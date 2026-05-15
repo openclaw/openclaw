@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -24,7 +24,23 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 
+afterAll(() => {
+  vi.doUnmock("./auth.js");
+  vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
+  vi.doUnmock("./token.js");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
 const TEST_BASE_URL = "https://api.githubcopilot.test";
+
+function shouldContinueAutoSelection(error: Error): boolean {
+  const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
+  if (!shouldContinue) {
+    throw new Error("GitHub Copilot embedding adapter did not expose auto-selection fallback");
+  }
+  return shouldContinue(error);
+}
 
 function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: unknown }>) {
   return { data: models };
@@ -52,6 +68,33 @@ function defaultCreateOptions() {
     config: {} as Record<string, unknown>,
     agentDir: "/tmp/test-agent",
     model: "",
+  };
+}
+
+function firstCopilotApiTokenRequest() {
+  const [call] = resolveCopilotApiTokenMock.mock.calls;
+  if (!call) {
+    throw new Error("expected resolveCopilotApiToken call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected resolveCopilotApiToken request");
+  }
+  return request as { env?: typeof process.env; githubToken?: string };
+}
+
+function firstDiscoveryRequest() {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected GitHub Copilot discovery request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected GitHub Copilot discovery request options");
+  }
+  return request as {
+    init: { headers: Record<string, string> };
+    url: string;
   };
 }
 
@@ -98,9 +141,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith(
-      expect.objectContaining({ githubToken: "gh_test_token_123" }),
-    );
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_test_token_123");
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
@@ -198,17 +239,10 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     } as never);
 
     expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        githubToken: "gh_remote_token",
-      }),
-    );
+    expect(firstCopilotApiTokenRequest().env).toBe(process.env);
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_remote_token");
 
-    const discoveryCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
-      init: { headers: Record<string, string> };
-      url: string;
-    };
+    const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
   });
@@ -234,25 +268,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("treats token parsing and discovery failures as auto-fallback errors", () => {
+    expect(shouldContinueAutoSelection(new Error("Copilot token response missing token"))).toBe(
+      true,
+    );
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Copilot token response missing token"),
-      ),
-    ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("Unexpected response from GitHub Copilot token endpoint"),
       ),
     ).toBe(true);
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("GitHub Copilot model discovery returned invalid JSON"),
       ),
     ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Network timeout"),
-      ),
-    ).toBe(false);
+    expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
   });
 });

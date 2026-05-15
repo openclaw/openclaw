@@ -18,6 +18,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -72,7 +73,8 @@ type RunPhaseIfTriggeredParams = {
 );
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
-const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
+const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
@@ -383,19 +385,53 @@ type DailyIngestionBatch = {
   results: MemorySearchResult[];
 };
 
+type DailyMemoryFile = {
+  fileName: string;
+  day: string;
+  canonical: boolean;
+};
+
 type DailyIngestionFileState = {
   mtimeMs: number;
   size: number;
+  lastDreamingDayIngested?: string;
 };
+
+function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
+  const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
+  const day = match?.[1];
+  return day
+    ? {
+        fileName,
+        day,
+        canonical: fileName.toLowerCase() === `${day}.md`,
+      }
+    : null;
+}
+
+function compareDailyMemoryFilesByNewestDay(left: DailyMemoryFile, right: DailyMemoryFile): number {
+  const dayOrder = right.day.localeCompare(left.day);
+  if (dayOrder !== 0) {
+    return dayOrder;
+  }
+  if (left.canonical !== right.canonical) {
+    return left.canonical ? -1 : 1;
+  }
+  return left.fileName.localeCompare(right.fileName);
+}
+
+function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: string): string {
+  const relativePath = path.relative(workspaceDir, filePath).replace(/\\/g, "/");
+  if (relativePath && relativePath !== ".." && !relativePath.startsWith("../")) {
+    return relativePath;
+  }
+  return `memory/${path.basename(filePath)}`;
+}
 
 type DailyIngestionState = {
   version: 1;
   files: Record<string, DailyIngestionFileState>;
 };
-
-function resolveDailyIngestionStatePath(workspaceDir: string): string {
-  return path.join(workspaceDir, DAILY_INGESTION_STATE_RELATIVE_PATH);
-}
 
 function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   const record = asRecord(raw);
@@ -417,9 +453,11 @@ function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
     if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
       continue;
     }
+    const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
     files[key] = {
       mtimeMs: Math.floor(mtimeMs),
       size: Math.floor(size),
+      ...(lastDreamingDayIngested ? { lastDreamingDayIngested } : {}),
     };
   }
   return {
@@ -428,14 +466,21 @@ function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   };
 }
 
+function normalizeMemoryDay(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const day = value.trim();
+  return MEMORY_DAY_RE.test(day) ? day : undefined;
+}
+
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  const statePath = resolveDailyIngestionStatePath(workspaceDir);
   try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    return normalizeDailyIngestionState(JSON.parse(raw) as unknown);
+    return normalizeDailyIngestionState(
+      await privateFileStore(workspaceDir).readJsonIfExists(DAILY_INGESTION_STATE_RELATIVE_PATH),
+    );
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
+    if (err instanceof SyntaxError) {
       return { version: 1, files: {} };
     }
     throw err;
@@ -446,11 +491,9 @@ async function writeDailyIngestionState(
   workspaceDir: string,
   state: DailyIngestionState,
 ): Promise<void> {
-  const statePath = resolveDailyIngestionStatePath(workspaceDir);
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, statePath);
+  await privateFileStore(workspaceDir).writeJson(DAILY_INGESTION_STATE_RELATIVE_PATH, state, {
+    trailingNewline: true,
+  });
 }
 
 type SessionIngestionFileState = {
@@ -482,10 +525,6 @@ type SessionIngestionCollectionResult = {
 function normalizeWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function resolveSessionIngestionStatePath(workspaceDir: string): string {
-  return path.join(workspaceDir, SESSION_INGESTION_STATE_RELATIVE_PATH);
 }
 
 function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
@@ -542,13 +581,12 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
-  const statePath = resolveSessionIngestionStatePath(workspaceDir);
   try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    return normalizeSessionIngestionState(JSON.parse(raw) as unknown);
+    return normalizeSessionIngestionState(
+      await privateFileStore(workspaceDir).readJsonIfExists(SESSION_INGESTION_STATE_RELATIVE_PATH),
+    );
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
+    if (err instanceof SyntaxError) {
       return { version: 3, files: {}, seenMessages: {} };
     }
     throw err;
@@ -559,11 +597,9 @@ async function writeSessionIngestionState(
   workspaceDir: string,
   state: SessionIngestionState,
 ): Promise<void> {
-  const statePath = resolveSessionIngestionStatePath(workspaceDir);
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, statePath);
+  await privateFileStore(workspaceDir).writeJson(SESSION_INGESTION_STATE_RELATIVE_PATH, state, {
+    trailingNewline: true,
+  });
 }
 
 function trimTrackedSessionScopes(
@@ -702,7 +738,11 @@ async function appendSessionCorpusLines(params: {
         ? normalizedExisting.slice(0, -1).split("\n").length
         : normalizedExisting.split("\n").length;
   const payload = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
-  await fs.appendFile(absolutePath, payload, "utf-8");
+  await appendRegularFile({
+    filePath: absolutePath,
+    content: payload,
+    rejectSymlinkParents: true,
+  });
   return params.lines.map((entry, index) => {
     const lineNumber = existingLineCount + index + 1;
     return {
@@ -1065,6 +1105,7 @@ async function collectDailyIngestionBatches(params: {
   lookbackDays: number;
   limit: number;
   nowMs: number;
+  ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
   const memoryDir = path.join(params.workspaceDir, "memory");
@@ -1078,18 +1119,17 @@ async function collectDailyIngestionBatches(params: {
   const files = entries
     .filter((entry) => entry.isFile())
     .map((entry) => {
-      const match = entry.name.match(DAILY_MEMORY_FILENAME_RE);
-      if (!match) {
+      const file = parseDailyMemoryFileName(entry.name);
+      if (!file) {
         return null;
       }
-      const day = match[1];
-      if (!isDayWithinLookback(day, cutoffMs)) {
+      if (!isDayWithinLookback(file.day, cutoffMs)) {
         return null;
       }
-      return { fileName: entry.name, day };
+      return file;
     })
-    .filter((entry): entry is { fileName: string; day: string } => entry !== null)
-    .toSorted((a, b) => b.day.localeCompare(a.day));
+    .filter((entry): entry is DailyMemoryFile => entry !== null)
+    .toSorted(compareDailyMemoryFilesByNewestDay);
 
   const batches: DailyIngestionBatch[] = [];
   const nextFiles: Record<string, DailyIngestionFileState> = {};
@@ -1119,11 +1159,15 @@ async function collectDailyIngestionBatches(params: {
       previous !== undefined &&
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size;
-    if (!unchanged) {
-      changed = true;
-    } else {
+    const previousDreamingDay = normalizeMemoryDay(previous?.lastDreamingDayIngested);
+    if (unchanged && previousDreamingDay === params.ingestionDreamingDay) {
+      nextFiles[relativePath] = {
+        ...fingerprint,
+        lastDreamingDayIngested: previousDreamingDay,
+      };
       continue;
     }
+    changed = true;
 
     const raw = await fs.readFile(filePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
@@ -1155,6 +1199,10 @@ async function collectDailyIngestionBatches(params: {
     }
     batches.push({ day: file.day, results });
     total += results.length;
+    nextFiles[relativePath] = {
+      ...fingerprint,
+      lastDreamingDayIngested: params.ingestionDreamingDay,
+    };
     if (total >= totalCap) {
       break;
     }
@@ -1189,14 +1237,15 @@ async function ingestDailyMemorySignals(params: {
   timezone?: string;
 }): Promise<void> {
   const state = await readDailyIngestionState(params.workspaceDir);
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   const collected = await collectDailyIngestionBatches({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.lookbackDays,
     limit: params.limit,
     nowMs: params.nowMs,
+    ingestionDreamingDay: ingestionDayBucket,
     state,
   });
-  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
@@ -1239,29 +1288,41 @@ export async function seedHistoricalDailyMemorySignals(params: {
   const resolved = normalizedPaths
     .map((filePath) => {
       const fileName = path.basename(filePath);
-      const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
-      if (!match) {
-        return { filePath, day: null as string | null };
+      const file = parseDailyMemoryFileName(fileName);
+      if (!file) {
+        return { filePath, fileName, relativePath: "", file: null as DailyMemoryFile | null };
       }
-      return { filePath, day: match[1] ?? null };
+      return {
+        filePath,
+        fileName,
+        relativePath: resolveWorkspaceMemoryRelativePath(params.workspaceDir, filePath),
+        file,
+      };
     })
     .toSorted((a, b) => {
-      if (a.day && b.day) {
-        return b.day.localeCompare(a.day);
+      if (a.file && b.file) {
+        return compareDailyMemoryFilesByNewestDay(a.file, b.file);
       }
-      if (a.day) {
+      if (a.file) {
         return -1;
       }
-      if (b.day) {
+      if (b.file) {
         return 1;
       }
       return a.filePath.localeCompare(b.filePath);
     });
 
-  const valid = resolved.filter((entry): entry is { filePath: string; day: string } =>
-    Boolean(entry.day),
+  const valid = resolved.filter(
+    (
+      entry,
+    ): entry is {
+      filePath: string;
+      fileName: string;
+      relativePath: string;
+      file: DailyMemoryFile;
+    } => Boolean(entry.file),
   );
-  const skippedPaths = resolved.filter((entry) => !entry.day).map((entry) => entry.filePath);
+  const skippedPaths = resolved.filter((entry) => !entry.file).map((entry) => entry.filePath);
   const totalCap = Math.max(20, params.limit * 4);
   const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, valid.length)));
   let importedSignalCount = 0;
@@ -1286,7 +1347,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
       results.push({
-        path: `memory/${entry.day}.md`,
+        path: entry.relativePath,
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         score: DAILY_INGESTION_SCORE,
@@ -1302,7 +1363,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
     }
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
-      query: `__dreaming_daily__:${entry.day}`,
+      query: `__dreaming_daily__:${entry.file.day}`,
       results,
       signalType: "daily",
       dedupeByQueryPerDay: true,

@@ -241,7 +241,6 @@ describe("CronService persists delivered status", () => {
       },
     });
 
-    expect(capturedEvent).toBeDefined();
     expect(capturedEvent?.delivered).toBe(true);
     expect(capturedEvent?.deliveryStatus).toBe("delivered");
   });

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -299,6 +300,7 @@ export function renderUsage(props: UsageProps) {
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||
     (displayTotals
@@ -314,6 +316,8 @@ export function renderUsage(props: UsageProps) {
     { label: t("usage.presets.today"), days: 1 },
     { label: t("usage.presets.last7d"), days: 7 },
     { label: t("usage.presets.last30d"), days: 30 },
+    { label: t("usage.presets.last90d"), days: 90 },
+    { label: t("usage.presets.last1y"), days: 365 },
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
@@ -321,6 +325,10 @@ export function renderUsage(props: UsageProps) {
     start.setDate(start.getDate() - (days - 1));
     filterActions.onStartDateChange(formatIsoDate(start));
     filterActions.onEndDateChange(formatIsoDate(end));
+  };
+  const applyAllRange = () => {
+    filterActions.onStartDateChange("1970-01-01");
+    filterActions.onEndDateChange(formatIsoDate(new Date()));
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {
@@ -413,17 +421,14 @@ export function renderUsage(props: UsageProps) {
 
   return html`
     <div class="usage-page">
-      <section class="usage-page-header">
-        <div class="usage-page-title">${t("tabs.usage")}</div>
-        <div class="usage-page-subtitle">${t("usage.page.subtitle")}</div>
-      </section>
-
       <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
         <div class="usage-header-row">
           <div class="usage-header-title">
             <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
-            ${data.loading
-              ? html`<span class="usage-refresh-indicator">${t("usage.loading.badge")}</span>`
+            ${data.loading || cacheStatusTitle
+              ? html`<span class="usage-refresh-indicator" title=${cacheStatusTitle ?? ""}>
+                  ${t("usage.loading.badge")}
+                </span>`
               : nothing}
             ${isEmpty
               ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
@@ -546,6 +551,7 @@ export function renderUsage(props: UsageProps) {
                   </button>
                 `,
               )}
+              <button class="btn btn--sm" @click=${applyAllRange}>${t("usage.presets.all")}</button>
             </div>
             <div class="usage-date-range">
               <input
@@ -581,6 +587,22 @@ export function renderUsage(props: UsageProps) {
               <option value="local">${t("usage.filters.timeZoneLocal")}</option>
               <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
             </select>
+            <div class="chart-toggle">
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
+                title=${t("usage.scope.instanceHint")}
+                @click=${() => filterActions.onScopeChange("instance")}
+              >
+                ${t("usage.scope.instance")}
+              </button>
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
+                title=${t("usage.scope.familyHint")}
+                @click=${() => filterActions.onScopeChange("family")}
+              >
+                ${t("usage.scope.family")}
+              </button>
+            </div>
             <div class="chart-toggle">
               <button
                 class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
@@ -707,6 +729,13 @@ export function renderUsage(props: UsageProps) {
 
         ${data.error
           ? html`<div class="callout danger usage-callout">${data.error}</div>`
+          : nothing}
+        ${cacheStatusTitle
+          ? html`
+              <div class="callout warning usage-callout usage-cache-warning">
+                ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+              </div>
+            `
           : nothing}
         ${data.sessionsLimitReached
           ? html`

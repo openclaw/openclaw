@@ -29,7 +29,17 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-h
 // We spell out job/patch properties so that LLMs know what fields to send.
 // Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
-const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
+const CRON_ACTIONS = [
+  "status",
+  "list",
+  "get",
+  "add",
+  "update",
+  "remove",
+  "run",
+  "runs",
+  "wake",
+] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
@@ -307,6 +317,7 @@ export const CronToolSchema = Type.Object(
     contextMessages: Type.Optional(
       Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
+    agentId: Type.Optional(Type.String({ description: "Filter by agent id (list action)" })),
   },
   { additionalProperties: true },
 );
@@ -314,7 +325,6 @@ export const CronToolSchema = Type.Object(
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
-  /** Restrict this cron tool instance to removing only this active cron job. */
   selfRemoveOnlyJobId?: string;
 };
 
@@ -349,23 +359,81 @@ function readCronJobIdParam(params: Record<string, unknown>) {
   return readStringParam(params, "jobId") ?? readStringParam(params, "id");
 }
 
+const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to the current cron job.";
+
+function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
+  return opts?.selfRemoveOnlyJobId?.trim() || undefined;
+}
+
+function isCronSelfIntrospectionAction(action: string) {
+  return action === "status" || action === "list";
+}
+
 function assertCronSelfRemoveScope(
   opts: CronToolOptions | undefined,
   action: string,
   params: Record<string, unknown>,
 ) {
-  const selfRemoveOnlyJobId = opts?.selfRemoveOnlyJobId?.trim();
-  if (!selfRemoveOnlyJobId) {
+  const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
+  if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action !== "remove") {
-    throw new Error("Cron tool is restricted to removing the current cron job.");
+  if (action === "get" || action === "remove" || action === "runs") {
+    const id = readCronJobIdParam(params);
+    if (id && id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
-  const id = readCronJobIdParam(params);
-  if (id && id === selfRemoveOnlyJobId) {
-    return;
+  throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
+}
+
+function filterCronDeliveryPreviewsByJobId(previews: unknown, jobId: string): unknown {
+  if (!isRecord(previews)) {
+    return previews;
   }
-  throw new Error("Cron tool is restricted to removing the current cron job.");
+  if (!Object.hasOwn(previews, jobId)) {
+    return {};
+  }
+  return { [jobId]: previews[jobId] };
+}
+
+function filterCronListResultToJobId(result: unknown, jobId: string): unknown {
+  if (!isRecord(result) || !Array.isArray(result.jobs)) {
+    return result;
+  }
+  const jobs = result.jobs.filter((job) => isRecord(job) && job.id === jobId);
+  return {
+    ...result,
+    jobs,
+    total: jobs.length,
+    offset: 0,
+    limit: jobs.length,
+    hasMore: false,
+    nextOffset: null,
+    ...(Object.hasOwn(result, "deliveryPreviews")
+      ? { deliveryPreviews: filterCronDeliveryPreviewsByJobId(result.deliveryPreviews, jobId) }
+      : {}),
+  };
+}
+
+function filterCronStatusResultForSelfScope(result: unknown): unknown {
+  return { enabled: isRecord(result) && result.enabled === true };
+}
+
+function cronListResultHasJob(result: unknown, jobId: string): boolean {
+  return (
+    isRecord(result) &&
+    Array.isArray(result.jobs) &&
+    result.jobs.some((job) => isRecord(job) && job.id === jobId)
+  );
+}
+
+function readCronListNextOffset(result: unknown, currentOffset: number): number | undefined {
+  if (!isRecord(result) || result.hasMore !== true || typeof result.nextOffset !== "number") {
+    return undefined;
+  }
+  const nextOffset = Math.floor(result.nextOffset);
+  return Number.isFinite(nextOffset) && nextOffset > currentOffset ? nextOffset : undefined;
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
@@ -564,13 +632,14 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: "cron",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
+    description: `Manage Gateway cron jobs (status/list/get/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
 Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
 
 ACTIONS:
 - status: Check cron scheduler status
-- list: List jobs (use includeDisabled:true to include disabled)
+- list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)
+- get: Get one job by id (requires jobId)
 - add: Create job (requires job object, see schema below)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
@@ -632,6 +701,9 @@ CRITICAL CONSTRAINTS:
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
+RESTRICTED CRON RUNS:
+- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, get/runs are allowed for the current job only, and mutation actions remain limited to removing the current cron job.
+
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
 - "now": Wake immediately
@@ -651,14 +723,56 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       };
 
       switch (action) {
-        case "status":
-          return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "status": {
+          const result = await callGateway("cron.status", gatewayOpts, {});
           return jsonResult(
-            await callGateway("cron.list", gatewayOpts, {
-              includeDisabled: Boolean(params.includeDisabled),
-            }),
+            readCronSelfRemoveOnlyJobId(opts) ? filterCronStatusResultForSelfScope(result) : result,
           );
+        }
+        case "list": {
+          const cfg = getRuntimeConfig();
+          const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
+          const listAgentId = selfRemoveOnlyJobId
+            ? opts?.agentSessionKey?.trim()
+              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+              : undefined
+            : typeof params.agentId === "string" && params.agentId.trim()
+              ? params.agentId.trim()
+              : opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined;
+          const includeDisabled = Boolean(params.includeDisabled);
+          let offset = 0;
+          let result: unknown;
+          let shouldContinue = true;
+          while (shouldContinue) {
+            result = await callGateway("cron.list", gatewayOpts, {
+              includeDisabled,
+              agentId: listAgentId,
+              ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+            });
+            if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
+              shouldContinue = false;
+            } else {
+              const nextOffset = readCronListNextOffset(result, offset);
+              if (nextOffset === undefined) {
+                shouldContinue = false;
+              } else {
+                offset = nextOffset;
+              }
+            }
+          }
+          return jsonResult(
+            selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
+          );
+        }
+        case "get": {
+          const id = readCronJobIdParam(params);
+          if (!id) {
+            throw new Error("jobId required (id accepted for backward compatibility)");
+          }
+          return jsonResult(await callGateway("cron.get", gatewayOpts, { id }));
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting

@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   pluginRegistrationContractRegistry,
@@ -23,7 +23,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
+let completeSimple: typeof import("@earendil-works/pi-ai").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -70,7 +70,7 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@mariozechner/pi-ai", () => {
+vi.mock("@earendil-works/pi-ai", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
     completeSimple: vi.fn(),
@@ -84,7 +84,7 @@ vi.mock("@mariozechner/pi-ai", () => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => {
+vi.mock("@earendil-works/pi-ai/oauth", () => {
   return {
     getOAuthProviders: () => [],
     getOAuthApiKey: vi.fn(async () => null),
@@ -116,6 +116,14 @@ function asLegacyTtsConfig(value: unknown): OpenClawConfig {
 
 function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
   return value as unknown as OpenClawConfig;
+}
+
+function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call at index ${index}`);
+  }
+  return call;
 }
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -496,7 +504,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("@mariozechner/pi-ai"));
+  ({ completeSimple } = await import("@earendil-works/pi-ai"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
@@ -900,10 +908,12 @@ export function describeTtsSummarizationContract() {
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = vi.mocked(completeSimple).mock.calls[0];
-      expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
-      expect(callArgs?.[2]?.maxTokens).toBe(250);
-      expect(callArgs?.[2]?.temperature).toBe(0.3);
+      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      expect(
+        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+      ).toBe("user");
+      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
+      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
       expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
     });
 
@@ -928,7 +938,9 @@ export function describeTtsSummarizationContract() {
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("openai-completions");
+      expect(
+        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+      ).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
@@ -944,7 +956,9 @@ export function describeTtsSummarizationContract() {
           `Invalid targetLength: ${testCase.targetLength}`,
         );
       } else {
-        await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
+        const result = await call;
+        expect(typeof result.summary, String(testCase.targetLength)).toBe("string");
+        expect(result.inputLength, String(testCase.targetLength)).toBe(4);
       }
     });
 
@@ -1043,16 +1057,22 @@ export function describeTtsProviderRuntimeContract() {
           expect(result.provider).toBe("microsoft");
           expect(result.fallbackFrom).toBe("openai");
           expect(result.attemptedProviders).toEqual(["openai", "microsoft"]);
-          expect(result.attempts?.[0]).toMatchObject({
-            provider: "openai",
-            outcome: "failed",
-            reasonCode: "provider_error",
-          });
-          expect(result.attempts?.[1]).toMatchObject({
-            provider: "microsoft",
-            outcome: "success",
-            reasonCode: "success",
-          });
+          expect(result.attempts).toHaveLength(2);
+          expect(result.attempts?.[0]?.provider).toBe("openai");
+          expect(result.attempts?.[0]?.outcome).toBe("failed");
+          expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
+          expect(result.attempts?.[0]?.persona).toBeUndefined();
+          expect(result.attempts?.[0]?.personaBinding).toBe("none");
+          expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
+          expect(result.attempts?.[0]?.error).toContain("openai: Authorization: Bearer");
+          expect(result.attempts?.[0]?.error).not.toContain("sk-readiness-throw-token-1234567890");
+          expect(result.attempts?.[1]?.provider).toBe("microsoft");
+          expect(result.attempts?.[1]?.outcome).toBe("success");
+          expect(result.attempts?.[1]?.reasonCode).toBe("success");
+          expect(result.attempts?.[1]?.persona).toBeUndefined();
+          expect(result.attempts?.[1]?.personaBinding).toBe("none");
+          expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
+          expect(result.attempts?.[1]?.error).toBeUndefined();
         });
       });
 
@@ -1113,16 +1133,22 @@ export function describeTtsProviderRuntimeContract() {
           expect(result.provider).toBe("microsoft");
           expect(result.fallbackFrom).toBe("primary-throws");
           expect(result.attemptedProviders).toEqual(["primary-throws", "microsoft"]);
-          expect(result.attempts?.[0]).toMatchObject({
-            provider: "primary-throws",
-            outcome: "failed",
-            reasonCode: "provider_error",
-          });
-          expect(result.attempts?.[1]).toMatchObject({
-            provider: "microsoft",
-            outcome: "success",
-            reasonCode: "success",
-          });
+          expect(result.attempts).toHaveLength(2);
+          expect(result.attempts?.[0]?.provider).toBe("primary-throws");
+          expect(result.attempts?.[0]?.outcome).toBe("failed");
+          expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
+          expect(result.attempts?.[0]?.persona).toBeUndefined();
+          expect(result.attempts?.[0]?.personaBinding).toBe("none");
+          expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
+          expect(result.attempts?.[0]?.error).toContain("primary-throws: Authorization: Bearer");
+          expect(result.attempts?.[0]?.error).not.toContain("sk-telephony-throw-token-1234567890");
+          expect(result.attempts?.[1]?.provider).toBe("microsoft");
+          expect(result.attempts?.[1]?.outcome).toBe("success");
+          expect(result.attempts?.[1]?.reasonCode).toBe("success");
+          expect(result.attempts?.[1]?.persona).toBeUndefined();
+          expect(result.attempts?.[1]?.personaBinding).toBe("none");
+          expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
+          expect(result.attempts?.[1]?.error).toBeUndefined();
         });
       });
 
@@ -1159,8 +1185,10 @@ export function describeTtsProviderRuntimeContract() {
         if (result.success) {
           throw new Error("expected synthesis failure");
         }
-        expect(result.error).toBeDefined();
-        const errorMessage = result.error ?? "";
+        const errorMessage = result.error;
+        if (typeof errorMessage !== "string") {
+          throw new Error("expected synthesis failure error message");
+        }
         expect(errorMessage).toBe("TTS conversion failed: openai: provider failed");
         expect(errorMessage).not.toContain("TTS conversion failed: TTS conversion failed:");
         expect(errorMessage.match(/TTS conversion failed:/g)).toHaveLength(1);
@@ -1180,7 +1208,7 @@ export function describeTtsProviderRuntimeContract() {
 
           expect(result.success).toBe(true);
           expect(fetchMock).toHaveBeenCalledTimes(1);
-          const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+          const [, init] = mockCallAt(fetchMock, 0) as [string, RequestInit];
           expect(typeof init.body).toBe("string");
           const body = JSON.parse(init.body as string) as Record<string, unknown>;
           expect(body.instructions).toBe(expectedInstructions);
@@ -1259,7 +1287,9 @@ export function describeTtsAutoApplyContract() {
         if (params.expectSamePayload) {
           expect(result).toBe(params.payload);
         } else {
-          expect(result.mediaUrl).toBeDefined();
+          if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
+            throw new Error("expected auto TTS to attach mediaUrl");
+          }
         }
       });
     }

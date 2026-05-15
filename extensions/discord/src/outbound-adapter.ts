@@ -2,13 +2,13 @@ import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
@@ -119,6 +119,17 @@ export const discordOutbound: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+  },
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      payload: true,
+      silent: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
   },
   renderPresentation: async ({ payload, presentation }) => {
     return await buildDiscordPresentationPayload({

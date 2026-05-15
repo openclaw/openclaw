@@ -14,17 +14,19 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: uses the npm package `@openclaw/whatsapp` on the current official
-  release tag.
+- Stable/Beta: installs the official `@openclaw/whatsapp` plugin from ClawHub
+  first, with npm as the fallback.
+- The WhatsApp runtime is distributed outside the core OpenClaw npm package so
+  WhatsApp-specific runtime dependencies stay with the external plugin.
 
 Manual install stays available:
 
 ```bash
-openclaw plugins install @openclaw/whatsapp
+openclaw plugins install clawhub:@openclaw/whatsapp
 ```
 
-Use the bare package to follow the current official release tag. Pin an exact
-version only when you need a reproducible install.
+Use the bare npm package (`@openclaw/whatsapp`) only when you need the registry
+fallback. Pin an exact version only when you need a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -479,6 +481,32 @@ Behavior notes:
 - failures are logged but do not block normal reply delivery
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
+
+## Lifecycle status reactions
+
+Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack reaction during a turn instead of leaving a static receipt emoji. When enabled, OpenClaw uses the same inbound message reaction slot for lifecycle states such as queued, thinking, tool activity, compaction, done, and error.
+
+```json5
+{
+  messages: {
+    statusReactions: {
+      enabled: true,
+      emojis: {
+        deploy: "🛫",
+        build: "🏗️",
+        concierge: "💁",
+      },
+    },
+  },
+}
+```
+
+Behavior notes:
+
+- `channels.whatsapp.ackReaction` still controls whether status reactions are eligible for direct messages and groups.
+- WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place.
+- `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold.
+- Tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
 
 ## Multi-account and credentials
 

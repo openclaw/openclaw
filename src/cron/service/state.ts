@@ -1,13 +1,15 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
+  CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronRunDiagnostics,
   CronMessageChannel,
-  CronAgentExecutionStarted,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -24,6 +26,7 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
@@ -73,7 +76,12 @@ export type CronServiceDeps = {
   startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      forceSenderIsOwnerFalse?: boolean;
+    },
   ) => void;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
@@ -83,7 +91,7 @@ export type CronServiceDeps = {
     agentId?: string;
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: { target?: string };
+    heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
@@ -98,6 +106,7 @@ export type CronServiceDeps = {
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   }) => Promise<
     {
       summary?: string;

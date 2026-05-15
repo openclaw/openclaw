@@ -38,10 +38,19 @@ export const SessionCompactionCheckpointSchema = Type.Object(
 
 export const SessionsListParamsSchema = Type.Object(
   {
+    /**
+     * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
+     * to keep large session stores from monopolizing the event loop.
+     */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    /**
+     * Limit returned agent-scoped rows to agents currently present in config.
+     * Broad disk discovery remains the default for recovery/ACP consumers.
+     */
+    configuredAgentsOnly: Type.Optional(Type.Boolean()),
     /**
      * Read first 8KB of each session transcript to derive title from first user message.
      * Performs a file read per session - use `limit` to bound result set on large stores.
@@ -67,6 +76,7 @@ export const SessionsCleanupParamsSchema = Type.Object(
     enforce: Type.Optional(Type.Boolean()),
     activeKey: Type.Optional(NonEmptyString),
     fixMissing: Type.Optional(Type.Boolean()),
+    fixDmScope: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -109,6 +119,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },
@@ -183,6 +194,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     subagentControlScope: Type.Optional(
       Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
     ),
+    inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
+    inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
@@ -335,6 +348,20 @@ export const SessionsUsageParamsSchema = Type.Object(
     mode: Type.Optional(
       Type.Union([Type.Literal("utc"), Type.Literal("gateway"), Type.Literal("specific")]),
     ),
+    /** Preset range for usage queries when explicit start/end dates are omitted. */
+    range: Type.Optional(
+      Type.Union([
+        Type.Literal("7d"),
+        Type.Literal("30d"),
+        Type.Literal("90d"),
+        Type.Literal("1y"),
+        Type.Literal("all"),
+      ]),
+    ),
+    /** Usage row grouping. `family` rolls up known rotated session ids for a logical key. */
+    groupBy: Type.Optional(Type.Union([Type.Literal("instance"), Type.Literal("family")])),
+    /** Backward-compatible alias for requesting family grouping. */
+    includeHistorical: Type.Optional(Type.Boolean()),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
     /** Maximum sessions to return (default 50). */

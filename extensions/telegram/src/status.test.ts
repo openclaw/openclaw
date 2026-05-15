@@ -12,6 +12,31 @@ import {
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
 
+type StatusIssue = ReturnType<typeof collectTelegramStatusIssues>[number];
+
+function expectIssueFields(issue: StatusIssue | undefined, expected: Partial<StatusIssue>): void {
+  if (!issue) {
+    throw new Error("expected status issue");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    expect(issue[key as keyof StatusIssue]).toBe(value);
+  }
+}
+
+function expectIssueListContainsFields(
+  issues: StatusIssue[],
+  expected: Partial<StatusIssue>,
+): void {
+  const match = issues.find((issue) =>
+    Object.entries(expected).every(([key, value]) => issue[key as keyof StatusIssue] === value),
+  );
+  expectIssueFields(match, expected);
+}
+
+function expectIssueMessageContains(issues: StatusIssue[], text: string): void {
+  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
+}
+
 describe("collectTelegramStatusIssues", () => {
   it("reports privacy-mode and wildcard unmentioned-group configuration risks", () => {
     const issues = collectTelegramStatusIssues([
@@ -27,18 +52,14 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          channel: "telegram",
-          accountId: "main",
-          kind: "config",
-        }),
-      ]),
-    );
-    expect(issues.some((issue) => issue.message.includes("privacy mode"))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes('uses "*"'))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes("unresolvedGroups=2"))).toBe(true);
+    expectIssueListContainsFields(issues, {
+      channel: "telegram",
+      accountId: "main",
+      kind: "config",
+    });
+    expectIssueMessageContains(issues, "privacy mode");
+    expectIssueMessageContains(issues, 'uses "*"');
+    expectIssueMessageContains(issues, "unresolvedGroups=2");
   });
 
   it("reports unreachable groups with match metadata", () => {
@@ -63,7 +84,7 @@ describe("collectTelegramStatusIssues", () => {
     ]);
 
     expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({
+    expectIssueFields(issues[0], {
       channel: "telegram",
       accountId: "main",
       kind: "runtime",
@@ -87,14 +108,13 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "main",
-        kind: "runtime",
-        message: expect.stringContaining("has not completed a successful getUpdates call"),
-      }),
-    ]);
+    expect(issues).toHaveLength(1);
+    expectIssueFields(issues[0], {
+      channel: "telegram",
+      accountId: "main",
+      kind: "runtime",
+    });
+    expect(issues[0]?.message).toContain("has not completed a successful getUpdates call");
     expect(issues[0]?.message).toContain("network timeout");
     expect(issues[0]?.fix).toContain("channels status --probe");
   });
@@ -112,7 +132,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("reports stale polling transport activity after successful getUpdates stops refreshing", () => {
@@ -129,14 +149,13 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "main",
-        kind: "runtime",
-        message: expect.stringContaining("polling transport is stale"),
-      }),
-    ]);
+    expect(issues).toHaveLength(1);
+    expectIssueFields(issues[0], {
+      channel: "telegram",
+      accountId: "main",
+      kind: "runtime",
+    });
+    expect(issues[0]?.message).toContain("polling transport is stale");
   });
 
   it("does not report inherited stale transport activity during a fresh polling lifecycle", () => {
@@ -153,7 +172,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("reports webhook runtime state that never completed setWebhook after startup grace", () => {
@@ -170,14 +189,13 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "main",
-        kind: "runtime",
-        message: expect.stringContaining("setWebhook has not completed"),
-      }),
-    ]);
+    expect(issues).toHaveLength(1);
+    expectIssueFields(issues[0], {
+      channel: "telegram",
+      accountId: "main",
+      kind: "runtime",
+    });
+    expect(issues[0]?.message).toContain("setWebhook has not completed");
     expect(issues[0]?.message).toContain("fetch failed");
     expect(issues[0]?.fix).toContain("webhook URL");
   });
@@ -195,7 +213,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("does not report an advertised webhook just because no user updates arrived", () => {
@@ -211,7 +229,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("ignores accounts that are not both enabled and configured", () => {
@@ -223,7 +241,7 @@ describe("collectTelegramStatusIssues", () => {
           configured: true,
         } as ChannelAccountSnapshot,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

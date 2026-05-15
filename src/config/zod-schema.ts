@@ -16,6 +16,7 @@ import {
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -23,7 +24,6 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { ChannelsSchema } from "./zod-schema.providers.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -49,6 +49,16 @@ const NodeHostSchema = z
       })
       .strict()
       .optional(),
+  })
+  .strict()
+  .optional();
+
+const LegacyCanvasHostSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    root: z.string().optional(),
+    port: z.number().int().positive().optional(),
+    liveReload: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -190,6 +200,8 @@ const PluginEntrySchema = z
       .object({
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
       })
       .strict()
       .optional(),
@@ -197,6 +209,14 @@ const PluginEntrySchema = z
       .object({
         allowModelOverride: z.boolean().optional(),
         allowedModels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    llm: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+        allowAgentIdOverride: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -210,10 +230,49 @@ const TalkProviderEntrySchema = z
   })
   .catchall(z.unknown());
 
+const TalkRealtimeSchema = z
+  .object({
+    provider: z.string().optional(),
+    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    model: z.string().optional(),
+    voice: z.string().optional(),
+    instructions: z.string().optional(),
+    mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
+    transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+  })
+  .strict()
+  .superRefine((realtime, ctx) => {
+    const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
+    const providers = realtime.providers ? Object.keys(realtime.providers) : [];
+
+    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: `talk.realtime.provider must match a key in talk.realtime.providers (missing "${provider}")`,
+      });
+    }
+
+    if (!provider && providers.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message:
+          "talk.realtime.provider is required when talk.realtime.providers defines multiple providers",
+      });
+    }
+  });
+
 const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    realtime: TalkRealtimeSchema.optional(),
+    consultThinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
+    consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
@@ -340,6 +399,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
+        stuckSessionAbortMs: z.number().int().positive().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -523,7 +583,12 @@ export const OpenClawSchema = z
             z
               .object({
                 provider: z.string(),
-                mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+                mode: z.union([
+                  z.literal("api_key"),
+                  z.literal("aws-sdk"),
+                  z.literal("oauth"),
+                  z.literal("token"),
+                ]),
                 email: z.string().optional(),
                 displayName: z.string().optional(),
               })
@@ -559,6 +624,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         backend: z.string().optional(),
+        fallbacks: z.array(z.string()).optional(),
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),
@@ -755,15 +821,6 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
-    canvasHost: z
-      .object({
-        enabled: z.boolean().optional(),
-        root: z.string().optional(),
-        port: z.number().int().positive().optional(),
-        liveReload: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
     talk: TalkSchema.optional(),
     gateway: z
       .object({
@@ -860,6 +917,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            preserveFunnel: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1024,6 +1082,7 @@ export const OpenClawSchema = z
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
+            allowSymlinkTargets: z.array(z.string()).optional(),
             watch: z.boolean().optional(),
             watchDebounceMs: z.number().int().min(0).optional(),
           })
@@ -1035,6 +1094,7 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
+            allowUploadedArchives: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1071,9 +1131,11 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
+        bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
       })
       .strict()
       .optional(),
+    canvasHost: LegacyCanvasHostSchema,
     surfaces: z
       .record(
         z.string(),

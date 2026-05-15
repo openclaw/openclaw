@@ -1,36 +1,37 @@
-import type { Api, Context, Model, ProviderStreamOptions } from "@mariozechner/pi-ai";
-import { complete } from "@mariozechner/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderStreamOptions,
+} from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
   getApiKeyForModel,
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
-import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-selection.js";
+import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelWithRegistry } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
-import { prepareProviderDynamicModel } from "../plugins/provider-runtime.js";
+import {
+  buildCopilotIdeHeaders,
+  COPILOT_INTEGRATION_ID,
+  resolveCopilotApiToken,
+} from "../plugin-sdk/provider-auth.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
-
-let piModelDiscoveryRuntimePromise: Promise<
-  typeof import("../agents/pi-model-discovery-runtime.js")
-> | null = null;
-
-function loadPiModelDiscoveryRuntime() {
-  piModelDiscoveryRuntimePromise ??= import("../agents/pi-model-discovery-runtime.js");
-  return piModelDiscoveryRuntimePromise;
-}
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
   if (
@@ -143,48 +144,18 @@ async function resolveImageRuntime(params: {
   authStore?: ImageDescriptionRequest["authStore"];
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const configuredProviders = params.cfg.models?.providers;
-  const providerConfig =
-    configuredProviders?.[resolvedRef.provider] ??
-    findNormalizedProviderValue(configuredProviders, resolvedRef.provider);
-  // Fast path: resolve without dynamic model preparation first.
-  // This avoids unnecessary prepare hooks (e.g. OpenRouter catalog fetch)
-  // for models that are already explicitly resolvable.
-  let model = resolveModelWithRegistry({
-    provider: resolvedRef.provider,
-    modelId: resolvedRef.model,
-    modelRegistry,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  }) as Model<Api> | null;
-
-  // If the model is not in the registry yet, prepare dynamic provider models
-  // and retry (needed for provider-runtime-backed dynamic models).
-  if (!model) {
-    await prepareProviderDynamicModel({
-      provider: resolvedRef.provider,
-      config: params.cfg,
-      context: {
-        config: params.cfg,
-        agentDir: params.agentDir,
-        provider: resolvedRef.provider,
-        modelId: resolvedRef.model,
-        modelRegistry,
-        providerConfig,
-      },
-    });
-    model = resolveModelWithRegistry({
-      provider: resolvedRef.provider,
-      modelId: resolvedRef.model,
-      modelRegistry,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    }) as Model<Api> | null;
-  }
+  const resolved = await resolveModelAsync(
+    resolvedRef.provider,
+    resolvedRef.model,
+    params.agentDir,
+    params.cfg,
+    {
+      allowBundledStaticCatalogFallback: true,
+    },
+  );
+  const { authStorage } = resolved;
+  let { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
@@ -209,7 +180,20 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  let apiKey = requireApiKey(apiKeyInfo, model.provider);
+  // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
+  // a short-lived Copilot API token so the integrator scope (vscode-chat)
+  // matches what runtime chat requests send.
+  if (model.provider === "github-copilot") {
+    const copilotToken = await resolveCopilotApiToken({
+      githubToken: apiKey,
+    });
+    apiKey = copilotToken.token;
+    const runtimeBaseUrl = copilotToken.baseUrl?.trim();
+    if (runtimeBaseUrl) {
+      model = { ...model, baseUrl: runtimeBaseUrl };
+    }
+  }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model };
 }
@@ -241,6 +225,13 @@ function buildImageContext(
 }
 
 function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+  // GitHub Copilot models (including Gemini 3.1 Pro Preview) require the
+  // prompt text to be in the user message alongside the image. Placing it
+  // in a separate system message produces "Request must contain at least
+  // one non-empty message" (400).
+  if (model.provider === "github-copilot") {
+    return true;
+  }
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
     api: model.api,
@@ -252,6 +243,19 @@ function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
     capabilities.endpointClass === "openrouter" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
+}
+
+function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | undefined {
+  if (model.provider !== "github-copilot") {
+    return undefined;
+  }
+  return {
+    ...buildCopilotIdeHeaders(),
+    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Openai-Organization": "github-copilot",
+    "x-initiator": "user",
+    "Copilot-Vision-Request": "true",
+  };
 }
 
 async function describeImagesWithMinimax(params: {
@@ -395,7 +399,7 @@ async function describeImagesWithModelInternal(
     });
   }
 
-  registerProviderStreamForModel({
+  const providerStreamFn = registerProviderStreamForModel({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -409,16 +413,22 @@ async function describeImagesWithModelInternal(
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
     const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const headers = buildImageRequestHeaders(model);
+    const streamOptions = {
+      apiKey,
+      maxTokens,
+      signal: controller.signal,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(headers ? { headers } : {}),
+      ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+    };
+    const task: Promise<AssistantMessage> = providerStreamFn
+      ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
+      : complete(model, context, streamOptions);
     return await withImageDescriptionTimeout({
       controller,
       timeoutMs,
-      task: complete(model, context, {
-        apiKey,
-        maxTokens,
-        signal: controller.signal,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(payloadHandler ? { onPayload: payloadHandler } : {}),
-      }),
+      task,
     });
   };
 

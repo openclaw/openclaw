@@ -1,7 +1,10 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
+import {
+  normalizeHeadersInitForFetch,
+  normalizeRequestInitHeadersForFetch,
+} from "../fetch-headers.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
@@ -13,6 +16,7 @@ import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
+  resolveSsrFPolicyForUrl,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type PinnedDispatcherPolicy,
@@ -95,6 +99,11 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
+const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -194,21 +203,20 @@ async function assertExplicitProxyAllowed(
   if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
     throw new Error("Explicit proxy URL must use http or https");
   }
+  const proxyPolicy: SsrFPolicy | undefined =
+    policy || dispatcherPolicy.allowPrivateProxy === true
+      ? {
+          ...policy,
+          // The proxy hostname is operator-configured, not user input. Target-scoped
+          // allowlists must not reject a configured proxy host before the request
+          // target gets checked against that same allowlist below.
+          hostnameAllowlist: undefined,
+          ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
+        }
+      : undefined;
   await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
     lookupFn,
-    policy:
-      dispatcherPolicy.allowPrivateProxy === true
-        ? {
-            // The proxy hostname is operator-configured, not user input.
-            // Clear the target-scoped hostnameAllowlist so configured proxies
-            // like localhost or internal hosts aren't rejected by an allowlist
-            // that was built for the target URL (for example api.example.test).
-            // Private-network IP checks still apply via allowPrivateNetwork.
-            ...policy,
-            allowPrivateNetwork: true,
-            hostnameAllowlist: undefined,
-          }
-        : policy,
+    policy: proxyPolicy,
   });
 }
 
@@ -233,6 +241,36 @@ export function retainSafeHeadersForCrossOriginRedirectHeaders(
   return retainSafeRedirectHeaders(headers);
 }
 
+async function captureGuardedFetchExchange(params: {
+  url: string;
+  method: string;
+  requestHeaders?: Headers | Record<string, string> | undefined;
+  requestBody?: BodyInit | Buffer | string | null;
+  response: Response;
+  transport?: "http" | "sse";
+  capture: GuardedFetchOptions["capture"];
+  auditContext?: string;
+}): Promise<void> {
+  if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../../proxy-capture/runtime.js");
+  captureHttpExchange({
+    url: params.url,
+    method: params.method,
+    requestHeaders: params.requestHeaders,
+    requestBody: params.requestBody,
+    response: params.response,
+    transport: params.transport,
+    flowId: params.capture?.flowId,
+    meta: {
+      captureOrigin: "guarded-fetch",
+      ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+      ...params.capture?.meta,
+    },
+  });
+}
+
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
   if (!init?.headers) {
     return init;
@@ -244,7 +282,7 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   if (!headers) {
     return headers;
   }
-  const nextHeaders = new Headers(headers);
+  const nextHeaders = new Headers(normalizeHeadersInitForFetch(headers));
   nextHeaders.delete("content-encoding");
   nextHeaders.delete("content-language");
   nextHeaders.delete("content-length");
@@ -335,7 +373,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
   const visited = new Set<string>([params.url]);
   let currentUrl = params.url;
-  let currentInit = params.init ? { ...params.init } : undefined;
+  let currentInit = normalizeRequestInitHeadersForFetch(
+    params.init ? { ...params.init } : undefined,
+  );
   let redirectCount = 0;
 
   while (true) {
@@ -356,6 +396,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     }
 
     let dispatcher: Dispatcher | null = null;
+    // Resolve inside the redirect loop so exact-origin trust never carries across origins.
+    const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     try {
       const usesTrustedExplicitProxyMode =
         mode === GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY &&
@@ -372,34 +414,41 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseManagedProxy =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+
+      // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
+      // the pre-DNS hostname/IP policy checks from the pinned path.
+      if (canUseTrustedEnvProxy || params.pinDns === false) {
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
+      }
+
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
         await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
-          policy: params.policy,
+          policy: policyForUrl,
         });
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
-        assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else if (params.pinDns === false) {
         await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
-          policy: params.policy,
+          policy: policyForUrl,
         });
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
-          policy: params.policy,
+          policy: policyForUrl,
         });
         dispatcher = createPinnedDispatcher(
           pinned,
           params.dispatcherPolicy,
-          params.policy,
+          policyForUrl,
           timeoutMs,
         );
       }
@@ -427,23 +476,17 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
 
-      if (params.capture !== false) {
-        captureHttpExchange({
-          url: parsedUrl.toString(),
-          method: currentInit?.method ?? "GET",
-          requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-          requestBody:
-            (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
-          response,
-          transport: "http",
-          flowId: params.capture?.flowId,
-          meta: {
-            captureOrigin: "guarded-fetch",
-            ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-            ...params.capture?.meta,
-          },
-        });
-      }
+      await captureGuardedFetchExchange({
+        url: parsedUrl.toString(),
+        method: currentInit?.method ?? "GET",
+        requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
+        requestBody:
+          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+        response,
+        transport: "http",
+        capture: params.capture,
+        auditContext: params.auditContext,
+      });
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");

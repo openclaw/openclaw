@@ -30,6 +30,21 @@ async function createTempSessionPath() {
   return { dir, file: path.join(dir, "session.jsonl") };
 }
 
+function requireBackupPath(result: { backupPath?: string }): string {
+  if (!result.backupPath) {
+    throw new Error("expected session repair backup path");
+  }
+  return result.backupPath;
+}
+
+function requireFirstLogMessage(log: ReturnType<typeof vi.fn>): string {
+  const message = log.mock.calls[0]?.[0];
+  if (typeof message !== "string") {
+    throw new Error("expected first log message");
+  }
+  return message;
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -45,15 +60,17 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
-    expect(result.backupPath).toBeTruthy();
+    const backupPath = requireBackupPath(result);
 
     const repaired = await fs.readFile(file, "utf-8");
-    expect(repaired.trim().split("\n")).toHaveLength(2);
+    const repairedLines = repaired
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(repairedLines).toEqual([header, message]);
 
-    if (result.backupPath) {
-      const backup = await fs.readFile(result.backupPath, "utf-8");
-      expect(backup).toBe(content);
-    }
+    const backup = await fs.readFile(backupPath, "utf-8");
+    expect(backup).toBe(content);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
@@ -84,7 +101,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("invalid session header");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("invalid session header");
+    expect(requireFirstLogMessage(warn)).toContain("invalid session header");
   });
 
   it("returns a detailed reason when read errors are not ENOENT", async () => {
@@ -134,9 +151,9 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    expect(result.backupPath).toBeTruthy();
+    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
     expect(debug).toHaveBeenCalledTimes(1);
-    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
@@ -173,7 +190,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
-    expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
+    expect(requireFirstLogMessage(debug)).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
@@ -270,7 +287,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("dropped 1 malformed line(s)");
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
   });
@@ -465,6 +482,142 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
+  it("inserts missing code-mode tool results before replay repair has to synthesize them", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-process",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        api: "openai-codex-responses",
+        content: [
+          { type: "text", text: "Process List" },
+          {
+            type: "toolCall",
+            id: "call_process|fc_1",
+            name: "process",
+            arguments: { action: "poll", sessionId: "wild-wharf", timeout: 30_000 },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    };
+    const deliveryMirror = {
+      type: "message",
+      id: "msg-delivery",
+      parentId: "msg-asst-process",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: "openai-responses",
+        content: [{ type: "text", text: "Process: `wild-wharf`" }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(deliveryMirror)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.insertedToolResults).toBe(1);
+    const backup = await fs.readFile(requireBackupPath(result), "utf-8");
+    expect(backup).toBe(original);
+
+    const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
+    expect(lines).toHaveLength(5);
+    const inserted = JSON.parse(lines[3]);
+    expect(inserted.type).toBe("message");
+    expect(inserted.parentId).toBe("msg-asst-process");
+    expect(inserted.message.role).toBe("toolResult");
+    expect(inserted.message.toolCallId).toBe("call_process|fc_1");
+    expect(inserted.message.toolName).toBe("process");
+    expect(inserted.message.isError).toBe(true);
+    expect(inserted.message.content[0].text).toBe("aborted");
+    expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
+  });
+
+  it("does not duplicate code-mode tool results that are already persisted", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-exec",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        api: "openai-codex-responses",
+        content: [{ type: "toolCall", id: "call_exec|fc_1", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    };
+    const toolResult = {
+      type: "message",
+      id: "msg-tool-result",
+      parentId: "msg-asst-exec",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_exec|fc_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(toolResult)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.insertedToolResults ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
+  });
+
+  it.each(["error", "aborted"] as const)(
+    "does not insert missing code-mode tool results for %s assistant turns",
+    async (stopReason) => {
+      const { file } = await createTempSessionPath();
+      const { header, message } = buildSessionHeaderAndMessage();
+      const incompleteAssistant = {
+        type: "message",
+        id: `msg-asst-${stopReason}`,
+        parentId: "msg-1",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          api: "openai-codex-responses",
+          content: [
+            { type: "toolCall", id: `call_${stopReason}|fc_1`, name: "exec", arguments: {} },
+          ],
+          stopReason,
+        },
+      };
+      const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(incompleteAssistant)}\n`;
+      await fs.writeFile(file, original, "utf-8");
+
+      const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+      expect(result.repaired).toBe(false);
+      expect(result.insertedToolResults ?? 0).toBe(0);
+      const after = await fs.readFile(file, "utf-8");
+      expect(after).toBe(original);
+    },
+  );
+
   it("preserves final text assistant turn that follows a tool-call/tool-result pair", async () => {
     // Regression: a trailing assistant message with stopReason "stop" that follows a
     // tool-call turn and its matching tool-result must never be trimmed by the repair
@@ -579,5 +732,124 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
     const after = await fs.readFile(file, "utf-8");
     expect(after).toBe(original);
+  });
+
+  it("drops type:message entries with null role instead of preserving them through repair (#77228)", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+
+    const nullRoleEntry = {
+      type: "message",
+      id: "corrupt-1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: null, content: "ignored" },
+    };
+    const missingRoleEntry = {
+      type: "message",
+      id: "corrupt-2",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { content: "no role at all" },
+    };
+    const emptyRoleEntry = {
+      type: "message",
+      id: "corrupt-3",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "   ", content: "blank role" },
+    };
+
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(message),
+      JSON.stringify(nullRoleEntry),
+      JSON.stringify(missingRoleEntry),
+      JSON.stringify(emptyRoleEntry),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedLines).toBe(3);
+    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(`${content}\n`);
+
+    const after = await fs.readFile(file, "utf-8");
+    const lines = after.trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual(header);
+    expect(JSON.parse(lines[1])).toEqual(message);
+    expect(after).not.toContain('"role":null');
+  });
+
+  it("drops a type:message entry whose message field is missing or non-object", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+
+    const missingMessage = {
+      type: "message",
+      id: "corrupt-4",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+    };
+    const stringMessage = {
+      type: "message",
+      id: "corrupt-5",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: "not an object",
+    };
+
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(message),
+      JSON.stringify(missingMessage),
+      JSON.stringify(stringMessage),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedLines).toBe(2);
+
+    const after = await fs.readFile(file, "utf-8");
+    const lines = after.trimEnd().split("\n");
+    expect(lines.map((line) => JSON.parse(line))).toEqual([header, message]);
+  });
+
+  it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+
+    const summary = {
+      type: "summary",
+      id: "summary-1",
+      timestamp: new Date().toISOString(),
+      summary: "opaque summary blob",
+    };
+    const custom = {
+      type: "custom",
+      id: "custom-1",
+      customType: "model-snapshot",
+      timestamp: new Date().toISOString(),
+      data: { provider: "openai", modelApi: "openai-responses", modelId: "gpt-5" },
+    };
+
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(message),
+      JSON.stringify(summary),
+      JSON.stringify(custom),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedLines).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
   });
 });

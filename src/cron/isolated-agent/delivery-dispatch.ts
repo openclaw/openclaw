@@ -406,6 +406,7 @@ async function queueCronAwarenessSystemEvent(params: {
         agentId: params.agentId,
       }),
       contextKey: params.deliveryIdempotencyKey,
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
   } catch (err) {
@@ -556,8 +557,8 @@ export async function dispatchCronDelivery(
     const {
       buildOutboundSessionContext,
       createOutboundSendDeps,
-      deliverOutboundPayloads,
       resolveAgentOutboundIdentity,
+      sendDurableMessageBatch,
     } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
@@ -660,8 +661,8 @@ export async function dispatchCronDelivery(
           }
         : undefined;
 
-      const runDelivery = async () =>
-        await deliverOutboundPayloads({
+      const runDelivery = async () => {
+        const send = await sendDurableMessageBatch({
           cfg: params.cfgWithAgentDefaults,
           channel: delivery.channel,
           to: delivery.to,
@@ -671,8 +672,9 @@ export async function dispatchCronDelivery(
           session: deliverySession,
           identity,
           bestEffort: params.deliveryBestEffort,
+          durability: params.deliveryBestEffort ? "best_effort" : "required",
           deps: createOutboundSendDeps(params.deps),
-          abortSignal: params.abortSignal,
+          signal: params.abortSignal,
           onError,
           // Isolated cron direct delivery uses its own transient retry loop.
           // Keep all attempts out of the write-ahead delivery queue so a
@@ -681,6 +683,17 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
+        if (
+          send.status === "failed" ||
+          (!params.deliveryBestEffort && send.status === "partial_failed")
+        ) {
+          throw send.error;
+        }
+        if (send.status === "partial_failed") {
+          hadPartialFailure = true;
+        }
+        return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
+      };
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
             jobId: params.job.id,

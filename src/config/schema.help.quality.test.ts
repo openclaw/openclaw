@@ -32,7 +32,6 @@ const ROOT_SECTIONS = [
   "web",
   "channels",
   "discovery",
-  "canvasHost",
   "talk",
   "gateway",
   "memory",
@@ -272,6 +271,11 @@ const TARGET_KEYS = [
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
   "channels.defaults.heartbeat.useIndicator",
+  "channels.defaults.botLoopProtection",
+  "channels.defaults.botLoopProtection.enabled",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow",
+  "channels.defaults.botLoopProtection.windowSeconds",
+  "channels.defaults.botLoopProtection.cooldownSeconds",
   "gateway",
   "gateway.mode",
   "gateway.bind",
@@ -324,14 +328,11 @@ const TARGET_KEYS = [
   "discovery.mdns",
   "discovery.mdns.mode",
   "gateway.controlUi.embedSandbox",
-  "canvasHost",
-  "canvasHost.enabled",
-  "canvasHost.root",
-  "canvasHost.port",
-  "canvasHost.liveReload",
   "talk",
+  "talk.consultFastMode",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
+  "talk.consultThinkingLevel",
   "meta",
   "env",
   "env.shellEnv",
@@ -369,9 +370,15 @@ const TARGET_KEYS = [
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.hooks.allowConversationAccess",
+  "plugins.entries.*.hooks.timeoutMs",
+  "plugins.entries.*.hooks.timeouts",
   "plugins.entries.*.subagent",
   "plugins.entries.*.subagent.allowModelOverride",
   "plugins.entries.*.subagent.allowedModels",
+  "plugins.entries.*.llm",
+  "plugins.entries.*.llm.allowModelOverride",
+  "plugins.entries.*.llm.allowedModels",
+  "plugins.entries.*.llm.allowAgentIdOverride",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
@@ -432,15 +439,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
   "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": [
-    '"steer"',
-    '"followup"',
-    '"collect"',
-    '"steer-backlog"',
-    '"steer+backlog"',
-    '"queue"',
-    '"interrupt"',
-  ],
+  "messages.queue.mode": ['"steer"', '"followup"', '"collect"', '"interrupt"'],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
   "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
@@ -498,6 +497,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.byProvider",
   "tools.exec.approvalRunningNoticeMs",
   "tools.exec.strictInlineEval",
+  "tools.exec.commandHighlighting",
   "tools.links.enabled",
   "tools.links.maxLinks",
   "tools.links.models",
@@ -537,6 +537,8 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.defaults.workspace",
   "agents.list[].tools.alsoAllow",
   "agents.list[].tools.byProvider",
+  "agents.list[].tools.message.crossContext.allowAcrossProviders",
+  "agents.list[].tools.message.crossContext.allowWithinProvider",
   "agents.list[].tools.profile",
   "channels.mattermost",
 ] as const;
@@ -566,6 +568,8 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.traces",
   "gateway.remote.password",
   "gateway.remote.token",
+  "skills.load.allowSymlinkTargets",
+  "skills.load.extraDirs",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
   "ui.assistant.avatar",
@@ -574,14 +578,29 @@ const FINAL_BACKLOG_TARGET_KEYS = [
 ] as const;
 
 describe("config help copy quality", () => {
+  function requireHelp(key: string): string {
+    const help = FIELD_HELP[key];
+    if (typeof help !== "string") {
+      throw new Error(`missing help for ${key}`);
+    }
+    return help;
+  }
+
+  function requireLabel(key: string): string {
+    const label = FIELD_LABELS[key];
+    if (typeof label !== "string") {
+      throw new Error(`missing label for ${key}`);
+    }
+    return label;
+  }
+
   function expectOperationalGuidance(
     keys: readonly string[],
     guidancePattern: RegExp,
     minLength = 80,
   ) {
     for (const key of keys) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
+      const help = requireHelp(key);
       expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
       expect(
         guidancePattern.test(help),
@@ -592,14 +611,14 @@ describe("config help copy quality", () => {
 
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
-      expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
-      expect(FIELD_HELP[key], `missing root help for ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
+      expect(requireHelp(key)).not.toHaveLength(0);
     }
   });
 
   it("keeps labels in parity for all help keys", () => {
     for (const key of Object.keys(FIELD_HELP)) {
-      expect(FIELD_LABELS[key], `missing label for help key ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
     }
   });
 
@@ -633,8 +652,7 @@ describe("config help copy quality", () => {
 
   it("documents option behavior for enum-style fields", () => {
     for (const [key, options] of Object.entries(ENUM_EXPECTATIONS)) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for enum key ${key}`).toBeDefined();
+      const help = requireHelp(key);
       for (const token of options) {
         expect(help.includes(token), `missing option ${token} in ${key}`).toBe(true);
       }
@@ -762,7 +780,7 @@ describe("config help copy quality", () => {
 
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer+backlog"')).toBe(true);
+    expect(queueMode.includes('"steer"')).toBe(true);
   });
 
   it("documents gateway bind modes and web reconnect semantics", () => {
@@ -800,6 +818,14 @@ describe("config help copy quality", () => {
     expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
     expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
     expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
+
+    const pluginHookTimeout = FIELD_HELP["plugins.entries.*.hooks.timeoutMs"];
+    expect(pluginHookTimeout.includes("typed hooks")).toBe(true);
+    expect(pluginHookTimeout.includes("hooks.timeouts")).toBe(true);
+
+    const pluginHookTimeouts = FIELD_HELP["plugins.entries.*.hooks.timeouts"];
+    expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
+    expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
     expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });
 

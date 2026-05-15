@@ -12,7 +12,7 @@ Adds the WhatsApp channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/whatsapp`
-- Install route: npm; ClawHub
+- Install route: ClawHub: `clawhub:@openclaw/whatsapp`; npm
 
 ## Surface
 

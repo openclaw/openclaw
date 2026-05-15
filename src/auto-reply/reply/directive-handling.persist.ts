@@ -3,11 +3,11 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,6 +23,7 @@ import {
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import { resolveContextTokens } from "./model-selection.js";
 
 export type PersistedThinkingLevelRemap = {
   from: ThinkLevel;
@@ -154,9 +155,20 @@ export async function persistInlineDirectives(params: {
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
 
-    if (directives.hasThinkDirective && directives.thinkLevel) {
+    if (directives.clearThinkLevel) {
+      if (sessionEntry.thinkingLevel) {
+        delete sessionEntry.thinkingLevel;
+        updated = true;
+      }
+    } else if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
+    }
+    if (directives.clearFastMode) {
+      if (sessionEntry.fastMode !== undefined) {
+        delete sessionEntry.fastMode;
+        updated = true;
+      }
     }
     if (
       directives.hasVerboseDirective &&
@@ -256,11 +268,22 @@ export async function persistInlineDirectives(params: {
             updated = true;
           }
         } else if (runtimeOverride?.kind === "set") {
-          if (sessionEntry.agentRuntimeOverride !== runtimeOverride.runtime) {
-            sessionEntry.agentRuntimeOverride = runtimeOverride.runtime;
+          if (sessionEntry.agentRuntimeOverride) {
+            delete sessionEntry.agentRuntimeOverride;
             updated = true;
           }
+          enqueueSystemEvent(
+            `Ignored session runtime ${runtimeOverride.runtime}; configure provider or model runtime policy instead.`,
+            {
+              sessionKey,
+              contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}:ignored-session-runtime`,
+            },
+          );
         } else if (runtimeOverride?.kind === "invalid") {
+          if (sessionEntry.agentRuntimeOverride) {
+            delete sessionEntry.agentRuntimeOverride;
+            updated = true;
+          }
           enqueueSystemEvent(
             `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
             {
@@ -342,13 +365,20 @@ export async function persistInlineDirectives(params: {
     provider,
     model,
     thinkingRemap,
-    contextTokens:
-      resolveContextTokensForModel({
-        cfg,
+    contextTokens: resolveContextTokens({
+      cfg,
+      agentCfg,
+      provider: resolveContextConfigProviderForRuntime({
         provider,
-        model,
-        contextTokensOverride: agentCfg?.contextTokens,
-        allowAsyncLoad: false,
-      }) ?? DEFAULT_CONTEXT_TOKENS,
+        runtimeId: resolveAgentHarnessPolicy({
+          provider,
+          modelId: model,
+          config: cfg,
+          agentId: activeAgentId,
+          sessionKey,
+        }).runtime,
+      }),
+      model,
+    }),
   };
 }

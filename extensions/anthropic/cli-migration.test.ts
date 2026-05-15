@@ -2,7 +2,7 @@ import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readClaudeCliCredentialsForSetup, readClaudeCliCredentialsForSetupNonInteractive } =
   vi.hoisted(() => ({
@@ -23,6 +23,16 @@ const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./c
 const { createTestWizardPrompter, registerSingleProviderPlugin } =
   await import("openclaw/plugin-sdk/plugin-test-runtime");
 const { default: anthropicPlugin } = await import("./index.js");
+
+beforeEach(() => {
+  readClaudeCliCredentialsForSetup.mockReset();
+  readClaudeCliCredentialsForSetupNonInteractive.mockReset();
+});
+
+afterAll(() => {
+  vi.doUnmock("./cli-auth-seam.js");
+  vi.resetModules();
+});
 
 async function resolveAnthropicCliAuthMethod() {
   const provider = await registerSingleProviderPlugin(anthropicPlugin);
@@ -112,7 +122,7 @@ describe("anthropic cli migration", () => {
       },
     });
 
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.defaultModel).toBe("anthropic/claude-opus-4-7");
     expect(result.configPatch).toEqual({
       agents: {
@@ -315,24 +325,26 @@ describe("anthropic cli migration", () => {
       },
     };
 
-    await expect(
-      method.runNonInteractive?.(createProviderAuthMethodNonInteractiveContext(config)),
-    ).resolves.toMatchObject({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-7",
-            fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
-          },
-          agentRuntime: { id: "claude-cli" },
-          models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
-            "anthropic/claude-opus-4-6": { alias: "Opus" },
-            "openai/gpt-5.2": {},
-          },
-        },
-      },
+    const result = await method.runNonInteractive?.(
+      createProviderAuthMethodNonInteractiveContext(config),
+    );
+    const defaults = result?.agents?.defaults as
+      | {
+          model?: { primary?: string; fallbacks?: string[] };
+          agentRuntime?: { id?: string };
+          models?: Record<string, unknown>;
+        }
+      | undefined;
+    expect(defaults?.model?.primary).toBe("anthropic/claude-opus-4-7");
+    expect(defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-6", "openai/gpt-5.2"]);
+    expect(defaults?.agentRuntime?.id).toBe("claude-cli");
+    expect(defaults?.models?.["anthropic/claude-opus-4-7"]).toEqual({
+      alias: "Opus",
     });
+    expect(defaults?.models?.["anthropic/claude-opus-4-6"]).toEqual({
+      alias: "Opus",
+    });
+    expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});
   });
 
   it("registered non-interactive cli auth reports missing local auth and exits cleanly", async () => {

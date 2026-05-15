@@ -4,6 +4,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -79,10 +80,14 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Internal trusted exec approval follow-up elevated defaults. */
+  bashElevated?: ExecElevatedDefaults;
   /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
+  toolsAllow?: string[];
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
@@ -116,6 +121,8 @@ export type AgentCommandOpts = {
   promptMode?: PromptMode;
   /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
   acpTurnSource?: AcpTurnSource;
+  /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
+  suppressPromptPersistence?: boolean;
 };
 
 export type AgentCommandIngressOpts = Omit<

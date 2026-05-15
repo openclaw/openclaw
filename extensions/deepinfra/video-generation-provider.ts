@@ -1,3 +1,4 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -5,7 +6,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -65,7 +66,7 @@ function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
     return undefined;
   }
   const mimeType = match[1] ?? "video/mp4";
-  const ext = mimeType.includes("webm") ? "webm" : "mp4";
+  const ext = extensionForMime(mimeType)?.slice(1) ?? "mp4";
   return {
     buffer: Buffer.from(match[2] ?? "", "base64"),
     mimeType,
@@ -228,7 +229,12 @@ export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider
       });
       try {
         await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        const payload = (await response.json()) as DeepInfraVideoResponse;
+        let payload: DeepInfraVideoResponse;
+        try {
+          payload = (await response.json()) as DeepInfraVideoResponse;
+        } catch (cause) {
+          throw new Error("DeepInfra video generation failed: malformed JSON response", { cause });
+        }
         const failed = failureMessage(payload);
         if (failed) {
           throw new Error(failed);

@@ -6,7 +6,7 @@ read_when:
 title: "OpenResponses API"
 ---
 
-OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
+OpenClaw's Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
@@ -74,6 +74,8 @@ The request follows the OpenResponses API with item-based input. Current support
 - `tool_choice`: filter or require client tools.
 - `stream`: enables SSE streaming.
 - `max_output_tokens`: best-effort output limit (provider dependent).
+- `temperature`: best-effort sampling temperature forwarded to the provider. Ignored by the ChatGPT-based Codex Responses backend, which uses fixed server-side sampling.
+- `top_p`: best-effort nucleus sampling forwarded to the provider. Same Codex Responses caveat as `temperature`.
 - `user`: stable session routing.
 
 Accepted but **currently ignored**:
@@ -95,7 +97,7 @@ Supported:
 Roles: `system`, `developer`, `user`, `assistant`.
 
 - `system` and `developer` are appended to the system prompt.
-- The most recent `user` or `function_call_output` item becomes the “current message.”
+- The most recent `user` or `function_call_output` item becomes the "current message."
 - Earlier user/assistant messages are included as history for context.
 
 ### `function_call_output` (turn-based tools)

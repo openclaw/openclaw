@@ -1,5 +1,5 @@
 import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { clearGroupNameCache, handleFeishuMessage } from "./bot.js";
@@ -7,7 +7,7 @@ import { setFeishuRuntime } from "./runtime.js";
 
 const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgentRoute } =
   vi.hoisted(() => ({
-    mockCreateFeishuReplyDispatcher: vi.fn(() => ({
+    mockCreateFeishuReplyDispatcher: vi.fn((_params?: unknown) => ({
       dispatcher: {
         sendToolResult: vi.fn(),
         sendBlockReply: vi.fn(),
@@ -54,6 +54,11 @@ describe("broadcast dispatch", () => {
     return {
       ...ctx,
       CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+      },
     };
   };
   const mockDispatchReplyFromConfig = vi
@@ -176,6 +181,12 @@ describe("broadcast dispatch", () => {
     },
   } as unknown as PluginRuntime;
 
+  afterAll(() => {
+    vi.doUnmock("./reply-dispatcher.js");
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
   function createBroadcastConfig(): ClawdbotConfig {
     return {
       broadcast: { "oc-broadcast-group": ["susan", "main"] },
@@ -274,18 +285,31 @@ describe("broadcast dispatch", () => {
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextCalls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          GroupSubject: "Broadcast Team",
-          ConversationLabel: "Broadcast Team",
-        }),
-      ]),
-    );
+    expect(
+      finalizeInboundContextCalls
+        .map((call) => ({
+          sessionKey: call.SessionKey,
+          groupSubject: call.GroupSubject,
+          conversationLabel: call.ConversationLabel,
+        }))
+        .toSorted((left, right) => String(left.sessionKey).localeCompare(String(right.sessionKey))),
+    ).toEqual([
+      {
+        sessionKey: "agent:main:feishu:group:oc-broadcast-group",
+        groupSubject: "Broadcast Team",
+        conversationLabel: "Broadcast Team",
+      },
+      {
+        sessionKey: "agent:susan:feishu:group:oc-broadcast-group",
+        groupSubject: "Broadcast Team",
+        conversationLabel: "Broadcast Team",
+      },
+    ]);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main" }),
-    );
+    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(0)?.[0] as
+      | { agentId?: string }
+      | undefined;
+    expect(dispatcherParams?.agentId).toBe("main");
   });
 
   it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {
@@ -359,13 +383,12 @@ describe("broadcast dispatch", () => {
 
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextCalls).toContainEqual(
-      expect.objectContaining({
-        SessionKey: "agent:main:feishu:group:oc-broadcast-group",
-        GroupSubject: "Broadcast Team",
-        ConversationLabel: "Broadcast Team",
-      }),
+    expect(finalizeInboundContextCalls).toHaveLength(1);
+    expect(finalizeInboundContextCalls[0]?.SessionKey).toBe(
+      "agent:main:feishu:group:oc-broadcast-group",
     );
+    expect(finalizeInboundContextCalls[0]?.GroupSubject).toBe("Broadcast Team");
+    expect(finalizeInboundContextCalls[0]?.ConversationLabel).toBe("Broadcast Team");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
   });
 

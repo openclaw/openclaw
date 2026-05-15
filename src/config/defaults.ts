@@ -1,7 +1,9 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
@@ -52,6 +54,10 @@ const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -171,6 +177,10 @@ export function applyModelDefaults(
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
+        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id);
+        if (id !== raw.id) {
+          modelMutated = true;
+        }
 
         const reasoning = typeof raw.reasoning === "boolean" ? raw.reasoning : false;
         if (raw.reasoning !== reasoning) {
@@ -204,7 +214,7 @@ export function applyModelDefaults(
         const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
         const maxTokens = resolveNormalizedProviderModelMaxTokens({
           providerId,
-          modelId: raw.id,
+          modelId: id,
           contextWindow,
           rawMaxTokens,
         });
@@ -221,6 +231,7 @@ export function applyModelDefaults(
         }
         providerMutated = true;
         return Object.assign({}, raw, {
+          id,
           reasoning,
           input,
           cost,
@@ -251,13 +262,67 @@ export function applyModelDefaults(
     }
   }
 
-  const existingAgent = nextCfg.agents?.defaults;
-  if (!existingAgent) {
-    return mutated ? nextCfg : cfg;
+  let nextAgents = nextCfg.agents;
+  const rawAgentList = nextAgents?.list;
+  if (Array.isArray(rawAgentList)) {
+    let listMutated = false;
+    const agentList = rawAgentList.map((agent) => {
+      if (!isRecord(agent)) {
+        return agent;
+      }
+      let nextAgent = agent;
+      if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+        const normalizedModel = normalizeAgentModelConfigForDefaults(agent.model);
+        if (normalizedModel !== agent.model) {
+          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+          listMutated = true;
+        }
+      }
+      if (isRecord(agent.models)) {
+        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+        if (normalizedModels !== agent.models) {
+          nextAgent = { ...nextAgent, models: normalizedModels };
+          listMutated = true;
+        }
+      }
+      return nextAgent;
+    });
+    if (listMutated) {
+      nextAgents = { ...nextAgents, list: agentList };
+      mutated = true;
+    }
   }
-  const existingModels = existingAgent.models ?? {};
+
+  const existingAgent = nextAgents?.defaults;
+  if (!existingAgent) {
+    if (!mutated) {
+      return cfg;
+    }
+    return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
+  }
+
+  let nextAgent = existingAgent;
+  const normalizedModel = normalizeAgentModelConfigForDefaults(existingAgent.model);
+  if (normalizedModel !== existingAgent.model) {
+    nextAgent = { ...nextAgent, model: normalizedModel as typeof existingAgent.model };
+    mutated = true;
+  }
+
+  const rawExistingModels = existingAgent.models ?? {};
+  const existingModels = normalizeAgentModelMapForConfig(rawExistingModels);
+  if (existingModels !== rawExistingModels) {
+    mutated = true;
+  }
   if (Object.keys(existingModels).length === 0) {
-    return mutated ? nextCfg : cfg;
+    return mutated
+      ? {
+          ...nextCfg,
+          agents: {
+            ...nextAgents,
+            defaults: nextAgent,
+          },
+        }
+      : cfg;
   }
 
   const nextModels: Record<string, { alias?: string }> = {
@@ -283,10 +348,42 @@ export function applyModelDefaults(
   return {
     ...nextCfg,
     agents: {
-      ...nextCfg.agents,
-      defaults: { ...existingAgent, models: nextModels },
+      ...nextAgents,
+      defaults: { ...nextAgent, models: nextModels },
     },
   };
+}
+
+function normalizeAgentModelConfigForDefaults(value: unknown): unknown {
+  if (typeof value === "string") {
+    const normalized = normalizeAgentModelRefForConfig(value);
+    return normalized === value ? value : normalized;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const raw = value as Record<string, unknown>;
+  let mutated = false;
+  const next: Record<string, unknown> = { ...raw };
+  if (typeof raw.primary === "string") {
+    const primary = normalizeAgentModelRefForConfig(raw.primary);
+    if (primary !== raw.primary) {
+      next.primary = primary;
+      mutated = true;
+    }
+  }
+  if (Array.isArray(raw.fallbacks)) {
+    const rawFallbacks = raw.fallbacks;
+    const fallbacks = rawFallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (fallbacks.some((fallback, index) => fallback !== rawFallbacks[index])) {
+      next.fallbacks = fallbacks;
+      mutated = true;
+    }
+  }
+  return mutated ? next : value;
 }
 
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {

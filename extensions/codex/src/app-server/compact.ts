@@ -7,8 +7,8 @@ import {
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
+  type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import type { CodexAppServerClient, CodexServerNotificationHandler } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -30,11 +30,9 @@ type ContextEngineCompactResult = Awaited<
 
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 
-let clientFactory = defaultCodexAppServerClientFactory;
-
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
-  options: { pluginConfig?: unknown } = {},
+  options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -107,10 +105,10 @@ export async function maybeCompactCodexAppServerSession(
 
 async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
-  options: { pluginConfig?: unknown } = {},
+  options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const binding = await readCodexAppServerBinding(params.sessionFile);
+  const binding = await readCodexAppServerBinding(params.sessionFile, { config: params.config });
   if (!binding?.threadId) {
     return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }
@@ -123,10 +121,12 @@ async function compactCodexNativeThread(
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
 
+  const clientFactory = options.clientFactory ?? defaultCodexAppServerClientFactory;
   const client = await clientFactory(
     appServer.start,
     requestedAuthProfileId ?? binding.authProfileId,
     params.agentDir,
+    params.config,
   );
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;
@@ -369,7 +369,3 @@ function formatCompactionError(error: unknown): string {
   }
   return String(error);
 }
-
-export const __testing = createCodexAppServerClientFactoryTestHooks((factory) => {
-  clientFactory = factory;
-});

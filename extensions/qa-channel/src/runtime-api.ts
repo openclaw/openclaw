@@ -4,7 +4,7 @@ export type {
   ChannelGatewayContext,
 } from "openclaw/plugin-sdk/channel-contract";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export {
@@ -20,4 +20,4 @@ export {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 export { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-export { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";

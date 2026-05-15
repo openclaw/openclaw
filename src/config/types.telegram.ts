@@ -11,7 +11,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -152,6 +152,8 @@ export type TelegramAccountConfig = {
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
+  /** Buffer window for Telegram media groups/albums before dispatching them as one inbound message. Default: 500ms. */
+  mediaGroupFlushMs?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
   pollingStallThresholdMs?: number;
   /** Retry policy for outbound Telegram API calls. */
@@ -321,9 +323,3 @@ export type TelegramConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & TelegramAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    telegram?: TelegramConfig;
-  }
-}

@@ -46,6 +46,7 @@ type SettingsHost = {
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
+    textScale?: import("./storage.ts").TextScaleStop;
     customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;
@@ -144,6 +145,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navWidth: 220,
     navGroupsCollapsed: {},
     borderRadius: 50,
+    textScale: 100,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -256,8 +258,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "logs");
-    expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
+    expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
@@ -267,8 +269,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "debug");
-    expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
+    expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
@@ -290,6 +292,18 @@ describe("setTabFromRoute", () => {
     expect(host.theme).toBe("knot");
     expect(host.themeMode).toBe("light");
     expect(host.themeResolved).toBe("openknot-light");
+  });
+
+  it("applies normalized browser-local text scale", () => {
+    const host = createHost("chat");
+
+    applySettings(host, {
+      ...host.settings,
+      textScale: 125,
+    });
+
+    expect(host.settings.textScale).toBe(125);
+    expect(document.documentElement.style.getPropertyValue("--control-ui-text-scale")).toBe("1.25");
   });
 
   it("syncs both theme family and mode from persisted settings", () => {

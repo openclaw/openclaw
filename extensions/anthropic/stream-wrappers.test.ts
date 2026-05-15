@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -11,6 +11,9 @@ import {
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const OAUTH_BETA = "oauth-2025-04-20";
+const DEFAULT_BETA_HEADER =
+  "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
+const OAUTH_BETA_HEADER = `claude-code-20250219,${OAUTH_BETA},${DEFAULT_BETA_HEADER}`;
 
 function runWrapper(apiKey: string | undefined): Record<string, string> | undefined {
   const captured: { headers?: Record<string, string> } = {};
@@ -88,31 +91,27 @@ describe("anthropic stream wrappers", () => {
   it("strips context-1m for Claude CLI or legacy token auth and warns", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-oat01-123");
-    expect(headers?.["anthropic-beta"]).toBeDefined();
-    expect(headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
-    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+    expect(headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
     expect(warn).toHaveBeenCalledOnce();
   });
 
   it("keeps context-1m for API key auth", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-api-123");
-    expect(headers?.["anthropic-beta"]).toBeDefined();
-    expect(headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
+    expect(headers?.["anthropic-beta"]).toBe(`${DEFAULT_BETA_HEADER},${CONTEXT_1M_BETA}`);
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("skips service_tier for OAuth token in composed stream chain", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
-    expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
-    expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+    expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
-    expect(captured.headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
-    expect(captured.payload).toMatchObject({ service_tier: "auto" });
+    expect(captured.headers?.["anthropic-beta"]).toBe(`${DEFAULT_BETA_HEADER},${CONTEXT_1M_BETA}`);
+    expect(captured.payload).toEqual({ service_tier: "auto" });
   });
 });
 
@@ -165,80 +164,70 @@ describe("createAnthropicThinkingPrefillWrapper", () => {
   });
 });
 
-describe("createAnthropicFastModeWrapper", () => {
-  function runFastModeWrapper(params: {
-    apiKey?: string;
-    provider?: string;
-    api?: string;
-    baseUrl?: string;
-    enabled?: boolean;
-  }): Record<string, unknown> | undefined {
-    return runPayloadWrapper(params, (base) =>
-      createAnthropicFastModeWrapper(base, params.enabled ?? true),
-    );
-  }
+type ServiceTierWrapperParams = {
+  apiKey?: string;
+  provider?: string;
+  api?: string;
+  enabled?: boolean;
+  serviceTier?: "auto" | "standard_only";
+};
 
-  it("does not inject service_tier for OAuth token", () => {
-    const payload = runFastModeWrapper({ apiKey: "sk-ant-oat01-test-token" });
+const serviceTierWrapperCases: Array<{
+  name: string;
+  run: (params: ServiceTierWrapperParams) => Record<string, unknown> | undefined;
+}> = [
+  {
+    name: "fast mode",
+    run: (params) =>
+      runPayloadWrapper(params, (base) =>
+        createAnthropicFastModeWrapper(base, params.enabled ?? true),
+      ),
+  },
+  {
+    name: "explicit service tier",
+    run: (params) =>
+      runPayloadWrapper(params, (base) =>
+        createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto"),
+      ),
+  },
+];
+
+describe("Anthropic service_tier payload wrappers", () => {
+  it.each(serviceTierWrapperCases)("$name skips service_tier for OAuth token", ({ run }) => {
+    const payload = run({ apiKey: "sk-ant-oat01-test-token" });
     expect(payload?.service_tier).toBeUndefined();
   });
 
-  it("injects service_tier for regular API keys", () => {
-    const payload = runFastModeWrapper({ apiKey: "sk-ant-api03-test-key" });
+  it.each(serviceTierWrapperCases)("$name injects service_tier for regular API keys", ({ run }) => {
+    const payload = run({ apiKey: "sk-ant-api03-test-key" });
     expect(payload?.service_tier).toBe("auto");
   });
 
-  it("injects service_tier=standard_only when disabled for API keys", () => {
-    const payload = runFastModeWrapper({ apiKey: "sk-ant-api03-test-key", enabled: false });
+  it.each(serviceTierWrapperCases)(
+    "$name does not inject service_tier for non-anthropic provider",
+    ({ run }) => {
+      const payload = run({
+        apiKey: "sk-ant-api03-test-key",
+        provider: "openai",
+        api: "openai-completions",
+      });
+      expect(payload?.service_tier).toBeUndefined();
+    },
+  );
+
+  it("fast mode injects service_tier=standard_only when disabled for API keys", () => {
+    const payload = serviceTierWrapperCases[0].run({
+      apiKey: "sk-ant-api03-test-key",
+      enabled: false,
+    });
     expect(payload?.service_tier).toBe("standard_only");
   });
 
-  it("does not inject service_tier for non-anthropic provider", () => {
-    const payload = runFastModeWrapper({
-      apiKey: "sk-ant-api03-test-key",
-      provider: "openai",
-      api: "openai-completions",
-    });
-    expect(payload?.service_tier).toBeUndefined();
-  });
-});
-
-describe("createAnthropicServiceTierWrapper", () => {
-  function runServiceTierWrapper(params: {
-    apiKey?: string;
-    provider?: string;
-    api?: string;
-    serviceTier?: "auto" | "standard_only";
-  }): Record<string, unknown> | undefined {
-    return runPayloadWrapper(params, (base) =>
-      createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto"),
-    );
-  }
-
-  it("does not inject service_tier for OAuth token", () => {
-    const payload = runServiceTierWrapper({ apiKey: "sk-ant-oat01-test-token" });
-    expect(payload?.service_tier).toBeUndefined();
-  });
-
-  it("injects service_tier for regular API keys", () => {
-    const payload = runServiceTierWrapper({ apiKey: "sk-ant-api03-test-key" });
-    expect(payload?.service_tier).toBe("auto");
-  });
-
-  it("injects service_tier=standard_only for regular API keys", () => {
-    const payload = runServiceTierWrapper({
+  it("explicit service tier injects service_tier=standard_only for regular API keys", () => {
+    const payload = serviceTierWrapperCases[1].run({
       apiKey: "sk-ant-api03-test-key",
       serviceTier: "standard_only",
     });
     expect(payload?.service_tier).toBe("standard_only");
-  });
-
-  it("does not inject service_tier for non-anthropic provider", () => {
-    const payload = runServiceTierWrapper({
-      apiKey: "sk-ant-api03-test-key",
-      provider: "openai",
-      api: "openai-completions",
-    });
-    expect(payload?.service_tier).toBeUndefined();
   });
 });

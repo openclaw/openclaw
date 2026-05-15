@@ -107,7 +107,11 @@ export type PluginRuntimeChannel = {
     upsertPairingRequest: UpsertChannelPairingRequestForAccount;
   };
   media: {
+    readRemoteMediaBuffer: typeof import("../../media/fetch.js").readRemoteMediaBuffer;
+    /** @deprecated Use `readRemoteMediaBuffer`. */
     fetchRemoteMedia: typeof import("../../media/fetch.js").fetchRemoteMedia;
+    saveRemoteMedia: typeof import("../../media/fetch.js").saveRemoteMedia;
+    saveResponseMedia: typeof import("../../media/fetch.js").saveResponseMedia;
     saveMediaBuffer: typeof import("../../media/store.js").saveMediaBuffer;
   };
   activity: {
@@ -153,11 +157,12 @@ export type PluginRuntimeChannel = {
   };
   turn: {
     run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
+    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
     /** @deprecated Prefer `run(...)`. */
     runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
     buildContext: typeof import("../../channels/turn/kernel.js").buildChannelTurnContext;
     runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
-    /** @deprecated Prefer `run(...)` or `runPrepared(...)`. */
+    /** @deprecated Prefer `runAssembled(...)`. */
     dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
   };
   threadBindings: {

@@ -34,6 +34,78 @@ function createReplyOperation() {
   } as never;
 }
 
+type RefreshQueuedFollowupSessionParams = {
+  key?: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+};
+
+type ModelFallbackParams = {
+  provider?: string;
+  model?: string;
+  fallbacksOverride?: unknown[];
+};
+
+type EmbeddedPiAgentParams = {
+  provider?: string;
+  model?: string;
+  authProfileId?: unknown;
+  authProfileIdSource?: unknown;
+  prompt?: string;
+  transcriptPrompt?: string;
+  memoryFlushWritePath?: string;
+  silentExpected?: boolean;
+  extraSystemPrompt?: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
+};
+
+type CompactEmbeddedPiSessionParams = {
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  currentTokenCount?: number;
+  sessionFile?: string;
+  sessionId?: string;
+  trigger?: string;
+};
+
+function requireRefreshQueuedFollowupSessionCall(index = 0) {
+  const call = refreshQueuedFollowupSessionMock.mock.calls[index]?.[0] as
+    | RefreshQueuedFollowupSessionParams
+    | undefined;
+  if (!call) {
+    throw new Error(`refreshQueuedFollowupSession call ${index} missing`);
+  }
+  return call;
+}
+
+function requireModelFallbackCall(index = 0) {
+  const call = runWithModelFallbackMock.mock.calls[index]?.[0] as ModelFallbackParams | undefined;
+  if (!call) {
+    throw new Error(`runWithModelFallback call ${index} missing`);
+  }
+  return call;
+}
+
+function requireEmbeddedPiAgentCall(index = 0) {
+  const call = runEmbeddedPiAgentMock.mock.calls[index]?.[0] as EmbeddedPiAgentParams | undefined;
+  if (!call) {
+    throw new Error(`runEmbeddedPiAgent call ${index} missing`);
+  }
+  return call;
+}
+
+function requireCompactEmbeddedPiSessionCall(index = 0) {
+  const call = compactEmbeddedPiSessionMock.mock.calls[index]?.[0] as
+    | CompactEmbeddedPiSessionParams
+    | undefined;
+  if (!call) {
+    throw new Error(`compactEmbeddedPiSession call ${index} missing`);
+  }
+  return call;
+}
+
 describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
 
@@ -157,31 +229,216 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(entry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      prompt?: string;
-      transcriptPrompt?: string;
-      memoryFlushWritePath?: string;
-      silentExpected?: boolean;
-    };
+    const flushCall = requireEmbeddedPiAgentCall();
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
     expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
-    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
-      key: sessionKey,
-      previousSessionId: "session",
-      nextSessionId: "session-rotated",
-      nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
-    });
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
+    const refreshCall = requireRefreshQueuedFollowupSessionCall();
+    expect(refreshCall.key).toBe(sessionKey);
+    expect(refreshCall.previousSessionId).toBe("session");
+    expect(refreshCall.nextSessionId).toBe("session-rotated");
+    expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
       main: SessionEntry;
     };
     expect(persisted.main.sessionId).toBe("session-rotated");
     expect(persisted.main.compactionCount).toBe(2);
-    expect(persisted.main.memoryFlushCompactionCount).toBe(2);
+    expect(persisted.main.memoryFlushCompactionCount).toBe(1);
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
+  });
+
+  it("reports memory-flush error payloads for visible delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "normal silent maintenance reply" },
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+          isError: true,
+        },
+      ],
+      meta: {},
+    });
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([
+      {
+        text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+        isError: true,
+      },
+    ]);
+  });
+
+  it("reports restricted memory-flush write failures for visible delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(
+        "write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+      ),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([
+      {
+        text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+        isError: true,
+      },
+    ]);
+  });
+
+  it("surfaces generic non-abort memory-flush failures so cron meta.error is populated (regression: #80755)", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("provider timed out after 60s while flushing memory"),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([
+      {
+        text: "⚠️ provider timed out after 60s while flushing memory",
+        isError: true,
+      },
+    ]);
+  });
+
+  it("redacts and caps generic visible memory-flush failures before delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    const token = "sk-abcdefghijklmnopqrstuv";
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(`provider failed with Authorization: Bearer ${token} ${"x".repeat(800)}`),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    const [payload] = visibleErrorPayloads;
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toMatch(/^⚠️ provider failed with Authorization: Bearer /);
+    expect(payload?.text).not.toContain(token);
+    expect(payload?.text?.length).toBeLessThanOrEqual(600);
+    expect(payload?.text?.endsWith("…")).toBe(true);
+  });
+
+  it("does not surface user-abort errors as visible payloads (regression: #80755)", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    const abortErr = new Error("operation aborted by user");
+    abortErr.name = "AbortError";
+    runWithModelFallbackMock.mockRejectedValueOnce(abortErr);
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([]);
   });
 
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
@@ -229,21 +486,17 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(runWithModelFallbackMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "qwen3:8b",
-        fallbacksOverride: [],
-      }),
-    );
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "qwen3:8b",
-        authProfileId: undefined,
-        authProfileIdSource: undefined,
-      }),
-    );
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    const fallbackCall = requireModelFallbackCall();
+    expect(fallbackCall.provider).toBe("ollama");
+    expect(fallbackCall.model).toBe("qwen3:8b");
+    expect(fallbackCall.fallbacksOverride).toEqual([]);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const agentCall = requireEmbeddedPiAgentCall();
+    expect(agentCall.provider).toBe("ollama");
+    expect(agentCall.model).toBe("qwen3:8b");
+    expect(agentCall.authProfileId).toBeUndefined();
+    expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
   it("skips memory flush for CLI providers", async () => {
@@ -356,12 +609,10 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        sandboxSessionKey: "agent:main:telegram:default:direct:12345",
-      }),
-    );
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.sessionKey).toBe("agent:main:main");
+    expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
   });
 
   it("updates the active preflight run after transcript rotation", async () => {
@@ -479,9 +730,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
-      currentTokenCount?: number;
-    };
+    const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
   });
 
@@ -529,12 +778,10 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session",
-        sessionFile: expect.stringContaining("active-run-session.jsonl"),
-      }),
-    );
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.sessionId).toBe("session");
+    expect(compactCall.sessionFile).toContain("active-run-session.jsonl");
   });
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
@@ -590,10 +837,189 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
-      currentTokenCount?: number;
-    };
+    const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
+  });
+
+  it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
+    const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: { input: 86_000, output: 2_000 },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "tool",
+            content: `moderate interrupted tool output ${"x".repeat(36_000)}`,
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(96_000);
+  });
+
+  it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
+    const sessionFile = path.join(rootDir, "large-usage-record-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session",
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: `large answer ${"x".repeat(300_000)}`,
+            usage: { input: 40_000, output: 2_000 },
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat raw transcript metadata bytes as token pressure", async () => {
+    const sessionFile = path.join(rootDir, "metadata-heavy-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session",
+        }),
+        JSON.stringify({
+          type: "custom",
+          payload: "x".repeat(450_000),
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: { input: 40_000, output: 2_000 },
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10mb",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
   });
 
   it("triggers preflight compaction when the active transcript exceeds the configured byte threshold", async () => {
@@ -646,19 +1072,10 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(entry?.compactionCount).toBe(1);
     expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
-      currentTokenCount?: number;
-      sessionFile?: string;
-      sessionId?: string;
-      trigger?: string;
-    };
-    expect(compactCall).toEqual(
-      expect.objectContaining({
-        sessionId: "session",
-        trigger: "budget",
-        currentTokenCount: 10,
-      }),
-    );
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.sessionId).toBe("session");
+    expect(compactCall.trigger).toBe("budget");
+    expect(compactCall.currentTokenCount).toBe(10);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 
@@ -753,15 +1170,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      prompt?: string;
-      transcriptPrompt?: string;
-      extraSystemPrompt?: string;
-      bootstrapPromptWarningSignaturesSeen?: string[];
-      bootstrapPromptWarningSignature?: string;
-      memoryFlushWritePath?: string;
-      silentExpected?: boolean;
-    };
+    const flushCall = requireEmbeddedPiAgentCall();
     expect(flushCall.prompt).toContain("Write notes.");
     expect(flushCall.prompt).toContain("NO_REPLY");
     expect(flushCall.prompt).toContain("MEMORY.md");

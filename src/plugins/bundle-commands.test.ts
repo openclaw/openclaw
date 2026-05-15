@@ -86,11 +86,10 @@ function expectEnabledClaudeBundleCommands(
     rawName: string;
     description: string;
     promptTemplate: string;
+    sourceFilePath: string;
   }>,
 ) {
-  expect(commands).toEqual(
-    expect.arrayContaining(expected.map((entry) => expect.objectContaining(entry))),
-  );
+  expect(commands).toEqual(expected);
 }
 
 describe("loadEnabledClaudeBundleCommands", () => {
@@ -149,15 +148,27 @@ describe("loadEnabledClaudeBundleCommands", () => {
           rawName: "office-hours",
           description: "Help with scoping and architecture",
           promptTemplate: "Give direct engineering advice.",
+          sourceFilePath: path.join(
+            resolveBundlePluginRoot(homeDir, "compound-bundle"),
+            "commands",
+            "office-hours.md",
+          ),
         },
         {
           pluginId: "compound-bundle",
           rawName: "workflows:review",
           description: "Run a structured review",
           promptTemplate: "Review the code. $ARGUMENTS",
+          sourceFilePath: path.join(
+            resolveBundlePluginRoot(homeDir, "compound-bundle"),
+            "commands",
+            "workflows",
+            "review.md",
+          ),
         },
       ]);
-      expect(commands.some((entry) => entry.rawName === "disabled")).toBe(false);
+      const rawNames = commands.map((entry) => entry.rawName);
+      expect(rawNames).not.toContain("disabled");
     } finally {
       env.restore();
     }

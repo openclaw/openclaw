@@ -11,13 +11,12 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -28,6 +27,7 @@ import {
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
@@ -37,18 +37,15 @@ import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runti
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  DM_GROUP_ACCESS_REASON,
-  resolvePinnedMainDmOwnerFromAllowlist,
-} from "openclaw/plugin-sdk/security-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
   formatSignalSenderId,
-  isSignalSenderAllowed,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
   resolveSignalRecipient,
@@ -190,11 +187,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
-        ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
-            sender: historyEntry.sender,
-            body: historyEntry.body,
-            timestamp: historyEntry.timestamp,
-          }))
+        ? buildInboundHistoryFromMap({
+            historyMap: deps.groupHistories,
+            historyKey,
+            limit: deps.historyLimit,
+          })
         : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
@@ -238,39 +235,40 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-      cfg: deps.cfg,
-      agentId: route.agentId,
-      channel: "signal",
-      accountId: route.accountId,
-      typing: {
-        start: async () => {
-          if (!ctxPayload.To) {
-            return;
-          }
-          await sendTypingSignal(ctxPayload.To, {
-            cfg: deps.cfg,
-            baseUrl: deps.baseUrl,
-            account: deps.account,
-            accountId: deps.accountId,
-          });
+    const { onModelSelected, typingCallbacks, ...replyPipeline } =
+      createChannelMessageReplyPipeline({
+        cfg: deps.cfg,
+        agentId: route.agentId,
+        channel: "signal",
+        accountId: route.accountId,
+        typing: {
+          start: async () => {
+            if (!ctxPayload.To) {
+              return;
+            }
+            await sendTypingSignal(ctxPayload.To, {
+              cfg: deps.cfg,
+              baseUrl: deps.baseUrl,
+              account: deps.account,
+              accountId: deps.accountId,
+            });
+          },
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerbose,
+              channel: "signal",
+              target: ctxPayload.To ?? undefined,
+              error: err,
+            });
+          },
         },
-        onStartError: (err) => {
-          logTypingFailure({
-            log: logVerbose,
-            channel: "signal",
-            target: ctxPayload.To ?? undefined,
-            error: err,
-          });
-        },
-      },
-    });
+      });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
-      deliver: async (payload) => {
+      deliver: async (payload, _info) => {
         await deps.deliverReplies({
           cfg: deps.cfg,
           replies: [payload],
@@ -424,10 +422,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     senderDisplay: string;
     reaction: SignalReactionMessage;
     hasBodyContent: boolean;
-    resolveAccessDecision: (isGroup: boolean) => {
-      decision: "allow" | "block" | "pairing";
-      reason: string;
-    };
+    accessDecision: { decision: "allow" | "block" | "pairing"; reasonCode: string };
   }): boolean {
     if (params.hasBodyContent) {
       return false;
@@ -441,10 +436,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    const reactionAccess = params.resolveAccessDecision(isGroup);
-    if (reactionAccess.decision !== "allow") {
+    if (params.accessDecision.decision !== "allow") {
       logVerbose(
-        `Blocked signal reaction sender ${params.senderDisplay} (${reactionAccess.reason})`,
+        `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
       );
       return true;
     }
@@ -491,7 +485,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ]
       .filter(Boolean)
       .join(":");
-    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey, trusted: false });
+    enqueueSystemEvent(text, {
+      sessionKey: route.sessionKey,
+      contextKey,
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
     return true;
   }
 
@@ -554,15 +553,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageText = normalizedMessage.trim();
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
+    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const {
-      resolveAccessDecision,
-      isGroupAllowed,
-      dmAccess,
-      effectiveDmAllow,
-      effectiveGroupAllow,
-    } = await resolveSignalAccessState({
+    const { senderAccess, commandAccess } = await resolveSignalAccessState({
       accountId: deps.accountId,
       dmPolicy: deps.dmPolicy,
       groupPolicy: deps.groupPolicy,
@@ -570,6 +564,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupAllowFrom: deps.groupAllowFrom,
       sender,
       groupId,
+      isGroup,
+      cfg: deps.cfg,
+      hasControlCommand: hasControlCommandInMessage,
     });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
@@ -578,7 +575,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         isGroup,
         dataMessage,
-        effectiveGroupAllow,
+        effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
       });
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
@@ -597,7 +594,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         senderDisplay,
         reaction,
         hasBodyContent,
-        resolveAccessDecision,
+        accessDecision: senderAccess,
       })
     ) {
       return;
@@ -618,7 +615,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
         dmPolicy: deps.dmPolicy,
-        dmAccessDecision: dmAccess.decision,
+        dmAccessDecision: senderAccess.decision,
         senderId: senderAllowId,
         senderIdLine,
         senderDisplay,
@@ -640,11 +637,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
     if (isGroup) {
-      const groupAccess = resolveAccessDecision(true);
-      if (groupAccess.decision !== "allow") {
-        if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
+      if (senderAccess.decision !== "allow") {
+        if (senderAccess.reasonCode === "group_policy_disabled") {
           logVerbose("Blocked signal group message (groupPolicy: disabled)");
-        } else if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
+        } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
           logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
         } else {
           logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
@@ -653,22 +649,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
-    const commandDmAllow = isGroup ? deps.allowFrom : effectiveDmAllow;
-    const ownerAllowedForCommands = isSignalSenderAllowed(sender, commandDmAllow);
-    const groupAllowedForCommands = isGroupAllowed(effectiveGroupAllow);
-    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
-    const commandGate = resolveControlCommandGate({
-      useAccessGroups,
-      authorizers: [
-        { configured: commandDmAllow.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
-      ],
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
-    });
-    const commandAuthorized = commandGate.commandAuthorized;
-    if (isGroup && commandGate.shouldBlock) {
+    const commandAuthorized = commandAccess.authorized;
+    if (isGroup && commandAccess.shouldBlockControlCommand) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",

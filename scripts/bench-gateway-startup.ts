@@ -580,7 +580,10 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     const value = Number(metricMatch[2]);
     if (
       !Number.isFinite(value) ||
-      (key !== "eventLoopMax" && !key.endsWith("Ms") && !key.endsWith("Mb"))
+      (key !== "eventLoopMax" &&
+        !key.endsWith("Ms") &&
+        !key.endsWith("Mb") &&
+        !key.endsWith("Count"))
     ) {
       continue;
     }

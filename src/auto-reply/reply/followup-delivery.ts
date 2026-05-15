@@ -46,18 +46,20 @@ export function resolveFollowupDeliveryPayloads(params: {
     params.originatingAccountId,
     params.originatingChatType,
   );
-  const sanitizedPayloads = params.payloads.flatMap((payload) => {
+  const sanitizedPayloads: ReplyPayload[] = [];
+  for (const payload of params.payloads) {
     const text = payload.text;
     if (!text || !text.includes("HEARTBEAT_OK")) {
-      return [payload];
+      sanitizedPayloads.push(payload);
+      continue;
     }
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     const hasMedia = hasReplyPayloadMedia(payload);
     if (stripped.shouldSkip && !hasMedia) {
-      return [];
+      continue;
     }
-    return [{ ...payload, text: stripped.text }];
-  });
+    sanitizedPayloads.push({ ...payload, text: stripped.text });
+  }
   const replyTaggedPayloads = applyReplyThreading({
     payloads: sanitizedPayloads,
     replyToMode,
@@ -73,17 +75,37 @@ export function resolveFollowupDeliveryPayloads(params: {
       originatingAccountId: params.originatingAccountId,
     }),
   });
+  const sentMediaUrlFallback = params.sentMediaUrls ?? [];
+  const sentTextFallback = params.sentTexts ?? [];
+  const shouldUseGlobalSentMediaUrlEvidence =
+    messagingToolPayloadDedupe.matchingRoute &&
+    messagingToolPayloadDedupe.routeSentMediaUrls.length === 0 &&
+    messagingToolPayloadDedupe.useGlobalSentMediaUrlEvidenceFallback;
+  const shouldUseGlobalSentTextEvidence =
+    messagingToolPayloadDedupe.matchingRoute &&
+    messagingToolPayloadDedupe.routeSentTexts.length === 0 &&
+    messagingToolPayloadDedupe.useGlobalSentTextEvidenceFallback;
+  const sentMediaUrlsForDedupe = messagingToolPayloadDedupe.matchingRoute
+    ? shouldUseGlobalSentMediaUrlEvidence
+      ? sentMediaUrlFallback
+      : messagingToolPayloadDedupe.routeSentMediaUrls
+    : sentMediaUrlFallback;
+  const sentTextsForDedupe = messagingToolPayloadDedupe.matchingRoute
+    ? shouldUseGlobalSentTextEvidence
+      ? sentTextFallback
+      : messagingToolPayloadDedupe.routeSentTexts
+    : sentTextFallback;
   const mediaFilteredPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
     ? filterMessagingToolMediaDuplicates({
         payloads: replyTaggedPayloads,
-        sentMediaUrls: params.sentMediaUrls ?? [],
+        sentMediaUrls: sentMediaUrlsForDedupe,
       })
     : replyTaggedPayloads;
   const dedupedPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
     ? filterMessagingToolDuplicates({
         payloads: mediaFilteredPayloads,
-        sentTexts: params.sentTexts ?? [],
+        sentTexts: sentTextsForDedupe,
       })
     : mediaFilteredPayloads;
-  return messagingToolPayloadDedupe.suppressReplies ? [] : dedupedPayloads;
+  return dedupedPayloads;
 }

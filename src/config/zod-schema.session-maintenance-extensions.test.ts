@@ -3,13 +3,12 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 describe("SessionSchema maintenance extensions", () => {
   it("accepts session write-lock acquire timeout", () => {
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          acquireTimeoutMs: 60_000,
-        },
-      }),
-    ).not.toThrow();
+    const result = SessionSchema.safeParse({
+      writeLock: {
+        acquireTimeoutMs: 60_000,
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid session write-lock acquire timeout values", () => {
@@ -23,25 +22,23 @@ describe("SessionSchema maintenance extensions", () => {
   });
 
   it("accepts valid maintenance extensions", () => {
-    expect(() =>
-      SessionSchema.parse({
-        maintenance: {
-          resetArchiveRetention: "14d",
-          maxDiskBytes: "500mb",
-          highWaterBytes: "350mb",
-        },
-      }),
-    ).not.toThrow();
+    const result = SessionSchema.safeParse({
+      maintenance: {
+        resetArchiveRetention: "14d",
+        maxDiskBytes: "500mb",
+        highWaterBytes: "350mb",
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts disabling reset archive cleanup", () => {
-    expect(() =>
-      SessionSchema.parse({
-        maintenance: {
-          resetArchiveRetention: false,
-        },
-      }),
-    ).not.toThrow();
+    const result = SessionSchema.safeParse({
+      maintenance: {
+        resetArchiveRetention: false,
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid maintenance extension values", () => {
