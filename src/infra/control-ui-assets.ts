@@ -330,6 +330,9 @@ export async function ensureControlUiAssetsBuilt(
   const build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
     cwd: repoRoot,
     timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
+    env: {
+      CI: process.env.CI || "true",
+    },
   });
   if (build.code !== 0) {
     return {

@@ -89,6 +89,15 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 }
 
+export const AUTO_INSTALL_ARGS = ["install", "--config.confirm-modules-purge=false"];
+
+export function resolveAutoInstallEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    CI: baseEnv.CI || "true",
+  };
+}
+
 function run(cmd, args) {
   const { command, args: spawnArgs, options } = resolveSpawnCall(cmd, args);
   let child;
@@ -186,9 +195,7 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv = process.env;
-    const installArgs = ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    runSync(runner.cmd, AUTO_INSTALL_ARGS, resolveAutoInstallEnv());
   }
 
   run(runner.cmd, ["run", script, ...rest]);
