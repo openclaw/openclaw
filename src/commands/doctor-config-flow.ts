@@ -307,6 +307,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    sourceConfigIssues: snapshot.issues,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };

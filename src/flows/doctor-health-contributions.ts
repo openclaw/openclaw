@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { FlowContribution } from "./types.js";
@@ -13,6 +13,7 @@ type DoctorConfigResult = {
   path?: string;
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
+  sourceConfigIssues?: ConfigValidationIssue[];
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
 };
@@ -69,6 +70,22 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
     return false;
   }
   return true;
+}
+
+function isConfiguredPluginInstallRepairableIssue(issue: ConfigValidationIssue): boolean {
+  return (
+    issue.path.trim() === "tools.web.search.provider" &&
+    issue.message.trim().startsWith("web_search provider is not available:") &&
+    issue.message.includes("install or enable plugin")
+  );
+}
+
+function shouldRunReleaseConfiguredPluginInstallsHealth(ctx: DoctorHealthFlowContext): boolean {
+  if (ctx.sourceConfigValid) {
+    return true;
+  }
+  const issues = ctx.configResult.sourceConfigIssues ?? [];
+  return issues.length > 0 && issues.every(isConfiguredPluginInstallRepairableIssue);
 }
 
 function createDoctorHealthContribution(params: {
@@ -279,7 +296,7 @@ async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<vo
 async function runReleaseConfiguredPluginInstallsHealth(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
-  if (!ctx.sourceConfigValid) {
+  if (!shouldRunReleaseConfiguredPluginInstallsHealth(ctx)) {
     return;
   }
   if (!ctx.prompter.shouldRepair) {

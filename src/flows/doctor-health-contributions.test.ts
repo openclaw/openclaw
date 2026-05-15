@@ -142,6 +142,66 @@ describe("doctor health contributions", () => {
     expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.2-test");
   });
 
+  it("runs release configured plugin installs when installable web search config blocks validation", async () => {
+    mocks.maybeRunConfiguredPluginInstallReleaseStep.mockResolvedValue({
+      changes: ['Installed missing configured plugin "brave".'],
+      warnings: [],
+      touchedConfig: true,
+    });
+    const contribution = requireDoctorContribution("doctor:release-configured-plugin-installs");
+    const cfg = { tools: { web: { search: { provider: "brave" } } } };
+    const ctx = {
+      cfg,
+      configResult: {
+        cfg,
+        sourceLastTouchedVersion: "2026.4.29",
+        sourceConfigIssues: [
+          {
+            path: "tools.web.search.provider",
+            message:
+              'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+          },
+        ],
+      },
+      sourceConfigValid: false,
+      prompter: buildDoctorPrompter(true),
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeRunConfiguredPluginInstallReleaseStep).toHaveBeenCalledWith({
+      cfg,
+      env: {},
+      touchedVersion: "2026.4.29",
+    });
+    expect(mocks.note).toHaveBeenCalledWith(
+      'Installed missing configured plugin "brave".',
+      "Doctor changes",
+    );
+    expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.2-test");
+  });
+
+  it("does not run release configured plugin installs for unrelated invalid config", async () => {
+    const contribution = requireDoctorContribution("doctor:release-configured-plugin-installs");
+    const ctx = {
+      cfg: {},
+      configResult: {
+        cfg: {},
+        sourceLastTouchedVersion: "2026.4.29",
+        sourceConfigIssues: [{ path: "gateway.mode", message: "Expected local or remote" }],
+      },
+      sourceConfigValid: false,
+      prompter: buildDoctorPrompter(true),
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeRunConfiguredPluginInstallReleaseStep).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
   it("checks command owner configuration before final config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
