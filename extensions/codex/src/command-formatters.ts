@@ -2,6 +2,7 @@ import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
+  hasCodexRateLimitSnapshots,
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
@@ -349,13 +350,21 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
 }
 
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
-  return formatCodexDisplayText(summarizeCodexRateLimits(value) ?? summarizeRateLimits(value));
+  const summary = summarizeCodexRateLimits(value);
+  if (summary) {
+    return formatCodexDisplayText(summary);
+  }
+  return formatCodexDisplayText(
+    hasCodexRateLimitSnapshots(value) ? "none returned" : summarizeRateLimits(value),
+  );
 }
 
 function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
   const lines = summarizeCodexAccountRateLimits(value);
   if (!lines) {
-    return formatCodexDisplayText(summarizeRateLimits(value));
+    return formatCodexDisplayText(
+      hasCodexRateLimitSnapshots(value) ? "none returned" : summarizeRateLimits(value),
+    );
   }
   return lines.map(formatCodexDisplayText).join("\n");
 }

@@ -126,6 +126,16 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["openshell", "slack"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
