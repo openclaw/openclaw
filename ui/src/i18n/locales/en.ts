@@ -688,9 +688,6 @@ export const en: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "See where tokens go, when sessions spike, and what drives cost.",
-    },
     common: {
       emptyValue: "—",
       unknown: "unknown",

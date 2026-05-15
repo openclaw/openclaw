@@ -693,9 +693,6 @@ export const id: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Lihat ke mana token digunakan, kapan sesi melonjak, dan apa yang mendorong biaya.",
-    },
     common: {
       emptyValue: "—",
       unknown: "tidak diketahui",
