@@ -430,7 +430,7 @@ export async function processDiscordMessage(
     log: logVerbose,
   });
   const finalPreviewFlags =
-    (discordConfig.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
+    (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
   const notifyFinalReplyStart = () => {
     if (finalReplyStartNotified) {
