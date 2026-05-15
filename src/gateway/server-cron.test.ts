@@ -868,6 +868,7 @@ describe("buildGatewayCronService", () => {
                   sessionKey?: string;
                   contextKey?: string;
                   forceSenderIsOwnerFalse?: boolean;
+                  trusted?: boolean;
                 },
               ) => void;
             };
@@ -885,6 +886,7 @@ describe("buildGatewayCronService", () => {
         sessionKey: "agent:main:discord:channel:ops",
         contextKey: "cron:test",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       });
     } finally {
       state.cron.stop();
