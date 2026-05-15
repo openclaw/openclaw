@@ -6,7 +6,10 @@ import {
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
 import { getLoadedChannelPlugin } from "./plugins/index.js";
-import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
+import {
+  resolveBundledChannelThreadBindingAutomaticSpawnSupport,
+  resolveBundledChannelThreadBindingDefaultPlacement,
+} from "./plugins/thread-binding-api.js";
 
 export {
   resolveThreadBindingLifecycle,
@@ -47,7 +50,14 @@ function normalizeChannelId(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
-export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
+export function supportsAutomaticThreadBindingSpawn(
+  channel: string,
+  kind?: ThreadBindingSpawnKind,
+): boolean {
+  const explicitSupport = resolveAutomaticThreadBindingSpawnSupport(channel, kind);
+  if (explicitSupport !== undefined) {
+    return explicitSupport;
+  }
   return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
@@ -75,6 +85,47 @@ function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
     resolveBundledChannelThreadBindingDefaultPlacement(normalized) ??
     "current"
   );
+}
+
+function resolveAutomaticThreadBindingSpawnSupport(
+  channel: string,
+  kind?: ThreadBindingSpawnKind,
+): boolean | undefined {
+  const normalized = normalizeChannelId(channel);
+  if (!normalized) {
+    return undefined;
+  }
+  const loadedSupport = normalizeAutomaticSpawnSupport(
+    getLoadedChannelPlugin(normalized)?.conversationBindings?.supportsAutomaticThreadBindingSpawn,
+    kind,
+  );
+  if (loadedSupport !== undefined) {
+    return loadedSupport;
+  }
+  return resolveBundledChannelThreadBindingAutomaticSpawnSupport(normalized, kind);
+}
+
+function normalizeAutomaticSpawnSupport(
+  value: unknown,
+  kind?: ThreadBindingSpawnKind,
+): boolean | undefined {
+  const booleanValue = normalizeBoolean(value);
+  if (booleanValue !== undefined) {
+    return booleanValue;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const support = value as Record<ThreadBindingSpawnKind, unknown>;
+  if (kind) {
+    return normalizeBoolean(support[kind]) ?? false;
+  }
+  const subagent = normalizeBoolean(support.subagent);
+  const acp = normalizeBoolean(support.acp);
+  if (subagent === undefined && acp === undefined) {
+    return undefined;
+  }
+  return subagent === true || acp === true;
 }
 
 function normalizeBoolean(value: unknown): boolean | undefined {

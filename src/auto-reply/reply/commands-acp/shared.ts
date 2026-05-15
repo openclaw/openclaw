@@ -174,7 +174,7 @@ function normalizeAcpOptionToken(raw: string): string {
 
 function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
   const channel = resolveAcpCommandChannel(params);
-  if (!supportsAutomaticThreadBindingSpawn(channel)) {
+  if (!supportsAutomaticThreadBindingSpawn(channel, "acp")) {
     return "off";
   }
   const currentThreadId = resolveAcpCommandThreadId(params);

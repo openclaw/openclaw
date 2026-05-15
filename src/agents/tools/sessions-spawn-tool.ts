@@ -134,10 +134,13 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 }): SessionsSpawnThreadAvailability {
   const channel = opts?.agentChannel;
   const cfg = opts?.config;
-  if (!channel || !cfg || !supportsAutomaticThreadBindingSpawn(channel)) {
+  if (!channel || !cfg) {
     return { subagent: false, acp: false };
   }
   const resolve = (kind: "subagent" | "acp") => {
+    if (!supportsAutomaticThreadBindingSpawn(channel, kind)) {
+      return false;
+    }
     const policy = resolveThreadBindingSpawnPolicy({
       cfg,
       channel,
@@ -358,6 +361,13 @@ export function createSessionsSpawnTool(
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      if (thread && opts?.agentChannel && opts.config && !threadAvailability[runtime]) {
+        return jsonResult({
+          status: "error",
+          error: `thread=true is unavailable for runtime="${runtime}" in the current ${opts.agentChannel} channel/account.`,
+          ...roleContext,
+        });
+      }
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;

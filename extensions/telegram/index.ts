@@ -1,4 +1,5 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { registerTelegramSubagentHooks } from "./subagent-hooks-api.js";
 
 export default defineBundledChannelEntry({
   id: "telegram",
@@ -20,5 +21,8 @@ export default defineBundledChannelEntry({
   accountInspect: {
     specifier: "./account-inspect-api.js",
     exportName: "inspectTelegramReadOnlyAccount",
+  },
+  registerFull(api) {
+    registerTelegramSubagentHooks(api);
   },
 });

@@ -633,6 +633,7 @@ export const telegramPlugin = createChatChannelPlugin({
     conversationBindings: {
       supportsCurrentConversationBinding: true,
       defaultTopLevelPlacement: "current",
+      supportsAutomaticThreadBindingSpawn: { subagent: true, acp: false },
       resolveConversationRef: ({
         accountId: _accountId,
         conversationId,

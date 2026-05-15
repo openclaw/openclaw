@@ -128,6 +128,18 @@ can also expose a top-level `session-key-api.ts` file with a matching
 `resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
 only when the runtime plugin registry is not available yet.
 
+If your channel supports explicit thread-bound session spawns, set
+`conversationBindings.supportsAutomaticThreadBindingSpawn` to `true`. This is
+separate from `conversationBindings.defaultTopLevelPlacement`: keep the default
+as `current` when commands such as `/focus` should bind the current
+conversation, and use the automatic-spawn flag only when `sessions_spawn` can
+request a new child thread explicitly. Use a per-kind object such as
+`{ subagent: true, acp: false }` when native subagent and ACP-backed session
+spawns have different support. Bundled plugins that need this decision before
+the channel registry boots can also expose a top-level `thread-binding-api.ts`
+file with `supportsAutomaticThreadBindingSpawn = true` or the same per-kind
+object.
+
 `messaging.resolveParentConversationCandidates(...)` remains available as a
 legacy compatibility fallback when a plugin only needs parent fallbacks on top
 of the generic/raw id. If both hooks exist, core uses
