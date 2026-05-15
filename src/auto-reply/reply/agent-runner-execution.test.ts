@@ -541,6 +541,56 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("does not reuse or persist CLI sessions for room-event turns", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ambient" }],
+      meta: {
+        agentMeta: {
+          sessionId: "transient-cli-session",
+          cliSessionBinding: {
+            sessionId: "transient-cli-session",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentTurnKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () =>
+        ({
+          cliSessionBindings: {
+            "codex-cli": { sessionId: "existing-cli-session" },
+          },
+        }) as unknown as SessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentTurnKind: "room_event",
+      cliSessionId: undefined,
+      cliSessionBinding: undefined,
+    });
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

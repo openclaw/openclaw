@@ -1514,10 +1514,10 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              cliExecutionProvider,
-            );
+            const isRoomEventCliTurn = params.followupRun.currentTurnKind === "room_event";
+            const cliSessionBinding = isRoomEventCliTurn
+              ? undefined
+              : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
             const authProfile = resolveRunAuthProfile(
               params.followupRun.run,
               cliExecutionProvider,
@@ -1579,7 +1579,7 @@ export async function runAgentTurnWithFallback(params: {
                   })
                 : noopBridge;
               try {
-                const result = await runCliAgent({
+                const rawResult = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
@@ -1622,6 +1622,19 @@ export async function runAgentTurnWithFallback(params: {
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
+                const result = isRoomEventCliTurn
+                  ? {
+                      ...rawResult,
+                      meta: {
+                        ...rawResult.meta,
+                        agentMeta: {
+                          ...rawResult.meta?.agentMeta,
+                          sessionId: "",
+                          cliSessionBinding: undefined,
+                        },
+                      },
+                    }
+                  : rawResult;
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );

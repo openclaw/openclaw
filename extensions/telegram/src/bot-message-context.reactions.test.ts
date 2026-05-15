@@ -86,7 +86,7 @@ describe("buildTelegramMessageContext reactions", () => {
         },
         messages: {
           ackReaction: "👀",
-          groupChat: { mentionPatterns: [] },
+          groupChat: { ambientTurns: "room_event", mentionPatterns: [] },
           statusReactions: { enabled: true },
         },
       },

@@ -61,8 +61,23 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     }
   });
 
-  it("marks always-on ambient group messages as room events", async () => {
+  it("keeps always-on ambient group messages as user requests by default", async () => {
     const ctx = await buildTelegramMessageContextForTest({
+      message: buildForumMessage(),
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundTurnKind).toBe("user_request");
+  });
+
+  it("marks always-on ambient group messages as room events when configured", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { ambientTurns: "room_event", mentionPatterns: [] } } },
       message: buildForumMessage(),
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
@@ -78,6 +93,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   it("keeps room events as context for the next direct group request", async () => {
     const groupHistories = new Map();
     await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { ambientTurns: "room_event", mentionPatterns: [] } } },
       message: { ...buildForumMessage(99), text: "side chatter" },
       historyLimit: 10,
       groupHistories,

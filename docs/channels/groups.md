@@ -36,7 +36,7 @@ groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
 requireMention? yes -> mentioned? no -> store for context only
 mention/reply/command/DM -> user request
-always-on group chatter -> room event
+always-on group chatter -> user request, or room event when configured
 ```
 
 ## Visible replies
@@ -61,7 +61,21 @@ For direct chats and any other source turn, use `messages.visibleReplies: "messa
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
-Typing indicators are still sent for direct group requests. Ambient always-on room events stay quiet unless the agent calls the message tool.
+Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay quiet unless the agent calls the message tool.
+
+To submit always-on ambient group chatter as quiet room context instead of legacy user requests:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      ambientTurns: "room_event",
+    },
+  },
+}
+```
+
+The default is `ambientTurns: "user_request"` for compatibility.
 
 To restore legacy automatic final replies for group/channel requests:
 
@@ -352,7 +366,7 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where automatic silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and message-tool-only group replies stay quiet by not calling `message(action=send)`.
-    - Ambient always-on group chatter is a room event. The model can use it as context, but visible room speech requires the message tool.
+    - Ambient always-on group chatter uses legacy user-request semantics by default. Set `messages.groupChat.ambientTurns: "room_event"` to submit it as quiet context instead.
     - Room events are not stored as fake user requests, and private assistant text from no-message-tool room events is not replayed as chat history.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
     - Group history context is wrapped uniformly across channels. Mention-gated groups keep pending skipped messages; always-on groups may also retain recent processed room messages when the channel supports it. Use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.

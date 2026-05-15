@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type BuildChannelTurnContextParams,
   type BuiltChannelTurnContext,
@@ -64,6 +65,17 @@ const sessionRuntimeMethods = [
   "resolvePinnedMainDmOwnerFromAllowlist",
   "resolveStorePath",
 ] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
+
+function resolveAmbientGroupTurnKind(
+  cfg: OpenClawConfig,
+  agentId: string,
+): BuildChannelTurnContextParams["message"]["inboundTurnKind"] {
+  const agentGroupChat = resolveAgentConfig(cfg, agentId)?.groupChat;
+  if (agentGroupChat && Object.hasOwn(agentGroupChat, "ambientTurns")) {
+    return agentGroupChat.ambientTurns ?? "user_request";
+  }
+  return cfg.messages?.groupChat?.ambientTurns ?? "user_request";
+}
 
 function hasCompleteSessionRuntime(
   runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
@@ -413,8 +425,13 @@ export async function buildTelegramInboundContextPayload(params: {
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
+  const ambientGroupTurnKind = resolveAmbientGroupTurnKind(cfg, route.agentId);
   const inboundTurnKind =
-    isGroup && !effectiveWasMentioned && !hasControlCommand && commandSource !== "native"
+    ambientGroupTurnKind === "room_event" &&
+    isGroup &&
+    !effectiveWasMentioned &&
+    !hasControlCommand &&
+    commandSource !== "native"
       ? "room_event"
       : "user_request";
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
