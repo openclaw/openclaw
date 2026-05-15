@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/channels: make `openclaw channels list --all` prefer reachable Gateway runtime account status and mark configured-but-unavailable credentials, avoiding false `not configured` output when Discord is running from service-only env. Fixes #79343. Thanks @EricY019.
 - Installer: handle noninteractive git installs from moving refs without tag-fetch conflicts, while keeping immutable refs on frozen lockfile installs. (#81875) Thanks @keshavbotagent.
 - Codex app-server: inject native client factories per run and compaction attempt instead of using module-scope test state, avoiding temporal-dead-zone reads during cyclic startup. (#81148) Thanks @bdjben.
 - Plugin skills: replace generated Windows plugin-skill directories before publishing the current skill link, avoiding repeated `EINVAL` warnings from stale non-symlink entries. Fixes #81432. (#81446) Thanks @hclsys and @vincentkoc.
