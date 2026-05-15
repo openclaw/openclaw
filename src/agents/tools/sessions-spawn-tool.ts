@@ -179,6 +179,12 @@ function createSessionsSpawnToolSchema(params: {
     agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
+    fastMode: Type.Optional(
+      Type.Boolean({
+        description:
+          "Optional per-spawn fast-mode override for the child session. Use false to keep a spawned child on standard processing even when agent or model defaults enable fast mode.",
+      }),
+    ),
     cwd: Type.Optional(Type.String()),
     ...(params.threadAvailable
       ? {
@@ -314,6 +320,7 @@ export function createSessionsSpawnTool(
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
       const thinkingOverrideRaw = readStringParam(params, "thinking");
+      const fastModeOverride = typeof params.fastMode === "boolean" ? params.fastMode : undefined;
       const cwd = readStringParam(params, "cwd");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
@@ -391,6 +398,7 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             model: modelOverride,
             thinking: thinkingOverrideRaw,
+            fastMode: fastModeOverride,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
@@ -478,6 +486,7 @@ export function createSessionsSpawnTool(
           model: modelOverride,
           thinking: thinkingOverrideRaw,
           cwd,
+          fastMode: fastModeOverride,
           thread,
           mode,
           cleanup,

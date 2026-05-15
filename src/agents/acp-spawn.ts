@@ -126,6 +126,7 @@ export type SpawnAcpParams = {
   resumeSessionId?: string;
   model?: string;
   thinking?: string;
+  fastMode?: boolean;
   runTimeoutSeconds?: number;
   cwd?: string;
   mode?: SpawnAcpMode;
@@ -1477,6 +1478,7 @@ export async function spawnAcpDirect(
         ...subagentEnvelopeState.childSessionPatch,
         ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
         ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+        ...(typeof params.fastMode === "boolean" ? { fastMode: params.fastMode } : {}),
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,

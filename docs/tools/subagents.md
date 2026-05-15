@@ -141,6 +141,7 @@ session to confirm the effective tool list.
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
+- **Fast mode:** follows the child session's normal fast-mode resolution unless `sessions_spawn.fastMode` is set. Use `false` to keep one child on standard processing even when the target agent or model defaults enable fast mode.
 - **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
@@ -207,6 +208,9 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 </ParamField>
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run.
+</ParamField>
+<ParamField path="fastMode" type="boolean">
+  Optional fast-mode override for the child session. Set `false` to force standard processing for this spawn; omit to inherit the target agent and model defaults.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.

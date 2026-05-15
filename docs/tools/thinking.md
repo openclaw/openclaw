@@ -65,7 +65,7 @@ title: "Thinking levels"
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
   1. Inline/directive-only `/fast on|off` override (`/fast default` clears this layer)
-  2. Session override
+  2. Session override, including `sessions_spawn.fastMode` persisted on child sessions
   3. Per-agent default (`agents.list[].fastModeDefault`)
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
   5. Fallback: `off`

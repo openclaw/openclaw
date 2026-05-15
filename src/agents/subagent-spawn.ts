@@ -166,6 +166,7 @@ export type SpawnSubagentParams = {
   taskName?: string;
   thinking?: string;
   cwd?: string;
+  fastMode?: boolean;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
@@ -315,6 +316,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
+  }
+  if (typeof patch.fastMode === "boolean") {
+    entry.fastMode = patch.fastMode;
   }
   if (typeof patch.model === "string" && patch.model.trim()) {
     const { provider, model } = splitModelRef(patch.model.trim());
@@ -1310,6 +1314,7 @@ export async function spawnSubagentDirect(
     subagentControlScope: childCapabilities.controlScope,
     ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+    ...(typeof params.fastMode === "boolean" ? { fastMode: params.fastMode } : {}),
     ...plan.initialSessionPatch,
   };
 
