@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  normalizeHistoryMediaEntries,
-  recordPendingHistoryEntryWithMedia,
-  type HistoryEntry,
-} from "./history.js";
+import { normalizeHistoryMediaEntries, recordPendingHistoryEntryWithMedia } from "./history.js";
+import type { HistoryEntry } from "./history.types.js";
 
 describe("history media recording", () => {
   it("keeps only bounded local image media", () => {
