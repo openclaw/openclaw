@@ -10,6 +10,7 @@ import {
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -254,7 +255,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         text,
         accountId: entry.lastAccountId ?? null,
         threadId: entry.lastThreadId ?? null,
-        identity: identity ?? resolveAgentOutboundIdentity(cfg, "main"),
+        identity:
+          identity ?? resolveAgentOutboundIdentity(cfg, resolveAgentIdFromSessionKey(sessionKey)),
       });
       return { delivered: true as const };
     } catch (error) {
