@@ -685,7 +685,7 @@ function handleTerminalChatEvent(
       runId,
       streamText: visibleStateBeforeEvent.chatStream,
       visibleOutput:
-        host.chatMessages.length > visibleStateBeforeEvent.chatMessagesLength ||
+        chatMessagesLength(host) > visibleStateBeforeEvent.chatMessagesLength ||
         Boolean(visibleStateBeforeEvent.chatStream?.trim()),
     });
   }
@@ -724,6 +724,11 @@ function isEventForDifferentActiveRun(
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
 }
 
+function chatMessagesLength(host: GatewayHost): number {
+  const messages = (host as unknown as { chatMessages?: unknown }).chatMessages;
+  return Array.isArray(messages) ? messages.length : 0;
+}
+
 function resolveChatEventSessionListAgentId(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
@@ -757,7 +762,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const activeRunIdBeforeEvent = host.chatRunId;
   const visibleStateBeforeEvent = {
-    chatMessagesLength: host.chatMessages.length,
+    chatMessagesLength: chatMessagesLength(host),
     chatStream: host.chatStream,
   };
   const state = handleChatEvent(host as unknown as ChatState, payload);
