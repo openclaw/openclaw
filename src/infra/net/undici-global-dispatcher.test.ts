@@ -603,6 +603,30 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 
+  it("reinstalls env proxy when resolved proxy options change", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://old-proxy.example:3128",
+      httpsProxy: "http://old-proxy.example:3128",
+    });
+
+    ensureGlobalUndiciEnvProxyDispatcher();
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://new-proxy.example:3128",
+      httpsProxy: "http://new-proxy.example:3128",
+    });
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
+      httpProxy: "http://new-proxy.example:3128",
+      httpsProxy: "http://new-proxy.example:3128",
+      allowH2: false,
+    });
+  });
+
   it("reinstalls env proxy if an external change later reverts the dispatcher to Agent", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
 
