@@ -19,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -217,16 +218,14 @@ export async function getReplyFromConfig(
     cfg,
     isFastTestEnv,
   });
-  const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
-  const agentSessionKey = targetSessionKey || ctx.SessionKey;
+  const finalized = finalizeInboundContext(ctx);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const agentSessionKey = targetSessionKey || finalized.SessionKey;
   const traceAttributes = {
-    surface: normalizeOptionalString(ctx.Surface ?? ctx.Provider) ?? "unknown",
+    surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
     isHeartbeat: opts?.isHeartbeat === true,
-    hasMedia: hasInboundMedia(ctx),
+    hasMedia: hasInboundMedia(finalized),
   };
   const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     measureDiagnosticsTimelineSpan(name, run, {
@@ -291,7 +290,6 @@ export async function getReplyFromConfig(
   });
   opts?.onTypingController?.(typing);
 
-  const finalized = finalizeInboundContext(ctx);
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
     () =>
@@ -760,6 +758,7 @@ export async function getReplyFromConfig(
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.

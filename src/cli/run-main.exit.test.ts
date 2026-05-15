@@ -1,6 +1,7 @@
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -52,6 +53,18 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
   >((argv: string[]) => ({ handled: false, argv })),
 );
+
+function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
+  const call = runCrestodianMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected runCrestodian call ${index}`);
+  }
+  expect(typeof call[0]).toBe("object");
+  if (typeof call[0] !== "object" || call[0] === null) {
+    throw new Error(`expected runCrestodian call ${index} to receive options`);
+  }
+  return call[0] as { onReady?: unknown };
+}
 
 vi.mock("commander", () => {
   class MockCommanderError extends Error {
@@ -257,6 +270,7 @@ describe("runCli exit behavior", () => {
     resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
+    loggingState.forceConsoleToStderr = false;
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -584,6 +598,68 @@ describe("runCli exit behavior", () => {
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
+  it("routes lazy plugin registration logs to stderr only during --json registration", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "memory" ? ["memory"] : [],
+    );
+    let stderrDuringPluginRegistration = false;
+    let stderrDuringParse = true;
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+      return {};
+    });
+    const parseAsync = vi.fn().mockImplementationOnce(async () => {
+      stderrDuringParse = loggingState.forceConsoleToStderr;
+    });
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "memory", "search", "query", "--json"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "memory" },
+    );
+    expect(stderrDuringPluginRegistration).toBe(true);
+    expect(stderrDuringParse).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("does not route lazy plugin registration logs for pass-through --json after terminator", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "memory" ? ["memory"] : [],
+    );
+    let stderrDuringPluginRegistration = true;
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+      return {};
+    });
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "memory", "--", "--json"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "memory" },
+    );
+    expect(stderrDuringPluginRegistration).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
   it("fails protected commands when managed proxy activation fails", async () => {
     startProxyMock.mockRejectedValueOnce(new Error("proxy: enabled but no HTTP proxy URL"));
 
@@ -728,7 +804,7 @@ describe("runCli exit behavior", () => {
 
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(runCrestodianMock).toHaveBeenCalledOnce();
-    const crestodianOptions = runCrestodianMock.mock.calls[0]?.[0] as { onReady?: unknown };
+    const crestodianOptions = requireRunCrestodianOptions();
     expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
     expect(crestodianOptions.onReady).toBeTypeOf("function");
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(

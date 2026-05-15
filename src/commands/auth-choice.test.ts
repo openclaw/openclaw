@@ -633,7 +633,7 @@ describe("applyAuthChoice", () => {
     });
   }
   function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-    expect(promptMessages(mock).some((message) => message.includes(expected))).toBe(true);
+    expect(promptMessages(mock).join("\n")).toContain(expected);
   }
   function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock)).toContain(expected);

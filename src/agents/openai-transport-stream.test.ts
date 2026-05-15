@@ -22,6 +22,7 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
+type OpenAIResponsesOutput = Parameters<typeof __testing.processResponsesStream>[1];
 
 type CapturedStreamEvent = { type?: string; delta?: string };
 
@@ -60,6 +61,54 @@ function createAssistantOutput(model: Model<"openai-completions">): OpenAIComple
   };
 }
 
+function createResponsesAssistantOutput(
+  model: Model<"azure-openai-responses">,
+): OpenAIResponsesOutput {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+function createAzureResponsesModel(): Model<"azure-openai-responses"> {
+  return {
+    id: "gpt-5.4-pro",
+    name: "GPT-5.4 Pro",
+    api: "azure-openai-responses",
+    provider: "azure-openai-responses-devdiv",
+    baseUrl: "https://example.openai.azure.com/openai/responses",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+}
+
+function neverYieldsStream(): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async () => await new Promise<IteratorResult<unknown>>(() => undefined),
+        return: async () => ({ done: true, value: undefined }),
+      };
+    },
+  };
+}
+
 async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
   for (const chunk of chunks) {
     yield chunk as never;
@@ -78,6 +127,19 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
+  it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
+    const model = createAzureResponsesModel();
+    await expect(
+      __testing.processResponsesStream(
+        neverYieldsStream(),
+        createResponsesAssistantOutput(model),
+        { push: vi.fn() },
+        model,
+        { firstEventTimeoutMs: 1 },
+      ),
+    ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
@@ -542,7 +604,7 @@ describe("openai transport stream", () => {
   });
 
   it("uses a valid Azure API version default when the environment is unset", () => {
-    expect(resolveAzureOpenAIApiVersion({})).toBe("2024-12-01-preview");
+    expect(resolveAzureOpenAIApiVersion({})).toBe("preview");
     expect(resolveAzureOpenAIApiVersion({ AZURE_OPENAI_API_VERSION: "2025-01-01-preview" })).toBe(
       "2025-01-01-preview",
     );
@@ -1312,6 +1374,75 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high" });
   });
 
+  it("forwards temperature and top_p to chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        temperature: 0.4,
+        topP: 0.9,
+      },
+    );
+
+    expect(params.temperature).toBe(0.4);
+    expect(params.top_p).toBe(0.9);
+  });
+
+  it("forwards response_format to chat completions request params", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    } as never;
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "json_object" },
+      });
+      expect(params.response_format).toEqual({ type: "json_object" });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "json_schema", json_schema: {} },
+      });
+      expect(params.response_format).toEqual({ type: "json_schema", json_schema: {} });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {});
+      expect(params).not.toHaveProperty("response_format");
+    }
+  });
+
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1440,6 +1571,7 @@ describe("openai transport stream", () => {
         serviceTier: "auto",
         sessionId: "session-123",
         temperature: 0.2,
+        topP: 0.85,
       },
       {
         openclaw_session_id: "session-123",
@@ -1463,6 +1595,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("prompt_cache_retention");
     expect(params).not.toHaveProperty("service_tier");
     expect(params).not.toHaveProperty("temperature");
+    expect(params).not.toHaveProperty("top_p");
   });
 
   it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
@@ -1476,6 +1609,8 @@ describe("openai transport stream", () => {
       prompt_cache_retention: "24h",
       service_tier: "auto",
       temperature: 0.2,
+      text: { format: { type: "json_object" }, verbosity: "low" },
+      top_p: 0.85,
     };
 
     const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
@@ -1500,6 +1635,8 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
+    expect(sanitized.text).toEqual({ verbosity: "low" });
+    expect(sanitized).not.toHaveProperty("top_p");
   });
 
   it("preserves custom Codex-compatible responses params", () => {
@@ -1526,6 +1663,7 @@ describe("openai transport stream", () => {
         maxTokens: 1024,
         sessionId: "session-123",
         temperature: 0.2,
+        topP: 0.85,
       },
       {
         openclaw_session_id: "session-123",
@@ -1541,6 +1679,52 @@ describe("openai transport stream", () => {
     });
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
+    expect(params.top_p).toBe(0.85);
+  });
+
+  it("forwards response_format to responses text format request params", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 65_536,
+    } satisfies Model<"openai-responses">;
+
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    } as never;
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: { type: "json_object" },
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({ format: { type: "json_object" } });
+    }
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "test", schema: { type: "object" } },
+        },
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({
+        format: { type: "json_schema", name: "test", schema: { type: "object" } },
+      });
+    }
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {}) as Record<string, unknown>;
+      expect(params).not.toHaveProperty("text");
+    }
   });
 
   it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {
@@ -2215,6 +2399,37 @@ describe("openai transport stream", () => {
         required: [],
       },
     });
+  });
+
+  it("passes explicit Responses tool_choice when tools are present", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      { toolChoice: "required" } as never,
+    ) as { tool_choice?: string };
+
+    expect(params.tool_choice).toBe("required");
   });
 
   it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
@@ -5196,5 +5411,340 @@ describe("openai transport stream", () => {
     await expect(
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
+  });
+});
+
+describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
+  const openRouterModel = {
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek v4 Flash",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  const openAIModel = {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  const nativeDeepSeekModel = {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  } satisfies Model<"openai-completions">;
+
+  const nativeZaiModel = {
+    id: "glm-5.1",
+    name: "GLM 5.1",
+    api: "openai-completions",
+    provider: "zai",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 131_072,
+  } satisfies Model<"openai-completions">;
+
+  const xiaomiModel = {
+    id: "mimo-v2.5-pro",
+    name: "MiMo V2.5 Pro",
+    api: "openai-completions",
+    provider: "xiaomi",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  const customMiMoProxyModel = {
+    ...xiaomiModel,
+    provider: "xiaomi-orbit",
+    baseUrl: "https://proxy.example.com/v1",
+  } satisfies Model<"openai-completions">;
+
+  const customKimiProxyModel = {
+    id: "moonshotai/kimi-k2.6",
+    name: "Kimi K2.6",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  function getAssistantMessage(params: { messages: unknown }) {
+    expect(Array.isArray(params.messages)).toBe(true);
+    const list = params.messages as Array<Record<string, unknown>>;
+    const assistant = list.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    return assistant as Record<string, unknown>;
+  }
+
+  function buildReplayParams(model: Model<"openai-completions">, thinkingSignature: string) {
+    return buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: model.provider,
+            api: model.api,
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need to answer politely.",
+                thinkingSignature,
+              },
+              { type: "text", text: "Hello!" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+  }
+
+  it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
+    "strips %s from stock OpenAI Chat Completions assistant replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    },
+  );
+
+  it("normalizes OpenRouter string reasoning_details to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each(["reasoning", "reasoning_content"])(
+    "preserves OpenRouter %s string reasoning replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openRouterModel, thinkingSignature));
+
+      expect(assistant[thinkingSignature]).toBe("Need to answer politely.");
+    },
+  );
+
+  it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "read config" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-pro",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "reasoning_content",
+              },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read_file",
+                arguments: { path: "config.json" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            content: [{ type: "text", text: "{ }" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "continue" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: Array<Record<string, unknown>> };
+
+    const assistantMessages = params.messages.filter((msg) => msg.role === "assistant");
+    for (const msg of assistantMessages) {
+      expect(msg).not.toHaveProperty("reasoning_content");
+    }
+  });
+
+  it.each([
+    ["DeepSeek", nativeDeepSeekModel],
+    ["Z.AI", nativeZaiModel],
+  ] as const)("preserves native %s reasoning_content replay", (_label, model) => {
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["DeepSeek", nativeDeepSeekModel],
+    ["Z.AI", nativeZaiModel],
+  ] as const)("strips non-native %s reasoning replay fields", (_label, model) => {
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("normalizes OpenRouter reasoning_text to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
+
+    expect(assistant).not.toHaveProperty("reasoning_text");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it("preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo", () => {
+    const assistant = getAssistantMessage(buildReplayParams(xiaomiModel, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom MiMo proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customMiMoProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom MiMo V2.6 proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customMiMoProxyModel,
+          id: "xiaomi/mimo-v2.6-pro",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom Kimi K2 proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customKimiProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for suffixed reasoning model ids", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customMiMoProxyModel,
+          id: "xiaomi/mimo-v2.5-pro:cloud",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {
+    const reasoningDetail = { type: "reasoning.encrypted", id: "rs_1", data: "ciphertext" };
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "lookup" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-flash",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "lookup",
+                arguments: { query: "weather" },
+                thoughtSignature: JSON.stringify(reasoningDetail),
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "sunny" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "answer" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+
+    const assistant = getAssistantMessage(params);
+    expect(assistant.reasoning_details).toEqual([reasoningDetail]);
   });
 });

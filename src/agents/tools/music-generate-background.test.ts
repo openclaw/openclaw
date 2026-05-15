@@ -22,7 +22,7 @@ const {
 } = await import("./music-generate-background.js");
 
 function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0] as
+  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
     | { internalEvents?: unknown }
     | undefined;
   if (!Array.isArray(params?.internalEvents)) {
@@ -112,7 +112,7 @@ describe("music generate background helpers", () => {
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("warns channel completion agents that normal final replies are private", async () => {
@@ -136,7 +136,7 @@ describe("music generate background helpers", () => {
     });
 
     expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-    expectReplyInstructionContains("Do not put MEDIA: lines only in your final answer");
+    expectReplyInstructionContains("the media must be sent as message-tool attachments");
   });
 
   it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
@@ -162,7 +162,7 @@ describe("music generate background helpers", () => {
       });
 
       expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-      expectReplyInstructionContains("Do not put MEDIA: lines only in your final answer");
+      expectReplyInstructionContains("the media must be sent as message-tool attachments");
     },
   );
 

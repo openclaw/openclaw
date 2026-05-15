@@ -12,6 +12,7 @@ vi.mock("../agent-scope.js", async () => {
   };
 });
 
+import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
@@ -105,10 +106,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: TestDelivery };
-    };
-    return call?.params?.delivery;
+    return (readGatewayCall().params as { delivery?: TestDelivery } | undefined)?.delivery;
   }
 
   async function executeAddAndReadSessionKey(params: {
@@ -534,10 +532,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { agentId?: unknown };
-    };
-    expect(call?.params?.agentId).toBeNull();
+    expect(readGatewayCall().params?.agentId).toBeNull();
   });
 
   it("infers session agentId when job.agentId is omitted", async () => {
@@ -721,10 +716,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      method?: string;
-      params?: { agentId?: string | null };
-    };
+    const call = readGatewayCall();
     expect(call.method).toBe("cron.add");
     expect(call.params?.agentId).toBeNull();
   });
@@ -830,6 +822,69 @@ describe("cron tool", () => {
       accountId: "bot-a",
       threadId: "$RootEvent:Example.Org",
     });
+  });
+
+  it("does not surface lowercased LINE recipients when current delivery context is unavailable (#81628)", async () => {
+    // Reproduces openclaw/openclaw#81628. LINE chat IDs are case-sensitive — push
+    // requires capital C/U/R; lowercased recipients return HTTP 400. The runtime
+    // already lowercases LINE peer IDs when canonicalizing the session key, and
+    // when the delivery-recovery / post-reply-token-expiry push path is missing
+    // currentDeliveryContext, inferDeliveryFromSessionKey lifts the lowercased
+    // fragment straight into delivery.to.
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "group",
+      peerId: "Cabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:group:cabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-group-no-context-81628",
+      agentSessionKey: sessionKey,
+      // Intentionally no currentDeliveryContext — emulates the delivery-recovery
+      // boundary that reloads queued entries from disk after the reply token has
+      // expired.
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-account-channel-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      accountId: "primary",
+      dmScope: "per-account-channel-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:primary:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-direct-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      dmScope: "per-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-per-peer-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
   });
 
   it("does not let current delivery context override explicit delivery targets", async () => {
@@ -1066,11 +1121,9 @@ describe("cron tool", () => {
       name: "flat-name-should-be-ignored",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { name?: string; payload?: { text?: string } };
-    };
+    const call = readGatewayCall();
     expect(call?.params?.name).toBe("nested-job");
-    expect(call?.params?.payload?.text).toBe("from nested");
+    expect((call?.params?.payload as { text?: string } | undefined)?.text).toBe("from nested");
   });
 
   it("does not infer delivery when mode is none", async () => {

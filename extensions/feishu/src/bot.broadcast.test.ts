@@ -54,6 +54,11 @@ describe("broadcast dispatch", () => {
     return {
       ...ctx,
       CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+      },
     };
   };
   const mockDispatchReplyFromConfig = vi
@@ -301,7 +306,7 @@ describe("broadcast dispatch", () => {
       },
     ]);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(0)?.[0] as
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");

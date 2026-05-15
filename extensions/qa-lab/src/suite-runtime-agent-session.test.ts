@@ -26,11 +26,19 @@ describe("qa suite runtime agent session helpers", () => {
     gatewayCall.mockReset();
   });
 
+  function requireGatewayCall() {
+    const [call] = gatewayCall.mock.calls;
+    if (!call) {
+      throw new Error("expected gateway call");
+    }
+    return call;
+  }
+
   it("creates sessions and trims the returned key", async () => {
     gatewayCall.mockResolvedValueOnce({ key: "  session-1  " });
 
     await expect(createSession(env, "Test Session")).resolves.toBe("session-1");
-    const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
+    const [method, params, options] = requireGatewayCall();
     expect(method).toBe("sessions.create");
     expect(params).toEqual({ label: "Test Session" });
     expect(options?.timeoutMs).toBe(60_000);
@@ -53,7 +61,7 @@ describe("qa suite runtime agent session helpers", () => {
     });
 
     await expect(readSkillStatus(env)).resolves.toEqual([{ name: "alpha", eligible: true }]);
-    const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
+    const [method, params, options] = requireGatewayCall();
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
     expect(options?.timeoutMs).toBe(45_000);

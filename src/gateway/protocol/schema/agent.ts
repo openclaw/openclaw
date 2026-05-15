@@ -31,6 +31,7 @@ export const AgentEventSchema = Type.Object(
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
     spawnedBy: Type.Optional(NonEmptyString),
+    isHeartbeat: Type.Optional(Type.Boolean()),
     data: Type.Record(Type.String(), Type.Unknown()),
   },
   { additionalProperties: false },
@@ -178,6 +179,9 @@ export const AgentParamsSchema = Type.Object(
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    sourceReplyDeliveryMode: Type.Optional(
+      Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
+    ),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),

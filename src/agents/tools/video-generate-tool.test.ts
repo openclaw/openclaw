@@ -163,6 +163,14 @@ function firstMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
   return firstCall[0];
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] {
+  const firstCall = mock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected first mock call");
+  }
+  return firstCall;
+}
+
 function resetVideoGenerateMocks() {
   vi.restoreAllMocks();
   for (const key of VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS) {
@@ -351,13 +359,22 @@ describe("createVideoGenerateTool", () => {
       "lobster.mp4",
     );
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
-    expect(text).toContain("MEDIA:/tmp/generated-lobster.mp4");
+    expect(text).toContain('path="/tmp/generated-lobster.mp4"');
+    expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("qwen");
     expect(details.model).toBe("wan2.6-t2v");
     expect(details.count).toBe(1);
     expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
       "/tmp/generated-lobster.mp4",
+    ]);
+    expect((details.media as { attachments?: unknown }).attachments).toEqual([
+      {
+        type: "video",
+        path: "/tmp/generated-lobster.mp4",
+        mimeType: "video/mp4",
+        name: "generated-lobster.mp4",
+      },
     ]);
     expect(details.paths).toEqual(["/tmp/generated-lobster.mp4"]);
     expect(details.metadata).toEqual({ taskId: "task-1" });
@@ -399,7 +416,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect((firstMockCallArg(generateSpy) as { timeoutMs?: number }).timeoutMs).toBe(180_000);
-    expect((generateSpy.mock.calls[1]?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
+    expect((generateSpy.mock.calls.at(1)?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
     expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
@@ -484,7 +501,8 @@ describe("createVideoGenerateTool", () => {
 
     expect(saveSpy).not.toHaveBeenCalled();
     expect(text).toContain("Generated 1 video with vydra/veo3.");
-    expect(text).toContain("MEDIA:https://example.com/generated-lobster.mp4");
+    expect(text).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
+    expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("vydra");
     expect(details.model).toBe("veo3");
@@ -534,7 +552,8 @@ describe("createVideoGenerateTool", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
-    expect(text).toContain("MEDIA:https://fal.run/files/generated-lobster.mp4");
+    expect(text).toContain('mediaUrl="https://fal.run/files/generated-lobster.mp4"');
+    expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("fal");
     expect(details.model).toBe("fal-ai/minimax/video-01-live");
@@ -626,13 +645,21 @@ describe("createVideoGenerateTool", () => {
     const wake = firstMockCallArg(wakeSpy) as {
       handle: { taskId?: string };
       status: string;
-      mediaUrls: string[];
+      attachments: unknown[];
       result: string;
     };
     expect(wake.handle.taskId).toBe("task-123");
     expect(wake.status).toBe("ok");
-    expect(wake.mediaUrls).toEqual(["https://example.com/generated-lobster.mp4"]);
-    expect(wake.result).toContain("MEDIA:https://example.com/generated-lobster.mp4");
+    expect(wake.attachments).toEqual([
+      {
+        type: "video",
+        url: "https://example.com/generated-lobster.mp4",
+        mimeType: "video/mp4",
+        name: "lobster.mp4",
+      },
+    ]);
+    expect(wake.result).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
+    expect(wake.result).not.toContain("MEDIA:");
   });
 
   it("surfaces provider generation failures inline when there is no detached session", async () => {
@@ -1059,7 +1086,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect(generateSpy).toHaveBeenCalledTimes(1);
-    const call = generateSpy.mock.calls[0]?.[0] as {
+    const call = firstMockCallArg(generateSpy) as {
       inputImages?: Array<{ role?: string }>;
     };
     expect(call.inputImages).toHaveLength(2);
@@ -1096,7 +1123,7 @@ describe("createVideoGenerateTool", () => {
       image: "/tmp/reference.png",
     });
 
-    const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls[0];
+    const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
     const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
     expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });

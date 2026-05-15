@@ -86,9 +86,25 @@ function makeFakeProc(overrides: Partial<FakeProc> = {}): FakeProc {
   return Object.assign(proc, overrides);
 }
 
-function effectiveSpawnCommand(call: unknown[] | undefined): unknown {
-  const command = call?.[0];
-  const args = call?.[1];
+function requireSpawnCall(index = 0): unknown[] {
+  const call = spawnMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected spawn call #${index + 1}`);
+  }
+  return call;
+}
+
+function requireSpawnOptions(index = 0): { env?: NodeJS.ProcessEnv } {
+  const options = requireSpawnCall(index)[2];
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected spawn options for call #${index + 1}`);
+  }
+  return options as { env?: NodeJS.ProcessEnv };
+}
+
+function effectiveSpawnCommand(call: unknown[]): unknown {
+  const command = call[0];
+  const args = call[1];
   if (
     command === "/bin/sh" &&
     Array.isArray(args) &&
@@ -454,7 +470,7 @@ describe("chrome.ts internal", () => {
           const running = await launchOpenClawChrome(makeResolved(), profile);
           expect(running.pid).toBe(4242);
           expect(spawnCalls).toBeGreaterThanOrEqual(1);
-          const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+          const spawnOptions = requireSpawnOptions();
           expect(spawnOptions.env?.HTTP_PROXY).toBeUndefined();
           expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
           expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
@@ -491,7 +507,7 @@ describe("chrome.ts internal", () => {
               executablePath: "/tmp/global-chrome",
             } as ResolvedBrowserConfig;
             const running = await launchOpenClawChrome(resolved, profile);
-            expect(effectiveSpawnCommand(spawnMock.mock.calls[0])).toBe("/tmp/profile-chrome");
+            expect(effectiveSpawnCommand(requireSpawnCall())).toBe("/tmp/profile-chrome");
             running.proc.kill?.("SIGTERM");
           },
         });

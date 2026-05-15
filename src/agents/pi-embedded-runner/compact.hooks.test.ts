@@ -1245,7 +1245,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     const runtimeContext = (
-      maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
+      maintain.mock.calls.at(0)?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
     )?.runtimeContext;
     expectRecordFields(mockCallArg(maintain), {
       sessionKey: TEST_SESSION_KEY,
@@ -1339,7 +1339,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     const result = await compactEmbeddedPiSession(wrappedCompactionArgs());
 
     expect(result.ok).toBe(false);
-    expect(hookRunner.runBeforeCompaction).toHaveBeenCalled();
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
   });
@@ -1475,6 +1475,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
-    expect(contextEngineCompactMock).toHaveBeenCalled();
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 });

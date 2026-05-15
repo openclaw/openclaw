@@ -321,7 +321,7 @@ describe("acquireSessionWriteLock", () => {
       });
 
       const released = await __testing.runLockWatchdogCheck(Date.now() + 1000);
-      expect(released).toBeGreaterThanOrEqual(1);
+      expect(released).toBe(1);
       await expectPathMissing(lockPath);
 
       const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });

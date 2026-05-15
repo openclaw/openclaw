@@ -71,6 +71,7 @@ export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
+export const ensureRuntimePluginsLoadedMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -139,6 +140,10 @@ vi.mock("./run-context.runtime.js", () => ({
 
 vi.mock("./run-model-catalog.runtime.js", () => ({
   loadModelCatalog: loadModelCatalogMock,
+}));
+
+vi.mock("./run-runtime-plugins.runtime.js", () => ({
+  ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
 
 vi.mock("./skills-snapshot.runtime.js", () => ({
@@ -509,6 +514,7 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resetRunSessionMocks();
   setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
+  ensureRuntimePluginsLoadedMock.mockReset();
 }
 
 export function clearFastTestEnv(): string | undefined {

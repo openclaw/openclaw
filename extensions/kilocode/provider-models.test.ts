@@ -56,6 +56,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 function makeGatewayModel(overrides: Record<string, unknown> = {}) {
   return {
     id: "anthropic/claude-sonnet-4",
@@ -167,10 +175,11 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const models = await discoverKilocodeModels();
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const guardedFetch = requireRecord(
-        fetchWithSsrFGuardMock.mock.calls[0]?.[0],
-        "guarded fetch params",
+      const [guardedFetchParams] = requireFirstMockCall(
+        fetchWithSsrFGuardMock,
+        "guarded fetch call",
       );
+      const guardedFetch = requireRecord(guardedFetchParams, "guarded fetch params");
       expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
       const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
       expect(guardedInit.headers).toEqual({ Accept: "application/json" });
@@ -179,8 +188,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      expect(mockFetch.mock.calls[0]?.[0]).toBe(KILOCODE_MODELS_URL);
-      const fetchInit = requireRecord(mockFetch.mock.calls[0]?.[1], "mock fetch init");
+      const [fetchUrl, fetchOptions] = requireFirstMockCall(mockFetch, "mock fetch call");
+      expect(fetchUrl).toBe(KILOCODE_MODELS_URL);
+      const fetchInit = requireRecord(fetchOptions, "mock fetch init");
       expect(fetchInit.headers).toEqual({ Accept: "application/json" });
 
       expect(models.length).toBe(2);

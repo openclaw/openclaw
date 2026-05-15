@@ -282,8 +282,8 @@ export class Client {
     return await this.deployCommands({ mode: "reconcile" });
   }
 
-  async handleInteraction(rawData: APIInteraction, _ctx?: Context): Promise<void> {
-    await dispatchInteraction(this, rawData);
+  async handleInteraction(rawData: APIInteraction, _ctx?: Context): Promise<boolean> {
+    return await dispatchInteraction(this, rawData);
   }
 
   async dispatchGatewayEvent(type: string, data: unknown): Promise<void> {

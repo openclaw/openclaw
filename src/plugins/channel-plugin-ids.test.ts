@@ -164,7 +164,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         origin: "bundled",
         enabledByDefault: true,
         providers: ["openai", "openai-codex"],
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         contracts: {
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],
@@ -1441,6 +1441,22 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: createStartupConfig({
         modelId: "openai/gpt-5.5",
       }),
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
+  it("includes Codex when OpenAI is a selectable default agent model", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
       expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });

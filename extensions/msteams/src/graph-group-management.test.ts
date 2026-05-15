@@ -37,6 +37,18 @@ const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
 
+function postGraphBodyAt(index: number): Record<string, unknown> {
+  const call = mockState.postGraphJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Graph post call ${index}`);
+  }
+  const body = call[0]?.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error(`expected Graph post call ${index} body`);
+  }
+  return body as Record<string, unknown>;
+}
+
 describe("addParticipantMSTeams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -129,7 +141,7 @@ describe("addParticipantMSTeams", () => {
       userId: "abc-def-123",
     });
 
-    const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
+    const calledBody = postGraphBodyAt(0);
     expect(calledBody["user@odata.bind"]).toBe(
       "https://graph.microsoft.com/v1.0/users('abc-def-123')",
     );
@@ -144,7 +156,7 @@ describe("addParticipantMSTeams", () => {
       userId: "o'hara@example.com",
     });
 
-    const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
+    const calledBody = postGraphBodyAt(0);
     expect(calledBody["user@odata.bind"]).toBe(
       "https://graph.microsoft.com/v1.0/users('o''hara@example.com')",
     );

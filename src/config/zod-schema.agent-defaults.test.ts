@@ -128,6 +128,34 @@ describe("agent defaults schema", () => {
     expect(result.contextInjection).toBe("never");
   });
 
+  it("accepts per-agent bootstrap profile overrides", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "worker",
+      contextInjection: "continuation-skip",
+      bootstrapMaxChars: 4096,
+      bootstrapTotalMaxChars: 16384,
+    });
+
+    expect(agent.contextInjection).toBe("continuation-skip");
+    expect(agent.bootstrapMaxChars).toBe(4096);
+    expect(agent.bootstrapTotalMaxChars).toBe(16384);
+  });
+
+  it("rejects invalid per-agent bootstrap profile overrides", () => {
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "worker", contextInjection: "unknown" }),
+      "contextInjection",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "worker", bootstrapMaxChars: 0 }),
+      "bootstrapMaxChars",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "worker", bootstrapTotalMaxChars: -1 }),
+      "bootstrapTotalMaxChars",
+    );
+  });
+
   it("rejects invalid contextInjection values", () => {
     expectSchemaFailurePath(
       AgentDefaultsSchema.safeParse({ contextInjection: "unknown" }),
@@ -165,6 +193,38 @@ describe("agent defaults schema", () => {
       },
     })!;
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+  });
+
+  it("accepts runRetries configuration on defaults and agent entries", () => {
+    const result = AgentDefaultsSchema.parse({
+      runRetries: {
+        base: 24,
+        max: 160,
+      },
+    });
+    expect(result?.runRetries?.base).toBe(24);
+    expect(result?.runRetries?.max).toBe(160);
+
+    const agentResult = AgentEntrySchema.parse({
+      id: "test",
+      runRetries: {
+        min: 10,
+        max: 50,
+      },
+    });
+    expect(agentResult?.runRetries?.min).toBe(10);
+    expect(agentResult?.runRetries?.max).toBe(50);
+  });
+
+  it("rejects runRetries with max < min", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
+      "runRetries.max",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
+      "runRetries.max",
+    );
   });
 
   it("accepts compaction.truncateAfterCompaction", () => {

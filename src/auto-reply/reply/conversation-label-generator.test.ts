@@ -39,6 +39,14 @@ vi.mock("../../plugins/runtime/runtime-model-auth.runtime.js", () => ({
 
 import { generateConversationLabel } from "./conversation-label-generator.js";
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("generateConversationLabel", () => {
   beforeEach(() => {
     completeSimple.mockReset();
@@ -108,10 +116,7 @@ describe("generateConversationLabel", () => {
     });
 
     expect(completeSimple).toHaveBeenCalledOnce();
-    const call = completeSimple.mock.calls[0];
-    if (!call) {
-      throw new Error("expected simple completion call");
-    }
+    const call = requireFirstMockCall(completeSimple, "simple completion");
     expect(call[0]).toStrictEqual({ provider: "openai" });
     expect(call[1]).toStrictEqual({
       systemPrompt: "Generate a label",
@@ -144,7 +149,7 @@ describe("generateConversationLabel", () => {
     });
 
     expect(completeSimple).toHaveBeenCalledOnce();
-    const options = completeSimple.mock.calls[0]?.[2];
+    const options = requireFirstMockCall(completeSimple, "simple completion")[2];
     if (!options) {
       throw new Error("expected simple completion options");
     }

@@ -103,7 +103,7 @@ vi.mock("./inbound-meta.js", () => ({
 }));
 
 vi.mock("./queue/settings-runtime.js", () => ({
-  resolveQueueSettings: vi.fn().mockReturnValue({ mode: "followup" }),
+  resolveQueueSettings: vi.fn().mockReturnValue({ mode: "steer" }),
 }));
 
 vi.mock("./route-reply.runtime.js", () => ({
@@ -120,6 +120,7 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+  drainFormattedSystemEventBlock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -129,7 +130,7 @@ vi.mock("./typing-mode.js", () => ({
 let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
 let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
+let drainFormattedSystemEventBlock: typeof import("./session-system-events.js").drainFormattedSystemEventBlock;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
@@ -238,10 +239,33 @@ function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   return params;
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireMockCallArg(mock: MockCallSource, label: string, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`${label} call ${index} missing`);
+  }
+  return call[0];
+}
+
 function requireRunReplyAgentCall(index = 0) {
   const call = vi.mocked(runReplyAgent).mock.calls[index]?.[0];
   if (!call) {
     throw new Error(`runReplyAgent call ${index} missing`);
+  }
+  return call;
+}
+
+function requireLastRunReplyAgentCall() {
+  const calls = vi.mocked(runReplyAgent).mock.calls;
+  const call = calls[calls.length - 1]?.[0];
+  if (!call) {
+    throw new Error("last runReplyAgent call missing");
   }
   return call;
 }
@@ -251,7 +275,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ drainFormattedSystemEventBlock } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
@@ -294,7 +318,7 @@ describe("runPreparedReply media-only handling", () => {
   it("propagates non-visible assistant silence for group runs", async () => {
     await runPreparedReply(baseParams());
 
-    let call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    let call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
 
     await runPreparedReply(
@@ -303,7 +327,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
@@ -332,7 +356,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
@@ -365,12 +389,32 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     expect(buildDirectChatContext).toHaveBeenCalledTimes(1);
-    const directContextParams = vi.mocked(buildDirectChatContext).mock.calls[0]?.[0] as
-      | { sessionCtx?: { Provider?: string; ChatType?: string }; sourceReplyDeliveryMode?: string }
-      | undefined;
+    const directContextParams = requireMockCallArg(
+      vi.mocked(buildDirectChatContext),
+      "direct chat context",
+    ) as {
+      sessionCtx?: { Provider?: string; ChatType?: string };
+      sourceReplyDeliveryMode?: string;
+    };
     expect(directContextParams?.sessionCtx?.Provider).toBe("telegram");
     expect(directContextParams?.sessionCtx?.ChatType).toBe("direct");
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(buildInboundUserContextPrefix).toHaveBeenCalledWith(
+      {
+        Body: "yo",
+        BodyStripped: "yo",
+        ThreadHistoryBody: "Earlier direct message",
+        MediaPath: "/tmp/input.png",
+        Provider: "telegram",
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram-direct-test-id",
+        InboundHistory: undefined,
+        ThreadStarterBody: undefined,
+      },
+      expect.anything(),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
   });
 
   it.each(["direct", "dm"] as const)(
@@ -411,7 +455,7 @@ describe("runPreparedReply media-only handling", () => {
         }),
       );
 
-      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+      const call = requireLastRunReplyAgentCall();
       expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
     },
   );
@@ -448,7 +492,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
@@ -460,6 +504,71 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it.each([
+    "discord",
+    "telegram",
+    "slack",
+    "whatsapp",
+    "signal",
+    "imessage",
+    "matrix",
+    "msteams",
+    "webchat",
+  ] as const)("enables default same-turn steering for active %s runs", async (channel) => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+
+    const params = baseParams({
+      sessionKey: `agent:main:${channel}:direct:steer-smoke`,
+    });
+    params.ctx = {
+      ...params.ctx,
+      Provider: channel,
+      OriginatingChannel: channel,
+      OriginatingTo: `${channel}-target`,
+      ChatType: "direct",
+    } as never;
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      Provider: channel,
+      OriginatingChannel: channel,
+      OriginatingTo: `${channel}-target`,
+      ChatType: "direct",
+    } as never;
+    params.command = {
+      ...(params.command as Record<string, unknown>),
+      surface: channel,
+      channel,
+    } as never;
+
+    await runPreparedReply(params);
+
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ channel }),
+    );
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call).toMatchObject({
+      shouldSteer: true,
+      shouldFollowup: true,
+      isActive: true,
+      isStreaming: true,
+      resolvedQueue: expect.objectContaining({ mode: "steer" }),
+    });
+    expect(call?.followupRun.run.messageProvider).toBe(channel);
+    expect(call?.followupRun.originatingChannel).toBe(channel);
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -681,7 +790,7 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.prompt).toBe("");
     expect(call?.followupRun.currentTurnContext?.text).toContain("Chat history since last reply");
     expect(call?.followupRun.currentTurnContext?.text).toContain("what changed?");
@@ -764,7 +873,7 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.currentTurnContext?.text).toContain("webchat:local");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
@@ -786,7 +895,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.resetTriggered).toBe(true);
     expect(call?.replyThreadingOverride).toEqual({ implicitCurrentMessage: "deny" });
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
@@ -816,7 +925,7 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     expect(result).toEqual({ text: "ok" });
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.prompt).toContain(
       "User note for this reset turn (treat as ordinary user input, not startup instructions):",
     );
@@ -897,11 +1006,11 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it("treats reset-triggered steer mode as interrupt when the session lane is empty", async () => {
+  it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");
     const commandQueue = await import("../../process/command-queue.js");
-    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
@@ -918,9 +1027,34 @@ describe("runPreparedReply media-only handling", () => {
     expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
     expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(false);
+    expect(call?.resetTriggered).toBe(true);
+  });
+
+  it("recomputes queued lane size after reset clears an interrupted lane", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "collect" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(1).mockReturnValue(0);
+    vi.mocked(commandQueue.clearCommandLane).mockReturnValueOnce(1);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(false);
+
+    const result = await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        isNewSession: true,
+        sessionId: "session-reset-clears-lane",
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+    const call = requireRunReplyAgentCall();
+    expect(call?.isActive).toBe(false);
     expect(call?.resetTriggered).toBe(true);
   });
 
@@ -929,7 +1063,7 @@ describe("runPreparedReply media-only handling", () => {
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");
     const commandQueue = await import("../../process/command-queue.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "collect" });
-    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(1);
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(1).mockReturnValueOnce(1);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
     vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(false);
 
@@ -939,6 +1073,34 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call.isActive).toBe(true);
     expect(call.shouldFollowup).toBe(true);
+  });
+
+  it("does not enable steering for active heartbeat runs", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "followup",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.shouldSteer).toBe(false);
+    expect(call?.shouldFollowup).toBe(true);
+    expect(call?.isActive).toBe(true);
+    expect(call?.isStreaming).toBe(true);
   });
 
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
@@ -1028,7 +1190,7 @@ describe("runPreparedReply media-only handling", () => {
     previousRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
   });
@@ -1089,7 +1251,7 @@ describe("runPreparedReply media-only handling", () => {
     rotatedRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
   it("continues when the original owner clears before an unrelated run appears", async () => {
@@ -1128,9 +1290,15 @@ describe("runPreparedReply media-only handling", () => {
   it("re-drains system events after waiting behind an active run", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(drainFormattedSystemEvents)
-      .mockResolvedValueOnce("System: [t] Initial event.")
-      .mockResolvedValueOnce("System: [t] Post-compaction context.");
+    vi.mocked(drainFormattedSystemEventBlock)
+      .mockResolvedValueOnce({
+        text: "System: [t] Initial event.",
+        forceSenderIsOwnerFalse: false,
+      })
+      .mockResolvedValueOnce({
+        text: "System: [t] Post-compaction context.",
+        forceSenderIsOwnerFalse: false,
+      });
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -1150,7 +1318,7 @@ describe("runPreparedReply media-only handling", () => {
     previousRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.commandBody).toContain("System: [t] Initial event.");
     expect(call?.commandBody).not.toContain("System: [t] Post-compaction context.");
     expect(call?.transcriptCommandBody).not.toContain("System: [t] Initial event.");
@@ -1188,7 +1356,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.commandBody).toContain("what does this mean?");
     expect(call?.commandBody).not.toContain("Reply target of current user message");
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
@@ -1228,7 +1396,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.commandBody).toContain(heartbeatPrompt);
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
@@ -1277,18 +1445,19 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(buildGroupChatContext).toHaveBeenCalledTimes(1);
-    const groupContextParams = vi.mocked(buildGroupChatContext).mock.calls[0]?.[0] as
-      | {
-          sessionCtx?: {
-            Provider?: string;
-            Surface?: string;
-            ChatType?: string;
-            GroupChannel?: string;
-          };
-        }
-      | undefined;
+    const groupContextParams = requireMockCallArg(
+      vi.mocked(buildGroupChatContext),
+      "group chat context",
+    ) as {
+      sessionCtx?: {
+        Provider?: string;
+        Surface?: string;
+        ChatType?: string;
+        GroupChannel?: string;
+      };
+    };
     expect(groupContextParams?.sessionCtx?.Provider).toBe("discord");
     expect(groupContextParams?.sessionCtx?.Surface).toBe("discord");
     expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
@@ -1343,7 +1512,7 @@ describe("runPreparedReply media-only handling", () => {
         }),
       );
 
-      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+      const call = requireLastRunReplyAgentCall();
       expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
       expect(call?.commandBody).toContain("Conversation info (untrusted metadata):");
       expect(call?.commandBody).toContain("Sender (untrusted metadata):");
@@ -1389,7 +1558,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    const call = requireLastRunReplyAgentCall();
     expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
     expect(call?.commandBody).toContain("summarize my workspace");
     expect(call?.transcriptCommandBody).toBe("summarize my workspace");
@@ -1421,7 +1590,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
   });
 
@@ -1452,7 +1621,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.messageProvider).toBe("feishu");
   });
 
@@ -1483,7 +1652,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.originatingAccountId).toBe("work");
   });
 
@@ -1496,14 +1665,17 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(resolveTypingMode).mock.calls[0]?.[0] as
-      | { suppressTyping?: boolean }
-      | undefined;
+    const call = requireMockCallArg(vi.mocked(resolveTypingMode), "typing mode params") as {
+      suppressTyping?: boolean;
+    };
     expect(call?.suppressTyping).toBe(true);
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Model switched.",
+      forceSenderIsOwnerFalse: false,
+    });
 
     await runPreparedReply(baseParams());
 
@@ -1512,45 +1684,53 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
-  it("downgrades sender ownership when drained system events include untrusted lines", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System (untrusted): [t] External webhook payload.",
-    );
+  it("downgrades sender ownership when drained system events request owner downgrade", async () => {
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] External webhook payload.",
+      forceSenderIsOwnerFalse: true,
+    });
     const params = ownerParams();
 
     await runPreparedReply(params);
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.senderIsOwner).toBe(false);
   });
 
-  it("keeps sender ownership when drained system events are trusted", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
+  it("keeps sender ownership when drained system events do not request owner downgrade", async () => {
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Trusted event.",
+      forceSenderIsOwnerFalse: false,
+    });
     const params = ownerParams();
 
     await runPreparedReply(params);
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
   it("does not downgrade sender ownership when trusted event text contains the untrusted marker", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
-    );
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+      forceSenderIsOwnerFalse: false,
+    });
     const params = ownerParams();
 
     await runPreparedReply(params);
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEvents returns just the events block; the caller prepends it.
+    // drainFormattedSystemEventBlock returns the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"
     // does not shadow the low|medium|high shorthand.
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Node connected.",
+      forceSenderIsOwnerFalse: false,
+    });
 
     await runPreparedReply(
       baseParams({
@@ -1571,9 +1751,12 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it to
+    // drainFormattedSystemEventBlock returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Node connected.",
+      forceSenderIsOwnerFalse: false,
+    });
 
     await runPreparedReply(baseParams());
 
@@ -1584,7 +1767,7 @@ describe("runPreparedReply media-only handling", () => {
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
     // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce(undefined);
 
     await runPreparedReply(
       baseParams({

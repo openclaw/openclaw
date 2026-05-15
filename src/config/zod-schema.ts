@@ -16,6 +16,7 @@ import {
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -23,7 +24,6 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { ChannelsSchema } from "./zod-schema.providers.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -624,6 +624,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         backend: z.string().optional(),
+        fallbacks: z.array(z.string()).optional(),
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),

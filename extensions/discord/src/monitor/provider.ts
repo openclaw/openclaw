@@ -121,6 +121,14 @@ function recordDiscordTransportEventStatus(setStatus: DiscordMonitorStatusSink |
   setStatus({ lastEventAt: at });
 }
 
+function recordDiscordAcceptedInboundStatus(setStatus: DiscordMonitorStatusSink | undefined) {
+  if (!setStatus) {
+    return;
+  }
+  const at = Date.now();
+  setStatus({ lastEventAt: at, lastInboundAt: at });
+}
+
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
 ) {
@@ -554,6 +562,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const trackInboundEvent = opts.setStatus
       ? () => recordDiscordTransportEventStatus(opts.setStatus)
       : undefined;
+    const trackAcceptedInboundEvent = opts.setStatus
+      ? () => recordDiscordAcceptedInboundStatus(opts.setStatus)
+      : undefined;
     registerDiscordMonitorListeners({
       cfg,
       client,
@@ -571,6 +582,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       logger,
       messageHandler,
       trackInboundEvent,
+      trackAcceptedInboundEvent,
     });
 
     logDiscordStartupPhase({
@@ -635,6 +647,7 @@ export const __testing = {
   formatDiscordDeployErrorDetails,
   formatDiscordDeployErrorMessage,
   recordDiscordTransportEventStatus,
+  recordDiscordAcceptedInboundStatus,
   setFetchDiscordApplicationId(mock?: typeof fetchDiscordApplicationId) {
     fetchDiscordApplicationIdForTesting = mock;
   },

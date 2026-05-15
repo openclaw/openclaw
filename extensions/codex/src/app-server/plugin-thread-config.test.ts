@@ -11,7 +11,7 @@ import {
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin thread config", () => {
-  it("builds restrictive app config for accessible migrated plugin apps", async () => {
+  it("defaults destructive app access on for accessible migrated plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
       key: "runtime",
@@ -26,7 +26,6 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: true,
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -254,7 +253,7 @@ describe("Codex plugin thread config", () => {
         },
         "google-calendar-app": {
           enabled: true,
-          destructive_enabled: false,
+          destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
         },
@@ -264,7 +263,7 @@ describe("Codex plugin thread config", () => {
       configKey: "google-calendar",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
-      allowDestructiveActions: false,
+      allowDestructiveActions: true,
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -328,7 +327,7 @@ describe("Codex plugin thread config", () => {
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: "google-calendar",
           enabled: true,
-          allowDestructiveActions: false,
+          allowDestructiveActions: true,
         },
         message: "google-calendar-app is not accessible or enabled for google-calendar.",
       },
@@ -403,7 +402,7 @@ describe("Codex plugin thread config", () => {
       },
       "google-calendar-app": {
         enabled: true,
-        destructive_enabled: false,
+        destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
       },
@@ -412,13 +411,36 @@ describe("Codex plugin thread config", () => {
       configKey: "google-calendar",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
-      allowDestructiveActions: false,
+      allowDestructiveActions: true,
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
-    expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");
-    expect(request.mock.calls.some(([method]) => method === "app/list")).toBe(true);
-    expect(appListParams.map((params) => params.forceRefetch)).toContain(true);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "plugin/list",
+      "plugin/read",
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+      "skills/list",
+      "hooks/list",
+      "config/mcpServer/reload",
+      "app/list",
+      "app/list",
+      "plugin/list",
+      "plugin/read",
+    ]);
+    expect(appListParams).toEqual([
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+    ]);
   });
 
   it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {

@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 
+function requireFirstNoteText(noteFn: ReturnType<typeof vi.fn>): string {
+  const [call] = noteFn.mock.calls;
+  if (!call) {
+    throw new Error("expected browser doctor note");
+  }
+  const [message] = call;
+  return String(message);
+}
+
 describe("browser doctor readiness", () => {
   it("does nothing when Chrome MCP is not configured", async () => {
     const noteFn = vi.fn();
@@ -99,8 +108,9 @@ describe("browser doctor readiness", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain("Google Chrome was not found");
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain("brave://inspect/#remote-debugging");
+    const note = requireFirstNoteText(noteFn);
+    expect(note).toContain("Google Chrome was not found");
+    expect(note).toContain("brave://inspect/#remote-debugging");
   });
 
   it("warns when detected Chrome is too old for Chrome MCP", async () => {
@@ -125,8 +135,9 @@ describe("browser doctor readiness", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain("too old");
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain("Chrome 144+");
+    const note = requireFirstNoteText(noteFn);
+    expect(note).toContain("too old");
+    expect(note).toContain("Chrome 144+");
   });
 
   it("reports the detected Chrome version for existing-session profiles", async () => {
@@ -153,9 +164,7 @@ describe("browser doctor readiness", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain(
-      "Detected Chrome Google Chrome 144.0.7534.0",
-    );
+    expect(requireFirstNoteText(noteFn)).toContain("Detected Chrome Google Chrome 144.0.7534.0");
   });
 
   it("skips Chrome auto-detection when profiles use explicit userDataDir", async () => {
@@ -181,7 +190,8 @@ describe("browser doctor readiness", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain("explicit Chromium user data directory");
-    expect(String(noteFn.mock.calls[0]?.[0])).toContain("brave://inspect/#remote-debugging");
+    const note = requireFirstNoteText(noteFn);
+    expect(note).toContain("explicit Chromium user data directory");
+    expect(note).toContain("brave://inspect/#remote-debugging");
   });
 });

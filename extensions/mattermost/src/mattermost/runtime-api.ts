@@ -30,6 +30,8 @@ export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";

@@ -388,7 +388,10 @@ describe("bootstrap prompt warnings", () => {
       previousSignature: signature,
     });
     expect(always.warningShown).toBe(true);
-    expect(always.lines.length).toBeGreaterThan(0);
+    expect(always.lines).toStrictEqual([
+      "AGENTS.md: 150 raw -> 100 injected (~33% removed; max/file).",
+      "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+    ]);
   });
 
   it("uses file path in signature to avoid collisions for duplicate names", () => {
@@ -452,7 +455,7 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.warningMode).toBe("once");
     expect(meta.warningShown).toBe(true);
     expect(meta.truncatedFiles).toBe(1);
-    expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
+    expect(meta.nearLimitFiles).toBe(1);
     expect(meta.promptWarningSignature).toBe(warning.signature);
     expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
   });

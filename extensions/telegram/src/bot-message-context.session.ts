@@ -14,10 +14,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  buildPendingHistoryContextFromMap,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -373,8 +370,8 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   let combinedBody = body;
   if (isGroup && historyKey && historyLimit > 0) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: groupHistories,
+    const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
+    combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -400,11 +397,10 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
+          historyKey,
+          limit: historyLimit,
+        })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
@@ -414,6 +410,7 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const commandSource = options?.commandSource;
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -465,6 +462,20 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
+    command:
+      commandSource === "native"
+        ? {
+            kind: "native",
+            authorized: commandAuthorized,
+            body: commandBody,
+          }
+        : commandSource === "text"
+          ? {
+              kind: "text-slash",
+              authorized: commandAuthorized,
+              body: commandBody,
+            }
+          : undefined,
     media: contextMedia.map((media, index) => ({
       path: media.path,
       url: media.path,
@@ -523,7 +534,6 @@ export async function buildTelegramInboundContextPayload(params: {
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
       ...locationContext,
-      CommandSource: options?.commandSource,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },

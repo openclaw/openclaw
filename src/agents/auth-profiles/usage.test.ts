@@ -876,7 +876,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
     expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
     expect(init.method).toBe("GET");
     const headers = init.headers as Record<string, string>;

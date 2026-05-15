@@ -312,13 +312,19 @@ describe("runReplyAgent runtime config", () => {
       isActive: true,
     });
 
-    await expect(runReplyAgent(replyParams)).resolves.toEqual({
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toEqual({
       text: "I'm still working on the previous request, so I queued this follow-up.",
     });
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single queued acknowledgement payload");
+    }
+    expect(getReplyPayloadMetadata(result)?.deliverDespiteSourceReplySuppression).toBe(true);
 
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
-    const enqueueCall = enqueueFollowupRunMock.mock.calls[0];
+    const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
     expect(enqueueCall?.[0]).toBe("main");
     expect(enqueueCall?.[1]).toBe(followupRun);
     expect(enqueueCall?.[2]).toBe(resolvedQueue);

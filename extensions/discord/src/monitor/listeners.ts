@@ -58,6 +58,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
   constructor(
     private logger?: Logger,
     private onEvent?: () => void,
+    private onAcceptedEvent?: () => void,
   ) {
     super();
   }
@@ -68,6 +69,11 @@ export class DiscordInteractionListener extends InteractionCreateListener {
     // or compaction without blocking later gateway events.
     void Promise.resolve()
       .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .then((accepted) => {
+        if (accepted) {
+          this.onAcceptedEvent?.();
+        }
+      })
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord interaction handler failed: ${String(err)}`));

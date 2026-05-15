@@ -136,6 +136,8 @@ const presentationButtonSchema = Type.Object({
   label: Type.String(),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
+  webApp: Type.Optional(Type.Object({ url: Type.String() })),
+  web_app: Type.Optional(Type.Object({ url: Type.String() })),
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
@@ -186,6 +188,25 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     caption: Type.Optional(Type.String()),
     path: Type.Optional(Type.String()),
     filePath: Type.Optional(Type.String()),
+    attachments: Type.Optional(
+      Type.Array(
+        Type.Object({
+          type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
+          media: Type.Optional(Type.String()),
+          mediaUrl: Type.Optional(Type.String()),
+          path: Type.Optional(Type.String()),
+          filePath: Type.Optional(Type.String()),
+          fileUrl: Type.Optional(Type.String()),
+          url: Type.Optional(Type.String()),
+          name: Type.Optional(Type.String()),
+          mimeType: Type.Optional(Type.String()),
+        }),
+        {
+          description:
+            "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+        },
+      ),
+    ),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
@@ -446,7 +467,12 @@ function buildPresenceSchema() {
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
-    type: Type.Optional(Type.Number()),
+    channelType: Type.Optional(
+      Type.Number({
+        description:
+          "Numeric channel type (e.g. Discord channel type). Renamed from `type` to avoid JSON Schema keyword collisions that break some OpenAI-compatible providers (notably NVIDIA NIM).",
+      }),
+    ),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
     position: Type.Optional(Type.Number()),
@@ -933,6 +959,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sessionId: options?.sessionId,
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
+        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         abortSignal: signal,
       });
 

@@ -35,6 +35,14 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
   });
 }
 
+function fetchInitAt(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call[1];
+}
+
 async function expectSafeFetchStatus(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   url: string;
@@ -150,7 +158,7 @@ describe("safeFetch", () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     // Should have used redirect: "manual"
-    expect(fetchMock.mock.calls[0][1]).toHaveProperty("redirect", "manual");
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
   });
 
   it("follows a redirect to an allowlisted host with public IP", async () => {
@@ -505,6 +513,17 @@ describe("msteams inline image limits", () => {
       expect(out[0].data.byteLength).toBeGreaterThan(0);
       expect(out[0].contentType).toBe("image/png");
     }
+  });
+
+  it("rejects inline data images with malformed base64 padding", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="data:image/png;base64,aGV=sbG8=" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out).toStrictEqual([]);
   });
 
   it("enforces cumulative inline size limit across attachments", () => {

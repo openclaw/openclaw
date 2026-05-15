@@ -57,6 +57,7 @@ export { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,

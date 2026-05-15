@@ -22,6 +22,7 @@ import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
+import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -268,6 +269,8 @@ async function resolveCliMediaPath(params: {
         "16000",
         "-c:a",
         "pcm_s16le",
+        "-f",
+        "wav",
         outputPath,
       ]);
     },
@@ -648,6 +651,7 @@ export async function runProviderEntry(params: {
     const result = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,
+      transientRetry: providerOperationRetryConfig("read"),
       execute: async (apiKey) =>
         transcribeAudio({
           buffer: media.buffer,
@@ -705,6 +709,7 @@ export async function runProviderEntry(params: {
   const result = await executeWithApiKeyRotation({
     provider: providerId,
     apiKeys,
+    transientRetry: providerOperationRetryConfig("read"),
     execute: (apiKey) =>
       describeVideo({
         buffer: media.buffer,
