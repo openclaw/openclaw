@@ -2448,9 +2448,7 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
     delete record.reasoning_details;
   }
 
-  // Strip non-string AND empty-string reasoning fields — empty strings are
-  // response artifacts that upstream providers (OpenRouter, DeepSeek) reject
-  // with HTTP 500 when replayed on follow-up turns.
+  // Empty reasoning artifacts are rejected by OpenRouter/DeepSeek replay.
   if ("reasoning" in record && (typeof record.reasoning !== "string" || record.reasoning === "")) {
     delete record.reasoning;
   }

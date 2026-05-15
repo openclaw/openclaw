@@ -181,7 +181,12 @@ function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void
   }
 }
 
-function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
+function ensureDeepSeekV4AssistantReasoningContent(
+  payload: Record<string, unknown>,
+  params?: {
+    shouldBackfillAssistantMessage?: (message: Record<string, unknown>) => boolean;
+  },
+): void {
   if (!Array.isArray(payload.messages)) {
     return;
   }
@@ -191,6 +196,9 @@ function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unkno
     }
     const record = message as Record<string, unknown>;
     if (record.role !== "assistant") {
+      continue;
+    }
+    if (params?.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record)) {
       continue;
     }
     if (!("reasoning_content" in record)) {
@@ -205,6 +213,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   thinkingLevel: DeepSeekV4ThinkingLevel;
   shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
   resolveReasoningEffort?: (thinkingLevel: DeepSeekV4ThinkingLevel) => DeepSeekV4ReasoningEffort;
+  shouldBackfillAssistantReasoningContent?: (message: Record<string, unknown>) => boolean;
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {
     return undefined;
@@ -227,7 +236,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload);
+      ensureDeepSeekV4AssistantReasoningContent(payload, {
+        shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
+      });
     });
   };
 }
