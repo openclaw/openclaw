@@ -1463,7 +1463,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           );
         }
 
-        setHandshakePhase("ready");
         if (presenceKey) {
           upsertPresence(presenceKey, {
             host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
@@ -1588,6 +1587,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           close();
           return;
         }
+        setHandshakePhase("ready");
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
             if (handoffBootstrapProfile) {

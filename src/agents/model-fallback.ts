@@ -321,8 +321,6 @@ function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
 
-const DEFAULT_MODEL_HEALTH_COOLDOWN_MS = 30 * 60 * 1000;
-
 function resolveModelHealthKey(provider: string, model: string): string {
   return modelKey(provider, model);
 }
