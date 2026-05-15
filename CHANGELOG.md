@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/providers: trust the exact configured custom/local provider `baseUrl` origin for guarded model HTTP requests, so loopback, LAN, tailnet, and private DNS endpoints work without broad private-network access while different ports and metadata/link-local pivots remain blocked. Fixes #80732. (#80751) Thanks @Kaspre and @msitarzewski.
 - Bind shell script operands after combined options [AI]. (#81882) Thanks @pgondhi987.
 - fix(canvas): validate snapshot response formats [AI]. (#81881) Thanks @pgondhi987.
 - Constrain provider catalog entry paths [AI]. (#81884) Thanks @pgondhi987.
