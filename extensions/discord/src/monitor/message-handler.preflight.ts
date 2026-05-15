@@ -13,7 +13,7 @@ import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import {
   type HistoryEntry,
   type HistoryMediaEntry,
-  recordPendingHistoryEntryIfEnabled,
+  recordPendingHistoryEntryWithMedia,
 } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -63,7 +63,6 @@ import {
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
   resolveMediaList,
-  type DiscordMediaInfo,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 
@@ -93,29 +92,6 @@ function resolveDiscordPreflightConversationKind(params: {
   return { isDirectMessage, isGroupDm };
 }
 
-function isLocalDiscordMediaPath(path: string): boolean {
-  if (/^[a-z]:[\\/]/i.test(path)) {
-    return true;
-  }
-  return !/^[a-z][a-z0-9+.-]*:/i.test(path);
-}
-
-function buildDiscordHistoryMediaEntries(params: {
-  messageId: string;
-  mediaList: DiscordMediaInfo[];
-}): HistoryMediaEntry[] {
-  return params.mediaList
-    .filter(
-      (media) => media.contentType?.startsWith("image/") && isLocalDiscordMediaPath(media.path),
-    )
-    .map((media) => ({
-      path: media.path,
-      contentType: media.contentType,
-      kind: "image" as const,
-      messageId: params.messageId,
-    }));
-}
-
 function isDiscordImageAttachmentCandidate(attachment: {
   content_type?: string | null;
   filename?: string | null;
@@ -131,14 +107,10 @@ function isDiscordImageAttachmentCandidate(attachment: {
   );
 }
 
-async function resolveDiscordHistoryEntryForPendingRecord(params: {
+async function resolveDiscordHistoryMediaForPendingRecord(params: {
   preflight: DiscordMessagePreflightParams;
   message: DiscordMessagePreflightContext["message"];
-  entry?: HistoryEntry;
-}): Promise<HistoryEntry | undefined> {
-  if (!params.entry) {
-    return undefined;
-  }
+}): Promise<HistoryMediaEntry[]> {
   const imageAttachments = (params.message.attachments ?? [])
     .filter(isDiscordImageAttachmentCandidate)
     .slice(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS);
@@ -147,7 +119,7 @@ async function resolveDiscordHistoryEntryForPendingRecord(params: {
     Math.max(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS - imageAttachments.length),
   );
   if (imageAttachments.length === 0 && stickers.length === 0) {
-    return params.entry;
+    return [];
   }
   const rawData = (() => {
     try {
@@ -183,11 +155,12 @@ async function resolveDiscordHistoryEntryForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  const media = buildDiscordHistoryMediaEntries({
+  return mediaList.map((media) => ({
+    path: media.path,
+    contentType: media.contentType,
+    kind: "image" as const,
     messageId: params.message.id,
-    mediaList,
-  });
-  return media.length > 0 ? { ...params.entry, media } : params.entry;
+  }));
 }
 
 async function recordDiscordPendingHistoryEntry(params: {
@@ -199,19 +172,19 @@ async function recordDiscordPendingHistoryEntry(params: {
   if (params.preflight.historyLimit <= 0) {
     return;
   }
-  const entry = await resolveDiscordHistoryEntryForPendingRecord({
-    preflight: params.preflight,
-    message: params.message,
-    entry: params.entry,
-  });
-  if (isPreflightAborted(params.preflight.abortSignal)) {
-    return;
-  }
-  recordPendingHistoryEntryIfEnabled({
+  await recordPendingHistoryEntryWithMedia({
     historyMap: params.preflight.guildHistories,
     historyKey: params.historyKey,
     limit: params.preflight.historyLimit,
-    entry: entry ?? null,
+    entry: params.entry ?? null,
+    mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
+    messageId: params.message.id,
+    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+    media: () =>
+      resolveDiscordHistoryMediaForPendingRecord({
+        preflight: params.preflight,
+        message: params.message,
+      }),
   });
 }
 

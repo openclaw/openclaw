@@ -666,6 +666,59 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(members).not.toHaveBeenCalled();
   });
 
+  it("records skipped no-mention room images as pending history media", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      return new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+        defaultRequireMention: true,
+      });
+      slackCtx.historyLimit = 5;
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount(),
+        createSlackMessage({
+          channel: "C123",
+          channel_type: "channel",
+          text: "",
+          ts: "500.000",
+          files: [
+            {
+              id: "F1",
+              name: "diagram.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/diagram.png",
+            },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      const entries = Array.from(slackCtx.channelHistories.values()).flat();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.body).toBe("[Slack file: diagram.png (fileId: F1)]");
+      expect(entries[0]?.media).toHaveLength(1);
+      expect(entries[0]?.media?.[0]).toMatchObject({
+        contentType: "image/png",
+        kind: "image",
+        messageId: "500.000",
+      });
+      expect(entries[0]?.media?.[0]?.path).toEqual(expect.any(String));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("allows bot-authored room messages with explicit mention when allowBots is mentions", async () => {
     const members = vi.fn();
     const slackCtx = createInboundSlackCtx({
