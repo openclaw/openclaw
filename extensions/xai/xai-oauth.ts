@@ -251,12 +251,8 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
       nonce,
       challenge: pkce.challenge,
     });
-    await noteXaiOAuthUrl(ctx, authorizeUrl);
-    if (!ctx.isRemote) {
-      await ctx.openUrl(authorizeUrl);
-    }
     progress.update(`Waiting for xAI OAuth callback on ${XAI_OAUTH_REDIRECT_URI}...`);
-    const callback = await waitForLocalOAuthCallback({
+    const callbackPromise = waitForLocalOAuthCallback({
       expectedState: state,
       timeoutMs: XAI_OAUTH_TIMEOUT_MS,
       port: XAI_OAUTH_CALLBACK_PORT,
@@ -264,7 +260,14 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
       redirectUri: XAI_OAUTH_REDIRECT_URI,
       hostname: XAI_OAUTH_CALLBACK_HOST,
       successTitle: "xAI OAuth complete",
+      onProgress: (message) => progress.update(message),
     });
+    void callbackPromise.catch(() => undefined);
+    await noteXaiOAuthUrl(ctx, authorizeUrl);
+    if (!ctx.isRemote) {
+      await ctx.openUrl(authorizeUrl);
+    }
+    const callback = await callbackPromise;
     const tokens = await exchangeXaiOAuthToken({
       tokenEndpoint: discovery.tokenEndpoint,
       context: "xAI OAuth token exchange",
