@@ -824,7 +824,7 @@ describe("runCodexAppServerAttempt", () => {
       expect(dynamicToolNames).not.toContain(toolName);
     }
   });
-  it("passes auth profiles into Codex dynamic tool construction", async () => {
+  it("passes auth profiles into Codex dynamic tool construction", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -841,13 +841,8 @@ describe("runCodexAppServerAttempt", () => {
     params.disableTools = false;
     params.authProfileStore = authProfileStore;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
-      factoryOptions.push(options);
-      return [];
-    });
 
-    await __testing.buildDynamicTools({
+    const toolOptions = __testing.buildOpenClawCodingToolsOptions({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
@@ -859,10 +854,9 @@ describe("runCodexAppServerAttempt", () => {
       onYieldDetected: () => undefined,
     });
 
-    expect(factoryOptions).toHaveLength(1);
-    expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
-      authProfileStore,
-    );
+    expect(toolOptions.authProfileStore).toBe(authProfileStore);
+    expect(toolOptions.modelProvider).toBe("openai");
+    expect(toolOptions.modelApi).toBe("openai-responses");
   });
 
   it("keeps canonical OpenAI Codex runs on OpenAI dynamic tool policy", async () => {
