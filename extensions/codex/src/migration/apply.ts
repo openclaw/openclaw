@@ -175,6 +175,7 @@ async function applyCodexPluginInstallItem(
           agentDir: resolveCodexMigrationTargets(ctx).agentDir,
           config: ctx.config,
           isolated: false,
+          waitForPluginName: policy.pluginName,
         }),
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
@@ -274,6 +275,7 @@ async function requestTargetCodexAppServerJson(params: {
   agentDir: string;
   config: MigrationProviderContext["config"];
   isolated?: boolean;
+  waitForPluginName?: string;
 }): Promise<unknown> {
   if (params.method !== "plugin/list") {
     return await requestCodexAppServerJson(params);
@@ -291,7 +293,7 @@ async function requestTargetCodexAppServerJson(params: {
       ...params,
       timeoutMs: remainingMs,
     });
-    if (hasOpenAiCuratedMarketplace(lastResponse)) {
+    if (hasRequestedOpenAiCuratedPlugin(lastResponse, params.waitForPluginName)) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -307,18 +309,35 @@ async function requestTargetCodexAppServerJson(params: {
   return lastResponse;
 }
 
-function hasOpenAiCuratedMarketplace(response: unknown): boolean {
+function hasRequestedOpenAiCuratedPlugin(
+  response: unknown,
+  pluginName: string | undefined,
+): boolean {
   if (!response || typeof response !== "object" || !("marketplaces" in response)) {
     return false;
   }
   const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
+  if (!Array.isArray(marketplaces)) {
+    return false;
+  }
+  const marketplace = marketplaces.find(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      (entry as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
+  );
+  if (!marketplace || typeof marketplace !== "object") {
+    return false;
+  }
+  if (!pluginName) {
+    return true;
+  }
+  const plugins = (marketplace as { plugins?: unknown }).plugins;
   return (
-    Array.isArray(marketplaces) &&
-    marketplaces.some(
-      (marketplace) =>
-        marketplace &&
-        typeof marketplace === "object" &&
-        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
+    Array.isArray(plugins) &&
+    plugins.some(
+      (plugin) =>
+        plugin && typeof plugin === "object" && (plugin as { name?: unknown }).name === pluginName,
     )
   );
 }
