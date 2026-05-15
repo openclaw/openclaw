@@ -8,6 +8,7 @@ import {
   formatToolProgressOutput,
   inferToolMetaFromArgs,
   normalizeUsage,
+  resolveEffectiveToolProgressMaxChars,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeCompactionHook,
@@ -666,14 +667,15 @@ export class CodexAppServerEventProjector {
     if (state.truncated) {
       return;
     }
-    const remainingChars = Math.max(0, TOOL_PROGRESS_OUTPUT_MAX_CHARS - state.chars);
+    const maxProgressChars = resolveEffectiveToolProgressMaxChars(this.params.config);
+    const remainingChars = Math.max(0, maxProgressChars - state.chars);
     const remainingMessages = Math.max(0, MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM - state.messages);
     if (remainingChars === 0 || remainingMessages === 0) {
       state.truncated = true;
       this.toolResultOutputDeltaState.set(itemId, state);
       this.emitToolResultMessage({
         itemId,
-        text: formatToolOutput(toolName, undefined, "(output truncated)"),
+        text: formatToolOutput(toolName, undefined, "(output truncated)", this.params.config),
       });
       return;
     }
@@ -682,7 +684,7 @@ export class CodexAppServerEventProjector {
     state.messages += 1;
     const reachedLimit =
       delta.length > remainingChars ||
-      state.chars >= TOOL_PROGRESS_OUTPUT_MAX_CHARS ||
+      state.chars >= maxProgressChars ||
       state.messages >= MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM;
     if (reachedLimit) {
       state.truncated = true;
@@ -695,6 +697,7 @@ export class CodexAppServerEventProjector {
         toolName,
         undefined,
         reachedLimit ? `${chunk}\n...(truncated)...` : chunk,
+        this.params.config,
       ),
     });
   }
@@ -996,7 +999,7 @@ export class CodexAppServerEventProjector {
     }
     this.emitToolResultMessage({
       itemId,
-      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
+      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output, this.params.config),
       finalOutput: true,
     });
   }
@@ -1715,8 +1718,13 @@ function formatToolSummary(toolName: string, meta?: string): string {
   });
 }
 
-function formatToolOutput(toolName: string, meta: string | undefined, output: string): string {
-  const formattedOutput = formatToolProgressOutput(output);
+function formatToolOutput(
+  toolName: string,
+  meta: string | undefined,
+  output: string,
+  config?: EmbeddedRunAttemptParams["config"],
+): string {
+  const formattedOutput = formatToolProgressOutput(output, { cfg: config });
   if (!formattedOutput) {
     return formatToolSummary(toolName, meta);
   }

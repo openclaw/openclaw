@@ -439,6 +439,8 @@ export type GatewayToolsConfig = {
 export type GatewayWebchatConfig = {
   /** Max characters per text field in chat.history responses before truncation (default: 12000). */
   chatHistoryMaxChars?: number;
+  /** Max characters for tool progress output before truncation in live tool/progress UI updates (default: 8000). */
+  toolProgressMaxChars?: number;
 };
 
 export type GatewayConfig = {

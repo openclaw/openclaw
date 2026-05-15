@@ -17,9 +17,23 @@ import {
 } from "../agents/pi-embedded-runner/runs.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+export function resolveEffectiveToolProgressMaxChars(
+  cfg?: OpenClawConfig,
+  maxChars?: number,
+): number {
+  if (typeof maxChars === "number") {
+    return maxChars;
+  }
+  if (typeof cfg?.gateway?.webchat?.toolProgressMaxChars === "number") {
+    return cfg.gateway.webchat.toolProgressMaxChars;
+  }
+  return TOOL_PROGRESS_OUTPUT_MAX_CHARS;
+}
 
 export type { AgentMessage } from "@earendil-works/pi-agent-core";
 export type {
@@ -217,14 +231,14 @@ export function inferToolMetaFromArgs(
  */
 export function formatToolProgressOutput(
   output: string,
-  options?: { maxChars?: number },
+  options?: { maxChars?: number; cfg?: OpenClawConfig },
 ): string | undefined {
   const trimmed = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!trimmed) {
     return undefined;
   }
   const redacted = redactToolDetail(trimmed);
-  const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
+  const maxChars = resolveEffectiveToolProgressMaxChars(options?.cfg, options?.maxChars);
   if (redacted.length <= maxChars) {
     return redacted;
   }

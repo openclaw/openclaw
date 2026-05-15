@@ -1723,6 +1723,31 @@ describe("CodexAppServerEventProjector", () => {
     );
   });
 
+  it("uses gateway.webchat.toolProgressMaxChars for streamed tool output", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        gateway: {
+          webchat: {
+            toolProgressMaxChars: 5,
+          },
+        },
+      },
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-tool-progress-cap",
+        delta: "abcdefghij",
+      }),
+    );
+
+    const toolResult = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
+    expect(toolResult.text).toContain(`abcde\n...(truncated)...`);
+  });
+
   it("continues projecting turn completion when an event consumer throws", async () => {
     const onAgentEvent = vi.fn(() => {
       throw new Error("consumer failed");
