@@ -16,6 +16,7 @@ final class AmbientOverlayExperienceController {
 
     private let enableUI: Bool
     private var timeoutTask: Task<Void, Never>?
+    private var displayController: AmbientOverlayDisplayController?
 
     var showAmbient: ((Double) -> Void)?
     var showWorkspace: (((@escaping () -> Void)) -> Void)?
@@ -48,6 +49,13 @@ final class AmbientOverlayExperienceController {
         if !isEnabled {
             self.dismissInteractive(reason: .disabled)
             self.closeSurfaces?()
+            self.displayController = nil
+            if self.enableUI {
+                self.showAmbient = nil
+                self.showWorkspace = nil
+                self.hideWorkspace = nil
+                self.closeSurfaces = nil
+            }
             return
         }
 
@@ -94,7 +102,36 @@ final class AmbientOverlayExperienceController {
 
     func showAmbientIfNeeded() {
         guard self.enableUI else { return }
+        if self.displayController == nil {
+            self.installDisplayController()
+        }
         self.showAmbient?(self.settings.intensity)
+    }
+
+    private func installDisplayController() {
+        let displayController = AmbientOverlayDisplayController()
+        let existingShowAmbient = self.showAmbient
+        let existingShowWorkspace = self.showWorkspace
+        let existingHideWorkspace = self.hideWorkspace
+        let existingCloseSurfaces = self.closeSurfaces
+
+        self.displayController = displayController
+        self.showAmbient = { intensity in
+            displayController.showAmbient(intensity: intensity)
+            existingShowAmbient?(intensity)
+        }
+        self.showWorkspace = { onDismiss in
+            displayController.showWorkspace(onDismiss: onDismiss)
+            existingShowWorkspace?(onDismiss)
+        }
+        self.hideWorkspace = {
+            displayController.hideWorkspace()
+            existingHideWorkspace?()
+        }
+        self.closeSurfaces = {
+            displayController.close()
+            existingCloseSurfaces?()
+        }
     }
 
     private func scheduleTimeout() {
