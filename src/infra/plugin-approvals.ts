@@ -1235,9 +1235,12 @@ function hasGitDiscardOption(args: readonly string[]): boolean {
 }
 
 function isGitPathCheckoutDiscard(args: readonly string[]): boolean {
+  const createsBranch = args.some((arg) => arg === "-b" || arg === "-B" || arg === "--orphan");
   return (
     args.includes("--") ||
-    args.some((arg) => arg === "." || arg === ":/" || arg.startsWith("./") || arg.startsWith("../"))
+    args.some((arg) => arg === "." || arg === ":/" || arg.startsWith("./") || arg.startsWith("../")) ||
+    args.some((arg) => arg === "--pathspec-from-file" || arg.startsWith("--pathspec-from-file=")) ||
+    (!createsBranch && args.some((arg) => arg !== "--" && !arg.startsWith("-")))
   );
 }
 

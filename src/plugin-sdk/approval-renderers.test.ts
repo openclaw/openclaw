@@ -476,6 +476,16 @@ describe("plugin-sdk/approval-renderers", () => {
       subcommand: "checkout",
     },
     {
+      command: "git checkout src/config.ts",
+      id: "plugin-command-git-checkout-file-path",
+      subcommand: "checkout",
+    },
+    {
+      command: "git checkout package.json",
+      id: "plugin-command-git-checkout-file-name",
+      subcommand: "checkout",
+    },
+    {
       command: "git switch --discard-changes main",
       id: "plugin-command-git-switch-discard",
       subcommand: "switch",
