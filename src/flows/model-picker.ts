@@ -611,9 +611,8 @@ export async function promptDefaultModel(
   if (
     loadCatalog &&
     browseCatalogOnDemand &&
-    preferredProvider &&
     allowKeep &&
-    normalizeProviderId(resolved.provider) === preferredProvider
+    (!preferredProvider || normalizeProviderId(resolved.provider) === preferredProvider)
   ) {
     const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [
