@@ -943,6 +943,15 @@ describe("failover-error", () => {
     );
   });
 
+  it("Codex deactivated workspace marker returns auth_permanent", () => {
+    expect(resolveFailoverReasonFromError({ message: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ message: "deactivated workspace" })).toBe(
+      "auth_permanent",
+    );
+  });
+
   it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
     // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
     // when the monthly key spending limit is reached. This must trigger billing failover
