@@ -496,7 +496,7 @@ describe("doctor preview warnings", () => {
     expect(warning).toContain('set messages.groupChat.visibleReplies to "automatic"');
   });
 
-  it("does not warn when source reply delivery grants message at runtime", () => {
+  it("warns about default private group replies when source reply delivery grants message at runtime", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -519,7 +519,9 @@ describe("doctor preview warnings", () => {
       },
     };
 
-    expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
+    const warnings = collectVisibleReplyToolPolicyWarnings(cfg);
+    expect(warnings).toEqual([expect.stringContaining("normal final replies stay private")]);
+    expect(warnings[0]).not.toContain("message tool is unavailable");
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);
   });
 
@@ -585,7 +587,9 @@ describe("doctor preview warnings", () => {
       },
     };
 
-    expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
+    const warnings = collectVisibleReplyToolPolicyWarnings(cfg);
+    expect(warnings).toEqual([expect.stringContaining("normal final replies stay private")]);
+    expect(warnings[0]).not.toContain("message tool is unavailable");
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);
   });
 

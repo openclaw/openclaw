@@ -267,16 +267,29 @@ type ChannelRouteToolAvailability = ChannelRouteTarget & {
   messageToolAvailable: boolean;
 };
 
-function collectChannelRouteToolAvailability(cfg: OpenClawConfig): ChannelRouteToolAvailability[] {
+function collectChannelRouteToolAvailability(
+  cfg: OpenClawConfig,
+  options: { sourceReplyRuntimeGrant?: boolean } = {},
+): ChannelRouteToolAvailability[] {
   return collectChannelRouteTargets(cfg).map((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
+    const messageToolAvailable = options.sourceReplyRuntimeGrant
+      ? resolveSourceReplyMessageToolAvailability({
+          cfg,
+          agentId: target.agentId,
+          globalTools: cfg.tools,
+          agentTools,
+        })
+      : resolveMessageToolAvailability({
+          cfg,
+          agentId: target.agentId,
+          globalTools: cfg.tools,
+          agentTools,
+        });
     return {
       agentId: target.agentId,
       channels: target.channels,
-      messageToolAvailable: resolveMessageToolAvailability({
-        globalTools: cfg.tools,
-        agentTools,
-      }),
+      messageToolAvailable,
     };
   });
 }
@@ -318,7 +331,9 @@ function formatTargets(targets: string[]): string {
 
 export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
-  const channelRouteTools = collectChannelRouteToolAvailability(cfg);
+  const channelRouteTools = collectChannelRouteToolAvailability(cfg, {
+    sourceReplyRuntimeGrant: groupPolicy.value === "message_tool",
+  });
   const hasConfiguredChannelChat = channelRouteTools.length > 0;
   const warnings: string[] = [];
   if (
@@ -344,7 +359,9 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
     return warnings;
   }
 
-  const targets = collectMessageToolUnavailableTargets(cfg);
+  const targets = collectMessageToolUnavailableTargets(cfg, {
+    sourceReplyRuntimeGrant: groupPolicy.value === "message_tool",
+  });
   if (targets.length === 0) {
     return warnings;
   }
