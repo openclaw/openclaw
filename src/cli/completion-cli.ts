@@ -108,7 +108,7 @@ export function registerCompletionCli(program: Command) {
       // Eagerly register all subcommands except completion itself to build the full tree.
       await registerSubcommandsForCompletion(program);
 
-      if (!writeState && process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
+      if (process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
         const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
         await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
           mode: "eager",

@@ -114,7 +114,7 @@ describe("completion-cli write-state", () => {
     expect(registerSubCliByNameMock.mock.calls).toEqual([
       [program, "qa", process.argv, { purpose: "completion" }],
     ]);
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
     expect(stderrWrites.mock.calls).toEqual([
       [
         "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.md\n",
