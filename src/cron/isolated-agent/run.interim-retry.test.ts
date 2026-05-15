@@ -304,6 +304,53 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "CLI repair ready." }]);
   });
 
+  it("recomputes empty-output repair constraints for each fallback runtime candidate", async () => {
+    usePayloadTextExtraction();
+    isCliProviderMock.mockImplementation((provider?: string) => provider === "claude-cli");
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "   " }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          sessionId: "first-cli-session",
+          usage: { input: 10, output: 20 },
+        },
+      },
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Embedded repair ready." }],
+      meta: { agentMeta: { provider: "openai", usage: { input: 10, output: 20 } } },
+    });
+    runWithModelFallbackMock
+      .mockImplementationOnce(async ({ run }) => {
+        const result = await run("claude-cli", "claude");
+        return { result, provider: "claude-cli", model: "claude", attempts: [] };
+      })
+      .mockImplementationOnce(async ({ run }) => {
+        const result = await run("openai", "gpt-5.4");
+        return { result, provider: "openai", model: "gpt-5.4", attempts: [] };
+      });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const repairCall = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as
+      | { disableTools?: boolean; prompt?: string }
+      | undefined;
+    expect(repairCall?.disableTools).toBe(true);
+    expect(repairCall?.prompt).toContain("produced no deliverable user-visible text");
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "Embedded repair ready." }]);
+  });
+
   it("preserves external-hook non-owner scope during CLI empty-output repair", async () => {
     usePayloadTextExtraction();
     isCliProviderMock.mockReturnValue(true);

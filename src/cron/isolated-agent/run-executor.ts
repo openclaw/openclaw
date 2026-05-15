@@ -38,13 +38,22 @@ type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | nul
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
-type CronPromptRunOptions = {
+type CronPromptRunResolvedOptions = {
   disableTools?: boolean;
   disableBundleMcpForCli?: boolean;
   cliSession?: {
     provider: string;
     sessionId: string;
   };
+};
+type CronPromptRunAttempt = {
+  provider: string;
+  model: string;
+  executionProvider: string;
+  usesCliProvider: boolean;
+};
+type CronPromptRunOptions = CronPromptRunResolvedOptions & {
+  resolveForAttempt?: (attempt: CronPromptRunAttempt) => CronPromptRunResolvedOptions;
 };
 
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
@@ -209,12 +218,20 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             modelId: modelOverride,
           }) ?? providerOverride;
+        const usesCliProvider = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+        const resolvedOptions =
+          options?.resolveForAttempt?.({
+            provider: providerOverride,
+            model: modelOverride,
+            executionProvider,
+            usesCliProvider,
+          }) ?? options;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
+        if (usesCliProvider) {
           const optionCliSessionId =
-            options?.cliSession?.provider === executionProvider
-              ? options.cliSession.sessionId.trim() || undefined
+            resolvedOptions?.cliSession?.provider === executionProvider
+              ? resolvedOptions.cliSession.sessionId.trim() || undefined
               : undefined;
           const cliSessionId =
             optionCliSessionId ??
@@ -238,8 +255,8 @@ export function createCronPromptExecutor(params: {
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
             cliSessionId,
-            disableTools: options?.disableTools,
-            disableBundleMcp: options?.disableBundleMcpForCli,
+            disableTools: resolvedOptions?.disableTools,
+            disableBundleMcp: resolvedOptions?.disableBundleMcpForCli,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,
@@ -317,7 +334,7 @@ export function createCronPromptExecutor(params: {
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
           forceMessageTool: params.toolPolicy.forceMessageTool,
-          disableTools: options?.disableTools,
+          disableTools: resolvedOptions?.disableTools,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -578,12 +595,14 @@ export async function executeCronRun(params: {
           : `[cron:${params.job.id}] empty deliverable output after sanitization; attempting no-tools repair pass`,
       );
       await executor.runPrompt(buildEmptyOutputRepairPrompt(params.commandBody), {
-        disableTools: repairUsesCliProvider ? undefined : true,
-        disableBundleMcpForCli: repairUsesCliProvider ? true : undefined,
-        cliSession:
-          repairUsesCliProvider && repairCliSessionId
-            ? { provider: repairProvider, sessionId: repairCliSessionId }
-            : undefined,
+        resolveForAttempt: ({ executionProvider, usesCliProvider }) => ({
+          disableTools: usesCliProvider ? undefined : true,
+          disableBundleMcpForCli: usesCliProvider ? true : undefined,
+          cliSession:
+            usesCliProvider && repairCliSessionId && executionProvider === repairProvider
+              ? { provider: executionProvider, sessionId: repairCliSessionId }
+              : undefined,
+        }),
       });
       ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
 
