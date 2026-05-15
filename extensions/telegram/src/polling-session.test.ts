@@ -1291,7 +1291,7 @@ describe("TelegramPollingSession", () => {
       ),
     ).toEqual({
       match: true,
-      bypassBackoff: true,
+      bypassBackoff: false,
     });
     expect(drain.selectEntry({ channel: "telegram", accountId: "alerts" }, Date.now()).match).toBe(
       false,

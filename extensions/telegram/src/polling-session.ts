@@ -49,16 +49,6 @@ function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
 }
 
-function shouldBypassReconnectBackoff(lastError?: string): boolean {
-  if (!lastError) {
-    return false;
-  }
-  return isRecoverableTelegramNetworkError(new Error(lastError), {
-    context: "send",
-    allowMessageMatch: true,
-  });
-}
-
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
@@ -236,7 +226,7 @@ export class TelegramPollingSession {
       selectEntry: (entry) => ({
         match:
           entry.channel === "telegram" && normalizeTelegramAccountId(entry.accountId) === accountId,
-        bypassBackoff: shouldBypassReconnectBackoff(entry.lastError),
+        bypassBackoff: false,
       }),
     })
       .catch((err) => {
