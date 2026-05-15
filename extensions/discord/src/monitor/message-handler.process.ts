@@ -47,11 +47,7 @@ import {
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import {
-  resolveForwardedMediaList,
-  resolveMediaList,
-  resolveReferencedReplyMediaList,
-} from "./message-utils.js";
+import { resolveForwardedMediaList, resolveMediaList } from "./message-utils.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -180,15 +176,7 @@ export async function processDiscordMessage(
   if (isProcessAborted(abortSignal)) {
     return;
   }
-  const referencedReplyMediaList = await resolveReferencedReplyMediaList(
-    message,
-    mediaMaxBytes,
-    mediaResolveOptions,
-  );
-  if (isProcessAborted(abortSignal)) {
-    return;
-  }
-  mediaList.push(...forwardedMediaList, ...referencedReplyMediaList);
+  mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
     logVerbose("discord: drop message " + message.id + " (empty content)");

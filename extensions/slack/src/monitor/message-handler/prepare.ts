@@ -800,7 +800,11 @@ export async function prepareSlackMessage(params: {
     const fallbackFile = message.files?.length
       ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
       : "";
-    const pendingBody = pendingText || fallbackFile;
+    const fallbackSharedMedia =
+      !fallbackFile && buildSlackHistoryMediaCandidateMessage(message)
+        ? "[Slack media attachment]"
+        : "";
+    const pendingBody = pendingText || fallbackFile || fallbackSharedMedia;
     await recordPendingHistoryEntryWithMedia({
       historyMap: ctx.channelHistories,
       historyKey,
