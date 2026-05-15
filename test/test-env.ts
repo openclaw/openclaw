@@ -170,7 +170,6 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
     { key: "OPENCLAW_BRIDGE_ENABLED", value: process.env.OPENCLAW_BRIDGE_ENABLED },
     { key: "OPENCLAW_BRIDGE_HOST", value: process.env.OPENCLAW_BRIDGE_HOST },
-    { key: "OPENCLAW_BRIDGE_PORT", value: process.env.OPENCLAW_BRIDGE_PORT },
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
@@ -210,7 +209,6 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   delete process.env.OPENCLAW_GATEWAY_PORT;
   delete process.env.OPENCLAW_BRIDGE_ENABLED;
   delete process.env.OPENCLAW_BRIDGE_HOST;
-  delete process.env.OPENCLAW_BRIDGE_PORT;
   delete process.env.OPENCLAW_CANVAS_HOST_PORT;
   // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
   delete process.env.TELEGRAM_BOT_TOKEN;
