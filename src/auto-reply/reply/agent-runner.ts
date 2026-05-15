@@ -161,7 +161,10 @@ function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
 }
 
 function hasSuccessfulSideEffectDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: {
+    didStream: () => boolean;
+    isAborted: () => boolean;
+  } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -189,7 +192,11 @@ function resolveConfiguredFallbackModel(params: {
     const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
     const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
     if (originProvider && originModel) {
-      return { provider: originProvider, model: originModel, persistedAutoFallback: true };
+      return {
+        provider: originProvider,
+        model: originModel,
+        persistedAutoFallback: true,
+      };
     }
   }
   return {
@@ -547,7 +554,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
   if (userChars > 0) {
     addChars("user_message", userChars);
   }
-  const result = Array.from(segments.entries()).map(([key, chars]) => ({ key, chars }));
+  const result = Array.from(segments.entries()).map(([key, chars]) => ({
+    key,
+    chars,
+  }));
   return result.length > 0 ? result : undefined;
 }
 
@@ -979,7 +989,9 @@ function enqueueCommitmentExtractionForTurn(params: {
     userText,
     assistantText,
     ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
+      ? {
+          sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+        }
       : {}),
     sourceRunId: params.runId,
   });
@@ -1466,6 +1478,7 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
         toolProgressDetail,
         replyMediaContext,
+        gptChatBrevityGuardEnabled: cfg.agents?.defaults?.gptChatBrevityGuard?.enabled,
       }),
     );
 
@@ -1815,7 +1828,9 @@ export async function runReplyAgent(params: {
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+      verboseNotices.push({
+        text: `🧭 New session: ${followupRun.run.sessionId}`,
+      });
     }
 
     if (fallbackTransition.fallbackTransitioned) {
@@ -1990,7 +2005,9 @@ export async function runReplyAgent(params: {
         ? { sessionCompactions: activeSessionEntry.compactionCount }
         : {}),
       ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
-        ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
+        ? {
+            lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions,
+          }
         : typeof runResult.meta?.agentMeta?.compactionCount === "number"
           ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
           : {}),

@@ -291,6 +291,15 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    gptChatBrevityGuard: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "Toggle for the chatty-reply guard that truncates verbose GPT-5 chat replies after acknowledgement-style prompts. Default true (current behavior). Set enabled=false to disable when you prefer unconstrained reply length.",
+      ),
     sandbox: AgentSandboxSchema,
   })
   .strict()

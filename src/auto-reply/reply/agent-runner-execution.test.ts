@@ -140,7 +140,11 @@ vi.mock("./agent-runner-utils.js", () => ({
   buildEmbeddedRunExecutionParams: (params: {
     provider: string;
     model: string;
-    run: { provider?: string; authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+    run: {
+      provider?: string;
+      authProfileId?: string;
+      authProfileIdSource?: "auto" | "user";
+    };
   }) => ({
     embeddedContext: {},
     senderContext: {},
@@ -179,7 +183,13 @@ async function getApplyFallbackCandidateSelectionToEntry() {
 type FallbackRunnerParams = {
   run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
-    result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
+    result: {
+      payloads?: Array<{
+        text?: string;
+        isError?: boolean;
+        isReasoning?: boolean;
+      }>;
+    };
     provider: string;
     model: string;
     attempt: number;
@@ -699,7 +709,10 @@ describe("runAgentTurnWithFallback", () => {
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: "secret heartbeat output", delta: "secret heartbeat output" },
+        data: {
+          text: "secret heartbeat output",
+          delta: "secret heartbeat output",
+        },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
@@ -721,7 +734,10 @@ describe("runAgentTurnWithFallback", () => {
     await runAgentTurnWithFallback({
       commandBody: "hi",
       followupRun,
-      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
@@ -819,12 +835,18 @@ describe("runAgentTurnWithFallback", () => {
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: "heartbeat scratch text", delta: "heartbeat scratch text" },
+        data: {
+          text: "heartbeat scratch text",
+          delta: "heartbeat scratch text",
+        },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
+        data: {
+          text: "NO_REPLY do not preview reasoning",
+          delta: " do not preview reasoning",
+        },
       });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -841,7 +863,10 @@ describe("runAgentTurnWithFallback", () => {
     await runAgentTurnWithFallback({
       commandBody: "hi",
       followupRun,
-      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
@@ -894,7 +919,10 @@ describe("runAgentTurnWithFallback", () => {
     await runAgentTurnWithFallback({
       commandBody: "hi",
       followupRun,
-      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
@@ -931,11 +959,17 @@ describe("runAgentTurnWithFallback", () => {
       realAgentEvents.emitAgentEvent({
         runId: "api-run",
         stream: "assistant",
-        data: { text: "assistant text from API run", delta: "assistant text from API run" },
+        data: {
+          text: "assistant text from API run",
+          delta: "assistant text from API run",
+        },
       });
       await params.onAgentEvent?.({
         stream: "assistant",
-        data: { text: "assistant text from API run", delta: "assistant text from API run" },
+        data: {
+          text: "assistant text from API run",
+          delta: "assistant text from API run",
+        },
       });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -951,7 +985,10 @@ describe("runAgentTurnWithFallback", () => {
     await runAgentTurnWithFallback({
       commandBody: "hi",
       followupRun,
-      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
@@ -1224,7 +1261,11 @@ describe("runAgentTurnWithFallback", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const first = (await params.run("openai-codex", "gpt-5.4")) as {
-        payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
+        payloads?: Array<{
+          text?: string;
+          isError?: boolean;
+          isReasoning?: boolean;
+        }>;
       };
       const classification = await params.classifyResult?.({
         result: first,
@@ -1304,7 +1345,11 @@ describe("runAgentTurnWithFallback", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = (await params.run("openai-codex", "gpt-5.4")) as {
-        payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
+        payloads?: Array<{
+          text?: string;
+          isError?: boolean;
+          isReasoning?: boolean;
+        }>;
       };
       expect(
         await params.classifyResult?.({
@@ -1417,7 +1462,10 @@ describe("runAgentTurnWithFallback", () => {
       compactionCount: 0,
     };
     const activeSessionStore = { main: sessionEntry };
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
       expect(sessionEntry.providerOverride).toBe("openai-codex");
@@ -1457,7 +1505,9 @@ describe("runAgentTurnWithFallback", () => {
   it("strips a glued leading NO_REPLY token from streamed tool results", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onToolResult?.({ text: "NO_REPLYThe user is saying hello" });
+      await params.onToolResult?.({
+        text: "NO_REPLYThe user is saying hello",
+      });
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -1494,7 +1544,9 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("The user is saying hello");
-    expect(onToolResult).toHaveBeenCalledWith({ text: "The user is saying hello" });
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "The user is saying hello",
+    });
   });
 
   it("continues delivering later streamed tool results after an earlier delivery failure", async () => {
@@ -1883,8 +1935,17 @@ describe("runAgentTurnWithFallback", () => {
         data: { phase: "start", startedAt: 1_000 },
       });
       return {
-        payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
-        meta: { aborted: true, livenessState: "blocked", replayInvalid: true },
+        payloads: [
+          {
+            text: "Request timed out before a response was generated.",
+            isError: true,
+          },
+        ],
+        meta: {
+          aborted: true,
+          livenessState: "blocked",
+          replayInvalid: true,
+        },
       };
     });
 
@@ -2040,6 +2101,60 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.runResult.payloads?.[0]?.text).toBe(
         "I updated the prompt overlay and tightened the runtime guard. I also added the ack-turn fast path so short approvals skip the recap. The reply-side brevity cap now trims long prose-heavy GPT confirmations...",
       );
+    }
+  });
+
+  it("preserves chatty GPT ack-turn replies when gptChatBrevityGuardEnabled is false", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    const fullReply = [
+      "I updated the prompt overlay and tightened the runtime guard.",
+      "I also added the ack-turn fast path so short approvals skip the recap.",
+      "The reply-side brevity cap now trims long prose-heavy GPT confirmations.",
+      "I updated tests for the overlay, retry guard, and reply normalization.",
+      "Everything is wired together and ready for verification.",
+    ].join(" ");
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [{ text: fullReply }],
+      meta: {},
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.4";
+    const result = await runAgentTurnWithFallback({
+      commandBody: "ok do it",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+      gptChatBrevityGuardEnabled: false,
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]?.text).toBe(fullReply);
     }
   });
 
@@ -2228,7 +2343,10 @@ describe("runAgentTurnWithFallback", () => {
   it("keeps compaction start notices silent by default", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      });
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -2266,7 +2384,10 @@ describe("runAgentTurnWithFallback", () => {
     const onCompactionStart = vi.fn();
     const onCompactionEnd = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      });
       await params.onAgentEvent?.({
         stream: "compaction",
         data: { phase: "end", completed: true },
@@ -2312,7 +2433,10 @@ describe("runAgentTurnWithFallback", () => {
   it("emits a compaction start notice when notifyUser is enabled", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      });
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -2365,7 +2489,10 @@ describe("runAgentTurnWithFallback", () => {
   it("emits a compaction completion notice when notifyUser is enabled", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      });
       await params.onAgentEvent?.({
         stream: "compaction",
         data: { phase: "end", completed: true },
@@ -2494,7 +2621,10 @@ describe("runAgentTurnWithFallback", () => {
     const onBlockReply = vi.fn();
     const onCompactionEnd = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      });
       await params.onAgentEvent?.({
         stream: "compaction",
         data: { phase: "end", completed: true },
@@ -2552,7 +2682,10 @@ describe("runAgentTurnWithFallback", () => {
   it("emits an incomplete compaction notice when compaction ends without completing", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      });
       await params.onAgentEvent?.({
         stream: "compaction",
         data: { phase: "end", completed: false },
@@ -2616,8 +2749,18 @@ describe("runAgentTurnWithFallback", () => {
         {
           name: "FallbackSummaryError",
           attempts: [
-            { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
-            { provider: "openai", model: "gpt-5.4", error: "402", reason: "billing" },
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "429",
+              reason: "rate_limit",
+            },
+            {
+              provider: "openai",
+              model: "gpt-5.4",
+              error: "402",
+              reason: "billing",
+            },
           ],
           soonestCooldownExpiry: Date.now() + 60_000,
         },

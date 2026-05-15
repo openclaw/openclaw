@@ -277,7 +277,10 @@ export function applyFallbackCandidateSelectionToEntry(params: {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
-  const origin = resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
+  const origin = resolveFallbackSelectionOrigin({
+    entry: params.entry,
+    run: params.run,
+  });
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
@@ -400,7 +403,9 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
   if (markerIndex === undefined) {
     return undefined;
   }
-  const message = sanitizeUserFacingText(text.slice(markerIndex), { errorContext: true })
+  const message = sanitizeUserFacingText(text.slice(markerIndex), {
+    errorContext: true,
+  })
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -916,8 +921,12 @@ function applyOpenAIGptChatReplyGuard(params: {
   commandBody: string;
   isHeartbeat: boolean;
   payloads?: ReplyPayload[];
+  // When explicitly false, the guard is disabled and reply text is passed through unchanged.
+  // Default behavior (undefined or true) preserves the existing brevity capping.
+  enabled?: boolean;
 }): void {
   if (
+    params.enabled === false ||
     params.isHeartbeat ||
     !shouldApplyOpenAIGptChatGuard({
       provider: params.provider,
@@ -1127,6 +1136,9 @@ export async function runAgentTurnWithFallback(params: {
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
+  // When explicitly false, disables the OpenAI GPT-5 chatty-reply brevity guard for this turn.
+  // Default (undefined or true) preserves the existing behavior of trimming verbose chat replies.
+  gptChatBrevityGuardEnabled?: boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -1567,7 +1579,9 @@ export async function runAgentTurnWithFallback(params: {
                 drain: async (): Promise<void> => undefined,
               };
               const assistantBridge = createAssistantTextBridge(async (text) => {
-                const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                const textForTyping = await handlePartialForTyping({
+                  text,
+                } as ReplyPayload);
                 if (textForTyping === undefined || !params.opts?.onPartialReply) {
                   return;
                 }
@@ -2415,6 +2429,7 @@ export async function runAgentTurnWithFallback(params: {
       commandBody: params.commandBody,
       isHeartbeat: params.isHeartbeat,
       payloads: runResult.payloads,
+      enabled: params.gptChatBrevityGuardEnabled,
     });
   }
 
