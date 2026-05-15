@@ -935,6 +935,32 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
+  it("keeps text-only turns off the agent media runtime", async () => {
+    const normalizeAttachments = vi.fn(() => {
+      throw new Error("media runtime should not be touched");
+    });
+
+    const result = await resolveAgentTurnAttachments({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        BodyForAgent: "hello",
+      }),
+      runtime: {
+        MediaAttachmentCache:
+          class {} as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+        isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+          false,
+        normalizeAttachments,
+        resolveMediaAttachmentLocalRoots: () => [],
+      },
+    });
+
+    expect(result).toEqual({ attachments: [], recentHistoryImages: [] });
+    expect(normalizeAttachments).not.toHaveBeenCalled();
+  });
+
   it("does not inject recent history images when the current turn already has an image", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-current-"));
     const currentPath = path.join(tempDir, "current.png");

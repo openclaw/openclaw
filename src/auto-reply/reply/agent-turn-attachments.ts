@@ -10,6 +10,7 @@ import {
   type RecentInboundHistoryImage,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
+import { hasInboundMedia } from "./inbound-media.js";
 
 const agentTurnMediaRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-media.runtime.js"),
@@ -30,6 +31,17 @@ export type AgentTurnAttachmentRuntime = Pick<
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
+function hasInboundHistoryMedia(ctx: FinalizedMsgContext): boolean {
+  return (
+    Array.isArray(ctx.InboundHistory) &&
+    ctx.InboundHistory.some((entry) => Array.isArray(entry.media) && entry.media.length > 0)
+  );
+}
+
+export function hasPotentialAgentTurnAttachments(ctx: FinalizedMsgContext): boolean {
+  return hasInboundMedia(ctx) || hasInboundHistoryMedia(ctx);
+}
+
 export async function resolveAgentTurnAttachments(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -38,6 +50,9 @@ export async function resolveAgentTurnAttachments(params: {
   attachments: AgentTurnAttachment[];
   recentHistoryImages: RecentInboundHistoryImage[];
 }> {
+  if (!hasPotentialAgentTurnAttachments(params.ctx)) {
+    return { attachments: [], recentHistoryImages: [] };
+  }
   const runtime = params.runtime ?? (await loadAgentTurnMediaRuntime());
   const currentAttachments = runtime
     .normalizeAttachments(params.ctx)
