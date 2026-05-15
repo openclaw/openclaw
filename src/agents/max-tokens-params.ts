@@ -1,3 +1,5 @@
+// Normalize config aliases to the internal output-token budget. Transports still
+// choose the provider-specific wire field name.
 export const MAX_TOKENS_PARAM_KEYS = ["maxTokens", "max_completion_tokens", "max_tokens"] as const;
 
 type MaxTokensParamResolution = {

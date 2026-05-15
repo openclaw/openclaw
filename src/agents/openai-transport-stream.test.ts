@@ -3477,6 +3477,66 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_tokens");
   });
 
+  it("preserves runtime maxTokens: 0 for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 0,
+      } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(0);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("preserves model params max_completion_tokens: 0 for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+        params: {
+          max_completion_tokens: 0,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(0);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -3527,6 +3587,34 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_tokens).toBe(64_000);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("preserves model params max_tokens: 0 with max_tokens completions compat", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "zai-org/GLM-4.7-TEE",
+        name: "GLM 4.7 TEE",
+        api: "openai-completions",
+        provider: "chutes",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+        params: {
+          max_tokens: 0,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_tokens).toBe(0);
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 

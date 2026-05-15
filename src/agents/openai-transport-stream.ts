@@ -2595,8 +2595,8 @@ export function buildOpenAICompletionsParams(
   }
   {
     const effectiveMaxTokens =
-      options?.maxTokens || resolveMaxTokensParam([model.params ?? undefined]) || model.maxTokens;
-    if (effectiveMaxTokens) {
+      options?.maxTokens ?? resolveMaxTokensParam([model.params ?? undefined]) ?? model.maxTokens;
+    if (effectiveMaxTokens !== undefined) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = effectiveMaxTokens;
       } else {
