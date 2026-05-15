@@ -92,6 +92,10 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
   }
 }
 
+function serializeTaskValue(value: TaskRecord["task"]): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const startedAt = normalizeNumber(row.started_at);
   const endedAt = normalizeNumber(row.ended_at);
@@ -154,7 +158,7 @@ function bindTaskRecordBase(record: TaskRecord) {
     agent_id: record.agentId ?? null,
     run_id: record.runId ?? null,
     label: record.label ?? null,
-    task: record.task,
+    task: serializeTaskValue(record.task),
     status: record.status,
     delivery_status: record.deliveryStatus,
     notify_policy: record.notifyPolicy,
