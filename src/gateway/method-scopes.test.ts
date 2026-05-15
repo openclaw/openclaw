@@ -6,19 +6,28 @@ import {
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/registry.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+const pluginHandler: GatewayRequestHandler = ({ respond }) => respond(true, {});
 
 function setPluginGatewayMethodScope(
   method: string,
   scope: "operator.read" | "operator.write" | "operator.admin",
 ) {
   const registry = createEmptyPluginRegistry();
-  registry.gatewayMethodScopes = {
-    [method]: scope,
-  };
+  registry.gatewayHandlers[method] = pluginHandler;
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "test",
+      name: method,
+      handler: pluginHandler,
+      scope,
+    }),
+  );
   setActivePluginRegistry(registry);
 }
 
@@ -183,9 +192,15 @@ describe("method scope resolution", () => {
 
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
     const registry = createEmptyPluginRegistry();
-    registry.gatewayMethodScopes = {
-      "browser.request": "operator.admin",
-    };
+    registry.gatewayHandlers["browser.request"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "browser",
+        name: "browser.request",
+        handler: pluginHandler,
+        scope: "operator.admin",
+      }),
+    );
     setActivePluginRegistry(registry);
 
     expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([

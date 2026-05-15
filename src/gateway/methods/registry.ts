@@ -1,6 +1,7 @@
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
+import { createCoreGatewayMethodDescriptors } from "./core-descriptors.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
@@ -8,32 +9,14 @@ import {
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
   type GatewayMethodRegistryView,
-  type GatewayMethodScope,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
-import {
-  CONTROL_PLANE_WRITE_METHODS,
-  CORE_ADVERTISED_GATEWAY_METHODS,
-  DYNAMIC_OPERATOR_SCOPE_METHODS,
-  METHOD_SCOPE_BY_NAME,
-  NODE_ROLE_METHODS,
-  STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-} from "./legacy-metadata.js";
 
 export type GatewayMethodRegistry = GatewayMethodRegistryView;
+export { createCoreGatewayMethodDescriptors };
 
 function normalizeMethodName(name: string): string {
   return name.trim();
-}
-
-export function resolveLegacyGatewayMethodScope(method: string): GatewayMethodScope | undefined {
-  if (NODE_ROLE_METHODS.has(method)) {
-    return NODE_GATEWAY_METHOD_SCOPE;
-  }
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
-    return DYNAMIC_GATEWAY_METHOD_SCOPE;
-  }
-  return METHOD_SCOPE_BY_NAME.get(method);
 }
 
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
@@ -90,11 +73,9 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
   owner: GatewayMethodOwner;
   defaultScope?: OperatorScope;
   scopes?: Partial<Record<string, OperatorScope>>;
-  startupUnavailableMethods?: ReadonlySet<string>;
 }): GatewayMethodDescriptorInput[] {
   return Object.entries(params.handlers).map(([name, handler]) => {
-    const scope =
-      params.scopes?.[name] ?? resolveLegacyGatewayMethodScope(name) ?? params.defaultScope;
+    const scope = params.scopes?.[name] ?? params.defaultScope;
     if (!scope) {
       throw new Error(`gateway method is missing a scope: ${name}`);
     }
@@ -104,26 +85,7 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
       owner: params.owner,
       scope,
     };
-    if (params.startupUnavailableMethods?.has(name)) {
-      descriptor.startup = "unavailable-until-sidecars";
-    }
-    if (CONTROL_PLANE_WRITE_METHODS.has(name)) {
-      descriptor.controlPlaneWrite = true;
-    }
-    if (params.owner.kind === "core" && !CORE_ADVERTISED_GATEWAY_METHODS.has(name)) {
-      descriptor.advertise = false;
-    }
     return descriptor;
-  });
-}
-
-export function createCoreGatewayMethodDescriptors(
-  handlers: Record<string, GatewayMethodHandler>,
-): GatewayMethodDescriptorInput[] {
-  return createGatewayMethodDescriptorsFromHandlers({
-    handlers,
-    owner: { kind: "core", area: "gateway" },
-    startupUnavailableMethods: new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS),
   });
 }
 
@@ -143,7 +105,7 @@ export function createPluginGatewayMethodDescriptor(params: {
 }
 
 export function createPluginGatewayMethodDescriptors(
-  registry: Pick<PluginRegistry, "gatewayHandlers" | "gatewayMethodScopes"> &
+  registry: Pick<PluginRegistry, "gatewayHandlers"> &
     Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
 ): GatewayMethodDescriptorInput[] {
   const descriptors = registry.gatewayMethodDescriptors ?? [];
@@ -154,6 +116,5 @@ export function createPluginGatewayMethodDescriptors(
     handlers: registry.gatewayHandlers,
     owner: { kind: "plugin", pluginId: "unknown" },
     defaultScope: ADMIN_SCOPE,
-    scopes: registry.gatewayMethodScopes,
   });
 }

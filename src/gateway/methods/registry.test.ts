@@ -5,7 +5,6 @@ import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
   createPluginGatewayMethodDescriptor,
-  resolveLegacyGatewayMethodScope,
 } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
@@ -71,22 +70,15 @@ describe("gateway method registry", () => {
     expect(registry.descriptors()[0]?.owner).toEqual({ kind: "plugin", pluginId: "demo" });
   });
 
-  it("accepts legacy plugin registries without descriptor metadata", () => {
+  it("defaults handler-only plugin registries to admin scope", () => {
     const descriptors = createPluginGatewayMethodDescriptors({
       gatewayHandlers: { "legacy.ping": handler },
-      gatewayMethodScopes: { "legacy.ping": READ_SCOPE },
     });
 
     const registry = createGatewayMethodRegistry(descriptors);
 
     expect(registry.listMethods()).toEqual(["legacy.ping"]);
     expect(registry.getHandler("legacy.ping")).toBe(handler);
-    expect(registry.getScope("legacy.ping")).toBe(READ_SCOPE);
-  });
-
-  it("keeps legacy scope metadata available during migration", () => {
-    expect(resolveLegacyGatewayMethodScope("health")).toBe(READ_SCOPE);
-    expect(resolveLegacyGatewayMethodScope("config.apply")).toBe(ADMIN_SCOPE);
-    expect(resolveLegacyGatewayMethodScope("node.event")).toBe("node");
+    expect(registry.getScope("legacy.ping")).toBe(ADMIN_SCOPE);
   });
 });

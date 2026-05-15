@@ -488,6 +488,7 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
   reload?: ChannelPlugin<TResolvedAccount>["reload"];
   gatewayMethods?: ChannelPlugin<TResolvedAccount>["gatewayMethods"];
+  gatewayMethodDescriptors?: ChannelPlugin<TResolvedAccount>["gatewayMethodDescriptors"];
   configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
   config?: ChannelPlugin<TResolvedAccount>["config"];
   security?: ChannelPlugin<TResolvedAccount>["security"];
@@ -510,6 +511,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
       | "streaming"
       | "reload"
       | "gatewayMethods"
+      | "gatewayMethodDescriptors"
       | "configSchema"
       | "config"
       | "security"
@@ -822,6 +824,9 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.streaming ? { streaming: params.streaming } : {}),
     ...(params.reload ? { reload: params.reload } : {}),
     ...(params.gatewayMethods ? { gatewayMethods: params.gatewayMethods } : {}),
+    ...(params.gatewayMethodDescriptors
+      ? { gatewayMethodDescriptors: params.gatewayMethodDescriptors }
+      : {}),
     ...(params.configSchema ? { configSchema: params.configSchema } : {}),
     ...(params.config ? { config: params.config } : {}),
     ...(params.security ? { security: params.security } : {}),

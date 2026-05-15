@@ -716,20 +716,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
       });
     }
-    const effectiveScope = normalizedScope.scope;
     registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({
         pluginId: record.id,
         name: trimmed,
         handler,
-        scope: effectiveScope,
+        scope: normalizedScope.scope,
       }),
     );
-    if (effectiveScope) {
-      registry.gatewayMethodScopes ??= {};
-      registry.gatewayMethodScopes[trimmed] = effectiveScope;
-    }
-    record.gatewayMethods.push(trimmed);
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {

@@ -44,7 +44,6 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   agentHarnesses: [],
   gatewayHandlers: {},
   gatewayMethodDescriptors: [],
-  gatewayMethodScopes: {},
   httpRoutes: [],
   cliRegistrars: [],
   reloads: [],

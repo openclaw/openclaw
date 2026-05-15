@@ -1,10 +1,11 @@
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
-  DYNAMIC_OPERATOR_SCOPE_METHODS,
-  METHOD_SCOPE_BY_NAME,
-  NODE_ROLE_METHODS,
-} from "./methods/legacy-metadata.js";
+  isCoreGatewayMethodClassified,
+  isCoreNodeGatewayMethod,
+  isDynamicOperatorGatewayMethod,
+  resolveCoreOperatorGatewayMethodScope,
+} from "./methods/core-descriptors.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -36,7 +37,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 ];
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
-  const explicitScope = METHOD_SCOPE_BY_NAME.get(method);
+  const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;
   }
@@ -44,11 +45,11 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginScope = getPluginRegistryState()?.activeRegistry?.gatewayMethodScopes?.[method];
-  if (pluginScope) {
-    return pluginScope;
-  }
-  return undefined;
+  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
+    (descriptor) => descriptor.name === method,
+  );
+  const pluginScope = pluginDescriptor?.scope;
+  return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 
 export function isApprovalMethod(method: string): boolean {
@@ -68,7 +69,7 @@ export function isWriteMethod(method: string): boolean {
 }
 
 export function isNodeRoleMethod(method: string): boolean {
-  return NODE_ROLE_METHODS.has(method);
+  return isCoreNodeGatewayMethod(method);
 }
 
 export function isAdminOnlyMethod(method: string): boolean {
@@ -135,7 +136,7 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
 ): OperatorScope[] {
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+  if (isDynamicOperatorGatewayMethod(method)) {
     return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
@@ -154,7 +155,7 @@ export function authorizeOperatorScopesForMethod(
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
   }
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+  if (isDynamicOperatorGatewayMethod(method)) {
     const registeredScopes = resolveSessionActionRegisteredScopes(params);
     if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
       const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
@@ -188,8 +189,11 @@ export function isGatewayMethodClassified(method: string): boolean {
   if (isNodeRoleMethod(method)) {
     return true;
   }
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+  if (isDynamicOperatorGatewayMethod(method)) {
     return true;
   }
-  return resolveRequiredOperatorScopeForMethod(method) !== undefined;
+  return (
+    isCoreGatewayMethodClassified(method) ||
+    resolveRequiredOperatorScopeForMethod(method) !== undefined
+  );
 }

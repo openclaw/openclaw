@@ -57,7 +57,7 @@ import {
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
-import { CORE_ADVERTISED_GATEWAY_METHODS } from "./methods/legacy-metadata.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -83,7 +83,6 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -1108,16 +1107,7 @@ export async function startGatewayServer(
       ]);
     let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRegistry);
     const listAttachedGatewayMethods = () => {
-      const advertisedMethods = attachedGatewayMethodRegistry.listAdvertisedMethods();
-      const advertisedSet = new Set(advertisedMethods);
-      const methods = [...CORE_ADVERTISED_GATEWAY_METHODS].filter((method) =>
-        advertisedSet.has(method),
-      );
-      for (const method of advertisedMethods) {
-        if (!CORE_ADVERTISED_GATEWAY_METHODS.has(method)) {
-          methods.push(method);
-        }
-      }
+      const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
       methods.push(...listStartupChannelGatewayMethods());
       return Array.from(new Set(methods));
     };

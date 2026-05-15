@@ -1546,7 +1546,6 @@ describe("loadOpenClawPlugins", () => {
         });
 
         expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
-        expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
         expect(registry.gatewayMethodDescriptors[0]?.scope).toBe("operator.admin");
         expectDiagnosticContaining({
           registry,

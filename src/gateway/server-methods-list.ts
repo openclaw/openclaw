@@ -1,6 +1,6 @@
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
-import { CORE_ADVERTISED_GATEWAY_METHODS } from "./methods/legacy-metadata.js";
+import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
 import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 
 type GatewayMethodChannelPlugin = {
@@ -9,7 +9,7 @@ type GatewayMethodChannelPlugin = {
 };
 
 export function listCoreGatewayMethods(): string[] {
-  return [...CORE_ADVERTISED_GATEWAY_METHODS];
+  return listCoreAdvertisedGatewayMethodNames();
 }
 
 function listChannelGatewayMethods(): string[] {
@@ -24,12 +24,8 @@ function listChannelGatewayMethods(): string[] {
 }
 
 export function listGatewayMethods(): string[] {
-  const advertisedBaseMethods = new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS]);
-  const baseMethods = [...CORE_ADVERTISED_GATEWAY_METHODS].filter((method) =>
-    advertisedBaseMethods.has(method),
-  );
   return Array.from(
-    new Set([...baseMethods, ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
+    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
   );
 }
 

@@ -29,7 +29,6 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     gatewayHandlers: {},
     gatewayMethodDescriptors: [],
     coreGatewayMethodNames: [],
-    gatewayMethodScopes: {},
     httpRoutes: [],
     hostedMediaResolvers: [],
     cliRegistrars: [],
