@@ -40,7 +40,7 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -876,8 +876,7 @@ export const dispatchTelegramMessage = async ({
   );
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: groupHistories,
+      createChannelHistoryWindow({ historyMap: groupHistories }).clear({
         historyKey,
         limit: historyLimit,
       });

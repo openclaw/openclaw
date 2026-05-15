@@ -575,13 +575,25 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   if (!peerId) {
     return null;
   }
+  const marker = parts[markerIndex];
 
   let channel: CronMessageChannel | undefined;
   if (markerIndex >= 1) {
     channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
-  const marker = parts[markerIndex];
+  // LINE chat ids are case-sensitive (push requires capital C/U/R) but the
+  // session key holds the peer id lowercased for canonical routing. Rebuilding
+  // `to` from the session-key fragment would yield a value LINE rejects with
+  // HTTP 400, so refuse the fallback for LINE and let the caller surface the
+  // missing target instead of silently scheduling an undeliverable job.
+  // openclaw/openclaw#81628
+  const isChannellessLineDirectId =
+    !channel && (marker === "direct" || marker === "dm") && /^[ucr][a-f0-9]{32}$/.test(peerId);
+  if (channel === "line" || isChannellessLineDirectId) {
+    return null;
+  }
+
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;

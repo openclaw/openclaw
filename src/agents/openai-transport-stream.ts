@@ -2510,9 +2510,13 @@ function normalizeReasoningContentReplayModelId(modelId: unknown): string | unde
 
 function shouldPreserveReasoningContentReplay(
   model: OpenAIModeModel,
-  compat: { requiresReasoningContentOnAssistantMessages: boolean },
+  compat: { requiresReasoningContentOnAssistantMessages: boolean; thinkingFormat: string },
 ): boolean {
-  if (compat.requiresReasoningContentOnAssistantMessages) {
+  if (
+    compat.requiresReasoningContentOnAssistantMessages ||
+    compat.thinkingFormat === "deepseek" ||
+    compat.thinkingFormat === "zai"
+  ) {
     return true;
   }
   const normalizedModelId = normalizeReasoningContentReplayModelId(model.id);

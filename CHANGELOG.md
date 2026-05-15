@@ -11,7 +11,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/media: preserve message-tool-only delivery for generated music and video completion handoffs, so group/channel completions do not finish without posting the generated attachment.
+- Agents: strip Gemini/Gemma `<final>` tags with attributes or self-closing syntax from delivered replies, including strict final-tag streaming enforcement. Fixes #65867.
+- macOS/update: disarm legacy `ai.openclaw.update.*` LaunchAgents when `openclaw update` starts from one, preventing KeepAlive relaunch loops that repeatedly restart the Gateway and replay update continuations. Fixes #82167.
 - LINE: acknowledge signed webhook events before agent processing so slow model replies do not cause LINE `request_timeout` delivery failures. Fixes #65375. Thanks @myericho.
+- LINE: stop cron recovery from inferring lowercased LINE recipients from canonical session keys, so long-running task replies do not silently retry undeliverable push targets. Fixes #81628. (#81704) Thanks @edenfunf.
 - TTS: preserve channel-derived voice-note delivery for `/tts audio` replies even when the provider output is not natively voice-compatible. (#82174) Thanks @xuruiray.
 - Codex/Lossless: keep Codex explicit compaction on native app-server threads while allowing Lossless through the context-engine slot; `openclaw doctor --fix` now migrates legacy `compaction.provider: "lossless-claw"` config to `plugins.slots.contextEngine`.
 - Cron/doctor: report scheduled jobs with explicit `payload.model` overrides, including provider namespace counts and default-model mismatches, so stale cron model pins are visible during auth or billing investigations. Fixes #82151. Thanks @mgonto.
@@ -19,10 +23,12 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: stop adding empty DeepSeek V4 `reasoning_content` placeholders to assistant tool-call replay messages and strip empty replay artifacts before follow-up Chat Completions requests, so `openrouter/deepseek/deepseek-v4-pro` no longer fails after tool use. Fixes #82150. (#82158) Thanks @luyao618 and @Suquir0.
 - Gateway/approvals: treat `turnSourceTo` as optional in `canBridgeNoDeviceChatApprovalFromBackend`, matching the existing optional handling of `turnSourceAccountId` and `turnSourceThreadId`. Channels without a recipient concept (webchat, control-ui) leave `turnSourceTo` null on both the approval snapshot and the replay params, so the prior required-string check rejected every backend replay with `APPROVAL_CLIENT_MISMATCH`. Cross-channel replay is still gated by the required `turnSourceChannel` and `sessionKey` checks. Fixes #82132. (#82136) Thanks @ottodeng.
 - Cron: load runtime plugins before isolated cron model and delivery resolution so external channels can be selected for scheduled runs. (#82111) Thanks @medns.
+- Cron: preserve rotated transcript identity after session-bound scheduled runs compact, so `sessionTarget: "current"` keeps the next user message on the same conversation. Fixes #82164. Thanks @weissfl.
 - Twitch: keep gateway accounts running until shutdown instead of treating successful monitor startup as a clean channel exit, preventing immediate auto-restart loops. Fixes #60071. (#81853) Thanks @edenfunf.
 - Agents/auto-reply: honor `agents.defaults.silentReply` and per-surface group silent-reply policy when generic agent-run failure fallbacks decide whether to send visible fallback text. Fixes #82060. (#82086) Thanks @taozengabc.
 - Discord: render channel topic context as structured untrusted metadata in reply prompts and stop duplicating inbound message bodies or exposing raw `EXTERNAL_UNTRUSTED_CONTENT` envelopes. Fixes #82168. Thanks @ronan-dandelion-cult.
 - Codex app-server: arm the short idle watchdog as soon as Codex accepts a turn, so accepted turns with no current-turn progress release the OpenClaw session lane before the outer model timeout. Fixes #82129. Thanks @Francois3d.
+- Agents/replies: also strip `<function_response>` workflow output when it becomes visible after an adjacent stripped tool-call XML block, closing the remaining sanitizer leak from #47444.
 - Control UI/WebChat: focus the composer when users click the visible input chrome and restore larger, labeled desktop composer controls while preserving compact mobile taps. Fixes #45656. Thanks @BunsDev.
 - Discord: suppress generated link embeds on outbound messages by default so agent-sent URLs stay as plain links unless `channels.discord.suppressEmbeds` is disabled.
 - System events: keep owner downgrades in structured metadata while rendering queued prompt text as plain `System:` lines, preserving least-privilege wakeups without prompt-visible trust labels. (#82067)

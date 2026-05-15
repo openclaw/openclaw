@@ -188,6 +188,63 @@ function isStandaloneOpeningTagLine(
   return after >= text.length || text[after] === "\n" || text[after] === "\r";
 }
 
+function isOpeningTagFollowedByLineBreak(text: string, tag: ParsedToolCallTag): boolean {
+  let after = tag.end;
+  while (after < text.length && (text[after] === " " || text[after] === "\t")) {
+    after += 1;
+  }
+  return after >= text.length || text[after] === "\n" || text[after] === "\r";
+}
+
+function hasSameLineContentAfterOpeningTag(text: string, tag: ParsedToolCallTag): boolean {
+  let after = tag.end;
+  while (after < text.length && (text[after] === " " || text[after] === "\t")) {
+    after += 1;
+  }
+  return after < text.length && text[after] !== "\n" && text[after] !== "\r";
+}
+
+function isVisibleLineStart(text: string): boolean {
+  let idx = text.length - 1;
+  while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
+    idx -= 1;
+  }
+  return idx < 0 || text[idx] === "\n" || text[idx] === "\r";
+}
+
+function isAdjacentToStrippedToolCallBlock(
+  text: string,
+  tagStart: number,
+  lastStrippedBlockEnd: number | null,
+): boolean {
+  if (lastStrippedBlockEnd === null || lastStrippedBlockEnd > tagStart) {
+    return false;
+  }
+  for (let idx = lastStrippedBlockEnd; idx < tagStart; idx += 1) {
+    if (text[idx] !== " " && text[idx] !== "\t" && text[idx] !== "\n" && text[idx] !== "\r") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function findMatchingToolCallCloseIndex(text: string, start: number, tagName: string): number {
+  for (let idx = start; idx < text.length; idx += 1) {
+    if (text[idx] !== "<") {
+      continue;
+    }
+    const tag = parseToolCallTagAt(text, idx);
+    if (!tag) {
+      continue;
+    }
+    if (tag.isClose && tag.tagName === tagName && !tag.isTruncated) {
+      return idx;
+    }
+    idx = Math.max(idx, tag.end - 1);
+  }
+  return -1;
+}
+
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
   if (text[start] !== "<") {
     return null;
@@ -256,6 +313,7 @@ export function stripToolCallXmlTags(
   let toolCallBlockNeedsQuoteBalance = false;
   let toolCallBlockStart = 0;
   let toolCallBlockTagName: string | null = null;
+  let lastStrippedToolCallBlockEnd: number | null = null;
   const visibleTagBalance = new Map<string, number>();
 
   for (let idx = 0; idx < text.length; idx += 1) {
@@ -291,6 +349,7 @@ export function stripToolCallXmlTags(
         continue;
       }
       if (tag.isSelfClosing) {
+        lastStrippedToolCallBlockEnd = tag.end;
         lastIndex = tag.end;
         idx = Math.max(idx, tag.end - 1);
         continue;
@@ -308,8 +367,22 @@ export function stripToolCallXmlTags(
           : null;
       const shouldStripStandaloneFunction =
         tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
+      const functionResponseCloseStart =
+        tag.tagName === "function_response"
+          ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
+          : -1;
+      const shouldStripAdjacentResult =
+        isAdjacentToStrippedToolCallBlock(text, idx, lastStrippedToolCallBlockEnd) &&
+        (isOpeningTagFollowedByLineBreak(text, tag) ||
+          functionResponseCloseStart !== -1 ||
+          hasSameLineContentAfterOpeningTag(text, tag));
       const shouldStripStandaloneResult =
-        tag.tagName === "function_response" && isStandaloneOpeningTagLine(text, idx, tag);
+        tag.tagName === "function_response" &&
+        (isStandaloneOpeningTagLine(text, idx, tag) ||
+          shouldStripAdjacentResult ||
+          (functionResponseCloseStart !== -1 &&
+            isVisibleLineStart(result) &&
+            isOpeningTagFollowedByLineBreak(text, tag)));
       if (
         !tag.isClose &&
         ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult)
@@ -342,9 +415,13 @@ export function stripToolCallXmlTags(
       (!toolCallBlockNeedsQuoteBalance ||
         !endsInsideQuotedString(text, toolCallBlockContentStart, idx))
     ) {
+      const closedBlockTagName = toolCallBlockTagName;
       inToolCallBlock = false;
       toolCallBlockNeedsQuoteBalance = false;
       toolCallBlockTagName = null;
+      if (closedBlockTagName) {
+        lastStrippedToolCallBlockEnd = tag.end;
+      }
     }
 
     lastIndex = tag.end;

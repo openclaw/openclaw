@@ -23,6 +23,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   readGatewayServiceState,
@@ -2259,6 +2260,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
   if (opts.dryRun !== true) {
+    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
     assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;

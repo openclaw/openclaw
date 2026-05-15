@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { resolveFinalAssistantRawText, resolveFinalAssistantVisibleText } from "./helpers.js";
+import {
+  buildErrorAgentMeta,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
+} from "./helpers.js";
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],
@@ -71,5 +75,23 @@ describe("resolveFinalAssistantVisibleText", () => {
     ]);
 
     expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
+  });
+});
+
+describe("buildErrorAgentMeta", () => {
+  it("preserves active session file for error exits after transcript rotation", () => {
+    expect(
+      buildErrorAgentMeta({
+        sessionId: "session-rotated",
+        sessionFile: "/tmp/session-rotated.jsonl",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        usageAccumulator: {},
+        lastRunPromptUsage: undefined,
+      }),
+    ).toMatchObject({
+      sessionId: "session-rotated",
+      sessionFile: "/tmp/session-rotated.jsonl",
+    });
   });
 });

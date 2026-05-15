@@ -2902,6 +2902,7 @@ export async function runEmbeddedAttempt(
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: () => {
           abortRun();
         },
