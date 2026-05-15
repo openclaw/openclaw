@@ -2115,24 +2115,25 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  type ToolCallBlock = {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    partialArgs: string;
+    thoughtSignature?: string;
+  };
   let currentBlock:
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
-    | {
-        type: "toolCall";
-        id: string;
-        name: string;
-        arguments: Record<string, unknown>;
-        partialArgs: string;
-        thoughtSignature?: string;
-      }
+    | ToolCallBlock
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
-  const toolCallBlocksByIndex = new Map<number, NonNullable<typeof currentBlock>>();
-  const toolCallBlocksById = new Map<string, NonNullable<typeof currentBlock>>();
-  const toolCallBlockBytes = new WeakMap<object, number>();
+  const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
+  const toolCallBlocksById = new Map<string, ToolCallBlock>();
+  const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
