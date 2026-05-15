@@ -859,12 +859,28 @@ describe("cron tool", () => {
       dmScope: "per-account-channel-peer",
       peerId: "Uabcdef0123456789abcdef0123456789",
     });
-    expect(sessionKey).toBe(
-      "agent:main:line:primary:direct:uabcdef0123456789abcdef0123456789",
-    );
+    expect(sessionKey).toBe("agent:main:line:primary:direct:uabcdef0123456789abcdef0123456789");
 
     const delivery = await executeAddAndReadDelivery({
       callId: "call-line-direct-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      dmScope: "per-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-per-peer-no-context-81628",
       agentSessionKey: sessionKey,
     });
 

@@ -575,6 +575,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   if (!peerId) {
     return null;
   }
+  const marker = parts[markerIndex];
 
   let channel: CronMessageChannel | undefined;
   if (markerIndex >= 1) {
@@ -587,11 +588,12 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   // HTTP 400, so refuse the fallback for LINE and let the caller surface the
   // missing target instead of silently scheduling an undeliverable job.
   // openclaw/openclaw#81628
-  if (channel === "line") {
+  const isChannellessLineDirectId =
+    !channel && (marker === "direct" || marker === "dm") && /^[ucr][a-f0-9]{32}$/.test(peerId);
+  if (channel === "line" || isChannellessLineDirectId) {
     return null;
   }
 
-  const marker = parts[markerIndex];
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;
