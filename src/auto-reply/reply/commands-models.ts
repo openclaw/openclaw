@@ -120,16 +120,10 @@ function resolveProviderDefaultRuntimeChoice(params: {
   cfg: OpenClawConfig;
   provider: string;
   resolvedDefault: { provider: string; model: string };
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
   agentId?: string;
 }): string {
   const modelId =
-    params.resolvedDefault.provider === params.provider
-      ? params.resolvedDefault.model
-      : params.byProvider.get(params.provider)?.values().next().value;
-  if (!modelId) {
-    return "pi";
-  }
+    params.resolvedDefault.provider === params.provider ? params.resolvedDefault.model : undefined;
   return normalizeRuntimeChoiceId(
     resolveAgentHarnessPolicy({
       config: params.cfg,
@@ -298,7 +292,6 @@ export async function buildModelsProviderData(
       cfg,
       provider,
       resolvedDefault,
-      byProvider,
       agentId,
     });
     const choices =

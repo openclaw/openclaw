@@ -454,6 +454,31 @@ describe("handleModelsCommand", () => {
     });
   });
 
+  it("does not use another provider's first model override as that provider's default runtime choice", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    ]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
   it("keeps the telegram provider picker browse-only", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
