@@ -493,9 +493,10 @@ The owner-only `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
 Agent-driven `gateway config.apply` and `gateway config.patch` edits are
-fail-closed by default: only a narrow set of prompt, model, and mention-gating
-paths are agent-tunable. New sensitive config trees are therefore protected
-unless they are deliberately added to the allowlist.
+fail-closed by default: only a narrow set of prompt, model, approved compaction
+tuning, visible reply delivery, and mention-gating paths are agent-tunable. New
+sensitive config trees are therefore protected unless they are deliberately
+added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
