@@ -39,6 +39,7 @@ import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
+  hasSessionAutoModelFallbackProvenance,
   listAgentIds,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
@@ -748,6 +749,8 @@ async function agentCommandInternal(
     let storedModelOverrideSource = hasStoredOverride
       ? sessionEntry?.modelOverrideSource
       : undefined;
+    const hasStoredAutoFallbackProvenance =
+      hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -1032,6 +1035,9 @@ async function agentCommandInternal(
           hasSessionModelOverride:
             hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+          hasAutoFallbackProvenance: hasExplicitRunOverride
+            ? false
+            : hasStoredAutoFallbackProvenance,
         });
 
         let fallbackAttemptIndex = 0;
