@@ -93,13 +93,13 @@ describe("prompt composition invariants", () => {
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 
-  it("includes direct-chat guidance that routes NO_REPLY through the default rewrite path", () => {
+  it("includes direct-chat guidance that avoids NO_REPLY for the default rewrite path", () => {
     const directScenario = getScenario(fixture, "auto-reply-direct");
     const first = getTurn(directScenario, "t1");
 
     expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
-    expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
-    expect(first.systemPrompt).toContain("so OpenClaw can send a short fallback reply");
+    expect(first.systemPrompt).toContain('Do not use "NO_REPLY" as your final answer');
+    expect(first.systemPrompt).not.toContain("so OpenClaw can send a short fallback reply");
     expect(first.systemPrompt).not.toContain("## Silent Replies");
   });
 

@@ -310,10 +310,6 @@ export function buildDirectChatContext(params: {
     lines.push(
       `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
     );
-  } else if (params.silentReplyRewrite === true) {
-    lines.push(
-      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,
-    );
   } else {
     lines.push(`Do not use "${params.silentToken}" as your final answer in this conversation.`);
   }

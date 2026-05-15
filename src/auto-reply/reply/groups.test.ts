@@ -82,7 +82,9 @@ describe("group runtime loading", () => {
         silentReplyRewrite: true,
         silentToken: "NO_REPLY",
       }),
-    ).toContain("so OpenClaw can send a short fallback reply");
+    ).toBe(
+      'You are in a Telegram direct conversation. Your replies are automatically sent to this conversation. Do not use "NO_REPLY" as your final answer in this conversation.',
+    );
 
     expect(
       groups.buildDirectChatContext({
