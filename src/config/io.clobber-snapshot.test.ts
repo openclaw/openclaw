@@ -35,7 +35,15 @@ describe("config clobber snapshots", () => {
     return entries.filter((entry) => entry.startsWith(prefix));
   }
 
-  it("keeps concurrent async snapshots under the per-path cap", async () => {
+  async function readClobberFileContents(configPath: string): Promise<string[]> {
+    const dir = path.dirname(configPath);
+    const clobberFiles = await listClobberFiles(configPath);
+    return await Promise.all(
+      clobberFiles.map((entry) => fsp.readFile(path.join(dir, entry), "utf-8")),
+    );
+  }
+
+  it("keeps concurrent async snapshots under the per-path cap by rotating oldest files", async () => {
     await withCase(async (configPath) => {
       const warn = vi.fn();
       const observedAt = "2026-05-03T00:00:00.000Z";
@@ -61,7 +69,35 @@ describe("config clobber snapshots", () => {
     });
   });
 
-  it("keeps sync snapshots under the per-path cap and warns once", async () => {
+  it("rotates async snapshots so the latest clobbered config is preserved", async () => {
+    await withCase(async (configPath) => {
+      const warn = vi.fn();
+
+      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3; index++) {
+        await persistBoundedClobberedConfigSnapshot({
+          deps: { fs, logger: { warn } },
+          configPath,
+          raw: `polluted-${index}\n`,
+          observedAt: `2026-05-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+        });
+      }
+
+      const clobberFiles = await listClobberFiles(configPath);
+      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const contents = await readClobberFileContents(configPath);
+      expect(contents).not.toContain("polluted-0\n");
+      expect(contents).not.toContain("polluted-1\n");
+      expect(contents).not.toContain("polluted-2\n");
+      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
+      const capWarnings = warn.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
+      );
+      expect(capWarnings).toHaveLength(1);
+    });
+  });
+
+  it("rotates sync snapshots so the latest clobbered config is preserved", async () => {
     await withCase(async (configPath) => {
       const warn = vi.fn();
 
@@ -76,6 +112,11 @@ describe("config clobber snapshots", () => {
 
       const clobberFiles = await listClobberFiles(configPath);
       expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const contents = await readClobberFileContents(configPath);
+      expect(contents).not.toContain("polluted-0\n");
+      expect(contents).not.toContain("polluted-1\n");
+      expect(contents).not.toContain("polluted-2\n");
+      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
       const capWarnings = warn.mock.calls.filter(
         ([message]) =>
           typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
