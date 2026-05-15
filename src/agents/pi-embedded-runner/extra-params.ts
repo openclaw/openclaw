@@ -15,6 +15,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -135,6 +136,10 @@ export function resolveExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [defaultParams, globalParams, agentParams],
+  });
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, [defaultParams, globalParams, agentParams]);
   }
@@ -260,6 +265,10 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [resolvedExtraParams, override],
+  });
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
   }
@@ -419,8 +428,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.topP === "number") {
     streamParams.topP = extraParams.topP;
   }
-  if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
+  const resolvedMaxTokens = resolveMaxTokensParam([extraParams]);
+  if (resolvedMaxTokens !== undefined) {
+    streamParams.maxTokens = resolvedMaxTokens;
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],

@@ -2045,6 +2045,26 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.maxTokens).toBe(0);
   });
 
+  it("maps configured max_completion_tokens into shared stream maxTokens", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildModelConfig("dashscope/kimi-k2.6", {
+      max_completion_tokens: 64_000,
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "dashscope", "kimi-k2.6");
+
+    const model = {
+      api: "openai-completions",
+      provider: "dashscope",
+      id: "kimi-k2.6",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(64_000);
+  });
+
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 

@@ -30,6 +30,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import { resolveMaxTokensParam } from "./max-tokens-params.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
@@ -120,6 +121,7 @@ type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
 
 type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
+  params?: Record<string, unknown> | null;
 };
 
 type MutableAssistantOutput = {
@@ -2592,7 +2594,8 @@ export function buildOpenAICompletionsParams(
     params.prompt_cache_key = options.sessionId;
   }
   {
-    const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+    const effectiveMaxTokens =
+      options?.maxTokens || resolveMaxTokensParam([model.params ?? undefined]) || model.maxTokens;
     if (effectiveMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = effectiveMaxTokens;
