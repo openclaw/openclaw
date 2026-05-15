@@ -785,7 +785,7 @@ describe("node subscription manager", () => {
           client: {
             id: "node-client",
             version: "1.0.0",
-            platform: "darwin",
+            platform: "macos",
             mode: "node",
           },
           device: { id: "node-a" },
@@ -828,7 +828,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "ios 26.0",
+        platform: "iOS 26.0",
         deviceFamily: "iPhone",
       },
     );
@@ -851,7 +851,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "android 16",
+        platform: "Android 16",
         deviceFamily: "Android",
       },
     );
@@ -875,6 +875,7 @@ describe("resolveNodeCommandAllowlist", () => {
       {
         platform: "macOS 26.3.1",
         deviceFamily: "Mac",
+        approvedCommands: ["screen.snapshot"],
       },
     );
 
@@ -888,8 +889,9 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "Windows_NT",
+        platform: "windows",
         deviceFamily: "Windows",
+        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
       },
     );
 

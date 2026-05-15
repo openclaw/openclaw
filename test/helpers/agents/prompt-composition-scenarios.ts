@@ -19,8 +19,10 @@ import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
+import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import { buildCurrentTurnPrompt } from "../../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
 
@@ -104,6 +106,23 @@ function buildAutoReplyBody(params: { ctx: TemplateContext; body: string; eventL
   return [params.eventLine, buildInboundUserContextPrefix(params.ctx), params.body]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string }): string {
+  const inboundUserContext = buildInboundUserContextPrefix(params.ctx);
+  const envelope = buildReplyPromptEnvelope({
+    ctx: params.ctx,
+    sessionCtx: params.ctx,
+    baseBody: params.body,
+    hasUserBody: true,
+    inboundUserContext,
+    isBareSessionReset: false,
+    startupAction: "new",
+  });
+  return buildCurrentTurnPrompt({
+    context: envelope.currentTurnContext,
+    prompt: envelope.queuedBody,
+  });
 }
 
 async function readContextFiles(workspaceDir: string, fileNames: string[]) {
@@ -422,6 +441,60 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
   };
 }
 
+function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
+  const body = "Please summarize the deploy log.";
+  const baseCtx: TemplateContext = {
+    Provider: "discord",
+    Surface: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: "channel:987654321",
+    AccountId: "A1",
+    ChatType: "channel",
+    GroupSubject: "#ops-bridge",
+    GroupChannel: "#ops-bridge",
+    GroupSpace: "guild-123",
+    SenderId: "U3",
+    SenderName: "Cael",
+    MessageSid: "1503084621145964846",
+    Body: body,
+    BodyStripped: body,
+    UntrustedStructuredContext: [
+      {
+        label: "Discord channel metadata",
+        source: "discord",
+        type: "channel_metadata",
+        payload: {
+          topic: "Deploy coordination",
+        },
+      },
+    ],
+  };
+  return {
+    scenario: "auto-reply-discord-boundary",
+    focus: "Discord inbound body remains one user turn while supplemental context is structured metadata",
+    expectedStableSystemAfterTurnIds: [],
+    turns: [
+      {
+        id: "t1",
+        label: "Discord turn with channel metadata",
+        systemPrompt: buildAutoReplySystemPrompt({
+          workspaceDir,
+          sessionCtx: baseCtx,
+          includeGroupChatContext: true,
+        }),
+        bodyPrompt: buildAutoReplyModelPrompt({
+          ctx: baseCtx,
+          body,
+        }),
+        notes: [
+          "Inbound body should appear once in the model-bound prompt",
+          "Channel metadata should not use raw EXTERNAL_UNTRUSTED_CONTENT wrappers",
+        ],
+      },
+    ],
+  };
+}
+
 async function createToolRichScenario(workspaceDir: string): Promise<PromptScenario> {
   const skillsPrompt = [
     "<available_skills>",
@@ -701,6 +774,7 @@ export async function createPromptCompositionScenarios(): Promise<{
   const scenarios = [
     createDirectScenario(workspaceDir),
     createGroupScenario(workspaceDir),
+    createDiscordBoundaryScenario(workspaceDir),
     await createToolRichScenario(workspaceDir),
     await createBootstrapWarningScenario(warningWorkspaceDir),
     await createMaintenanceScenario(workspaceDir),
