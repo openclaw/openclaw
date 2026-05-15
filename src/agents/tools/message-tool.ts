@@ -467,7 +467,12 @@ function buildPresenceSchema() {
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
-    type: Type.Optional(Type.Number()),
+    channelType: Type.Optional(
+      Type.Number({
+        description:
+          "Numeric channel type (e.g. Discord channel type). Renamed from `type` to avoid JSON Schema keyword collisions that break some OpenAI-compatible providers (notably NVIDIA NIM).",
+      }),
+    ),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
     position: Type.Optional(Type.Number()),

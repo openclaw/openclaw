@@ -91,6 +91,9 @@ const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-del
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
+const runtimePluginsLoader = createLazyImportLoader(
+  () => import("./run-runtime-plugins.runtime.js"),
+);
 
 async function loadSessionStoreRuntime() {
   return await sessionStoreRuntimeLoader.load();
@@ -122,6 +125,10 @@ async function loadCronDeliveryRuntime() {
 
 async function loadCronModelPreflightRuntime() {
   return await cronModelPreflightRuntimeLoader.load();
+}
+
+async function loadRuntimePlugins() {
+  return await runtimePluginsLoader.load();
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -538,6 +545,13 @@ async function prepareCronRunContext(params: {
     skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
   });
   const workspaceDir = workspace.dir;
+
+  const { ensureRuntimePluginsLoaded } = await loadRuntimePlugins();
+  ensureRuntimePluginsLoaded({
+    config: cfgWithAgentDefaults,
+    workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();

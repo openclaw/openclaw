@@ -530,6 +530,7 @@ describe("stuck session diagnostics threshold", () => {
           diagnostics: {
             enabled: true,
             stuckSessionWarnMs,
+            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },

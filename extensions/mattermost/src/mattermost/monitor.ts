@@ -88,6 +88,7 @@ import type {
 import {
   buildAgentMediaPayload,
   buildModelsProviderData,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   createChannelPairingController,
   createChannelMessageReplyPipeline,
@@ -1529,11 +1530,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const commandBody = rawText.trim();
         const inboundHistory =
           historyKey && historyLimit > 0
-            ? (channelHistories.get(historyKey) ?? []).map((entry) => ({
-                sender: entry.sender,
-                body: entry.body,
-                timestamp: entry.timestamp,
-              }))
+            ? buildInboundHistoryFromMap({
+                historyMap: channelHistories,
+                historyKey,
+                limit: historyLimit,
+              })
             : undefined;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: combinedBody,

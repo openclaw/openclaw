@@ -2161,6 +2161,7 @@ export async function runReplyAgent(params: {
       err: error,
       sessionCtx,
       resolvedVerboseLevel,
+      cfg,
     });
     if (knownFailurePayload) {
       replyOperation.fail("run_failed", error);

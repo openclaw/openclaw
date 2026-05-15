@@ -1,3 +1,4 @@
+import { MessageFlags } from "discord-api-types/v10";
 import {
   formatReasoningMessage,
   resolveAckReaction,
@@ -428,6 +429,8 @@ export async function processDiscordMessage(
     chunkMode,
     log: logVerbose,
   });
+  const finalPreviewFlags =
+    (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
   const notifyFinalReplyStart = () => {
     if (finalReplyStartNotified) {
@@ -491,7 +494,10 @@ export async function processDiscordMessage(
                 ) {
                   return undefined;
                 }
-                return { content: previewFinalText };
+                return {
+                  content: previewFinalText,
+                  ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
+                };
               },
               editFinal: async (previewMessageId, edit) => {
                 if (isProcessAborted(abortSignal)) {

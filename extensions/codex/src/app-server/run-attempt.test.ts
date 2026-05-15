@@ -1921,7 +1921,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 60_000;
 
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
     await harness.waitForMethod("turn/start");
 
     const result = await run;
@@ -1953,7 +1953,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 200;
 
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 15 });
+    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 15 });
     await harness.waitForMethod("turn/start");
     await harness.notify(rateLimitsUpdated(Date.now() + 60_000));
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -3838,6 +3838,45 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
     );
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("does not time out when turn progress arrives before turn/start returns", async () => {
+    let harness: ReturnType<typeof createAppServerHarness>;
+    harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        await harness.notify({
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        });
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
     expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
   });
