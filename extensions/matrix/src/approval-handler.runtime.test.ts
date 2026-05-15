@@ -133,7 +133,10 @@ function buildPluginApprovalView(
   };
 }
 
-async function buildPendingPayload(view: MatrixPendingApprovalView) {
+async function buildPendingPayload(
+  view: MatrixPendingApprovalView,
+  cfg: MatrixDeliverPendingParams["cfg"] = {} as never,
+) {
   const request =
     view.approvalKind === "plugin"
       ? ({
@@ -161,7 +164,7 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
           expiresAtMs: view.expiresAtMs,
         } satisfies ExecApprovalRequest);
   return await matrixApprovalNativeRuntime.presentation.buildPendingPayload({
-    cfg: {} as never,
+    cfg,
     accountId: "default",
     context: { client: {} as never },
     request,
@@ -292,6 +295,38 @@ describe("matrixApprovalNativeRuntime", () => {
     expect(mockCall(reactMessage)?.[1]).toBe("$plugin-approval");
     expect(mockCall(reactMessage)?.[2]).toBe("✅");
     expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
+  });
+
+  it("uses Matrix plugin actions in simple fallback approval text", async () => {
+    const view = buildPluginApprovalView({
+      actions: [
+        {
+          decision: "allow-once",
+          label: "Allow Once",
+          style: "success",
+          command: "/approve plugin:req-1 allow-once",
+        },
+        {
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:req-1 deny",
+        },
+      ],
+    });
+    const pendingPayload = await buildPendingPayload(view, {
+      approvals: {
+        plugin: {
+          language: "simple",
+        },
+      },
+    } as never);
+
+    expect(pendingPayload.text).toContain(
+      "If buttons are unavailable, reply: /approve plugin:req-1 allow-once|deny",
+    );
+    expect(pendingPayload.text).not.toContain("allow-once|allow-always|deny");
+    expect(pendingPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
   it("binds Matrix approval reactions before publishing option reactions", async () => {

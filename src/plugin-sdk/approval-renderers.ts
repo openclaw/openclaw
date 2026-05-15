@@ -75,6 +75,8 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   language?: PluginApprovalLanguage | null;
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
+  const allowedDecisions =
+    params.allowedDecisions ?? resolvePluginApprovalRequestAllowedDecisions(params.request.request);
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
@@ -82,11 +84,10 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     text:
       params.text ??
       buildPluginApprovalRequestMessage(params.request, params.nowMs, {
+        allowedDecisions,
         language: params.language,
       }),
-    allowedDecisions:
-      params.allowedDecisions ??
-      resolvePluginApprovalRequestAllowedDecisions(params.request.request),
+    allowedDecisions,
     channelData: params.channelData,
   });
 }

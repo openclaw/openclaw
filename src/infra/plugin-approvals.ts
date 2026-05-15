@@ -63,9 +63,16 @@ export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
 export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
+  const explicit = normalizePluginApprovalAllowedDecisions(params?.allowedDecisions);
+  return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
+}
+
+function normalizePluginApprovalAllowedDecisions(
+  allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null,
+): ExecApprovalDecision[] {
   const explicit: ExecApprovalDecision[] = [];
-  if (Array.isArray(params?.allowedDecisions)) {
-    for (const decision of params.allowedDecisions) {
+  if (Array.isArray(allowedDecisions)) {
+    for (const decision of allowedDecisions) {
       if (
         (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
         !explicit.includes(decision)
@@ -74,7 +81,7 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
       }
     }
   }
-  return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
+  return explicit;
 }
 
 export function resolvePluginApprovalLanguage(value?: string | null): PluginApprovalLanguage {
@@ -274,9 +281,15 @@ function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): 
 
 function buildApprovalDecisionHelpLines(
   request: PluginApprovalRequest,
-  options?: { includeManualFallback?: boolean },
+  options?: {
+    includeManualFallback?: boolean;
+    allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+  },
 ): string[] {
-  const decisions = resolvePluginApprovalRequestAllowedDecisions(request.request);
+  const decisions =
+    options?.allowedDecisions != null
+      ? normalizePluginApprovalAllowedDecisions(options.allowedDecisions)
+      : resolvePluginApprovalRequestAllowedDecisions(request.request);
   if (decisions.length === 0) {
     return [];
   }
@@ -2830,7 +2843,10 @@ function isSystemPath(path: string): boolean {
 export function buildPluginApprovalRequestMessage(
   request: PluginApprovalRequest,
   nowMsValue: number,
-  options?: { language?: PluginApprovalLanguage | null },
+  options?: {
+    language?: PluginApprovalLanguage | null;
+    allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+  },
 ): string {
   const lines: string[] = [];
   const severity = request.request.severity ?? "warning";
@@ -2840,7 +2856,10 @@ export function buildPluginApprovalRequestMessage(
     lines.push(`${icon} Approval needed`);
     lines.push(...buildPlainEnglishApprovalLines(request.request));
     lines.push(
-      ...buildApprovalDecisionHelpLines(request, { includeManualFallback: language === "simple" }),
+      ...buildApprovalDecisionHelpLines(request, {
+        allowedDecisions: options?.allowedDecisions,
+        includeManualFallback: language === "simple",
+      }),
     );
     if (language === "simple") {
       return lines.join("\n");
