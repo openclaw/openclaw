@@ -65,6 +65,7 @@ describe("method scope resolution", () => {
     ["talk.session.submitToolResult", ["operator.write"]],
     ["talk.session.close", ["operator.write"]],
     ["update.status", ["operator.admin"]],
+    ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -226,6 +227,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.read"], { allowed: true }],
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
+    ["config.schema", ["operator.read"], { allowed: false, missingScope: "operator.admin" }],
     ["config.patch", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
