@@ -139,6 +139,8 @@ mantis/
 !.agents/skills/openclaw-refactor-docs/**
 !.agents/skills/openclaw-qa-testing/
 !.agents/skills/openclaw-qa-testing/**
+!.agents/skills/openclaw-release-ci/
+!.agents/skills/openclaw-release-ci/**
 !.agents/skills/openclaw-release-maintainer/
 !.agents/skills/openclaw-release-maintainer/**
 !.agents/skills/openclaw-secret-scanning-maintainer/

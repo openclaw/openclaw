@@ -2,6 +2,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -10,6 +11,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { ContextWindowInfo } from "../context-window-guard.js";
 import type {
   CurrentTurnPromptContext,
   EmbeddedRunTrigger,
@@ -27,7 +29,7 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
-  /** Runtime-only current-turn context visible to the model but excluded from transcript text. */
+  currentTurnKind?: InboundTurnKind;
   currentTurnContext?: CurrentTurnPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;
@@ -114,6 +116,7 @@ export type PreparedCliRunContext = {
   reusableCliSession: CliReusableSession;
   modelId: string;
   normalizedModel: string;
+  contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];

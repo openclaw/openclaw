@@ -634,7 +634,11 @@ async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
 }
 
 async function readClawHubResponseBytes(params: {

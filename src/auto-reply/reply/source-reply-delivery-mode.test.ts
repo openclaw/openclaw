@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CommandTurnContext } from "../command-turn-context.js";
 import {
   resolveSourceReplyDeliveryMode,
   resolveSourceReplyVisibilityPolicy,
@@ -127,7 +128,57 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
-  it("falls back to automatic when message tool is unavailable", () => {
+  it("uses structured command-turn context for cross-channel visible command replies", () => {
+    const entries: Array<{ surface: string; commandTurn: CommandTurnContext }> = [
+      {
+        surface: "whatsapp",
+        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      },
+      {
+        surface: "telegram",
+        commandTurn: { kind: "native", source: "native", authorized: true, body: "/status" },
+      },
+      {
+        surface: "discord",
+        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      },
+      {
+        surface: "webchat",
+        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      },
+    ];
+    for (const entry of entries) {
+      expect(
+        resolveSourceReplyDeliveryMode({
+          cfg: emptyConfig,
+          ctx: {
+            ChatType: "group",
+            CommandTurn: entry.commandTurn,
+          },
+        }),
+        entry.surface,
+      ).toBe("automatic");
+    }
+  });
+
+  it("does not make unauthorized text slash command turns visible in groups", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "group",
+          CommandTurn: {
+            kind: "text-slash",
+            source: "text",
+            authorized: false,
+            body: "/status",
+          },
+        },
+      }),
+    ).toBe("message_tool_only");
+  });
+
+  it("falls back to automatic when message-tool-only delivery cannot use the message tool", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
@@ -150,6 +201,26 @@ describe("resolveSourceReplyDeliveryMode", () => {
         messageToolAvailable: false,
       }),
     ).toBe("automatic");
+  });
+
+  it("keeps strict message-tool-only delivery when the message tool is unavailable", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        strictMessageToolOnly: true,
+        messageToolAvailable: false,
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "automatic",
+        strictMessageToolOnly: true,
+      }),
+    ).toBe("message_tool_only");
   });
 
   it("keeps message-tool-only delivery when message tool availability is unknown", () => {
@@ -327,7 +398,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       },
     );
   });
-  it("keeps delivery automatic when message-tool-only mode cannot send visibly", () => {
+  it("falls back to automatic when message-tool-only delivery cannot use the message tool", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
@@ -356,6 +427,40 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         suppressAutomaticSourceDelivery: false,
         suppressDelivery: false,
         deliverySuppressionReason: "",
+      },
+    );
+  });
+
+  it("keeps strict message-tool-only delivery suppressed when the message tool is unavailable", () => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        strictMessageToolOnly: true,
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+        deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "automatic",
+        strictMessageToolOnly: true,
+        sendPolicy: "allow",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+        deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
       },
     );
   });

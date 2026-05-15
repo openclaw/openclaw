@@ -119,6 +119,18 @@ Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 `openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
 do not write new `openai-codex/gpt-*` model refs.
 
+Do not set `compaction.model` or `compaction.provider` on Codex-backed agents.
+Codex owns compaction through its native app-server thread state, so OpenClaw
+ignores those local summarizer overrides at runtime and `openclaw doctor --fix`
+removes them when the agent uses Codex.
+
+Lossless remains supported as a context engine. Configure it through
+`plugins.slots.contextEngine: "lossless-claw"` and
+`plugins.entries.lossless-claw.config.summaryModel`, not through
+`agents.defaults.compaction.provider`. `openclaw doctor --fix` migrates the old
+`compaction.provider: "lossless-claw"` shape to the Lossless context-engine slot
+when Codex is the active runtime.
+
 ```json5
 {
   auth: {
@@ -493,7 +505,7 @@ Supported `appServer` fields:
 | `headers`                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                |
 | `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                      |
 | `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                             |
-| `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after a turn-scoped Codex app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                     |
+| `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                             |
 | `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                   |
 | `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                    |
 | `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` is narrowed to `"workspace-write"`. |
@@ -511,16 +523,17 @@ budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
 where supported and returns a failed dynamic-tool response to Codex so the turn
 can continue instead of leaving the session in `processing`.
 
-After OpenClaw responds to a Codex turn-scoped app-server request, the harness
-also expects Codex to finish the native turn with `turn/completed`. If the
-app-server goes quiet for `appServer.turnCompletionIdleTimeoutMs` after that
-response, OpenClaw best-effort interrupts the Codex turn, records a diagnostic
-timeout, and releases the OpenClaw session lane so follow-up chat messages are
-not queued behind a stale native turn. Any non-terminal notification for the
-same turn, including `rawResponseItem/completed`, disarms that short watchdog
-because Codex has proven the turn is still alive; the longer terminal watchdog
-continues to protect genuinely stuck turns. Global app-server notifications,
-such as rate-limit updates, do not reset turn-idle progress. When Codex emits a
+After Codex accepts a turn, and after OpenClaw responds to a turn-scoped
+app-server request, the harness expects Codex to make current-turn progress and
+eventually finish the native turn with `turn/completed`. If the app-server goes
+quiet for `appServer.turnCompletionIdleTimeoutMs`, OpenClaw best-effort
+interrupts the Codex turn, records a diagnostic timeout, and releases the
+OpenClaw session lane so follow-up chat messages are not queued behind a stale
+native turn. Any non-terminal notification for the same turn, including
+`rawResponseItem/completed`, disarms that short watchdog because Codex has
+proven the turn is still alive; the longer terminal watchdog continues to
+protect genuinely stuck turns. Global app-server notifications, such as
+rate-limit updates, do not reset turn-idle progress. When Codex emits a
 completed `agentMessage` item and then goes quiet without `turn/completed`,
 OpenClaw treats the assistant output as effectively complete, best-effort
 interrupts the native Codex turn, and releases the session lane. Timeout

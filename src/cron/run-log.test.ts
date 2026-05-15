@@ -242,6 +242,10 @@ describe("cron run log", () => {
             delivered: true,
             deliveryStatus: "not-delivered",
             deliveryError: "announce failed",
+            failureNotificationDelivery: {
+              delivered: true,
+              status: "delivered",
+            },
             delivery: {
               intended: { channel: "last", to: null, source: "last" },
               resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
@@ -260,6 +264,10 @@ describe("cron run log", () => {
       expect(entries[0]?.delivered).toBe(true);
       expect(entries[0]?.deliveryStatus).toBe("not-delivered");
       expect(entries[0]?.deliveryError).toBe("announce failed");
+      expect(entries[0]?.failureNotificationDelivery).toEqual({
+        delivered: true,
+        status: "delivered",
+      });
       expect(entries[0]?.delivery).toEqual({
         intended: { channel: "last", to: null, source: "last" },
         resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },

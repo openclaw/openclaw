@@ -8,6 +8,8 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_SERVICE_KIND,
+  GATEWAY_SERVICE_MARKER,
   resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
   resolveLegacyGatewayLaunchAgentLabels,
@@ -43,6 +45,60 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
+const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
+
+export type StaleOpenClawUpdateLaunchdJob = {
+  label: string;
+  pid?: number;
+  lastExitStatus?: number;
+};
+
+function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
+  if (typeof label !== "string") {
+    return null;
+  }
+  const trimmed = label.trim();
+  return trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX) ? trimmed : null;
+}
+
+function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
+  const gatewayProfileLabel = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  if (label === gatewayProfileLabel) {
+    return true;
+  }
+  if (
+    env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER ||
+    env.OPENCLAW_SERVICE_KIND?.trim() !== GATEWAY_SERVICE_KIND
+  ) {
+    return false;
+  }
+  const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  return Boolean(configuredLabel && label === configuredLabel);
+}
+
+export function isOpenClawUpdateLaunchdLabel(label: unknown): label is string {
+  return normalizeOpenClawUpdateLaunchdLabel(label) !== null;
+}
+
+function resolveCurrentOpenClawUpdateLaunchdJobLabel(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  for (const label of [
+    env.LAUNCH_JOB_LABEL,
+    env.LAUNCH_JOB_NAME,
+    env.XPC_SERVICE_NAME,
+    env.OPENCLAW_LAUNCHD_LABEL,
+  ]) {
+    const normalized = normalizeOpenClawUpdateLaunchdLabel(label);
+    if (normalized) {
+      if (isCurrentGatewayLaunchdLabel(normalized, env)) {
+        continue;
+      }
+      return normalized;
+    }
+  }
+  return null;
+}
 
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
@@ -218,6 +274,74 @@ async function execLaunchctl(
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+}
+
+export function parseLaunchctlListOpenClawUpdateJobs(
+  output: string,
+): StaleOpenClawUpdateLaunchdJob[] {
+  const jobs: StaleOpenClawUpdateLaunchdJob[] = [];
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const parts = line.split(/\s+/);
+    const [pidRaw, statusRaw, ...labelParts] = parts;
+    const label = labelParts.join(" ");
+    if (!label.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+      continue;
+    }
+    const pid = pidRaw === "-" ? undefined : parseStrictPositiveInteger(pidRaw ?? "");
+    const lastExitStatus = parseStrictInteger(statusRaw ?? "");
+    jobs.push({
+      label,
+      ...(pid !== undefined ? { pid } : {}),
+      ...(lastExitStatus !== undefined ? { lastExitStatus } : {}),
+    });
+  }
+  return jobs.toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
+  StaleOpenClawUpdateLaunchdJob[]
+> {
+  if (process.platform !== "darwin") {
+    return [];
+  }
+  const result = await execLaunchctl(["list"]);
+  if (result.code !== 0) {
+    return [];
+  }
+  return parseLaunchctlListOpenClawUpdateJobs(result.stdout);
+}
+
+export async function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
+  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
+  if (process.platform !== "darwin" || !normalizedLabel) {
+    return false;
+  }
+  const result = await execLaunchctl(["remove", assertValidLaunchAgentLabel(normalizedLabel)]);
+  return result.code === 0;
+}
+
+export async function disableOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
+  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
+  if (process.platform !== "darwin" || !normalizedLabel) {
+    return false;
+  }
+  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(normalizedLabel)}`;
+  const result = await execLaunchctl(["disable", serviceTarget]);
+  return result.code === 0;
+}
+
+export async function disableCurrentOpenClawUpdateLaunchdJob(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const label = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
+  if (!label) {
+    return false;
+  }
+  return await disableOpenClawUpdateLaunchdJob(label);
 }
 
 function parseGatewayPortFromProgramArguments(
