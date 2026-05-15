@@ -70,6 +70,26 @@ describe("gateway method registry", () => {
     expect(registry.descriptors()[0]?.owner).toEqual({ kind: "plugin", pluginId: "demo" });
   });
 
+  it("preserves reserved core and aux scopes", () => {
+    const registry = createGatewayMethodRegistry([
+      {
+        name: "config.get",
+        handler,
+        scope: READ_SCOPE,
+        owner: { kind: "core", area: "gateway" },
+      },
+      {
+        name: "exec.approvals.get",
+        handler,
+        scope: "operator.approvals",
+        owner: { kind: "aux", area: "gateway-extra" },
+      },
+    ]);
+
+    expect(registry.getScope("config.get")).toBe(READ_SCOPE);
+    expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
+  });
+
   it("defaults handler-only plugin registries to admin scope", () => {
     const descriptors = createPluginGatewayMethodDescriptors({
       gatewayHandlers: { "legacy.ping": handler },

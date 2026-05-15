@@ -222,6 +222,10 @@ export function listCoreAdvertisedGatewayMethodNames(): string[] {
   );
 }
 
+export function listCoreGatewayMethodNames(): string[] {
+  return CORE_GATEWAY_METHOD_SPECS.map((spec) => spec.name);
+}
+
 export function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
 }

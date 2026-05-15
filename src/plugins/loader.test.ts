@@ -1554,6 +1554,42 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "rejects gateway methods that collide with hidden core methods",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "hidden-core-collision",
+          filename: "hidden-core-collision.cjs",
+          body: `module.exports = {
+  id: "hidden-core-collision",
+  register(api) {
+    api.registerGatewayMethod("config.openFile", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          coreGatewayMethodNames: ["config.openFile"],
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["hidden-core-collision"],
+            },
+          },
+        });
+
+        expect(Object.keys(registry.gatewayHandlers)).not.toContain("config.openFile");
+        expectDiagnosticContaining({
+          registry,
+          level: "error",
+          pluginId: "hidden-core-collision",
+          message: "gateway method already registered: config.openFile",
+        });
+      },
+    },
+    {
       label: "rejects async register functions instead of silently loading them",
       run: () => {
         useNoBundledPlugins();

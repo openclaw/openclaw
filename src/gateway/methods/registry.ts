@@ -30,7 +30,9 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   const normalizedScope =
     input.scope === NODE_GATEWAY_METHOD_SCOPE || input.scope === DYNAMIC_GATEWAY_METHOD_SCOPE
       ? input.scope
-      : normalizePluginGatewayMethodScope(name, input.scope).scope;
+      : input.owner.kind === "plugin"
+        ? normalizePluginGatewayMethodScope(name, input.scope).scope
+        : input.scope;
   if (!normalizedScope) {
     throw new Error(`gateway method descriptor is missing a scope: ${name}`);
   }
