@@ -21,6 +21,9 @@ final class AmbientOverlayDisplayController {
         var hostingView: NSHostingView<AmbientOverlayView>
     }
 
+    nonisolated static let ambientWindowLevel = NSWindow.Level.statusBar
+    nonisolated static let workspaceWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+
     private var ambientPanels: [String: AmbientPanelSurface] = [:]
     private var workspacePanel: NSPanel?
     private var workspaceHostingView: NSHostingView<AmbientWorkspaceSheetView>?
@@ -39,7 +42,7 @@ final class AmbientOverlayDisplayController {
         for display in plan.ambientDisplays {
             let surface = self.ensureAmbientPanel(display: display, intensity: intensity)
             surface.panel.setFrame(display.frame, display: true)
-            surface.panel.level = .screenSaver
+            surface.panel.level = Self.ambientWindowLevel
             surface.panel.ignoresMouseEvents = true
             surface.hostingView.frame = NSRect(origin: .zero, size: display.frame.size)
             surface.hostingView.rootView = AmbientOverlayView(intensity: intensity)
@@ -61,7 +64,7 @@ final class AmbientOverlayDisplayController {
         let frame = Self.workspaceFrame(for: plan.workspaceDisplay)
         let panel = self.ensureWorkspacePanel(frame: frame, onDismiss: onDismiss)
         panel.setFrame(frame, display: true)
-        panel.level = .floating
+        panel.level = Self.workspaceWindowLevel
         panel.ignoresMouseEvents = false
         self.workspaceHostingView?.rootView = AmbientWorkspaceSheetView(onClose: onDismiss)
         panel.orderFrontRegardless()
@@ -114,7 +117,7 @@ final class AmbientOverlayDisplayController {
         let frame = display.frame
         let panel = OverlayPanelFactory.makePanel(
             contentRect: frame,
-            level: .screenSaver,
+            level: Self.ambientWindowLevel,
             hasShadow: false)
         panel.ignoresMouseEvents = true
         let host = NSHostingView(rootView: AmbientOverlayView(intensity: intensity))
@@ -133,7 +136,7 @@ final class AmbientOverlayDisplayController {
 
         let panel = OverlayPanelFactory.makePanel(
             contentRect: frame,
-            level: .floating,
+            level: Self.workspaceWindowLevel,
             hasShadow: true,
             acceptsMouseMovedEvents: true)
         panel.ignoresMouseEvents = false

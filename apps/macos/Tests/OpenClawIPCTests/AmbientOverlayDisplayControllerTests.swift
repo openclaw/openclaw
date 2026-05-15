@@ -3,6 +3,11 @@ import Testing
 @testable import OpenClaw
 
 struct AmbientOverlayDisplayControllerTests {
+    @Test func `workspace panel renders above ambient decoration`() {
+        #expect(AmbientOverlayDisplayController.workspaceWindowLevel.rawValue
+            > AmbientOverlayDisplayController.ambientWindowLevel.rawValue)
+    }
+
     @Test func `current display plan targets mouse display for ambient and workspace`() {
         let displays = [
             AmbientOverlayDisplayController.DisplaySnapshot(
