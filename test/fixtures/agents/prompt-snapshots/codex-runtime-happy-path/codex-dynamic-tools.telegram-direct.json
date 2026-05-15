@@ -1170,6 +1170,7 @@
           "type": "string"
         }
       },
+      "required": ["query"],
       "type": "object"
     },
     "name": "web_search",
