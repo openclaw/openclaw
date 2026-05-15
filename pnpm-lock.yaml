@@ -199,8 +199,8 @@ importers:
         specifier: 1.24.1
         version: 1.24.1(vitest@4.1.6)
       '@grammyjs/types':
-        specifier: 3.27.2
-        version: 3.27.2
+        specifier: 3.26.0
+        version: 3.26.0
       '@lit-labs/signals':
         specifier: 0.3.0
         version: 0.3.0
