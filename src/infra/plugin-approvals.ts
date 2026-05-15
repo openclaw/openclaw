@@ -169,6 +169,7 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
   "--form",
 ]);
 const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
+const CURL_GET_FLAGS = new Set(["-G", "--get"]);
 const CURL_NETRC_FILE_FLAGS = new Set(["--netrc-file"]);
 const CURL_NETRC_FLAGS = new Set(["-n", "--netrc", "--netrc-optional"]);
 const CURL_CREDENTIAL_FILE_FLAGS = new Set([
@@ -398,21 +399,36 @@ function redactQuotedCookieHeaderValues(command: string): string {
   );
 }
 
-function redactCurlUrlQueryCommandValues(command: string): string {
-  return command.replace(
-    /(--url-query(?:=|\s+))(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
-    (_match: string, prefix: string, doubleQuoted: string, singleQuoted: string, bare: string) => {
-      const value = doubleQuoted ?? singleQuoted ?? bare ?? "";
-      const redacted = redactSensitiveCurlUrlQueryValue(value);
-      if (doubleQuoted !== undefined) {
-        return `${prefix}"${redacted}"`;
+function redactCurlQueryLikeCommandValues(command: string): string {
+  return command
+    .replace(
+      /(--(?:url-query|data|data-ascii|data-binary|data-raw|data-urlencode|form)|-[dF])(=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
+      (
+        _match: string,
+        flag: string,
+        separator: string,
+        doubleQuoted: string,
+        singleQuoted: string,
+        bare: string,
+      ) => {
+        const value = doubleQuoted ?? singleQuoted ?? bare ?? "";
+        const redacted = redactSensitiveCurlUrlQueryValue(value);
+        if (doubleQuoted !== undefined) {
+          return `${flag}${separator}"${redacted}"`;
+        }
+        if (singleQuoted !== undefined) {
+          return `${flag}${separator}'${redacted}'`;
+        }
+        return `${flag}${separator}${redacted}`;
       }
-      if (singleQuoted !== undefined) {
-        return `${prefix}'${redacted}'`;
-      }
-      return `${prefix}${redacted}`;
-    },
-  );
+    )
+    .replace(
+      /(^|\s)(-[dF])((?:\+)?[^\s'"\\]+)/g,
+      (match: string, leading: string, flag: string, value: string) => {
+        const redacted = redactSensitiveCurlUrlQueryValue(value);
+        return redacted === value ? match : `${leading}${flag}${redacted}`;
+      },
+    );
 }
 
 function redactSensitiveCurlUrlQueryValue(value: string): string {
@@ -422,7 +438,7 @@ function redactSensitiveCurlUrlQueryValue(value: string): string {
 }
 
 function redactSensitiveCommandText(command: string): string {
-  return redactCurlUrlQueryCommandValues(
+  return redactCurlQueryLikeCommandValues(
     redactSensitiveUrlQueryValues(redactQuotedCookieHeaderValues(command)),
   )
     .replace(
@@ -2101,6 +2117,7 @@ function collectNetworkTransferOperands(
   let usesInlineCredentialSource = false;
   let usesUrlCredentialSource = false;
   let usesHeaderCredentialSource = false;
+  const curlUsesGet = command === "curl" && args.some((value) => CURL_GET_FLAGS.has(value));
   const recordStdinUpload = () => {
     if (inputRedirection.targets.length > 0) {
       uploadFiles.push(...inputRedirection.targets);
@@ -2330,9 +2347,31 @@ function collectNetworkTransferOperands(
     const bodyValue =
       command === "curl" ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"]) : null;
     if (bodyValue) {
-      uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
-      if (isCurlBodyStdinOperand(bodyValue.value)) {
-        recordStdinUpload();
+      if (curlUsesGet) {
+        const querySource = analyzeCurlUrlQueryValue(bodyValue.value);
+        if (querySource.files.length > 0) {
+          credentialFiles.push(...querySource.files);
+          usesUrlCredentialSource = true;
+        }
+        if (querySource.usesStdin) {
+          if (inputRedirection.targets.length > 0) {
+            credentialFiles.push(...inputRedirection.targets);
+          } else {
+            usesAmbiguousCredentialSource = true;
+          }
+          usesUrlCredentialSource = true;
+        }
+        if (querySource.hasSensitiveQueryKey) {
+          usesUrlCredentialSource = true;
+        }
+        if (querySource.ambiguous) {
+          usesAmbiguousCredentialSource = true;
+        }
+      } else {
+        uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
+        if (isCurlBodyStdinOperand(bodyValue.value)) {
+          recordStdinUpload();
+        }
       }
       index = Math.max(index, bodyValue.nextIndex);
       continue;
