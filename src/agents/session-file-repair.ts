@@ -17,6 +17,9 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  movedToolResults?: number;
+  droppedDuplicateToolResults?: number;
+  droppedOrphanToolResults?: number;
   insertedToolResults?: number;
   backupPath?: string;
   reason?: string;
@@ -31,12 +34,46 @@ type SessionMessageEntry = {
   message: { role: string; content?: unknown } & Record<string, unknown>;
 } & Record<string, unknown>;
 
+type PersistedToolResultEntry = {
+  entry: SessionMessageEntry;
+  id: string;
+  originalIndex: number;
+};
+
+type PersistedToolResultRepair = {
+  entries: unknown[];
+  movedToolResults: number;
+  droppedDuplicateToolResults: number;
+  droppedOrphanToolResults: number;
+};
+
 function isSessionHeader(entry: unknown): entry is { type: string; id: string } {
   if (!entry || typeof entry !== "object") {
     return false;
   }
   const record = entry as { type?: unknown; id?: unknown };
   return record.type === "session" && typeof record.id === "string" && record.id.length > 0;
+}
+
+function isSessionMessageEntry(entry: unknown): entry is SessionMessageEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const role = (record.message as { role?: unknown }).role;
+  return typeof role === "string" && role.trim().length > 0;
+}
+
+function extractAssistantToolCalls(entry: SessionMessageEntry) {
+  if (entry.message.role !== "assistant") {
+    return [];
+  }
+  return extractToolCallsFromAssistant(
+    entry.message as unknown as Extract<AgentMessage, { role: "assistant" }>,
+  );
 }
 
 /**
@@ -171,6 +208,9 @@ function buildRepairSummaryParts(params: {
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  movedToolResults: number;
+  droppedDuplicateToolResults: number;
+  droppedOrphanToolResults: number;
   insertedToolResults: number;
 }): string {
   const parts: string[] = [];
@@ -186,10 +226,118 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
+  if (params.movedToolResults > 0) {
+    parts.push(`moved ${params.movedToolResults} tool result(s)`);
+  }
+  if (params.droppedDuplicateToolResults > 0) {
+    parts.push(`dropped ${params.droppedDuplicateToolResults} duplicate tool result(s)`);
+  }
+  if (params.droppedOrphanToolResults > 0) {
+    parts.push(`dropped ${params.droppedOrphanToolResults} orphan tool result(s)`);
+  }
   if (params.insertedToolResults > 0) {
     parts.push(`inserted ${params.insertedToolResults} missing tool result(s)`);
   }
   return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
+function repairPersistedToolResultPairing(entries: unknown[]): PersistedToolResultRepair {
+  const out: unknown[] = [];
+  const seenToolResultIds = new Set<string>();
+  let movedToolResults = 0;
+  let droppedDuplicateToolResults = 0;
+  let droppedOrphanToolResults = 0;
+  let changed = false;
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!isSessionMessageEntry(entry)) {
+      out.push(entry);
+      continue;
+    }
+
+    const role = entry.message.role;
+    if (role !== "assistant") {
+      if (role === "toolResult") {
+        droppedOrphanToolResults += 1;
+        changed = true;
+        continue;
+      }
+      out.push(entry);
+      continue;
+    }
+
+    const toolCalls = extractAssistantToolCalls(entry);
+    if (toolCalls.length === 0) {
+      out.push(entry);
+      continue;
+    }
+
+    const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+    const spanResultsById = new Map<string, PersistedToolResultEntry>();
+    const remainder: unknown[] = [];
+
+    let j = i + 1;
+    for (; j < entries.length; j += 1) {
+      const next = entries[j];
+      if (!isSessionMessageEntry(next)) {
+        remainder.push(next);
+        continue;
+      }
+
+      const nextRole = next.message.role;
+      if (nextRole === "assistant" && extractAssistantToolCalls(next).length > 0) {
+        break;
+      }
+
+      if (nextRole === "toolResult") {
+        const id = extractToolResultId(
+          next.message as unknown as Extract<AgentMessage, { role: "toolResult" }>,
+        );
+        if (id && toolCallIds.has(id)) {
+          if (seenToolResultIds.has(id) || spanResultsById.has(id)) {
+            droppedDuplicateToolResults += 1;
+            changed = true;
+            continue;
+          }
+          spanResultsById.set(id, { entry: next, id, originalIndex: j });
+          continue;
+        }
+        droppedOrphanToolResults += 1;
+        changed = true;
+        continue;
+      }
+
+      remainder.push(next);
+    }
+
+    out.push(entry);
+    let expectedIndex = i + 1;
+    for (const toolCall of toolCalls) {
+      const result = spanResultsById.get(toolCall.id);
+      if (!result) {
+        continue;
+      }
+      if (result.originalIndex !== expectedIndex) {
+        movedToolResults += 1;
+        changed = true;
+      }
+      seenToolResultIds.add(result.id);
+      out.push(result.entry);
+      expectedIndex += 1;
+    }
+    for (const rem of remainder) {
+      out.push(rem);
+    }
+    i = j - 1;
+  }
+
+  return {
+    entries: changed ? out : entries,
+    movedToolResults,
+    droppedDuplicateToolResults,
+    droppedOrphanToolResults,
+  };
 }
 
 function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMessageEntry {
@@ -320,6 +468,9 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let movedToolResults = 0;
+  let droppedDuplicateToolResults = 0;
+  let droppedOrphanToolResults = 0;
   let insertedToolResults = 0;
 
   for (const line of lines) {
@@ -377,24 +528,31 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
+  const repairedPairing = repairPersistedToolResultPairing(entries);
+  movedToolResults = repairedPairing.movedToolResults;
+  droppedDuplicateToolResults = repairedPairing.droppedDuplicateToolResults;
+  droppedOrphanToolResults = repairedPairing.droppedOrphanToolResults;
+  if (movedToolResults > 0 || droppedDuplicateToolResults > 0 || droppedOrphanToolResults > 0) {
+    entries.splice(0, entries.length, ...repairedPairing.entries);
+  }
+
+  const repairedToolResults = insertMissingCodeModeToolResults(entries);
+  insertedToolResults = repairedToolResults.insertedToolResults;
+  if (insertedToolResults > 0) {
+    entries.splice(0, entries.length, ...repairedToolResults.entries);
+  }
+
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    movedToolResults === 0 &&
+    droppedDuplicateToolResults === 0 &&
+    droppedOrphanToolResults === 0 &&
+    insertedToolResults === 0
   ) {
-    const repairedToolResults = insertMissingCodeModeToolResults(entries);
-    insertedToolResults = repairedToolResults.insertedToolResults;
-    if (insertedToolResults === 0) {
-      return { repaired: false, droppedLines: 0 };
-    }
-    entries.splice(0, entries.length, ...repairedToolResults.entries);
-  } else {
-    const repairedToolResults = insertMissingCodeModeToolResults(entries);
-    insertedToolResults = repairedToolResults.insertedToolResults;
-    if (insertedToolResults > 0) {
-      entries.splice(0, entries.length, ...repairedToolResults.entries);
-    }
+    return { repaired: false, droppedLines: 0 };
   }
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
@@ -418,6 +576,9 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      movedToolResults,
+      droppedDuplicateToolResults,
+      droppedOrphanToolResults,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -428,6 +589,9 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      movedToolResults,
+      droppedDuplicateToolResults,
+      droppedOrphanToolResults,
       insertedToolResults,
     })} (${path.basename(sessionFile)})`,
   );
@@ -437,6 +601,9 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    movedToolResults,
+    droppedDuplicateToolResults,
+    droppedOrphanToolResults,
     insertedToolResults,
     backupPath,
   };
