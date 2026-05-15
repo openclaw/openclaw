@@ -12,6 +12,7 @@ import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-pro
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import {
+  __testing,
   collectStaleOAuthProfileShadowWarnings,
   repairStaleOAuthProfileShadows,
   scanStaleOAuthProfileShadows,
@@ -279,5 +280,54 @@ describe("stale OAuth profile shadow doctor repair", () => {
 
     expect(result.changes).toEqual([]);
     expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
+  });
+
+  it("rechecks stale OAuth shadows against the locked store before removal", () => {
+    const profileId = "anthropic:default";
+    const now = Date.now();
+    const result = __testing.removeStaleProfilesFromStore({
+      store: storeWith(
+        profileId,
+        oauthCredential({
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-shared",
+        }),
+      ),
+      mainStore: storeWith(
+        profileId,
+        oauthCredential({
+          expires: now + 30 * 60 * 1000,
+          accountId: "acct-shared",
+        }),
+      ),
+      profileIds: new Set([profileId]),
+      now,
+    });
+
+    expect(result.removedProfileIds).toEqual([]);
+    expect(result.store.profiles[profileId]).toBeDefined();
+  });
+
+  it("does not recreate a child auth store that disappeared before repair", async () => {
+    const profileId = "anthropic:default";
+    const now = Date.now();
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    const repair = await __testing.repairStaleOAuthProfilesForAgent({
+      agentDir: childAgentDir,
+      mainStore: storeWith(
+        profileId,
+        oauthCredential({
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-shared",
+        }),
+      ),
+      profileIds: new Set([profileId]),
+      now,
+    });
+
+    expect(repair.status).toBe("missing");
+    await expect(fs.stat(resolveAuthStorePath(childAgentDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
