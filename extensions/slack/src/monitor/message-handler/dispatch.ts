@@ -873,6 +873,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
 
+  let draftPreviewFinalized = false;
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -890,19 +891,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         kind: info.kind,
         payload,
         adapter: defineFinalizableLivePreviewAdapter({
-          draft: draftStream
-            ? {
-                flush: draftStream.flush,
-                clear: draftStream.clear,
-                discardPending: draftStream.discardPending,
-                seal: draftStream.seal,
-                id: () => {
-                  const channelId = draftStream.channelId();
-                  const messageId = draftStream.messageId();
-                  return channelId && messageId ? { channelId, messageId } : undefined;
-                },
-              }
-            : undefined,
+          draft:
+            draftStream && !draftPreviewFinalized
+              ? {
+                  flush: draftStream.flush,
+                  clear: draftStream.clear,
+                  discardPending: draftStream.discardPending,
+                  seal: draftStream.seal,
+                  id: () => {
+                    const channelId = draftStream.channelId();
+                    const messageId = draftStream.messageId();
+                    return channelId && messageId ? { channelId, messageId } : undefined;
+                  },
+                }
+              : undefined,
           buildFinalEdit: () => {
             if (
               !previewStreamingEnabled ||
@@ -936,6 +938,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             });
           },
           onPreviewFinalized: (_preview) => {
+            draftPreviewFinalized = true;
             const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
             observedReplyDelivery = true;
             replyPlan.markSent();
