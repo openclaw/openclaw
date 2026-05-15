@@ -393,6 +393,11 @@ describe("handleModelsCommand", () => {
       label: "OpenAI Codex",
       description: "Run openai models through the codex harness.",
     });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
   });
 
   it("keeps custom OpenAI-compatible providers on the Pi default runtime choice", async () => {
@@ -441,6 +446,11 @@ describe("handleModelsCommand", () => {
       id: "codex",
       label: "OpenAI Codex",
       description: "Run openai models through the codex harness.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
     });
   });
 

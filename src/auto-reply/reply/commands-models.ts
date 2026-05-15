@@ -294,21 +294,23 @@ export async function buildModelsProviderData(
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   for (const alias of listLegacyRuntimeModelProviderAliases()) {
     const provider = normalizeProviderId(alias.provider);
+    const defaultRuntime = resolveProviderDefaultRuntimeChoice({
+      cfg,
+      provider,
+      resolvedDefault,
+      byProvider,
+      agentId,
+    });
     const choices =
       runtimeChoicesByProvider.get(provider) ??
       addRuntimeChoice(
         [],
         runtimeChoiceFor({
           provider,
-          runtime: resolveProviderDefaultRuntimeChoice({
-            cfg,
-            provider,
-            resolvedDefault,
-            byProvider,
-            agentId,
-          }),
+          runtime: defaultRuntime,
         }),
       );
+    addRuntimeChoice(choices, runtimeChoiceFor({ provider, runtime: "pi" }));
     addRuntimeChoice(
       choices,
       runtimeChoiceFor({
