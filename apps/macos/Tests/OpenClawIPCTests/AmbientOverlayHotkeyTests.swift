@@ -19,4 +19,11 @@ struct AmbientOverlayHotkeyTests {
         #expect(!AmbientOverlayHotkeyMatcher.matches(keyCode: 49, modifierFlags: [.control, .option, .command]))
         #expect(!AmbientOverlayHotkeyMatcher.matches(keyCode: 49, modifierFlags: [.control, .option, .shift]))
     }
+
+    @Test func `repeat control option space is not handled`() {
+        #expect(!AmbientOverlayHotkeyMatcher.shouldHandle(
+            keyCode: 49,
+            modifierFlags: [.control, .option],
+            isRepeat: true))
+    }
 }

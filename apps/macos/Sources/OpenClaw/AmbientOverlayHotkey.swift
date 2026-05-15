@@ -10,6 +10,15 @@ enum AmbientOverlayHotkeyMatcher {
         guard !modifierFlags.contains(.command), !modifierFlags.contains(.shift) else { return false }
         return true
     }
+
+    static func shouldHandle(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        isRepeat: Bool) -> Bool
+    {
+        guard !isRepeat else { return false }
+        return self.matches(keyCode: keyCode, modifierFlags: modifierFlags)
+    }
 }
 
 @MainActor
@@ -38,9 +47,10 @@ final class AmbientOverlayHotkeyController {
         self.isEnabled = true
 
         self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            guard AmbientOverlayHotkeyMatcher.matches(
+            guard AmbientOverlayHotkeyMatcher.shouldHandle(
                 keyCode: event.keyCode,
-                modifierFlags: event.modifierFlags)
+                modifierFlags: event.modifierFlags,
+                isRepeat: event.isARepeat)
             else { return }
 
             Task { @MainActor in
@@ -49,9 +59,10 @@ final class AmbientOverlayHotkeyController {
         }
 
         self.localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard AmbientOverlayHotkeyMatcher.matches(
+            guard AmbientOverlayHotkeyMatcher.shouldHandle(
                 keyCode: event.keyCode,
-                modifierFlags: event.modifierFlags)
+                modifierFlags: event.modifierFlags,
+                isRepeat: event.isARepeat)
             else { return event }
 
             Task { @MainActor in
