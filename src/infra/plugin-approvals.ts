@@ -121,7 +121,7 @@ const RISK_RANK: Record<ApprovalRiskLevel, number> = {
 };
 
 const SECRETISH_PATH_RE =
-  /(^|[/_.-])(secret|secrets|token|tokens|password|passwd|credential|credentials|api[-_]?key|private[-_]?key|id_rsa|\.env)([/_.-]|$)/i;
+  /(^|[/_.-])(secret|secrets|token|tokens|password|passwd|credential|credentials|api[-_]?key|private[-_]?key|id_rsa|netrc|\.env)([/_.-]|$)/i;
 const SYSTEM_PATH_RE =
   /^(?:\/(?:bin|boot|dev|etc|lib|opt|proc|root|sbin|sys|usr)\b|\/var\/(?!log\b))/i;
 const EMPTY_OPTION_VALUE_FLAGS = new Set<string>();
@@ -168,6 +168,8 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
   "--form",
 ]);
 const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
+const CURL_NETRC_FILE_FLAGS = new Set(["--netrc-file"]);
+const CURL_NETRC_FLAGS = new Set(["-n", "--netrc", "--netrc-optional"]);
 const CURL_OUTPUT_FLAGS = new Set([
   "-D",
   "-o",
@@ -357,7 +359,7 @@ function redactSensitiveCommandText(command: string): string {
       "$1[redacted]",
     )
     .replace(
-      /(--(?:api[-_]?key|auth[-_]?token|password|passwd|secret|token)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      /(--(?:api[-_]?key|auth[-_]?token|oauth2[-_]?bearer|password|passwd|secret|token)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
     )
     .replace(/(^|\s)(-u|-U)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
@@ -1668,12 +1670,16 @@ function summarizeNetworkCommand(
   const uploadFiles = uniqueStrings(transfer.uploadFiles);
   const outputFiles = uniqueStrings(transfer.outputFiles);
   const configFiles = uniqueStrings(transfer.configFiles);
+  const credentialFiles = uniqueStrings(transfer.credentialFiles);
   if (
     uploadFiles.length > 0 ||
     outputFiles.length > 0 ||
     configFiles.length > 0 ||
     transfer.usesAmbiguousStdinUpload ||
-    transfer.usesAmbiguousConfig
+    transfer.usesAmbiguousConfig ||
+    credentialFiles.length > 0 ||
+    transfer.usesDefaultCredentialSource ||
+    transfer.usesAmbiguousCredentialSource
   ) {
     const actions: string[] = [];
     if (uploadFiles.length > 0) {
@@ -1687,6 +1693,15 @@ function summarizeNetworkCommand(
     }
     if (transfer.usesAmbiguousConfig) {
       actions.push("load network options from standard input");
+    }
+    if (credentialFiles.length > 0) {
+      actions.push(`read network credentials from file${formatTargets(credentialFiles)}`);
+    }
+    if (transfer.usesDefaultCredentialSource) {
+      actions.push("read network credentials from the default netrc file");
+    }
+    if (transfer.usesAmbiguousCredentialSource) {
+      actions.push("read network credentials from an ambiguous source");
     }
     if (outputFiles.length > 0) {
       actions.push(`write network output to local files${formatTargets(outputFiles)}`);
@@ -1704,6 +1719,9 @@ function summarizeNetworkCommand(
         transfer.usesAmbiguousStdinUpload,
         configFiles,
         transfer.usesAmbiguousConfig,
+        credentialFiles,
+        transfer.usesDefaultCredentialSource,
+        transfer.usesAmbiguousCredentialSource,
       ),
       showCommandPreview: true,
     };
@@ -1724,17 +1742,23 @@ function collectNetworkTransferOperands(
   uploadFiles: string[];
   outputFiles: string[];
   configFiles: string[];
+  credentialFiles: string[];
   urls: string[];
   usesAmbiguousStdinUpload: boolean;
   usesAmbiguousConfig: boolean;
+  usesDefaultCredentialSource: boolean;
+  usesAmbiguousCredentialSource: boolean;
 } {
   const uploadFiles: string[] = [];
   const outputFiles: string[] = [...getShellOutputRedirectionTargets(segment)];
   const configFiles: string[] = [];
+  const credentialFiles: string[] = [];
   const urls: string[] = [];
   const inputRedirection = getShellInputRedirection(segment);
   let usesAmbiguousStdinUpload = false;
   let usesAmbiguousConfig = false;
+  let usesDefaultCredentialSource = false;
+  let usesAmbiguousCredentialSource = false;
   const recordStdinUpload = () => {
     if (inputRedirection.targets.length > 0) {
       uploadFiles.push(...inputRedirection.targets);
@@ -1758,6 +1782,28 @@ function collectNetworkTransferOperands(
         usesAmbiguousConfig = true;
       }
       index = Math.max(index, configValue.nextIndex);
+      continue;
+    }
+
+    const netrcFileValue =
+      command === "curl" ? takeFlagValue(args, index, CURL_NETRC_FILE_FLAGS) : null;
+    if (netrcFileValue) {
+      const files = extractPlainLocalFileOperands(netrcFileValue.value);
+      if (files.length > 0) {
+        credentialFiles.push(...files);
+      } else {
+        usesAmbiguousCredentialSource = true;
+      }
+      index = Math.max(index, netrcFileValue.nextIndex);
+      continue;
+    }
+    if (command === "curl" && CURL_NETRC_FILE_FLAGS.has(arg)) {
+      usesAmbiguousCredentialSource = true;
+      continue;
+    }
+
+    if (command === "curl" && CURL_NETRC_FLAGS.has(arg)) {
+      usesDefaultCredentialSource = true;
       continue;
     }
 
@@ -1798,9 +1844,12 @@ function collectNetworkTransferOperands(
     uploadFiles,
     outputFiles,
     configFiles,
+    credentialFiles,
     urls: uniqueStrings(urls),
     usesAmbiguousStdinUpload,
     usesAmbiguousConfig,
+    usesDefaultCredentialSource,
+    usesAmbiguousCredentialSource,
   };
 }
 
@@ -1877,9 +1926,19 @@ function buildNetworkTransferRiskReason(
   usesAmbiguousStdinUpload = false,
   configFiles: readonly string[] = [],
   usesAmbiguousConfig = false,
+  credentialFiles: readonly string[] = [],
+  usesDefaultCredentialSource = false,
+  usesAmbiguousCredentialSource = false,
 ): string {
   if (uploadFiles.some(isSensitivePath)) {
     return "This network command can send local sensitive files outside this machine.";
+  }
+  if (
+    credentialFiles.length > 0 ||
+    usesDefaultCredentialSource ||
+    usesAmbiguousCredentialSource
+  ) {
+    return "netrc files can provide hidden login/password credentials for network requests.";
   }
   if (outputFiles.some((file) => isSensitivePath(file) || isSystemPath(file))) {
     return "This network command can overwrite sensitive or system paths.";

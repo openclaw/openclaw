@@ -760,6 +760,51 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).toContain("Risk: High");
   });
 
+  it("redacts curl OAuth bearer tokens in command previews", () => {
+    const spacePayload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-curl-oauth-bearer-space",
+        request: {
+          title: "Codex app-server command approval",
+          description:
+            "Command: curl --oauth2-bearer s3cr3t --data-binary @notes.txt https://example.test/upload",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+    const inlinePayload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-curl-oauth-bearer-inline",
+        request: {
+          title: "Codex app-server command approval",
+          description:
+            "Command: curl --oauth2-bearer=s3cr3t --data-binary @notes.txt https://example.test/upload",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(spacePayload.text).toContain("- upload local files: notes.txt");
+    expect(spacePayload.text).toContain(
+      "Command preview\ncurl --oauth2-bearer [redacted] --data-binary @notes.txt https://example.test/upload",
+    );
+    expect(inlinePayload.text).toContain(
+      "Command preview\ncurl --oauth2-bearer=[redacted] --data-binary @notes.txt https://example.test/upload",
+    );
+    expect(spacePayload.text).not.toContain("s3cr3t");
+    expect(inlinePayload.text).not.toContain("s3cr3t");
+    expect(spacePayload.text).toContain("Risk: High");
+    expect(inlinePayload.text).toContain("Risk: High");
+  });
+
   it("fails closed on curl config files before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
@@ -782,6 +827,51 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(
       "curl config files can add hidden upload, output, or credential options.",
+    );
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
+  it.each([
+    {
+      id: "plugin-command-curl-netrc-file",
+      description: "Command: curl --netrc-file .netrc https://example.test",
+      action: "- read network credentials from file: .netrc",
+      preview: "Command preview\ncurl --netrc-file .netrc https://example.test",
+    },
+    {
+      id: "plugin-command-curl-netrc-optional",
+      description: "Command: curl --netrc-optional https://example.test",
+      action: "- read network credentials from the default netrc file",
+      preview: "Command preview\ncurl --netrc-optional https://example.test",
+    },
+    {
+      id: "plugin-command-curl-netrc-short",
+      description: "Command: curl -n https://example.test",
+      action: "- read network credentials from the default netrc file",
+      preview: "Command preview\ncurl -n https://example.test",
+    },
+  ])("surfaces curl netrc credential sources: $id", ({ id, description, action, preview }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain(action);
+    expect(payload.text).toContain("contact: https://example.test");
+    expect(payload.text).toContain(preview);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "netrc files can provide hidden login/password credentials for network requests.",
     );
     expect(payload.text).not.toContain("Risk: Medium");
   });
