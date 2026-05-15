@@ -345,6 +345,7 @@ function resetRunConfigMocks(): void {
     };
     return (
       resolveOverride(agentConfig?.subagents?.model) ??
+      resolveOverride(agentConfig?.model) ??
       resolveOverride(
         (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
           ?.subagents?.model,

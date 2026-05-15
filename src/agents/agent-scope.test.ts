@@ -16,6 +16,7 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
   resolveRunModelFallbacksOverride,
+  resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveAgentIdByWorkspacePath,
   resolveAgentIdsByWorkspacePath,
@@ -512,6 +513,65 @@ describe("resolveAgentConfig", () => {
         sessionKey: "agent:main:session",
       }),
     ).toBe(false);
+  });
+
+  it("resolves subagent model fallbacks from the selected subagent model source", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+          subagents: {
+            model: {
+              primary: "kimi/kimi-code",
+              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            subagents: {
+              model: {
+                primary: "kimi/kimi-code",
+                fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+              },
+            },
+          },
+          {
+            id: "agent-model",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+          },
+          {
+            id: "default-subagent",
+          },
+          {
+            id: "strict",
+            subagents: {
+              model: "kimi/kimi-code",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveSubagentModelFallbacksOverride(cfg, "research")).toEqual([
+      "openai-codex/gpt-5.4",
+      "zai/glm-5",
+    ]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
+      "google/gemini-3-pro",
+    ]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
+      "openai-codex/gpt-5.4",
+      "zai/glm-5",
+    ]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
   });
 
   it("should return agent-specific sandbox config", () => {
