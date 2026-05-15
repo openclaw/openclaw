@@ -911,6 +911,7 @@ export const registerTelegramHandlers = ({
     msg: Message,
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
+    dedupeSessionKey?: string,
   ): TelegramPromptContextEntry[] => {
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = messageCache.get({
@@ -919,6 +920,7 @@ export const registerTelegramHandlers = ({
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const shouldDedupeSessionContext = msg.chat.type !== "group" && msg.chat.type !== "supergroup";
     const conversationContext = buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -931,6 +933,7 @@ export const registerTelegramHandlers = ({
       ...(options?.promptContextMinTimestampMs !== undefined
         ? { minTimestampMs: options.promptContextMinTimestampMs }
         : {}),
+      ...(shouldDedupeSessionContext && dedupeSessionKey ? { dedupeSessionKey } : {}),
     });
     return conversationContext.length > 0
       ? [
@@ -1001,16 +1004,22 @@ export const registerTelegramHandlers = ({
   ) => {
     const replyChainNodes = buildReplyChainForMessage(msg);
     const { replyMedia, replyChain } = await resolveReplyMediaForChain(ctx, replyChainNodes);
-    const promptContext = buildPromptContextForMessage(msg, replyChainNodes, options);
-    await processMessage(
-      ctx,
-      allMedia,
-      storeAllowFrom,
-      options,
-      replyMedia,
-      replyChain,
-      promptContext,
-    );
+    const contextOptions: TelegramMessageContextOptions = {
+      ...options,
+      resolvePromptContext: (params) =>
+        options?.resolvePromptContext?.(params) ??
+        buildPromptContextForMessage(msg, replyChainNodes, options, params.sessionKey),
+      markSessionBoundMessage: (params) => {
+        messageCache.markSessionBound({
+          accountId,
+          chatId: msg.chat.id,
+          messageId: params.messageId,
+          sessionKey: params.sessionKey,
+        });
+        options?.markSessionBoundMessage?.(params);
+      },
+    };
+    await processMessage(ctx, allMedia, storeAllowFrom, contextOptions, replyMedia, replyChain);
   };
 
   const shouldSkipGroupMessage = (params: {

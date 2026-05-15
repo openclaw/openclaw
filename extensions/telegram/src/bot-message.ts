@@ -184,6 +184,17 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         telegramDeps,
         opts,
       });
+      const messageId =
+        typeof context.ctxPayload.MessageSid === "string"
+          ? context.ctxPayload.MessageSid
+          : undefined;
+      const sessionKey =
+        typeof context.ctxPayload.SessionKey === "string"
+          ? context.ctxPayload.SessionKey
+          : undefined;
+      if (messageId && sessionKey) {
+        options?.markSessionBoundMessage?.({ messageId, sessionKey });
+      }
       if (ingressDebugEnabled && ingressReceivedAtMs) {
         logVerbose(
           `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +

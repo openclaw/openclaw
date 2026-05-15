@@ -1773,6 +1773,48 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
+  it("omits same-session Telegram messages from direct conversation context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const chat = { id: 42, type: "private", first_name: "Ada" };
+    const from = { id: 42, is_bot: false, first_name: "Ada" };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "remember the deploy window",
+        date: 1736380200,
+        message_id: 300,
+        from,
+      },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "what did I ask you to remember?",
+        date: 1736380300,
+        message_id: 301,
+        from,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.UntrustedStructuredContext).toBeUndefined();
+  });
+
   it("omits stale Telegram topic context before the persisted session start", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

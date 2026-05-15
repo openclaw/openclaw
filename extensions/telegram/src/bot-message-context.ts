@@ -474,6 +474,7 @@ export const buildTelegramMessageContext = async ({
   if (!(await ensureConfiguredBindingReady())) {
     return null;
   }
+  const resolvedPromptContext = options?.resolvePromptContext?.({ sessionKey }) ?? promptContext;
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     cfg,
@@ -482,7 +483,7 @@ export const buildTelegramMessageContext = async ({
     allMedia,
     replyMedia,
     replyChain,
-    promptContext,
+    promptContext: resolvedPromptContext,
     isGroup,
     isForum,
     chatId,
