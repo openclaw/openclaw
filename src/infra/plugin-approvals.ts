@@ -154,6 +154,36 @@ const ENV_BOOLEAN_FLAGS = new Set([
 const ENV_UNSAFE_SPLIT_FLAGS = new Set(["-S", "--split-string"]);
 const FIND_DELETE_PREDICATES = new Set(["-delete"]);
 const FIND_EXEC_PREDICATES = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+const CURL_UPLOAD_FILE_FLAGS = new Set(["-T", "--upload-file"]);
+const CURL_UPLOAD_BODY_FLAGS = new Set([
+  "-d",
+  "--data",
+  "--data-ascii",
+  "--data-binary",
+  "--data-raw",
+  "--data-urlencode",
+  "-F",
+  "--form",
+]);
+const CURL_OUTPUT_FLAGS = new Set([
+  "-D",
+  "-o",
+  "--cookie-jar",
+  "--dump-header",
+  "--output",
+  "--output-dir",
+]);
+const WGET_UPLOAD_FILE_FLAGS = new Set(["--body-file", "--post-file"]);
+const WGET_OUTPUT_FLAGS = new Set([
+  "-O",
+  "-P",
+  "-a",
+  "-o",
+  "--append-output",
+  "--directory-prefix",
+  "--output-document",
+  "--output-file",
+]);
 
 function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): string[] {
   const command = extractApprovalCommand(payload);
@@ -843,15 +873,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       );
     case "curl":
     case "wget":
-      return withSudo(
-        {
-          text: `make a network request or download data${formatNetworkTargets(args)}`,
-          risk: "medium",
-          kind: "network",
-          reason: "Network commands can send or fetch data outside this machine.",
-        },
-        sudoPrefix,
-      );
+      return withSudo(summarizeNetworkCommand(command, args), sudoPrefix);
     case "npm":
     case "pnpm":
     case "yarn":
@@ -1507,6 +1529,150 @@ function summarizeRedirectedWrite(
   );
 }
 
+function summarizeNetworkCommand(command: string, args: readonly string[]): CommandActionSummary {
+  const transfer = collectNetworkTransferOperands(command, args);
+  const uploadFiles = uniqueStrings(transfer.uploadFiles);
+  const outputFiles = uniqueStrings(transfer.outputFiles);
+  if (uploadFiles.length > 0 || outputFiles.length > 0) {
+    const actions: string[] = [];
+    if (uploadFiles.length > 0) {
+      actions.push(`upload local files${formatTargets(uploadFiles)}`);
+    }
+    if (outputFiles.length > 0) {
+      actions.push(`write network output to local files${formatTargets(outputFiles)}`);
+    }
+    if (transfer.urls.length > 0) {
+      actions.push(`contact${formatNetworkTargetList(transfer.urls)}`);
+    }
+    return {
+      text: actions.join("; "),
+      risk: "high",
+      kind: "network",
+      reason: buildNetworkTransferRiskReason(uploadFiles, outputFiles),
+      showCommandPreview: true,
+    };
+  }
+  return {
+    text: `make a network request or download data${formatNetworkTargets(args)}`,
+    risk: "medium",
+    kind: "network",
+    reason: "Network commands can send or fetch data outside this machine.",
+  };
+}
+
+function collectNetworkTransferOperands(
+  command: string,
+  args: readonly string[],
+): { uploadFiles: string[]; outputFiles: string[]; urls: string[] } {
+  const uploadFiles: string[] = [];
+  const outputFiles: string[] = [];
+  const urls: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (/^https?:\/\//i.test(arg)) {
+      urls.push(formatNetworkUrl(arg));
+    }
+
+    const uploadValue =
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_UPLOAD_FILE_FLAGS, ["-T"])
+        : takeFlagValue(args, index, WGET_UPLOAD_FILE_FLAGS);
+    if (uploadValue) {
+      uploadFiles.push(...extractPlainLocalFileOperands(uploadValue.value));
+      index = Math.max(index, uploadValue.nextIndex);
+      continue;
+    }
+
+    const bodyValue =
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"])
+        : null;
+    if (bodyValue) {
+      uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
+      index = Math.max(index, bodyValue.nextIndex);
+      continue;
+    }
+
+    const outputValue =
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_OUTPUT_FLAGS, ["-D", "-o"])
+        : takeFlagValue(args, index, WGET_OUTPUT_FLAGS, ["-O", "-P", "-a", "-o"]);
+    if (outputValue) {
+      outputFiles.push(...extractPlainLocalFileOperands(outputValue.value));
+      index = Math.max(index, outputValue.nextIndex);
+    }
+  }
+  return { uploadFiles, outputFiles, urls: uniqueStrings(urls) };
+}
+
+function takeFlagValue(
+  args: readonly string[],
+  index: number,
+  valueFlags: ReadonlySet<string>,
+  inlineShortFlags: readonly string[] = [],
+): { value: string; nextIndex: number } | null {
+  const arg = args[index] ?? "";
+  const separatorIndex = arg.indexOf("=");
+  if (separatorIndex > 0 && valueFlags.has(arg.slice(0, separatorIndex))) {
+    return { value: arg.slice(separatorIndex + 1), nextIndex: index };
+  }
+  if (valueFlags.has(arg)) {
+    const value = args[index + 1];
+    return value ? { value, nextIndex: index + 1 } : null;
+  }
+  for (const flag of inlineShortFlags) {
+    if (arg.startsWith(flag) && arg.length > flag.length) {
+      return { value: arg.slice(flag.length), nextIndex: index };
+    }
+  }
+  return null;
+}
+
+function extractPlainLocalFileOperands(value: string): string[] {
+  const file = stripNetworkFileOperandPrefix(value.trim());
+  return file && file !== "-" ? [file] : [];
+}
+
+function extractCurlBodyFileOperands(value: string): string[] {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("@")) {
+    return extractPlainLocalFileOperands(trimmed);
+  }
+  const namedFile = /^[^=]+@(.+)$/.exec(trimmed);
+  if (namedFile) {
+    return extractPlainLocalFileOperands(namedFile[1] ?? "");
+  }
+  const files: string[] = [];
+  const formFilePattern = /(?:^|=)([@<])([^;]+)/g;
+  for (const match of trimmed.matchAll(formFilePattern)) {
+    const file = stripNetworkFileOperandPrefix(match[2]?.trim() ?? "");
+    if (file && file !== "-") {
+      files.push(file);
+    }
+  }
+  return files;
+}
+
+function stripNetworkFileOperandPrefix(value: string): string {
+  return stripShellWordQuotes(value).replace(/^@/, "");
+}
+
+function buildNetworkTransferRiskReason(
+  uploadFiles: readonly string[],
+  outputFiles: readonly string[],
+): string {
+  if (uploadFiles.some(isSensitivePath)) {
+    return "This network command can send local sensitive files outside this machine.";
+  }
+  if (outputFiles.some((file) => isSensitivePath(file) || isSystemPath(file))) {
+    return "This network command can overwrite sensitive or system paths.";
+  }
+  if (uploadFiles.length > 0) {
+    return "This network command can send local files outside this machine.";
+  }
+  return "This network command can create or overwrite local files from network data.";
+}
+
 function getCommandOptionValueFlags(command: string): ReadonlySet<string> {
   if (command === "grep" || command === "rg") {
     return GREP_OPTION_VALUE_FLAGS;
@@ -1556,21 +1722,28 @@ function formatTargets(args: readonly string[]): string {
 }
 
 function formatNetworkTargets(args: readonly string[]): string {
-  const targets = args
-    .filter((arg) => /^https?:\/\//i.test(arg))
-    .map((arg) => {
-      try {
-        const url = new URL(arg);
-        return `${url.origin}${url.pathname}`;
-      } catch {
-        return arg;
-      }
-    });
+  return formatNetworkTargetList(
+    args
+      .filter((arg) => /^https?:\/\//i.test(arg))
+      .map((arg) => formatNetworkUrl(arg)),
+  );
+}
+
+function formatNetworkTargetList(targets: readonly string[]): string {
   if (targets.length === 0) {
     return "";
   }
   const shown = targets.slice(0, 2).join(", ");
   return targets.length > 2 ? `: ${shown}, and ${targets.length - 2} more` : `: ${shown}`;
+}
+
+function formatNetworkUrl(arg: string): string {
+  try {
+    const url = new URL(arg);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return arg;
+  }
 }
 
 function basename(command: string): string {
