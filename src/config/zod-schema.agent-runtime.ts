@@ -19,6 +19,24 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+export const AgentRunRetriesConfigSchema = z
+  .object({
+    base: z.number().int().positive().optional(),
+    perProfile: z.number().int().nonnegative().optional(),
+    min: z.number().int().positive().optional(),
+    max: z.number().int().positive().optional(),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (data.min !== undefined && data.max !== undefined) {
+        return data.max >= data.min;
+      }
+      return true;
+    },
+    { message: "max must be greater than or equal to min", path: ["max"] },
+  );
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -569,6 +587,28 @@ const ToolSearchSchema = z
   ])
   .optional();
 
+const CodeModeSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        runtime: z.literal("quickjs-wasi").optional(),
+        mode: z.literal("only").optional(),
+        languages: z.array(z.enum(["javascript", "typescript"])).optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        memoryLimitBytes: z.number().int().positive().optional(),
+        maxOutputBytes: z.number().int().positive().optional(),
+        maxSnapshotBytes: z.number().int().positive().optional(),
+        maxPendingToolCalls: z.number().int().positive().optional(),
+        snapshotTtlSeconds: z.number().int().positive().optional(),
+        searchDefaultLimit: z.number().int().positive().optional(),
+        maxSearchLimit: z.number().int().positive().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 const SandboxSshSchema = z
   .object({
     target: z.string().min(1).optional(),
@@ -951,6 +991,7 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedPi: z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
@@ -978,6 +1019,7 @@ export const ToolsSchema = z
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
     toolSearch: ToolSearchSchema,
+    codeMode: CodeModeSchema,
     message: MessageToolConfigSchema,
     agentToAgent: z
       .object({

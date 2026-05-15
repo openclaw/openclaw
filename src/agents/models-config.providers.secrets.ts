@@ -1,12 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
+  isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
   listAuthProfilesForProvider,
+  normalizeApiKeyConfig,
   resolveApiKeyFromCredential,
   resolveApiKeyFromProfiles,
   resolveEnvApiKeyVarName,
@@ -61,6 +64,7 @@ export function createProviderApiKeyResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      env,
     });
     if (fromConfig?.apiKey) {
       return {
@@ -145,6 +149,7 @@ export function createProviderAuthResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      env,
     });
     if (fromConfig) {
       return {
@@ -163,7 +168,11 @@ export function createProviderAuthResolver(
   };
 }
 
-function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+function resolveConfigBackedProviderAuth(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}):
   | {
       apiKey: string;
       discoveryApiKey?: string;
@@ -182,19 +191,77 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
     },
   });
   const apiKey = synthetic?.apiKey?.trim();
-  if (!apiKey) {
+  if (apiKey) {
+    return isNonSecretApiKeyMarker(apiKey)
+      ? {
+          apiKey,
+          discoveryApiKey: toDiscoveryApiKey(apiKey),
+          mode: "api_key",
+          source: "config",
+        }
+      : {
+          apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
+          discoveryApiKey: toDiscoveryApiKey(apiKey),
+          mode: "api_key",
+          source: "config",
+        };
+  }
+
+  const configuredProvider = params.config?.models?.providers?.[authProvider];
+  const configuredProviderApiKey = configuredProvider?.apiKey;
+  const configuredApiKeyRef = resolveSecretInputRef({
+    value: configuredProviderApiKey,
+    defaults: params.config?.secrets?.defaults,
+  }).ref;
+  if (configuredApiKeyRef) {
+    if (configuredApiKeyRef.source === "env") {
+      const envVar = configuredApiKeyRef.id.trim();
+      const envValue = params.env?.[envVar]?.trim();
+      return envValue
+        ? {
+            apiKey: envVar,
+            discoveryApiKey: toDiscoveryApiKey(envValue),
+            mode: "api_key",
+            source: "config",
+          }
+        : undefined;
+    }
+    return {
+      apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
+      discoveryApiKey: undefined,
+      mode: "api_key",
+      source: "config",
+    };
+  }
+  if (typeof configuredProviderApiKey !== "string") {
     return undefined;
   }
-  return isNonSecretApiKeyMarker(apiKey)
+  const configuredApiKey = normalizeApiKeyConfig(configuredProviderApiKey);
+  if (!configuredApiKey) {
+    return undefined;
+  }
+  if (isKnownEnvApiKeyMarker(configuredApiKey)) {
+    const envValue = params.env?.[configuredApiKey]?.trim();
+    if (envValue) {
+      return {
+        apiKey: configuredApiKey,
+        discoveryApiKey: toDiscoveryApiKey(envValue),
+        mode: "api_key",
+        source: "config",
+      };
+    }
+    return undefined;
+  }
+  return isNonSecretApiKeyMarker(configuredApiKey)
     ? {
-        apiKey,
-        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        apiKey: configuredApiKey,
+        discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
         mode: "api_key",
         source: "config",
       }
     : {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
-        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        apiKey: configuredApiKey,
+        discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
         mode: "api_key",
         source: "config",
       };

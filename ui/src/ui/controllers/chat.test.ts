@@ -158,6 +158,91 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("reconciles cached run and indicator state on terminal events", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Live reply",
+        chatStreamStartedAt: 100,
+      }) as ChatState & {
+        chatRunStatus?: unknown;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      state.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      state.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      state.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+      state.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Live reply" }],
+        },
+      };
+
+      expect(handleChatEvent(state, payload)).toBe("final");
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatStreamStartedAt).toBeNull();
+      expect(state.compactionStatus).toBeNull();
+      expect(state.compactionClearTimer).toBeNull();
+      expect(state.fallbackStatus).toBeNull();
+      expect(state.fallbackClearTimer).toBeNull();
+      expect(state.chatRunStatus).toMatchObject({
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+      expect(state.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: "done",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still drops events when neither session key nor active run id matches", () => {
     const state = createState({
       sessionKey: "main",
@@ -883,7 +968,7 @@ describe("sendChatMessage", () => {
 
     expect(result).toMatch(UUID_V4_RE);
     expect(state.currentSessionId).toBe("session-before-reconnect");
-    const sendRequest = request.mock.calls.at(-1);
+    const sendRequest = request.mock.calls[request.mock.calls.length - 1];
     expect(sendRequest?.[0]).toBe("chat.send");
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");
@@ -954,6 +1039,8 @@ describe("sendChatMessage", () => {
       dataUrl: `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`,
       file,
     });
+    const previewUrl = attachment.previewUrl;
+    expect(previewUrl).toMatch(/^blob:nodedata:/u);
 
     const result = await sendChatMessage(state, "summarize", [attachment]);
 
@@ -968,9 +1055,24 @@ describe("sendChatMessage", () => {
     const attachmentRecord = requireRecord(attachmentParam);
     expect(attachmentRecord.type).toBe("file");
     expect(attachmentRecord.content).toBe(Buffer.from(pdfBytes).toString("base64"));
-    expect(JSON.stringify(state.chatMessages)).not.toContain(
-      Buffer.from(pdfBytes).toString("base64"),
-    );
+    expect(state.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize" },
+          {
+            type: "attachment",
+            attachment: {
+              url: previewUrl,
+              kind: "document",
+              label: "brief.pdf",
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {
@@ -988,8 +1090,10 @@ describe("sendChatMessage", () => {
 
     const result = await sendChatMessage(state, "hello");
 
+    const expectedError =
+      "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
     expect(result).toBeNull();
-    expect(state.lastError).toContain("origin not allowed");
+    expect(state.lastError).toBe(expectedError);
     const assistantMessage = requireRecord(state.chatMessages.at(-1));
     expect(assistantMessage.role).toBe("assistant");
     const content = assistantMessage.content;
@@ -997,7 +1101,7 @@ describe("sendChatMessage", () => {
     const [textPart] = content as unknown[];
     const textRecord = requireRecord(textPart);
     expect(textRecord.type).toBe("text");
-    expect(String(textRecord.text)).toContain("origin not allowed");
+    expect(textRecord.text).toBe(`Error: ${expectedError}`);
   });
 });
 
@@ -1024,7 +1128,9 @@ describe("abortChatRun", () => {
       sessionKey: "main",
       runId: "run-1",
     });
-    expect(state.lastError).toContain("device identity required");
+    expect(state.lastError).toBe(
+      "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",
+    );
   });
 });
 
@@ -1243,7 +1349,9 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
-    expect(state.lastError).toContain("operator.read");
+    expect(state.lastError).toBe(
+      "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+    );
     expect(state.chatLoading).toBe(false);
   });
 

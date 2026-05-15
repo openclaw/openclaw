@@ -696,9 +696,6 @@ export const nl: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Zie waar tokens naartoe gaan, wanneer sessies pieken en wat de kosten bepaalt.",
-    },
     common: {
       emptyValue: "—",
       unknown: "onbekend",
@@ -1046,6 +1043,10 @@ export const nl: TranslationMap = {
     settings: "Chatinstellingen",
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Focusmodus schakelen (zijbalk + paginakop verbergen)",
     hideCronSessions: "Cron-sessies verbergen",
     showCronSessions: "Cron-sessies weergeven",

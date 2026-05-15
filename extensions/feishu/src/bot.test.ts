@@ -335,6 +335,7 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./media.js", () => ({
   downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
+  saveMessageResourceFeishu: mockDownloadMessageResourceFeishu,
 }));
 
 vi.mock("./audio-preflight.runtime.js", () => ({
@@ -973,7 +974,7 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
     const after = Date.now();
 
-    const call = mockFinalizeInboundContext.mock.calls[0]?.[0] as { Timestamp: number };
+    const call = mockFinalizeInboundContext.mock.calls.at(0)?.[0] as { Timestamp: number };
     expect(call.Timestamp).toBeGreaterThanOrEqual(before);
     expect(call.Timestamp).toBeLessThanOrEqual(after);
   });

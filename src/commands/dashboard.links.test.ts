@@ -47,11 +47,11 @@ function logMessages(): string[] {
 }
 
 function expectLogWith(text: string): void {
-  expect(logMessages().some((message) => message.includes(text))).toBe(true);
+  expect(logMessages().join("\n")).toContain(text);
 }
 
 function expectNoLogWith(text: string): void {
-  expect(logMessages().some((message) => message.includes(text))).toBe(false);
+  expect(logMessages().join("\n")).not.toContain(text);
 }
 
 function mockSnapshot(token: unknown = "abc") {

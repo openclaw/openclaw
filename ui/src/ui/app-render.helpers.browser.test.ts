@@ -44,6 +44,7 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
     },
     applySettings: () => undefined,
     chatMobileControlsOpen: false,
@@ -163,13 +164,36 @@ describe("chat header controls (browser)", () => {
 
     expect(buttons).toHaveLength(4);
     const cronButton = requireButton(buttons.at(-1), "cron sessions");
-    expect(cronButton.classList.contains("active")).toBe(true);
+    expect([...cronButton.classList]).toEqual(["btn", "btn--sm", "btn--icon", "active"]);
     expect(cronButton.getAttribute("aria-pressed")).toBe("true");
     expect(cronButton.getAttribute("title")).toBe(t("chat.showCronSessionsHidden", { count: "1" }));
 
     cronButton.click();
 
     expect(state.sessionsHideCron).toBe(false);
+  });
+
+  it("renders and applies the chat auto-scroll mode selector", async () => {
+    const applySettings = vi.fn();
+    const state = createState({ applySettings });
+    const container = document.createElement("div");
+    render(renderChatControls(state), container);
+    await Promise.resolve();
+
+    const select = requireElement(
+      container.querySelector<HTMLSelectElement>('[data-chat-auto-scroll-select="true"]'),
+      "auto-scroll select",
+    );
+    expect(select.getAttribute("aria-label")).toBe(t("chat.autoScrollMode"));
+    expect(select.value).toBe("near-bottom");
+
+    select.value = "off";
+    select.dispatchEvent(new Event("change"));
+
+    expect(applySettings).toHaveBeenCalledWith({
+      ...state.settings,
+      chatAutoScroll: "off",
+    });
   });
 
   it("uses the shared chat session controls in the mobile dropdown", async () => {
@@ -205,11 +229,12 @@ describe("chat header controls (browser)", () => {
     const selectDatasets = Array.from(container.querySelectorAll("select")).map(
       (select) => select.dataset,
     );
-    expect(selectDatasets).toHaveLength(4);
+    expect(selectDatasets).toHaveLength(5);
     expect(selectDatasets[0]?.chatAgentFilter).toBe("true");
     expect(selectDatasets[1]?.chatSessionSelect).toBe("true");
     expect(selectDatasets[2]?.chatModelSelect).toBe("true");
     expect(selectDatasets[3]?.chatThinkingSelect).toBe("true");
+    expect(selectDatasets[4]?.chatAutoScrollSelect).toBe("true");
   });
 
   it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {
@@ -233,12 +258,12 @@ describe("chat header controls (browser)", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
     expect(dropdown.id).toBe("chat-mobile-controls-dropdown");
-    expect(dropdown.classList.contains("open")).toBe(false);
+    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
 
     toggle.click();
 
     expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
-    expect(dropdown.classList.contains("open")).toBe(false);
+    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
 
     render(
       renderChatMobileToggle(
@@ -260,6 +285,6 @@ describe("chat header controls (browser)", () => {
       "open mobile controls dropdown",
     );
     expect(openToggle.getAttribute("aria-expanded")).toBe("true");
-    expect(openDropdown.classList.contains("open")).toBe(true);
+    expect([...openDropdown.classList]).toEqual(["chat-controls-dropdown", "open"]);
   });
 });
