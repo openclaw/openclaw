@@ -1153,11 +1153,12 @@ describe("short-term promotion", () => {
       "[]",
       "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
       "## Tagesnotizen - ## Entscheidungen -",
+      "- ## Entscheidungen",
     ]) {
-      expect(__testing.isUnpromotableShortTermSnippet(snippet)).toBe(true);
+      expect(testing.isUnpromotableShortTermSnippet(snippet)).toBe(true);
     }
 
-    expect(__testing.isUnpromotableShortTermSnippet("- Keep gateway restarts supervised.")).toBe(
+    expect(testing.isUnpromotableShortTermSnippet("- Keep gateway restarts supervised.")).toBe(
       false,
     );
   });
@@ -1217,7 +1218,7 @@ describe("short-term promotion", () => {
                 startLine: 2,
                 endLine: 2,
                 source: "memory",
-                snippet: "-",
+                snippet: "- ## Entscheidungen",
                 recallCount: 3,
                 dailyCount: 0,
                 groundedCount: 0,
@@ -1257,7 +1258,7 @@ describe("short-term promotion", () => {
             startLine: 2,
             endLine: 2,
             source: "memory",
-            snippet: "-",
+            snippet: "- ## Entscheidungen",
             recallCount: 3,
             dailyCount: 0,
             groundedCount: 0,

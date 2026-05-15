@@ -319,12 +319,16 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
 }
 
+function stripMarkdownLeadingMarkers(raw: string): string {
+  return raw.replace(/^(?:[-*+>]\s*)+/, "").trim();
+}
+
 function isMarkdownMarkerOnlyLine(raw: string): boolean {
   const line = raw.trim();
   if (!line) {
     return true;
   }
-  const withoutLeadingMarkers = line.replace(/^(?:[-*+>]\s*)+/, "").trim();
+  const withoutLeadingMarkers = stripMarkdownLeadingMarkers(line);
   if (!withoutLeadingMarkers) {
     return true;
   }
@@ -346,7 +350,11 @@ function isMarkdownSkeletonSnippet(raw: string): boolean {
       hasPlaceholderLine = true;
       continue;
     }
-    if (/^#{1,6}\s+\S/.test(line)) {
+    const withoutLeadingMarkers = stripMarkdownLeadingMarkers(line);
+    if (/^#{1,6}\s+\S/.test(withoutLeadingMarkers)) {
+      if (withoutLeadingMarkers !== line) {
+        hasPlaceholderLine = true;
+      }
       if (/(?:^|\s)[-*+>]\s*$/.test(line)) {
         hasPlaceholderLine = true;
       }
