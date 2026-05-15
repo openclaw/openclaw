@@ -74,6 +74,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       : DmPolicySchema.optional(),
     selfChatMode: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
+    allowSendTo: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: params.useDefaults

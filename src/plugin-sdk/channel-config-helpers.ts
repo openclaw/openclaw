@@ -57,6 +57,7 @@ type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
   | "setAccountEnabled"
   | "deleteAccount"
   | "resolveAllowFrom"
+  | "resolveAllowSendTo"
   | "formatAllowFrom"
   | "resolveDefaultTo"
 >;
@@ -114,6 +115,7 @@ type MultiAccountChannelConfigAdapterParams<
   inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
   clearBaseFields: string[];
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
+  resolveAllowSendTo?: (account: AccessorAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 };
@@ -168,13 +170,17 @@ export function createScopedAccountConfigAccessors<
 >(params: {
   resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveAllowSendTo?: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
 }): Pick<
   ChannelConfigAdapter<ResolvedAccount>,
-  "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
+  "resolveAllowFrom" | "resolveAllowSendTo" | "formatAllowFrom" | "resolveDefaultTo"
 > {
-  const base = {
+  const base: Pick<
+    ChannelConfigAdapter<ResolvedAccount>,
+    "resolveAllowFrom" | "resolveAllowSendTo" | "formatAllowFrom"
+  > = {
     resolveAllowFrom({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) {
       return mapAllowFromEntries(
         params.resolveAllowFrom(params.resolveAccount({ cfg: cfg as Config, accountId })),
@@ -184,6 +190,14 @@ export function createScopedAccountConfigAccessors<
       return params.formatAllowFrom(allowFrom);
     },
   };
+
+  if (params.resolveAllowSendTo) {
+    const resolveAllowSendTo = params.resolveAllowSendTo;
+    base.resolveAllowSendTo = ({ cfg, accountId }) => {
+      const entries = resolveAllowSendTo(params.resolveAccount({ cfg: cfg as Config, accountId }));
+      return entries ? mapAllowFromEntries(entries) : undefined;
+    };
+  }
 
   if (!params.resolveDefaultTo) {
     return base;
@@ -264,6 +278,7 @@ function createChannelConfigAdapterWithAccessors<
   resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
   fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
+  resolveAllowSendTo?: (account: AccessorAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
@@ -275,6 +290,7 @@ function createChannelConfigAdapterWithAccessors<
         params.fallbackResolveAccessorAccount,
       ),
       resolveAllowFrom: params.resolveAllowFrom,
+      resolveAllowSendTo: params.resolveAllowSendTo,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,
     }),
@@ -290,6 +306,7 @@ function createChannelConfigAdapterFromBase<
   resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
   resolveAccountForAccessors: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
+  resolveAllowSendTo?: (account: AccessorAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
@@ -298,6 +315,7 @@ function createChannelConfigAdapterFromBase<
     resolveAccessorAccount: params.resolveAccessorAccount,
     fallbackResolveAccessorAccount: params.resolveAccountForAccessors,
     resolveAllowFrom: params.resolveAllowFrom,
+    resolveAllowSendTo: params.resolveAllowSendTo,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
   });
@@ -362,6 +380,7 @@ export function createScopedChannelConfigAdapter<
       return params.resolveAccount(cfg, accountId) as unknown as AccessorAccount;
     },
     resolveAllowFrom: params.resolveAllowFrom,
+    resolveAllowSendTo: params.resolveAllowSendTo,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
   });
@@ -493,6 +512,7 @@ export function createTopLevelChannelConfigAdapter<
   deleteMode?: "remove-section" | "clear-fields";
   clearBaseFields?: string[];
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
+  resolveAllowSendTo?: (account: AccessorAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
@@ -511,6 +531,7 @@ export function createTopLevelChannelConfigAdapter<
       return params.resolveAccount(cfg) as unknown as AccessorAccount;
     },
     resolveAllowFrom: params.resolveAllowFrom,
+    resolveAllowSendTo: params.resolveAllowSendTo,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
   });
@@ -596,6 +617,7 @@ export function createHybridChannelConfigAdapter<
       return params.resolveAccount(cfg, accountId) as unknown as AccessorAccount;
     },
     resolveAllowFrom: params.resolveAllowFrom,
+    resolveAllowSendTo: params.resolveAllowSendTo,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
   });

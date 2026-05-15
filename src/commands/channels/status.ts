@@ -15,6 +15,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
   appendBaseUrlBit,
+  appendDirectMessageRoutingBits,
   appendEnabledConfiguredLinkedBits,
   appendModeBit,
   appendTokenSourceBits,
@@ -126,12 +127,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (botUsername) {
         bits.push(`bot:${botUsername}`);
       }
-      if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
-        bits.push(`dm:${account.dmPolicy}`);
-      }
-      if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
-        bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
-      }
+      appendDirectMessageRoutingBits(bits, account);
       appendTokenSourceBits(bits, account);
       const application = account.application as
         | { intents?: { messageContent?: string } }
