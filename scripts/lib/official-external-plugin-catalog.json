@@ -14,7 +14,7 @@
           {
             "id": "iflow",
             "label": "iFlow Search",
-            "hint": "Chinese-first web search via iFlow Open Platform.",
+            "hint": "Connect Your AI Agent to the Real World",
             "onboardingScopes": ["text-inference"],
             "credentialLabel": "iFlow API key",
             "envVars": ["IFLOW_API_KEY"],
