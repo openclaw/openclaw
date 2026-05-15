@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -1076,11 +1077,11 @@ export async function handleFeishuMessage(params: {
 
     const inboundHistory =
       isGroup && historyKey && historyLimit > 0 && chatHistories
-        ? (chatHistories.get(historyKey) ?? []).map((entry) => ({
-            sender: entry.sender,
-            body: entry.body,
-            timestamp: entry.timestamp,
-          }))
+        ? buildInboundHistoryFromMap({
+            historyMap: chatHistories,
+            historyKey,
+            limit: historyLimit,
+          })
         : undefined;
 
     const threadContextBySessionKey = new Map<
