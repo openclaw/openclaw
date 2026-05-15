@@ -41,6 +41,10 @@ export function buildMediaLocalRoots(
       path.join(resolvedConfigDir, "media"),
       path.join(resolvedStateDir, "media"),
       path.join(resolvedStateDir, "canvas"),
+      // ScreenWatch writes current local screen frames under the managed
+      // OpenClaw state tree. Keep those frames readable by the image tool
+      // without reopening arbitrary parent directories such as ~/.openclaw.
+      path.join(resolvedStateDir, "screenwatch"),
       path.join(resolvedStateDir, "workspace"),
       path.join(resolvedStateDir, "sandboxes"),
     ]),

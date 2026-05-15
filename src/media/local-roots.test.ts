@@ -78,12 +78,12 @@ describe("local media roots", () => {
 
   it.each([
     {
-      name: "keeps temp, media cache, canvas, and workspace roots by default",
+      name: "keeps temp, media cache, canvas, screenwatch, and workspace roots by default",
       stateDir: path.join("/tmp", "openclaw-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
-      expectedContained: ["media", "canvas", "workspace", "sandboxes"],
+      expectedContained: ["media", "canvas", "screenwatch", "workspace", "sandboxes"],
       expectedExcluded: ["agents"],
-      minLength: 4,
+      minLength: 5,
     },
     {
       name: "adds the active agent workspace without re-opening broad agent state roots",
@@ -192,6 +192,8 @@ describe("local media roots", () => {
 
     expectNormalizedRootsContain(roots, [
       path.join(stateDir, "media"),
+      path.join(stateDir, "canvas"),
+      path.join(stateDir, "screenwatch"),
       path.join(configDir, "media"),
     ]);
   });
