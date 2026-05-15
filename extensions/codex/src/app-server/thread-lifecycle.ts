@@ -468,7 +468,7 @@ function areContextEngineProjectionBindingsCompatible(
   next: CodexAppServerContextEngineProjectionBinding | undefined,
 ): boolean {
   if (!next) {
-    return true;
+    return previous === undefined;
   }
   return (
     previous?.schemaVersion === next.schemaVersion &&

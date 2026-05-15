@@ -510,6 +510,23 @@ export async function runCodexAppServerAttempt(
     sessionKey: sandboxSessionKey,
     ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
   };
+  let activeSessionId = params.sessionId;
+  let activeSessionFile = params.sessionFile;
+  const buildActiveRunAttemptParams = (): EmbeddedRunAttemptParams => ({
+    ...runtimeParams,
+    sessionId: activeSessionId,
+    sessionFile: activeSessionFile,
+  });
+  const adoptContextEngineCompactionTranscript = (compactResult: {
+    result?: { sessionId?: string; sessionFile?: string };
+  }): void => {
+    if (compactResult.result?.sessionId) {
+      activeSessionId = compactResult.result.sessionId;
+    }
+    if (compactResult.result?.sessionFile) {
+      activeSessionFile = compactResult.result.sessionFile;
+    }
+  };
   const startupAuthAccountCacheKey = await resolveCodexAppServerAuthAccountCacheKey({
     authProfileId: startupAuthProfileId,
     authProfileStore: params.authProfileStore,
@@ -561,8 +578,8 @@ export async function runCodexAppServerAttempt(
       runId: params.runId,
     },
   });
-  const hadSessionFile = await pathExists(params.sessionFile);
-  let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
+  const hadSessionFile = await pathExists(activeSessionFile);
+  let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
   const hookContextWindowFields = {
     ...(params.contextWindowInfo?.tokens
       ? { contextTokenBudget: params.contextWindowInfo.tokens }
@@ -592,7 +609,7 @@ export async function runCodexAppServerAttempt(
     : undefined;
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
-      attempt: runtimeParams,
+      attempt: buildActiveRunAttemptParams(),
       workspaceDir: effectiveWorkspace,
       agentDir,
       activeAgentId: sessionAgentId,
@@ -603,16 +620,16 @@ export async function runCodexAppServerAttempt(
     await bootstrapHarnessContextEngine({
       hadSessionFile,
       contextEngine: activeContextEngine,
-      sessionId: params.sessionId,
+      sessionId: activeSessionId,
       sessionKey: sandboxSessionKey,
-      sessionFile: params.sessionFile,
+      sessionFile: activeSessionFile,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
-      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
+      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
   // Build the workspace bootstrap block before finalizing developer
@@ -650,7 +667,7 @@ export async function runCodexAppServerAttempt(
     }
     const assembled = await assembleHarnessContextEngine({
       contextEngine: activeContextEngine,
-      sessionId: params.sessionId,
+      sessionId: activeSessionId,
       sessionKey: sandboxSessionKey,
       messages: historyMessages,
       tokenBudget: params.contextTokenBudget,
@@ -681,7 +698,10 @@ export async function runCodexAppServerAttempt(
     const projectionDecision = contextEngineProjection
       ? resolveContextEngineBootstrapProjectionDecision({
           startupBinding: decisionStartupBinding,
-          expectedBinding: buildContextEngineBinding(runtimeParams, contextEngineProjection),
+          expectedBinding: buildContextEngineBinding(
+            buildActiveRunAttemptParams(),
+            contextEngineProjection,
+          ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
         })
@@ -853,7 +873,7 @@ export async function runCodexAppServerAttempt(
           const buildThreadLifecycleParams = () =>
             ({
               client: startupClient,
-              params: runtimeParams,
+              params: buildActiveRunAttemptParams(),
               agentId: sessionAgentId,
               cwd: effectiveWorkspace,
               dynamicTools: toolBridge.specs,
@@ -1559,7 +1579,7 @@ export async function runCodexAppServerAttempt(
     embeddedAgentLog.warn(
       "codex app-server context-engine turn overflowed; forcing context-engine compaction",
       {
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         sessionKey: sandboxSessionKey,
         threadId: thread.threadId,
         engineId: activeContextEngine.info.id,
@@ -1571,9 +1591,9 @@ export async function runCodexAppServerAttempt(
       const runtimeContext = buildActiveContextEngineRuntimeContext();
       const overflowTokenCount = params.contextTokenBudget ?? params.contextWindowInfo?.tokens;
       const compactResult = await activeContextEngine.compact({
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         sessionKey: sandboxSessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: activeSessionFile,
         tokenBudget: params.contextTokenBudget,
         force: true,
         ...(overflowTokenCount ? { currentTokenCount: overflowTokenCount } : {}),
@@ -1586,7 +1606,7 @@ export async function runCodexAppServerAttempt(
           : runtimeContext,
       });
       embeddedAgentLog.info("codex app-server context-engine forced compaction result", {
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         sessionKey: sandboxSessionKey,
         engineId: activeContextEngine.info.id,
         ok: compactResult.ok,
@@ -1598,13 +1618,15 @@ export async function runCodexAppServerAttempt(
       if (!compactResult.ok || !compactResult.compacted) {
         return false;
       }
+      adoptContextEngineCompactionTranscript(compactResult);
+      const maintenanceRuntimeContext = buildActiveContextEngineRuntimeContext();
       await runHarnessContextEngineMaintenance({
         contextEngine: activeContextEngine,
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         sessionKey: sandboxSessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: activeSessionFile,
         reason: "compaction",
-        runtimeContext,
+        runtimeContext: maintenanceRuntimeContext,
         config: params.config,
       });
       return true;
@@ -1620,7 +1642,7 @@ export async function runCodexAppServerAttempt(
   };
   const rebuildPromptAfterContextEngineCompaction = async () => {
     historyMessages =
-      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
+      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
     resetCodexPromptInputs();
     try {
       await applyActiveContextEngineProjection(undefined);
@@ -1690,8 +1712,12 @@ export async function runCodexAppServerAttempt(
           error: formatErrorMessage(turnStartError),
         },
       );
+      const preRetrySessionFile = activeSessionFile;
       const compactedForRetry = await forceContextEngineCompactionForCodexOverflow(turnStartError);
-      await clearCodexAppServerBinding(params.sessionFile);
+      await clearCodexAppServerBinding(preRetrySessionFile);
+      if (activeSessionFile !== preRetrySessionFile) {
+        await clearCodexAppServerBinding(activeSessionFile);
+      }
       if (compactedForRetry) {
         await rebuildPromptAfterContextEngineCompaction();
       }
@@ -1944,21 +1970,21 @@ export async function runCodexAppServerAttempt(
     if (activeContextEngine) {
       const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
-        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
+        (await readMirroredSessionHistoryMessages(activeSessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
         promptError: Boolean(finalPromptError),
         aborted: finalAborted,
         yieldAborted: Boolean(result.yieldDetected),
-        sessionIdUsed: params.sessionId,
+        sessionIdUsed: activeSessionId,
         sessionKey: sandboxSessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: activeSessionFile,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: params.contextTokenBudget,
         runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
-          attempt: runtimeParams,
+          attempt: buildActiveRunAttemptParams(),
           workspaceDir: effectiveWorkspace,
           agentDir,
           activeAgentId: sessionAgentId,

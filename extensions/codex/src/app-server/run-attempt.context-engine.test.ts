@@ -267,7 +267,15 @@ function expectRequestInputTextContains(
 }
 
 function getRequestInputText(harness: ReturnType<typeof createStartedThreadHarness>): string {
-  const params = requireRequestParams(harness, "turn/start");
+  return getRequestInputTextAt(harness, 0);
+}
+
+function getRequestInputTextAt(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  index: number,
+): string {
+  const request = harness.requests.filter((entry) => entry.method === "turn/start").at(index);
+  const params = requireRecord(request?.params, "turn/start params");
   const input = requireArray(params.input, "turn/start input");
   return input
     .map((entry) => {
@@ -636,9 +644,80 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
-  it("retries a resumed context-engine thread on a fresh Codex thread after early context overflow", async () => {
+  it("starts a fresh Codex thread when thread-bootstrap projection falls back to per-turn projection", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ prompt }) => ({
+        messages: [assistantMessage("per-turn context", 10), userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+      })),
+    });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-new");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+    expectRequestInputTextContains(harness, "per-turn context");
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-new",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+        },
+      },
+    });
+    await run;
+
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-new");
+    expect(savedBinding?.contextEngine?.projection).toBeUndefined();
+  });
+
+  it("retries a resumed context-engine thread on a fresh Codex thread after early context overflow", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const successorFile = path.join(tempDir, "session.compacted.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
@@ -658,18 +737,33 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     let epoch = "epoch-before";
     const compact = vi.fn(async () => {
       epoch = "epoch-after";
+      SessionManager.open(successorFile).appendMessage(
+        assistantMessage("successor compacted context", Date.now()) as never,
+      );
       return {
         ok: true,
         compacted: true,
-        result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 10 },
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 10,
+          sessionId: "session-1-compacted",
+          sessionFile: successorFile,
+        },
       };
     });
-    const assemble = vi.fn(async ({ prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
-      messages: [assistantMessage(`context ${epoch}`, 10), userMessage(prompt ?? "", 11)],
-      estimatedTokens: 42,
-      systemPromptAddition: "context-engine system",
-      contextProjection: { mode: "thread_bootstrap" as const, epoch },
-    }));
+    const assemble = vi.fn(
+      async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: [
+          ...messages,
+          assistantMessage(`context ${epoch}`, 10),
+          userMessage(prompt ?? "", 11),
+        ],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch },
+      }),
+    );
     const contextEngine = createContextEngine({ assemble, compact });
     const harness = createStartedThreadHarness(async (method, requestParams) => {
       const request = requireRecord(requestParams, `${method} params`);
@@ -727,7 +821,15 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     expect(assemble).toHaveBeenCalledTimes(2);
-    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    const retryAssembleParams = assemble.mock.calls[1]?.[0];
+    expect(retryAssembleParams?.messages.map((message) => message.role)).toEqual(["assistant"]);
+    expect(
+      retryAssembleParams?.messages.map((message) => String(message.content?.[0]?.text)),
+    ).toEqual(["successor compacted context"]);
+    const retryInputText = getRequestInputTextAt(harness, -1);
+    expect(retryInputText).toContain("successor compacted context");
+    expect(retryInputText).not.toContain("pre-compaction context");
+    const savedBinding = await readCodexAppServerBinding(successorFile);
     expect(savedBinding?.threadId).toBe("thread-fresh");
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
     expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after");

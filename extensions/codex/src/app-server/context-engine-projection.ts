@@ -1,4 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 
 type CodexContextProjection = {
   developerInstructionAddition?: string;
@@ -196,23 +197,133 @@ function renderMessagePart(
     return "[image omitted]";
   }
   if (type === "toolCall" || type === "tool_use") {
+    const label = `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`;
     if (options.toolPayloadMode === "preserve") {
       return truncateText(
-        `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}\n${stableJson(record)}`,
+        `${label}\n${stableJson(renderToolCallPayload(record))}`,
         options.maxTextPartChars,
       );
     }
-    return `tool call${typeof record.name === "string" ? `: ${record.name}` : ""} [input omitted]`;
+    return `${label} [input omitted]`;
   }
   if (type === "toolResult" || type === "tool_result") {
     const label =
       typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
     if (options.toolPayloadMode === "preserve") {
-      return truncateText(`${label}\n${stableJson(record)}`, options.maxTextPartChars);
+      return truncateText(
+        `${label}\n${stableJson(renderToolResultPayload(record))}`,
+        options.maxTextPartChars,
+      );
     }
     return `${label} [content omitted]`;
   }
   return `[${type ?? "non-text"} content omitted]`;
+}
+
+function renderToolCallPayload(record: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
+  const input = record.input ?? record.arguments;
+  if (input !== undefined) {
+    payload.inputShape = summarizeToolInputShape(input);
+  }
+  return payload;
+}
+
+function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
+  for (const [key, value] of Object.entries(record)) {
+    if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
+      continue;
+    }
+    payload[key] = redactPreservedToolValue(key, value);
+  }
+  return payload;
+}
+
+const TOOL_PAYLOAD_METADATA_KEYS = new Set([
+  "type",
+  "name",
+  "id",
+  "callId",
+  "toolCallId",
+  "toolUseId",
+]);
+
+function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  for (const key of TOOL_PAYLOAD_METADATA_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      payload[key] = redactSensitiveFieldValue(key, value);
+    }
+  }
+  return payload;
+}
+
+// Tool-call inputs can contain shell commands and credentials. For bootstrap
+// continuity, retain object structure and primitive types instead of values.
+function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    return value.map((entry) => summarizeToolInputShape(entry, seen));
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = summarizeToolInputShape(child, seen);
+    }
+    return out;
+  }
+  return `[${typeof value}]`;
+}
+
+// Tool results are the useful carried context for a fresh Codex thread, so keep
+// their content while applying the same text/field redaction used for tool logs.
+function redactPreservedToolValue(
+  key: string,
+  value: unknown,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === "string") {
+    return redactSensitiveFieldValue(key, redactToolPayloadText(value));
+  }
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out: Record<string, unknown> = {};
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+    }
+    return out;
+  }
+  return `[${typeof value}]`;
 }
 
 function stableJson(value: unknown): string {

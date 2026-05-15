@@ -192,6 +192,11 @@ thread from engine-managed context. OpenClaw keeps a transcript mirror for
 channel history, search, `/new`, `/reset`, and future model or harness
 switching.
 
+When a context engine requests Codex thread-bootstrap projection, OpenClaw
+projects tool-call names and ids, input shapes, and redacted tool-result content
+into the fresh Codex thread. It does not copy raw tool-call argument values into
+that projection.
+
 The mirror includes the user prompt, final assistant text, and lightweight Codex
 reasoning or plan records when the app-server emits them. Today, OpenClaw only
 records native compaction start and completion signals. It does not yet expose a
