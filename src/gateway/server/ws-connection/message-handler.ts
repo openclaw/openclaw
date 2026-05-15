@@ -213,12 +213,16 @@ function resolvePinnedClientMetadata(params: {
   const platformMismatch =
     hasPinnedPlatform && claimedPlatform !== pairedPlatform && !isLegacyNodeHostPlatformPin;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
-  const shouldPinPlatform =
-    hasPinnedPlatform && (claimedPlatform === pairedPlatform || isLegacyNodeHostPlatformPin);
+  const pinnedPlatform =
+    claimedPlatform === pairedPlatform
+      ? params.pairedPlatform
+      : isLegacyNodeHostPlatformPin
+        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
+        : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,
-    pinnedPlatform: shouldPinPlatform ? params.pairedPlatform : undefined,
+    pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
 }

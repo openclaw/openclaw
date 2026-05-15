@@ -420,4 +420,28 @@ describe("resolvePinnedClientMetadata", () => {
       });
     },
   );
+
+  it.each([
+    ["macos", "darwin", "Mac"],
+    ["windows", "win32", "Windows"],
+  ])(
+    "pins canonical node-host platform %s over paired legacy alias %s",
+    (claimedPlatform, pairedPlatform, deviceFamily) => {
+      expect(
+        __testing.resolvePinnedClientMetadata({
+          clientId: "node-host",
+          clientMode: "node",
+          claimedPlatform,
+          claimedDeviceFamily: deviceFamily,
+          pairedPlatform,
+          pairedDeviceFamily: deviceFamily,
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: claimedPlatform,
+        pinnedDeviceFamily: deviceFamily,
+      });
+    },
+  );
 });
