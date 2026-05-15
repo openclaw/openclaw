@@ -1632,6 +1632,164 @@ ${JSON.stringify({
     expect(parsed.response.response.message).toContain("security=allowlist");
   });
 
+  it("answers Claude live control_request can_use_tool with allow when no exec policy is configured (default deployment)", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-default-allow",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "Bash",
+                tool_use_id: "tool-default-allow-1",
+                input: { command: "echo hi" },
+              },
+            })}
+${JSON.stringify({
+  type: "system",
+  subtype: "init",
+  session_id: "live-control-default-allow",
+})}
+${JSON.stringify({
+  type: "result",
+  session_id: "live-control-default-allow",
+  result: "ok",
+})}
+`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-default-allow",
+        pid: 3003,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    // No tools.exec configured at all — represents the default deployment
+    // that extensions/anthropic/cli-shared.ts already launches with
+    // --permission-mode bypassPermissions via normalizeClaudePermissionArgs.
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-control-default-allow",
+        prompt: "hello",
+        backend: { liveSession: "claude-stdio" },
+      }),
+    );
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      type: string;
+      response: {
+        subtype: string;
+        request_id: string;
+        response: { behavior: string; toolUseID?: string };
+      };
+    };
+    expect(parsed.response.response.behavior).toBe("allow");
+    expect(parsed.response.response.toolUseID).toBe("tool-default-allow-1");
+  });
+
+  it("answers Claude live control_request can_use_tool with deny when raw --permission-mode override is not bypass", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-permmode-deny",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "Bash",
+                tool_use_id: "tool-permmode-deny-1",
+                input: { command: "ls" },
+              },
+            })}
+${JSON.stringify({
+  type: "system",
+  subtype: "init",
+  session_id: "live-control-permmode-deny",
+})}
+${JSON.stringify({
+  type: "result",
+  session_id: "live-control-permmode-deny",
+  result: "ok",
+})}
+`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-permmode-deny",
+        pid: 3004,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    // tools.exec resolves to full/off (would normally allow native Bash),
+    // but the operator explicitly forced --permission-mode default in raw
+    // backend args. That override must be honored: deny native Bash even
+    // though the exec policy alone would permit it.
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-control-permmode-deny",
+        prompt: "hello",
+        backend: {
+          liveSession: "claude-stdio",
+          args: ["-p", "--output-format", "stream-json", "--permission-mode", "default"],
+        },
+        config: {
+          tools: { exec: { security: "full", ask: "off" } },
+        } as PreparedCliRunContext["params"]["config"],
+      }),
+    );
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      type: string;
+      response: {
+        subtype: string;
+        request_id: string;
+        response: { behavior: string; message: string; decisionClassification: string };
+      };
+    };
+    expect(parsed.response.response.behavior).toBe("deny");
+    expect(parsed.response.response.decisionClassification).toBe("user_reject");
+    expect(parsed.response.response.message).toContain("permission-mode=default");
+  });
+
   it("restarts Claude live sessions for env changes and fresh retries", async () => {
     const cancels: Array<ReturnType<typeof vi.fn>> = [];
     const turnResults = ["first-ok", "resume-ok", "env-ok", "fresh-ok"];
