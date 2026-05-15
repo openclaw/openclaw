@@ -1,3 +1,4 @@
+import type { HistoryEntry } from "./history.types.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
@@ -27,12 +28,7 @@ export function evictOldHistoryKeys<T>(
   }
 }
 
-export type HistoryEntry = {
-  sender: string;
-  body: string;
-  timestamp?: number;
-  messageId?: string;
-};
+export type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export function buildHistoryContext(params: {
   historyText: string;
@@ -122,6 +118,43 @@ export function buildPendingHistoryContextFromMap(params: {
     formatEntry: params.formatEntry,
     lineBreak: params.lineBreak,
     excludeLast: false,
+  });
+}
+
+export function buildInboundHistoryFromMap<T extends HistoryEntry>(params: {
+  historyMap: Map<string, T[]>;
+  historyKey: string;
+  limit: number;
+}): HistoryEntry[] | undefined {
+  return buildInboundHistoryFromEntries({
+    entries: params.historyMap.get(params.historyKey) ?? [],
+    limit: params.limit,
+  });
+}
+
+export function buildInboundHistoryFromEntries(params: {
+  entries: readonly HistoryEntry[];
+  limit: number;
+}): HistoryEntry[] | undefined {
+  if (params.limit <= 0) {
+    return undefined;
+  }
+  if (params.entries.length === 0) {
+    return [];
+  }
+  return params.entries.slice(-params.limit).map((entry) => {
+    const historyEntry: HistoryEntry = {
+      sender: entry.sender,
+      body: entry.body,
+      timestamp: entry.timestamp,
+    };
+    if (entry.messageId) {
+      historyEntry.messageId = entry.messageId;
+    }
+    if (entry.media && entry.media.length > 0) {
+      historyEntry.media = entry.media;
+    }
+    return historyEntry;
   });
 }
 

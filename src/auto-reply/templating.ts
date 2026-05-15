@@ -5,6 +5,7 @@ import type {
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
@@ -48,11 +49,7 @@ export type MsgContext = {
    * Recent chat history for context (untrusted user content). Prefer passing this
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
-  InboundHistory?: Array<{
-    sender: string;
-    body: string;
-    timestamp?: number;
-  }>;
+  InboundHistory?: HistoryEntry[];
   /**
    * @deprecated Use CommandBody.
    *

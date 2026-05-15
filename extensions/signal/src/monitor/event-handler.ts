@@ -27,6 +27,7 @@ import {
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
@@ -186,11 +187,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
-        ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
-            sender: historyEntry.sender,
-            body: historyEntry.body,
-            timestamp: historyEntry.timestamp,
-          }))
+        ? buildInboundHistoryFromMap({
+            historyMap: deps.groupHistories,
+            historyKey,
+            limit: deps.historyLimit,
+          })
         : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,

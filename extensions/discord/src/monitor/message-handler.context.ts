@@ -6,7 +6,10 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { buildPendingHistoryContextFromMap } from "openclaw/plugin-sdk/reply-history";
+import {
+  buildInboundHistoryFromMap,
+  buildPendingHistoryContextFromMap,
+} from "openclaw/plugin-sdk/reply-history";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -287,14 +290,13 @@ export async function buildDiscordMessageProcessContext(params: {
     return null;
   }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
-  const inboundHistory =
-    shouldIncludeChannelHistory && historyLimit > 0
-      ? (guildHistories.get(messageChannelId) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
-      : undefined;
+  const inboundHistory = shouldIncludeChannelHistory
+    ? buildInboundHistoryFromMap({
+        historyMap: guildHistories,
+        historyKey: messageChannelId,
+        limit: historyLimit,
+      })
+    : undefined;
   const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
   const effectiveSessionKey =
     boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey;

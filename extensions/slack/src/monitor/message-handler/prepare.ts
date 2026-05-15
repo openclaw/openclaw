@@ -18,6 +18,7 @@ import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversat
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
@@ -920,11 +921,11 @@ export async function prepareSlackMessage(params: {
 
   const inboundHistory =
     isRoomish && ctx.historyLimit > 0
-      ? (ctx.channelHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? buildInboundHistoryFromMap({
+          historyMap: ctx.channelHistories,
+          historyKey,
+          limit: ctx.historyLimit,
+        })
       : dmHistoryContext.inboundHistory;
   const commandBody = textForCommandDetection.trim();
 

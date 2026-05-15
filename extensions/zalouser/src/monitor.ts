@@ -10,6 +10,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  buildInboundHistoryFromMap,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
   buildPendingHistoryContextFromMap,
@@ -605,11 +606,11 @@ async function processMessage(
       : body;
   const inboundHistory =
     isGroup && historyKey && historyState.historyLimit > 0
-      ? (historyState.groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? buildInboundHistoryFromMap({
+          historyMap: historyState.groupHistories,
+          historyKey,
+          limit: historyState.historyLimit,
+        })
       : undefined;
 
   const normalizedTo = isGroup ? `zalouser:group:${chatId}` : `zalouser:${chatId}`;
