@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
@@ -9,10 +9,6 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -21,6 +17,7 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -103,7 +100,8 @@ export type PluginHookName =
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
-  | "before_install";
+  | "before_install"
+  | "before_agent_run";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -141,6 +139,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_dispatch",
   "reply_dispatch",
   "before_install",
+  "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -168,10 +167,13 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
 export const CONVERSATION_HOOK_NAMES = [
+  "before_model_resolve",
+  "before_agent_reply",
   "llm_input",
   "llm_output",
   "before_agent_finalize",
   "agent_end",
+  "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
 
 export type ConversationHookName = (typeof CONVERSATION_HOOK_NAMES)[number];
@@ -194,7 +196,19 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
 };
+
+export type PluginHookContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentContextTokens"
+  | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -215,6 +229,7 @@ export type PluginHookLlmInputEvent = {
   prompt: string;
   historyMessages: unknown[];
   imagesCount: number;
+  tools?: unknown[];
 };
 
 export type PluginHookModelCallBaseEvent = {
@@ -226,6 +241,12 @@ export type PluginHookModelCallBaseEvent = {
   model: string;
   api?: string;
   transport?: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
 };
 
 export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
@@ -246,6 +267,12 @@ export type PluginHookLlmOutputEvent = {
   sessionId: string;
   provider: string;
   model: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
   /**
    * Fully resolved provider/model ref used for the call.
    *
@@ -259,6 +286,8 @@ export type PluginHookLlmOutputEvent = {
    * `resolvedRef` so provider/model consumers keep a stable parse contract.
    */
   harnessId?: string;
+  /** The original user prompt that produced this output. */
+  prompt?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {
@@ -404,10 +433,8 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
-  getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
-    namespace: string,
-  ) => T | undefined;
+  getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
+  channelId?: string;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -415,6 +442,18 @@ export type PluginHookBeforeToolCallEvent = {
   params: Record<string, unknown>;
   runId?: string;
   toolCallId?: string;
+  /**
+   * Optional best-effort destination path hints the host derived from `params`
+   * for well-known tool envelopes (e.g. `apply_patch`).
+   *
+   * This is a convenience hint, not an authoritative parse result: the host's
+   * extractor may be intentionally lenient and can return paths for malformed
+   * or partial envelopes. Plugins may use `derivedPaths` as a fast path, but
+   * should parse and validate `params` themselves when correctness or policy
+   * decisions depend on the exact set of affected paths. Absent for tools the
+   * host does not know how to derive paths for.
+   */
+  derivedPaths?: readonly string[];
 };
 
 export const PluginApprovalResolutions = {
@@ -438,6 +477,7 @@ export type PluginHookBeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
+    allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };
@@ -501,6 +541,8 @@ export type PluginHookSessionEndReason =
   | "daily"
   | "compaction"
   | "deleted"
+  | "shutdown"
+  | "restart"
   | "unknown";
 
 export type PluginHookSessionEndEvent = {
@@ -802,6 +844,31 @@ export type PluginHookBeforeInstallResult = {
   blockReason?: string;
 };
 
+// ---------------------------------------------------------------------------
+// before_agent_run — Lifecycle Gate Hook
+// ---------------------------------------------------------------------------
+
+/** Event payload for the before_agent_run gate hook. */
+export type PluginHookBeforeAgentRunEvent = {
+  /** The user's message that triggered this run. */
+  prompt: string;
+  /** Loaded session history before the current prompt is submitted. */
+  messages: unknown[];
+  /** Active system prompt prepared for this run. */
+  systemPrompt?: string;
+  /** Account identity when available. */
+  accountId?: string;
+  /** Channel the message came from. */
+  channelId?: string;
+  /** Sender identity when available. */
+  senderId?: string;
+  /** Whether the sender is an owner. */
+  senderIsOwner?: boolean;
+};
+
+/** Result type for before_agent_run. Returns pass/block or void (= pass). */
+export type PluginHookBeforeAgentRunResult = InputGateDecision | void;
+
 export type PluginHookHandlerMap = {
   agent_turn_prepare: (
     event: PluginAgentTurnPrepareEvent,
@@ -950,6 +1017,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
   ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
+  before_agent_run: (
+    event: PluginHookBeforeAgentRunEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentRunResult> | PluginHookBeforeAgentRunResult;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

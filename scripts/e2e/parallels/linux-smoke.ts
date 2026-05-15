@@ -39,6 +39,32 @@ import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runne
 import { resolveUbuntuVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 
+// Older published baselines predate this warning, but still need update coverage.
+const BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7";
+
+function parseOpenClawPackageVersion(value: string): string | null {
+  return value.match(/\b(\d{4}\.\d{1,2}\.\d{1,2}(?:-[A-Za-z0-9.]+)?)\b/u)?.[1] ?? null;
+}
+
+function compareOpenClawPackageVersions(left: string, right: string): number {
+  const parse = (value: string): [number, number, number] => {
+    const match = parseOpenClawPackageVersion(value)?.match(/^(\d{4})\.(\d+)\.(\d+)/u);
+    if (!match) {
+      return [0, 0, 0];
+    }
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+  };
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  for (let index = 0; index < leftParts.length; index++) {
+    const delta = leftParts[index] - rightParts[index];
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
 interface LinuxOptions {
   vmName: string;
   vmNameExplicit: boolean;
@@ -337,10 +363,12 @@ class LinuxSmoke {
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
     await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
-    await this.phase("fresh.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
+    await this.phase("fresh.inject-bad-plugin", 90, () =>
+      this.maybeInjectBadPluginFixture("fresh"),
+    );
     await this.phase("fresh.gateway-start", 240, () => this.startGatewayBackground());
     await this.phase("fresh.bad-plugin-diagnostic", 90, () =>
-      this.verifyBadPluginDiagnostic("fresh"),
+      this.maybeVerifyBadPluginDiagnostic("fresh"),
     );
     await this.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.freshGateway = "pass";
@@ -366,11 +394,13 @@ class LinuxSmoke {
     );
     this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
     await this.phase("upgrade.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phase("upgrade.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
+    await this.phase("upgrade.inject-bad-plugin", 90, () =>
+      this.maybeInjectBadPluginFixture("upgrade"),
+    );
     await this.phase("upgrade.onboard-ref", 180, () => this.runRefOnboard());
     await this.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
     await this.phase("upgrade.bad-plugin-diagnostic", 90, () =>
-      this.verifyBadPluginDiagnostic("upgrade"),
+      this.maybeVerifyBadPluginDiagnostic("upgrade"),
     );
     await this.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.upgradeGateway = "pass";
@@ -592,6 +622,28 @@ config_path.write_text(json.dumps(config, indent=2) + "\n")
 PY`);
   }
 
+  private versionForLane(lane: "fresh" | "upgrade"): string {
+    return lane === "fresh" ? this.status.freshVersion : this.status.upgradeVersion;
+  }
+
+  private shouldExpectBadPluginDiagnostic(lane: "fresh" | "upgrade"): boolean {
+    const version = parseOpenClawPackageVersion(this.versionForLane(lane));
+    if (!version) {
+      return true;
+    }
+    return compareOpenClawPackageVersions(version, BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION) >= 0;
+  }
+
+  private maybeInjectBadPluginFixture(lane: "fresh" | "upgrade"): void {
+    if (!this.shouldExpectBadPluginDiagnostic(lane)) {
+      this.log(
+        `Skipping bad plugin diagnostic fixture for ${lane}: installed ${this.versionForLane(lane)} predates ${BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION}\n`,
+      );
+      return;
+    }
+    this.injectBadPluginFixture();
+  }
+
   private startGatewayBackground(): void {
     const bonjourEnv = this.disableBonjour ? " OPENCLAW_DISABLE_BONJOUR=1" : "";
     this.guestBash(
@@ -599,7 +651,7 @@ PY`);
 rm -f /tmp/openclaw-parallels-linux-gateway.log
 setsid sh -lc ` +
         shellQuote(
-          `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json${bonjourEnv} ${this.auth.apiKeyEnv}=${shellQuote(
+          `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_ALLOW_ROOT=1${bonjourEnv} ${this.auth.apiKeyEnv}=${shellQuote(
             this.auth.apiKeyValue,
           )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
         ) +
@@ -622,7 +674,7 @@ setsid sh -lc ` +
       : ["openclaw", "gateway", "status", "--deep"];
     const result = run(
       "prlctl",
-      ["exec", this.options.vmName, "/usr/bin/env", "HOME=/root", ...args],
+      ["exec", this.options.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args],
       {
         check: false,
         quiet: true,
@@ -646,6 +698,7 @@ setsid sh -lc ` +
           this.options.vmName,
           "/usr/bin/env",
           "HOME=/root",
+          "OPENCLAW_ALLOW_ROOT=1",
           "openclaw",
           "gateway",
           "status",
@@ -669,7 +722,13 @@ setsid sh -lc ` +
     throw new Error("gateway status did not become RPC-ready");
   }
 
-  private async verifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
+  private async maybeVerifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
+    if (!this.shouldExpectBadPluginDiagnostic(lane)) {
+      this.log(
+        `Skipping bad plugin diagnostic assertion for ${lane}: installed ${this.versionForLane(lane)} predates ${BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION}\n`,
+      );
+      return;
+    }
     const warning =
       "channel plugin manifest declares test-bad-plugin without channelConfigs metadata";
     const gatewayStartLog = await readFile(
@@ -728,7 +787,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+  /usr/bin/env OPENCLAW_ALLOW_ROOT=1 ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
   )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
   rc=$?

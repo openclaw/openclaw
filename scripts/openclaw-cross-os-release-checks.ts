@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -18,9 +19,8 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
+import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertNoLegacyPluginDependencyStagingDebris } from "../src/infra/package-dist-inventory.ts";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -99,6 +99,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
@@ -107,6 +108,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
 }
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
@@ -120,9 +122,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
-export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 25 * 60;
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
-  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 5 * 60) * 1000;
+  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 2 * 60) * 1000;
 export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
@@ -557,7 +559,7 @@ async function prepareCandidate(params) {
 
   const buildEnv = {
     ...process.env,
-    NODE_OPTIONS: "--max-old-space-size=6144",
+    NODE_OPTIONS: "--max-old-space-size=8192",
   };
 
   logPhase("prepare", "pnpm-install");
@@ -626,6 +628,83 @@ function normalizeRelativePath(value) {
   return value.replace(/\\/gu, "/");
 }
 
+function isNotFoundError(error) {
+  return error && typeof error === "object" && error.code === "ENOENT";
+}
+
+function isInstallStageDirName(value) {
+  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
+}
+
+function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
+  const rootEntries = readdirSync(packageRoot, { withFileTypes: true });
+  const debris = [];
+  for (const rootEntry of rootEntries) {
+    if (!rootEntry.isDirectory() || rootEntry.name.toLowerCase() !== "dist") {
+      continue;
+    }
+    const distDir = join(packageRoot, rootEntry.name);
+    let distEntries = [];
+    try {
+      distEntries = readdirSync(distDir, { withFileTypes: true });
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    for (const distEntry of distEntries) {
+      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
+        continue;
+      }
+      const extensionsDir = join(distDir, distEntry.name);
+      let extensionEntries = [];
+      try {
+        extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          continue;
+        }
+        throw error;
+      }
+
+      for (const extensionEntry of extensionEntries) {
+        if (!extensionEntry.isDirectory()) {
+          continue;
+        }
+        const extensionPath = join(extensionsDir, extensionEntry.name);
+        let stagingEntries = [];
+        try {
+          stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
+        } catch (error) {
+          if (isNotFoundError(error)) {
+            continue;
+          }
+          throw error;
+        }
+        for (const stagingEntry of stagingEntries) {
+          if (isInstallStageDirName(stagingEntry.name)) {
+            debris.push(
+              normalizeRelativePath(relative(packageRoot, join(extensionPath, stagingEntry.name))),
+            );
+          }
+        }
+      }
+    }
+  }
+  return debris.toSorted((left, right) => left.localeCompare(right));
+}
+
+function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
+  const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
+  if (debris.length === 0) {
+    return;
+  }
+  throw new Error(
+    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
+  );
+}
+
 function isPackagedDistPath(relativePath) {
   if (!relativePath.startsWith("dist/")) {
     return false;
@@ -649,7 +728,7 @@ function isPackagedDistPath(relativePath) {
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
-  await assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
+  assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -1369,7 +1448,7 @@ function buildInstallerEnv(lane, providerMeta, providerSecretValue) {
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_NO_PROMPT: "1",
     CI: "1",
-    NODE_OPTIONS: "--max-old-space-size=6144",
+    NODE_OPTIONS: "--max-old-space-size=8192",
     [providerMeta.secretEnv]: providerSecretValue,
   };
 }

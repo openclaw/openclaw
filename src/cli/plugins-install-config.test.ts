@@ -115,7 +115,7 @@ describe("loadConfigForInstall", () => {
     );
 
     const result = await loadConfigForInstall(discordNpmRequest);
-    expect(readConfigFileSnapshotMock).toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });
@@ -142,10 +142,8 @@ describe("loadConfigForInstall", () => {
       throw new Error(request.error);
     }
 
-    expect(request.request).toMatchObject({
-      bundledPluginId: "discord",
-      allowInvalidConfigRecovery: true,
-    });
+    expect(request.request.bundledPluginId).toBe("discord");
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
     const result = await loadConfigForInstall(request.request);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
@@ -163,7 +161,7 @@ describe("loadConfigForInstall", () => {
           {
             path: "plugins",
             message:
-              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs",
+              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.",
           },
         ],
       }),

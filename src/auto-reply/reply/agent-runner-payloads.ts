@@ -1,11 +1,16 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -91,7 +96,20 @@ async function normalizeSentMediaUrlsForDedupe(params: {
 }
 
 function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  if (payload.isError) {
+    return true;
+  }
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
+}
+
+function sanitizeFinalReplyText(
+  payload: ReplyPayload,
+  text: string | undefined,
+): string | undefined {
+  if (!text) {
+    return text;
+  }
+  return sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
 }
 
 function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
@@ -99,12 +117,37 @@ function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
   if (!text) {
     return payload;
   }
-  const cleaned = stripLegacyBracketToolCallBlocks(text);
+  const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
+  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks);
   if (cleaned === text) {
     return payload;
   }
-  logVerbose("Stripped legacy tool-call block from heartbeat reply");
-  return copyReplyPayloadMetadata(payload, { ...payload, text: cleaned });
+  if (withoutLegacyBlocks !== text) {
+    logVerbose("Stripped legacy tool-call block from heartbeat reply");
+  }
+  return copyPayloadWithSanitizedText(payload, cleaned);
+}
+
+function copyPayloadWithSanitizedText(
+  payload: ReplyPayload,
+  text: string | undefined,
+): ReplyPayload {
+  const sanitizedText = sanitizeFinalReplyText(payload, text);
+  const next = copyReplyPayloadMetadata(payload, {
+    ...payload,
+    text: sanitizedText,
+  });
+  const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+  if (!mirror?.text) {
+    return next;
+  }
+  setReplyPayloadMetadata(next, {
+    sourceReplyTranscriptMirror: {
+      ...mirror,
+      text: sanitizeFinalReplyText(payload, mirror.text) || undefined,
+    },
+  });
+  return next;
 }
 
 export async function buildReplyPayloads(params: {
@@ -131,63 +174,77 @@ export async function buildReplyPayloads(params: {
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
-  const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads.map((payload) => sanitizeHeartbeatPayload(payload))
-    : params.payloads.flatMap((payload) => {
-        let text = payload.text;
+  const sanitizedPayloads: ReplyPayload[] = [];
+  if (params.isHeartbeat) {
+    for (const payload of params.payloads) {
+      sanitizedPayloads.push(sanitizeHeartbeatPayload(payload));
+    }
+  } else {
+    for (const payload of params.payloads) {
+      let text = payload.text;
 
-        if (payload.isError && text && isBunFetchSocketError(text)) {
-          text = formatBunFetchSocketError(text);
-        }
+      if (payload.isError && text && isBunFetchSocketError(text)) {
+        text = formatBunFetchSocketError(text);
+      }
 
-        if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [copyReplyPayloadMetadata(payload, { ...payload, text })];
-        }
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        if (stripped.didStrip && !didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-        }
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-        if (stripped.shouldSkip && !hasMedia) {
-          return [];
-        }
-        return [copyReplyPayloadMetadata(payload, { ...payload, text: stripped.text })];
-      });
+      if (!text || !text.includes("HEARTBEAT_OK")) {
+        sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text));
+        continue;
+      }
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.didStrip && !didLogHeartbeatStrip) {
+        didLogHeartbeatStrip = true;
+        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+      }
+      const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+      if (stripped.shouldSkip && !hasMedia) {
+        continue;
+      }
+      sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, stripped.text));
+    }
+  }
 
-  const replyTaggedPayloads = (
-    await Promise.all(
-      applyReplyThreading({
-        payloads: sanitizedPayloads,
-        replyToMode: params.replyToMode,
-        replyToChannel: params.replyToChannel,
+  const replyTaggedPayloadCandidates = await Promise.all(
+    applyReplyThreading({
+      payloads: sanitizedPayloads,
+      replyToMode: params.replyToMode,
+      replyToChannel: params.replyToChannel,
+      currentMessageId: params.currentMessageId,
+      replyThreading: params.replyThreading,
+    }).map(async (payload) => {
+      const parsed = normalizeReplyPayloadDirectives({
+        payload,
         currentMessageId: params.currentMessageId,
-        replyThreading: params.replyThreading,
-      }).map(async (payload) => {
-        const parsed = normalizeReplyPayloadDirectives({
-          payload,
-          currentMessageId: params.currentMessageId,
-          silentToken: SILENT_REPLY_TOKEN,
-          parseMode: "always",
-          extractMarkdownImages: params.extractMarkdownImages,
-        });
-        const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
-          payload: parsed.payload,
-          normalizeMediaPaths: params.normalizeMediaPaths,
-        });
-        if (
-          parsed.isSilent &&
-          !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia
-        ) {
-          mediaNormalizedPayload.text = undefined;
-        }
-        return mediaNormalizedPayload;
-      }),
-    )
-  ).filter(isRenderablePayload);
-  const silentFilteredPayloads = params.silentExpected
-    ? replyTaggedPayloads.filter(shouldKeepPayloadDuringSilentTurn)
-    : replyTaggedPayloads;
+        silentToken: SILENT_REPLY_TOKEN,
+        parseMode: "always",
+        extractMarkdownImages: params.extractMarkdownImages,
+      });
+      const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
+        payload: parsed.payload,
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      });
+      if (parsed.isSilent && !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia) {
+        mediaNormalizedPayload.text = undefined;
+      }
+      return mediaNormalizedPayload;
+    }),
+  );
+  const replyTaggedPayloads: ReplyPayload[] = [];
+  for (const payload of replyTaggedPayloadCandidates) {
+    if (isRenderablePayload(payload)) {
+      replyTaggedPayloads.push(payload);
+    }
+  }
+  const silentFilteredPayloads: ReplyPayload[] = [];
+  if (params.silentExpected) {
+    for (const payload of replyTaggedPayloads) {
+      if (shouldKeepPayloadDuringSilentTurn(payload)) {
+        silentFilteredPayloads.push(payload);
+      }
+    }
+  } else {
+    silentFilteredPayloads.push(...replyTaggedPayloads);
+  }
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -293,17 +350,39 @@ export async function buildReplyPayloads(params: {
     });
   };
   const contentSuppressedPayloads = shouldDropFinalPayloads
-    ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockStream(payload) ?? [])
+    ? (() => {
+        const preserved: ReplyPayload[] = [];
+        for (const payload of dedupedPayloads) {
+          const next = preserveUnsentMediaAfterBlockStream(payload);
+          if (next) {
+            preserved.push(next);
+          }
+        }
+        return preserved;
+      })()
     : params.blockStreamingEnabled
-      ? dedupedPayloads.filter(
-          (payload) =>
-            !params.blockReplyPipeline?.hasSentPayload(payload) &&
-            !isDirectlySentBlockPayload(payload),
-        )
+      ? (() => {
+          const unsent: ReplyPayload[] = [];
+          for (const payload of dedupedPayloads) {
+            if (
+              !params.blockReplyPipeline?.hasSentPayload(payload) &&
+              !isDirectlySentBlockPayload(payload)
+            ) {
+              unsent.push(payload);
+            }
+          }
+          return unsent;
+        })()
       : params.directlySentBlockKeys?.size
-        ? dedupedPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
-          )
+        ? (() => {
+            const unsent: ReplyPayload[] = [];
+            for (const payload of dedupedPayloads) {
+              if (!params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
+                unsent.push(payload);
+              }
+            }
+            return unsent;
+          })()
         : dedupedPayloads;
   const blockSentMediaUrls = params.blockStreamingEnabled
     ? await normalizeSentMediaUrlsForDedupe({
@@ -320,7 +399,12 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = filteredPayloads.filter(isRenderablePayload);
+  const replyPayloads: ReplyPayload[] = [];
+  for (const payload of filteredPayloads) {
+    if (isRenderablePayload(payload)) {
+      replyPayloads.push(payload);
+    }
+  }
 
   return {
     replyPayloads,

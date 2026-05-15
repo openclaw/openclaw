@@ -6,7 +6,7 @@ import {
   type Message,
   type Model,
   type TextContent,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
@@ -17,12 +17,14 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
+import { resolveAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
@@ -215,6 +217,7 @@ async function resolveRuntimeModel(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
   sessionEntry?: StoredSessionEntry;
@@ -244,6 +247,16 @@ async function resolveRuntimeModel(params: {
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
     provider: params.provider,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: params.provider,
+      harnessRuntime: resolveAgentHarnessPolicy({
+        provider: params.provider,
+        modelId: params.model,
+        config: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }).runtime,
+    }),
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
@@ -294,6 +307,50 @@ export async function runBtwSideQuestion(
     throw new Error("No active session transcript.");
   }
 
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+  const harness = selectAgentHarness({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  if (harness.runSideQuestion) {
+    const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentId: sessionAgentId,
+      agentDir: params.agentDir,
+      workspaceDir,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      isNewSession: params.isNewSession,
+    });
+    const result = await harness.runSideQuestion({
+      ...params,
+      provider: model.provider,
+      model: model.id,
+      runtimeModel: model,
+      sessionId,
+      sessionFile,
+      agentId: sessionAgentId,
+      workspaceDir,
+      authProfileId,
+      authProfileIdSource,
+    });
+    return { text: result.text };
+  }
+  if (harness.id === "codex") {
+    throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
+  }
+
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
   const imageLimits = resolveImageSanitizationLimits(params.cfg);
   let messages: Message[] = [];
@@ -321,15 +378,11 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const sessionAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const { model, authProfileId } = await resolveRuntimeModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    agentId: sessionAgentId,
     agentDir: params.agentDir,
     workspaceDir,
     sessionEntry: params.sessionEntry,

@@ -39,6 +39,11 @@ type DoctorHealthContribution = FlowContribution & {
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
+function isUpdateDoctorRun(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
+  const value = env.OPENCLAW_UPDATE_IN_PROGRESS;
+  return value === "1" || value === "true";
+}
+
 function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
@@ -313,6 +318,23 @@ async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<vo
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
 }
 
+async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairCodexSessionRoutes } =
+    await import("../commands/doctor/shared/codex-route-warnings.js");
+  const { note } = await import("../terminal/note.js");
+  const result = await maybeRepairCodexSessionRoutes({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
   await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
@@ -321,6 +343,11 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
+async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
+  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -345,8 +372,11 @@ async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
     await import("../commands/doctor-gateway-services.js");
-  const { noteMacLaunchAgentOverrides, noteMacLaunchctlGatewayEnvOverrides } =
-    await import("../commands/doctor-platform-notes.js");
+  const {
+    noteMacLaunchAgentOverrides,
+    noteMacLaunchctlGatewayEnvOverrides,
+    noteMacStaleOpenClawUpdateLaunchdJobs,
+  } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -355,6 +385,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     ctx.prompter,
   );
   await noteMacLaunchAgentOverrides();
+  await noteMacStaleOpenClawUpdateLaunchdJobs();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
 }
 
@@ -559,13 +590,14 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { CONFIG_PATH, replaceConfigFile } = await import("../config/config.js");
+  const { replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const shouldWriteConfig =
     ctx.configResult.shouldWriteConfig ||
     JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
+    const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     ctx.cfg = applyWizardMetadata(ctx.cfg, {
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
@@ -578,12 +610,18 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
       writeOptions: {
-        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
         skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
       },
     });
     logConfigUpdated(ctx.runtime);
-    const backupPath = `${CONFIG_PATH}.bak`;
+    const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
+    if (updateDoctorRun && fs.existsSync(preUpdateSnapshotPath)) {
+      ctx.runtime.log(
+        `Update changed config; pre-update backup: ${shortenHomePath(preUpdateSnapshotPath)}`,
+      );
+    }
+    const backupPath = `${ctx.configPath}.bak`;
     if (fs.existsSync(backupPath)) {
       ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
@@ -676,6 +714,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runStateIntegrityHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:codex-session-routes",
+      label: "Codex session routes",
+      run: runCodexSessionRouteHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
@@ -684,6 +727,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-transcripts",
       label: "Session transcripts",
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:config-audit-scrub",
+      label: "Config audit",
+      run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",

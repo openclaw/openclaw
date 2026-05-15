@@ -133,12 +133,24 @@ const BASE_USAGE_RANGE = {
   limit: 10,
 } as const;
 
+function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
 function expectSuccessfulSessionsUsage(
   respond: ReturnType<typeof vi.fn>,
 ): Array<{ key: string; agentId: string }> {
   expect(respond).toHaveBeenCalledTimes(1);
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  const result = respond.mock.calls[0]?.[1] as {
+  expect(mockArg(respond, 0, 0)).toBe(true);
+  const result = mockArg(respond, 0, 1) as {
     sessions: Array<{ key: string; agentId: string }>;
   };
   return result.sessions;
@@ -154,8 +166,12 @@ describe("sessions.usage", () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
-    expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe("opus");
+    expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
+      "main",
+    );
+    expect((mockArg(vi.mocked(discoverAllSessions), 1, 0) as { agentId?: string }).agentId).toBe(
+      "opus",
+    );
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(2);
@@ -214,6 +230,96 @@ describe("sessions.usage", () => {
     }
   });
 
+  it("rolls up known session family ids when historical usage is requested", async () => {
+    const storeKey = "agent:opus:main";
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        fs.writeFileSync(path.join(agentSessionsDir, "current.jsonl"), "", "utf-8");
+        fs.writeFileSync(
+          path.join(agentSessionsDir, "old.jsonl.reset.2026-02-01T00-00-00.000Z"),
+          "",
+          "utf-8",
+        );
+
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            [storeKey]: {
+              sessionId: "current",
+              sessionFile: "current.jsonl",
+              updatedAt: 1_000,
+              usageFamilyKey: storeKey,
+              usageFamilySessionIds: ["old", "current"],
+            },
+          },
+        });
+        vi.mocked(loadSessionCostSummaryFromCache).mockImplementation(async ({ sessionId }) => ({
+          summary: {
+            input: sessionId === "old" ? 10 : 20,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: sessionId === "old" ? 10 : 20,
+            totalCost: sessionId === "old" ? 0.01 : 0.02,
+            inputCost: sessionId === "old" ? 0.01 : 0.02,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+            messageCounts: {
+              total: 1,
+              user: 1,
+              assistant: 0,
+              toolCalls: 0,
+              toolResults: 0,
+              errors: 0,
+            },
+          },
+          cacheStatus: {
+            status: "fresh",
+            cachedFiles: 1,
+            pendingFiles: 0,
+            staleFiles: 0,
+          },
+        }));
+
+        const respond = await runSessionsUsage({
+          ...BASE_USAGE_RANGE,
+          key: storeKey,
+          groupBy: "family",
+          includeHistorical: true,
+        });
+
+        expect(respond).toHaveBeenCalledTimes(1);
+        expect(mockArg(respond, 0, 0)).toBe(true);
+        const result = mockArg(respond, 0, 1) as {
+          sessions: Array<{
+            key: string;
+            scope?: string;
+            includedSessionIds?: string[];
+            usage?: { totalTokens: number; totalCost: number; messageCounts?: { total: number } };
+          }>;
+          totals: { totalTokens: number; totalCost: number };
+        };
+        expect(result.sessions).toHaveLength(1);
+        expect(result.sessions[0]?.key).toBe(storeKey);
+        expect(result.sessions[0]?.scope).toBe("family");
+        expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old"]);
+        expect(result.sessions[0]?.usage?.totalTokens).toBe(30);
+        expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.03);
+        expect(result.sessions[0]?.usage?.messageCounts?.total).toBe(2);
+        expect(result.totals.totalTokens).toBe(30);
+        expect(result.totals.totalCost).toBeCloseTo(0.03);
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
     const preferredKey = "agent:opus:acp:run-dup";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
@@ -261,8 +367,8 @@ describe("sessions.usage", () => {
     });
 
     expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    expect(mockArg(respond, 0, 0)).toBe(false);
+    const error = mockArg(respond, 0, 2) as { message?: string } | undefined;
     expect(error?.message).toContain("Invalid session reference");
   });
 
@@ -272,7 +378,9 @@ describe("sessions.usage", () => {
     });
 
     expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalled();
-    expect(vi.mocked(loadSessionUsageTimeSeries).mock.calls[0]?.[0]?.agentId).toBe("opus");
+    expect(
+      (mockArg(vi.mocked(loadSessionUsageTimeSeries), 0, 0) as { agentId?: string }).agentId,
+    ).toBe("opus");
   });
 
   it("passes parsed agentId into sessions.usage.logs", async () => {
@@ -281,30 +389,38 @@ describe("sessions.usage", () => {
     });
 
     expect(vi.mocked(loadSessionLogs)).toHaveBeenCalled();
-    expect(vi.mocked(loadSessionLogs).mock.calls[0]?.[0]?.agentId).toBe("opus");
+    expect((mockArg(vi.mocked(loadSessionLogs), 0, 0) as { agentId?: string }).agentId).toBe(
+      "opus",
+    );
   });
 
   it("rejects traversal-style keys in timeseries/log lookups", async () => {
     const timeseriesRespond = await runSessionsUsageTimeseries({
       key: "agent:opus:../../etc/passwd",
     });
-    expect(timeseriesRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("Invalid session key"),
-      }),
-    );
+    expect(timeseriesRespond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "Invalid session key: agent:opus:../../etc/passwd",
+        },
+      ],
+    ]);
 
     const logsRespond = await runSessionsUsageLogs({
       key: "agent:opus:../../etc/passwd",
     });
-    expect(logsRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("Invalid session key"),
-      }),
-    );
+    expect(logsRespond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "Invalid session key: agent:opus:../../etc/passwd",
+        },
+      ],
+    ]);
   });
 });

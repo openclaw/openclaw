@@ -59,7 +59,7 @@ Config (global default + per-channel overrides):
 Notes:
 
 - Debounce applies to **text-only** messages; media/attachments flush immediately.
-- Control commands bypass debouncing so they remain standalone — **except** when a channel explicitly opts in to same-sender DM coalescing (e.g. [BlueBubbles `coalesceSameSenderDms`](/channels/bluebubbles#coalescing-split-send-dms-command--url-in-one-composition)), where DM commands wait inside the debounce window so a split-send payload can join the same agent turn.
+- Control commands bypass debouncing so they remain standalone. Channels that explicitly opt in to same-sender DM coalescing can keep DM commands inside the debounce window so a split-send payload can join the same agent turn.
 
 ## Sessions and devices
 
@@ -125,14 +125,14 @@ default) and per-channel overrides like `channels.slack.historyLimit` or
 
 ## Queueing and followups
 
-If a run is already active, inbound messages can be queued, steered into the
-current run, or collected for a followup turn.
+If a run is already active, inbound messages are steered into the current run by
+default. `messages.queue` selects whether active-run messages steer, queue for
+later, collect into one later turn, or interrupt the active run.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
-- Default mode is `steer`, with a 500ms followup debounce when steering falls
-  back to queued followup delivery.
-- Modes: `steer`, `followup`, `collect`, `steer-backlog`, `interrupt`, and the
-  legacy one-at-a-time `queue` mode.
+- Default mode is `steer`, with a 500ms debounce for Codex steering batches and
+  followup/collect queues.
+- Modes: `steer`, `followup`, `collect`, and `interrupt`.
 
 Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
@@ -181,7 +181,7 @@ Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 
-The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+The exact silent token `NO_REPLY` / `no_reply` means "do not deliver a user-visible reply".
 When a turn also has pending tool media, such as generated TTS audio, OpenClaw
 strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:
@@ -206,6 +206,7 @@ parent stays quiet until the child completion event delivers the real reply.
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
 - [Streaming](/concepts/streaming) — real-time message delivery
 - [Retry](/concepts/retry) — message delivery retry behavior
 - [Queue](/concepts/queue) — message processing queue

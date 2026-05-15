@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Model } from "@mariozechner/pi-ai";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Model } from "@earendil-works/pi-ai";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
 }));
 
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
+let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-stream.js").buildGoogleGemini3FirstResponseRetryParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
@@ -72,6 +73,10 @@ function buildGoogleVertexModel(
 
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  return buildRawSseResponse(sse);
+}
+
+function buildRawSseResponse(sse: string): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -85,10 +90,91 @@ function buildSseResponse(events: unknown[]): Response {
   });
 }
 
+function buildDelayedSecondSseResponse(params: {
+  first: unknown;
+  second: unknown;
+  delayMs: number;
+}): Response {
+  const encoder = new TextEncoder();
+  const first = `data: ${JSON.stringify(params.first)}\n\n`;
+  const second = `data: ${JSON.stringify(params.second)}\n\ndata: [DONE]\n\n`;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(first));
+      timeout = setTimeout(() => {
+        controller.enqueue(encoder.encode(second));
+        controller.close();
+      }, params.delayMs);
+    },
+    cancel() {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function requireMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  index: number,
+  label: string,
+): TArgs {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected ${label} mock call ${index}`);
+  }
+  return call;
+}
+
+function requireRequestInit(call: unknown[], label: string): RequestInit {
+  const init = call[1];
+  if (!init || typeof init !== "object") {
+    throw new Error(`Expected ${label} request init`);
+  }
+  return init as RequestInit;
+}
+
+function expectHeaders(init: RequestInit, expected: Record<string, string>): void {
+  const headers = new Headers(init.headers);
+  for (const [key, value] of Object.entries(expected)) {
+    expect(headers.get(key)).toBe(value);
+  }
+}
+
+function parseRequestJsonBody(init: RequestInit): Record<string, unknown> {
+  const requestBody = init.body;
+  if (typeof requestBody !== "string") {
+    throw new Error("Expected request body to be serialized JSON");
+  }
+  return JSON.parse(requestBody) as Record<string, unknown>;
+}
+
+function requireGenerationConfig(params: { generationConfig?: unknown }): Record<string, unknown> {
+  const config = params.generationConfig;
+  if (!config || typeof config !== "object") {
+    throw new Error("Expected generationConfig");
+  }
+  return config as Record<string, unknown>;
+}
+
+function requireThinkingConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const thinkingConfig = config.thinkingConfig;
+  if (!thinkingConfig || typeof thinkingConfig !== "object") {
+    throw new Error("Expected thinkingConfig");
+  }
+  return thinkingConfig as Record<string, unknown>;
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
       buildGoogleGenerativeAiParams,
+      buildGoogleGemini3FirstResponseRetryParams,
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
@@ -105,6 +191,11 @@ describe("google transport stream", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/provider-transport-runtime");
+    vi.resetModules();
   });
 
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
@@ -190,57 +281,199 @@ describe("google transport stream", () => {
     const result = await stream.result();
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
-    expect(guardedFetchMock).toHaveBeenCalledWith(
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          accept: "text/event-stream",
-          "Content-Type": "application/json",
-          "x-goog-api-key": "gemini-api-key",
-          "X-Provider": "google",
-        }),
-      }),
     );
+    const init = requireRequestInit(guardedCall, "guarded fetch");
+    expect(init.method).toBe("POST");
+    expectHeaders(init, {
+      accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "x-goog-api-key": "gemini-api-key",
+      "X-Provider": "google",
+    });
 
-    const init = guardedFetchMock.mock.calls[0]?.[1] as RequestInit;
-    const requestBody = init.body;
-    if (typeof requestBody !== "string") {
-      throw new Error("Expected Google transport request body to be serialized JSON");
-    }
-    const payload = JSON.parse(requestBody) as Record<string, unknown>;
+    const payload = parseRequestJsonBody(init);
     expect(payload.systemInstruction).toEqual({
       parts: [{ text: "Follow policy." }],
     });
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
-    expect(payload.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
+    expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
     });
-    expect(payload.toolConfig).toMatchObject({
-      functionCallingConfig: { mode: "AUTO" },
+    expect(
+      (payload.toolConfig as { functionCallingConfig?: unknown }).functionCallingConfig,
+    ).toEqual({
+      mode: "AUTO",
     });
-    expect(result).toMatchObject({
-      api: "google-generative-ai",
-      provider: "google",
-      responseId: "resp_1",
-      stopReason: "toolUse",
-      usage: {
-        input: 8,
-        output: 8,
-        cacheRead: 2,
-        totalTokens: 18,
-      },
-      content: [
-        { type: "thinking", thinking: "draft", thinkingSignature: "sig_1" },
-        { type: "text", text: "answer" },
-        {
-          type: "toolCall",
-          name: "lookup",
-          arguments: { q: "hello" },
-          thoughtSignature: "call_sig_1",
+    expect(result.api).toBe("google-generative-ai");
+    expect(result.provider).toBe("google");
+    expect(result.responseId).toBe("resp_1");
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.usage.input).toBe(8);
+    expect(result.usage.output).toBe(8);
+    expect(result.usage.cacheRead).toBe(2);
+    expect(result.usage.totalTokens).toBe(18);
+    expect(result.content).toHaveLength(3);
+    expect(result.content[0]).toEqual({
+      type: "thinking",
+      thinking: "draft",
+      thinkingSignature: "sig_1",
+    });
+    expect(result.content[1]?.type).toBe("text");
+    expect(result.content[1]).toHaveProperty("text", "answer");
+    expect(result.content[2]?.type).toBe("toolCall");
+    expect(result.content[2]).toHaveProperty("name", "lookup");
+    expect(result.content[2]).toHaveProperty("arguments", { q: "hello" });
+    expect(result.content[2]).toHaveProperty("thoughtSignature", "call_sig_1");
+  });
+
+  it("builds a lean Gemini 3 first-response retry payload", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const retryPayload = buildGoogleGemini3FirstResponseRetryParams({
+      model,
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+        generationConfig: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: "HIGH",
+          },
         },
-      ],
+      },
     });
+
+    expect(retryPayload?.generationConfig).toEqual({
+      thinkingConfig: {
+        thinkingLevel: "LOW",
+      },
+    });
+  });
+
+  it("wraps malformed Gemini SSE JSON", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse("data: {not json\n\n"));
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
+  });
+
+  it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock
+      .mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(init.signal?.reason ?? new Error("aborted"));
+            });
+          }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: {
+                type: "object",
+                properties: { q: { type: "string" } },
+              },
+            },
+          ],
+        } as never,
+        { reasoning: "high" } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+    );
+    const retryBody = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+    );
+    const firstGenerationConfig = requireGenerationConfig(firstBody);
+    const retryGenerationConfig = requireGenerationConfig(retryBody);
+    expect(firstGenerationConfig.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+    expect(retryGenerationConfig.thinkingConfig).toEqual({
+      thinkingLevel: "LOW",
+    });
+    expect(retryBody.tools).toEqual(firstBody.tools);
+  });
+
+  it("keeps streaming after the first Gemini 3 chunk arrives before the retry deadline", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock.mockResolvedValueOnce(
+      buildDelayedSecondSseResponse({
+        first: {
+          candidates: [{ content: { parts: [{ text: "first " }] } }],
+        },
+        second: {
+          candidates: [{ content: { parts: [{ text: "second" }] }, finishReason: "STOP" }],
+        },
+        delayMs: 25,
+      }),
+    );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        { reasoning: "high" } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "first second" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
@@ -280,15 +513,13 @@ describe("google transport stream", () => {
     );
     await stream.result();
 
-    expect(guardedFetchMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer oauth-token",
-          "Content-Type": "application/json",
-        }),
-      }),
-    );
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(typeof guardedCall[0]).toBe("string");
+    const init = requireRequestInit(guardedCall, "guarded fetch");
+    expectHeaders(init, {
+      Authorization: "Bearer oauth-token",
+      "Content-Type": "application/json",
+    });
   });
 
   it("refreshes authorized_user ADC before Google Vertex requests", async () => {
@@ -340,27 +571,25 @@ describe("google transport stream", () => {
     );
     const result = await stream.result();
 
-    expect(tokenFetchMock).toHaveBeenCalledWith(
-      "https://oauth2.googleapis.com/token",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(guardedFetchMock).toHaveBeenCalledWith(
+    const tokenCall = requireMockCall(tokenFetchMock, 0, "token fetch");
+    expect(tokenCall[0]).toBe("https://oauth2.googleapis.com/token");
+    expect(requireRequestInit(tokenCall, "token fetch").method).toBe("POST");
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
       "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer ya29.vertex-token",
-          "Content-Type": "application/json",
-          accept: "text/event-stream",
-        }),
-      }),
     );
-    expect(result).toMatchObject({
-      api: "google-vertex",
-      provider: "google-vertex",
-      stopReason: "stop",
-      content: [{ type: "text", text: "ok" }],
+    const guardedInit = requireRequestInit(guardedCall, "guarded fetch");
+    expect(guardedInit.method).toBe("POST");
+    expectHeaders(guardedInit, {
+      Authorization: "Bearer ya29.vertex-token",
+      "Content-Type": "application/json",
+      accept: "text/event-stream",
     });
+    expect(result.api).toBe("google-vertex");
+    expect(result.provider).toBe("google-vertex");
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
   });
 
   it("refreshes authorized_user ADC from the Windows APPDATA fallback for Google Vertex requests", async () => {
@@ -416,25 +645,18 @@ describe("google transport stream", () => {
     );
     await stream.result();
 
-    expect(tokenFetchMock).toHaveBeenCalledWith(
-      "https://oauth2.googleapis.com/token",
-      expect.objectContaining({
-        body: expect.objectContaining({
-          get: expect.any(Function),
-        }),
-        method: "POST",
-      }),
-    );
-    const requestBody = tokenFetchMock.mock.calls[0]?.[1]?.body as URLSearchParams | undefined;
+    const tokenCall = requireMockCall(tokenFetchMock, 0, "token fetch");
+    expect(tokenCall[0]).toBe("https://oauth2.googleapis.com/token");
+    const tokenInit = requireRequestInit(tokenCall, "token fetch");
+    expect(tokenInit.method).toBe("POST");
+    expect(tokenInit.body).toBeInstanceOf(URLSearchParams);
+    const requestBody = tokenInit.body as URLSearchParams;
     expect(requestBody?.get("refresh_token")).toBe("appdata-refresh-token");
-    expect(guardedFetchMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer ya29.appdata-token",
-        }),
-      }),
-    );
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(typeof guardedCall[0]).toBe("string");
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      Authorization: "Bearer ya29.appdata-token",
+    });
   });
 
   it("coerces replayed malformed tool-call args to an object for Google payloads", () => {
@@ -459,7 +681,7 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    expect(params.contents[0]).toMatchObject({
+    expect(params.contents[0]).toEqual({
       role: "model",
       parts: [{ functionCall: { name: "lookup", args: {} } }],
     });
@@ -493,7 +715,7 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    expect(params.contents[0]).toMatchObject({
+    expect(params.contents[0]).toEqual({
       role: "model",
       parts: [
         {
@@ -502,6 +724,80 @@ describe("google transport stream", () => {
         },
       ],
     });
+  });
+
+  it("uses Gemini skip-validator thought signatures for cross-provider tool-call replay", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toEqual({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
+    const model = buildGeminiModel({
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "foreign_sig",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toEqual({
+      role: "model",
+      parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+    });
+    expect(JSON.stringify(params.contents)).not.toContain("foreign_sig");
+    expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
   });
 
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
@@ -528,12 +824,10 @@ describe("google transport stream", () => {
       },
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true },
-    });
-    expect(params.generationConfig).not.toMatchObject({
-      thinkingConfig: { thinkingBudget: -1 },
-    });
+    const generationConfig = requireGenerationConfig(params);
+    const thinkingConfig = requireThinkingConfig(generationConfig);
+    expect(thinkingConfig.includeThoughts).toBe(true);
+    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
   });
 
   it("omits disabled thinkingBudget=0 for Gemini 2.5 Pro direct payloads", () => {
@@ -547,10 +841,9 @@ describe("google transport stream", () => {
       } as never,
     );
 
-    expect(params.generationConfig).toMatchObject({
-      maxOutputTokens: 128,
-    });
-    expect(params.generationConfig).not.toHaveProperty("thinkingConfig");
+    const generationConfig = requireGenerationConfig(params);
+    expect(generationConfig.maxOutputTokens).toBe(128);
+    expect(generationConfig).not.toHaveProperty("thinkingConfig");
   });
 
   it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {
@@ -567,12 +860,10 @@ describe("google transport stream", () => {
       } as never,
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true },
-    });
-    expect(params.generationConfig).not.toMatchObject({
-      thinkingConfig: { thinkingBudget: 0 },
-    });
+    const generationConfig = requireGenerationConfig(params);
+    const thinkingConfig = requireThinkingConfig(generationConfig);
+    expect(thinkingConfig.includeThoughts).toBe(true);
+    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
   });
 
   it.each([
@@ -592,13 +883,11 @@ describe("google transport stream", () => {
         } as never,
       );
 
-      expect(params.generationConfig).toMatchObject({
-        maxOutputTokens: 128,
-        thinkingConfig: { thinkingLevel: level },
-      });
-      expect(params.generationConfig).not.toMatchObject({
-        thinkingConfig: { thinkingBudget: 0 },
-      });
+      const generationConfig = requireGenerationConfig(params);
+      const thinkingConfig = requireThinkingConfig(generationConfig);
+      expect(generationConfig.maxOutputTokens).toBe(128);
+      expect(thinkingConfig.thinkingLevel).toBe(level);
+      expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
     },
   );
 
@@ -616,12 +905,13 @@ describe("google transport stream", () => {
       } as never,
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true, thinkingLevel: "MEDIUM" },
+    const generationConfig = requireGenerationConfig(params);
+    const thinkingConfig = requireThinkingConfig(generationConfig);
+    expect(thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "MEDIUM",
     });
-    expect(params.generationConfig).not.toMatchObject({
-      thinkingConfig: { thinkingBudget: 8192 },
-    });
+    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
   });
 
   it("keeps adaptive Gemini 3 thinking on provider dynamic defaults", () => {
@@ -635,15 +925,11 @@ describe("google transport stream", () => {
       } as never,
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true },
-    });
-    expect(params.generationConfig).not.toMatchObject({
-      thinkingConfig: { thinkingLevel: expect.any(String) },
-    });
-    expect(params.generationConfig).not.toMatchObject({
-      thinkingConfig: { thinkingBudget: expect.any(Number) },
-    });
+    const generationConfig = requireGenerationConfig(params);
+    const thinkingConfig = requireThinkingConfig(generationConfig);
+    expect(thinkingConfig.includeThoughts).toBe(true);
+    expect(thinkingConfig).not.toHaveProperty("thinkingLevel");
+    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
   });
 
   it("maps adaptive Gemini 2.5 thinking to dynamic thinkingBudget", () => {
@@ -657,8 +943,10 @@ describe("google transport stream", () => {
       } as never,
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+    const generationConfig = requireGenerationConfig(params);
+    expect(requireThinkingConfig(generationConfig)).toEqual({
+      includeThoughts: true,
+      thinkingBudget: -1,
     });
   });
 
@@ -676,8 +964,10 @@ describe("google transport stream", () => {
       } as never,
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+    const generationConfig = requireGenerationConfig(params);
+    expect(requireThinkingConfig(generationConfig)).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "LOW",
     });
   });
 
@@ -763,8 +1053,10 @@ describe("google transport stream", () => {
       { reasoning },
     );
 
-    expect(params.generationConfig).toMatchObject({
-      thinkingConfig: { includeThoughts: true, thinkingBudget: expectedBudget },
+    const generationConfig = requireGenerationConfig(params);
+    expect(requireThinkingConfig(generationConfig)).toEqual({
+      includeThoughts: true,
+      thinkingBudget: expectedBudget,
     });
   });
 
@@ -831,7 +1123,8 @@ describe("google transport stream", () => {
       "text_end",
       "done",
     ]);
-    expect(events[3]).toMatchObject({ type: "thinking_delta", delta: "" });
+    expect(events[3]?.type).toBe("thinking_delta");
+    expect(events[3]).toHaveProperty("delta", "");
   });
 
   it("starts a thinking block for thoughtSignature-only parts that arrive before any text", async () => {

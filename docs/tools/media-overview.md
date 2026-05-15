@@ -14,6 +14,12 @@ media capabilities are tool-driven: the agent decides when to use them based
 on the conversation, and each tool only appears when at least one backing
 provider is configured.
 
+Live speech uses the Talk session contract instead of the one-shot media tool
+path. Talk has three modes: provider-native `realtime`, local or streaming
+`stt-tts`, and `transcription` for observe-only speech capture. Those modes
+share provider catalogs, event envelopes, and cancellation semantics with
+telephony, meetings, browser realtime, and native push-to-talk clients.
+
 ## Capabilities
 
 <CardGroup cols={2}>
@@ -61,7 +67,7 @@ provider is configured.
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral     |       |       |       |     |  ✓  |                |                     |
 | OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |       |  ✓  |     |                |          ✓          |
+| OpenRouter  |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
 | Qwen        |       |   ✓   |       |     |     |                |                     |
 | Runway      |       |   ✓   |       |     |     |                |                     |
 | SenseAudio  |       |       |       |     |  ✓  |                |                     |
@@ -99,7 +105,7 @@ the generated media fallback directly to the original channel.
 
 ## Speech-to-text and Voice Call
 
-Deepgram, DeepInfra, ElevenLabs, Mistral, OpenAI, SenseAudio, and xAI can all transcribe
+Deepgram, DeepInfra, ElevenLabs, Mistral, OpenAI, OpenRouter, SenseAudio, and xAI can all transcribe
 inbound audio through the batch `tools.media.audio` path when configured.
 Channel plugins that preflight a voice note for mention gating or command
 parsing mark the transcribed attachment on the inbound context, so the shared
@@ -109,6 +115,11 @@ STT call for the same audio.
 Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected
 vendor without waiting for a completed recording.
+
+For live user conversations, prefer [Talk mode](/nodes/talk). Batch audio
+attachments stay on the media path; browser realtime, native push-to-talk,
+telephony, and meeting audio should use Talk events and the session-scoped
+catalogs returned by the Gateway.
 
 ## Provider mappings (how vendors split across surfaces)
 
@@ -144,3 +155,4 @@ vendor without waiting for a completed recording.
 - [Text-to-speech](/tools/tts)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
+- [Talk mode](/nodes/talk)

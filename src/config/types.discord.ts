@@ -10,7 +10,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -129,13 +129,64 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceAllowedChannelConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID allowed for realtime voice sessions. */
+  channelId: string;
+};
+
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+
+export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
+
+export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
+
+export type DiscordVoiceRealtimeConfig = {
+  /** Realtime voice provider id, for example "openai". */
+  provider?: string;
+  /** Provider realtime session model, for example "gpt-realtime-2". */
+  model?: string;
+  /** Provider realtime output voice, for example "cedar". */
+  voice?: string;
+  /** System instructions passed to the realtime provider. */
+  instructions?: string;
+  /** Tool policy for bidi realtime consult calls. */
+  toolPolicy?: DiscordVoiceRealtimeToolPolicy;
+  /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
+  consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Allow Discord speaker-start events to interrupt active realtime playback. */
+  bargeIn?: boolean;
+  /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
+  minBargeInAudioEndMs?: number;
+  /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
+  debounceMs?: number;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, Record<string, unknown> | undefined>;
+};
+
+export type DiscordVoiceAgentSessionConfig = {
+  /** Which OpenClaw conversation should receive voice turns. Default: "voice". */
+  mode?: "voice" | "target";
+  /** Discord target used when mode is "target", for example "channel:123". */
+  target?: string;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Voice conversation mode. Default: agent-proxy. */
+  mode?: DiscordVoiceMode;
+  /** Route voice turns through an existing OpenClaw Discord conversation. */
+  agentSession?: DiscordVoiceAgentSessionConfig;
   /** Optional LLM model override for Discord voice channel responses. */
   model?: string;
+  /** Realtime provider settings for agent-proxy or bidi modes. */
+  realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
+  allowedChannels?: DiscordVoiceAllowedChannelConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
@@ -144,6 +195,8 @@ export type DiscordVoiceConfig = {
   connectTimeoutMs?: number;
   /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
   reconnectGraceMs?: number;
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
@@ -267,6 +320,20 @@ export type DiscordAccountConfig = {
   gatewayRuntimeReadyTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
+  /**
+   * Sliding-window guard that suppresses runaway two-bot exchanges. Default on
+   * whenever `allowBots` lets bot messages reach dispatch. See #58789.
+   */
+  botLoopProtection?: {
+    /** Enable the bot-pair sliding-window guard (default: true when allowBots is set). */
+    enabled?: boolean;
+    /** Maximum messages a single bot pair may exchange in the configured window. Default: 20. */
+    maxEventsPerWindow?: number;
+    /** Sliding window length in seconds. Default: 60. */
+    windowSeconds?: number;
+    /** Cooldown seconds applied to a bot pair after the limit is hit. Default: 60. */
+    cooldownSeconds?: number;
+  };
   /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
@@ -396,9 +463,3 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    discord?: DiscordConfig;
-  }
-}

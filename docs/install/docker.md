@@ -51,6 +51,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
     - prompt for provider API keys
     - generate a gateway token and write it to `.env`
+    - create the auth-profile secret key directory
     - start the gateway via Docker Compose
 
     During setup, pre-start onboarding and config writes run through
@@ -257,19 +258,23 @@ For gotchas and troubleshooting, see [Bonjour discovery](/gateway/bonjour).
 
 ### Storage and persistence
 
-Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
-`OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
-survive container replacement. When either variable is unset, the bundled
-`docker-compose.yml` falls back to `${HOME}/.openclaw` (and
-`${HOME}/.openclaw/workspace` for the workspace mount), or `/tmp/.openclaw`
-when `HOME` itself is also missing. That keeps `docker compose up` from
-emitting an empty-source volume spec on bare environments.
+Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`,
+`OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, and
+`OPENCLAW_AUTH_PROFILE_SECRET_DIR` to `/home/node/.config/openclaw`, so those
+paths survive container replacement. When any variable is unset, the bundled
+`docker-compose.yml` falls back under `${HOME}`, or `/tmp` when `HOME` itself is
+also missing. That keeps `docker compose up` from emitting an empty-source
+volume spec on bare environments.
 
 That mounted config directory is where OpenClaw keeps:
 
 - `openclaw.json` for behavior config
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
+
+The auth-profile secret key directory stores the local encryption key used for
+OAuth-backed auth profile token material. Keep it with your Docker host state,
+but separate from `OPENCLAW_CONFIG_DIR`.
 
 Installed downloadable plugins store their package state under the mounted
 OpenClaw home, so plugin install records and package roots survive container
@@ -314,7 +319,9 @@ See [ClawDock](/install/clawdock) for the full helper guide.
 
     The script mounts `docker.sock` only after sandbox prerequisites pass. If
     sandbox setup cannot complete, the script resets `agents.defaults.sandbox.mode`
-    to `off`.
+    to `off`. Codex code-mode turns are still constrained to Codex
+    `workspace-write` while the OpenClaw sandbox is active; do not mount the
+    host Docker socket into agent sandbox containers.
 
   </Accordion>
 
@@ -335,6 +342,32 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
   </Accordion>
 
+  <Accordion title="Docker Desktop DNS failures in openclaw-cli">
+    Some Docker Desktop setups fail DNS lookups from the shared-network
+    `openclaw-cli` sidecar after `NET_RAW` is dropped, which shows up as
+    `EAI_AGAIN` during npm-backed commands such as `openclaw plugins install`.
+    Keep the default hardened compose file for normal gateway operation. The
+    local override below loosens the CLI container's security posture by
+    restoring Docker's default capabilities, so use it only for the one-off CLI
+    command that needs package registry access, not as your default Compose
+    invocation:
+
+    ```bash
+    printf '%s\n' \
+      'services:' \
+      '  openclaw-cli:' \
+      '    cap_drop: !reset []' \
+      > docker-compose.cli-no-dropped-caps.local.yml
+
+    docker compose -f docker-compose.yml -f docker-compose.cli-no-dropped-caps.local.yml run --rm openclaw-cli plugins install <package>
+    ```
+
+    If you already created a long-running `openclaw-cli` container, recreate it
+    with the same override. `docker compose exec` and `docker exec` cannot
+    change Linux capabilities on an already-created container.
+
+  </Accordion>
+
   <Accordion title="Permissions and EACCES">
     The image runs as `node` (uid 1000). If you see permission errors on
     `/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000:
@@ -342,6 +375,14 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     ```bash
     sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
     ```
+
+    The same mismatch can show up as a plugin warning such as
+    `blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)`
+    followed by `plugin present but blocked`. That means the process uid and the
+    mounted plugin directory owner disagree. Prefer running the container as the
+    default uid 1000 and fixing the bind mount ownership. Only chown
+    `/path/to/openclaw-config/npm` to `root:root` if you intentionally run
+    OpenClaw as root long term.
 
   </Accordion>
 
@@ -375,14 +416,15 @@ See [ClawDock](/install/clawdock) for the full helper guide.
 
     1. **Persist `/home/node`**: `export OPENCLAW_HOME_VOLUME="openclaw_home"`
     2. **Bake system deps**: `export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"`
-    3. **Install Playwright browsers**:
+    3. **Bake Playwright Chromium**: `export OPENCLAW_INSTALL_BROWSER=1`
+    4. **Or install Playwright browsers into a persisted volume**:
        ```bash
        docker compose run --rm openclaw-cli \
          node /app/node_modules/playwright-core/cli.js install chromium
        ```
-    4. **Persist browser downloads**: set
-       `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` and use
-       `OPENCLAW_HOME_VOLUME` or `OPENCLAW_EXTRA_MOUNTS`.
+    5. **Persist browser downloads**: use `OPENCLAW_HOME_VOLUME` or
+       `OPENCLAW_EXTRA_MOUNTS`. OpenClaw auto-detects the Docker image's
+       Playwright-managed Chromium on Linux.
 
   </Accordion>
 
@@ -393,8 +435,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The main Docker runtime image uses `node:24-bookworm-slim` and publishes OCI
-    base-image annotations including `org.opencontainers.image.base.name`,
+    The main Docker runtime image uses `node:24-bookworm-slim` and includes `tini` as the entrypoint init process (PID 1) to ensure zombie processes are reaped and signals are handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name`,
     `org.opencontainers.image.source`, and others. The Node base digest is
     refreshed through Dependabot Docker base-image PRs; release builds do not run
     a distro upgrade layer. See

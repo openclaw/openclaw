@@ -73,21 +73,37 @@ describe("cron service timer seam coverage", () => {
 
     const persisted = await loadCronStore(storePath);
     const job = persisted.jobs[0];
-    expect(job).toBeDefined();
-    expect(job?.state.lastStatus).toBe("ok");
-    expect(job?.state.runningAtMs).toBeUndefined();
-    expect(job?.state.nextRunAtMs).toBe(now + 60_000);
-    expect(findTaskByRunId(`cron:main-heartbeat-job:${now}`)).toMatchObject({
-      runtime: "cron",
-      status: "succeeded",
-      endedAt: now,
-      cleanupAfter: expect.any(Number),
-    });
+    if (!job) {
+      throw new Error("expected persisted heartbeat cron job");
+    }
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBe(now + 60_000);
+    const task = findTaskByRunId(`cron:main-heartbeat-job:${now}`);
+    if (!task) {
+      throw new Error("expected cron task ledger record");
+    }
+    expect(task.runtime).toBe("cron");
+    expect(task.sourceId).toBe("main-heartbeat-job");
+    expect(task.ownerKey).toBe("");
+    expect(task.scopeKind).toBe("system");
+    expect(task.childSessionKey).toBe("agent:main:main");
+    expect(task.runId).toBe(`cron:main-heartbeat-job:${now}`);
+    expect(task.label).toBe("main heartbeat job");
+    expect(task.task).toBe("main heartbeat job");
+    expect(task.status).toBe("succeeded");
+    expect(task.deliveryStatus).toBe("not_applicable");
+    expect(task.notifyPolicy).toBe("silent");
+    expect(task.startedAt).toBe(now);
+    expect(task.lastEventAt).toBe(now);
+    expect(task.endedAt).toBe(now);
+    expect(task?.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((delay): delay is number => typeof delay === "number");
-    expect(delays.some((delay) => delay > 0)).toBe(true);
+    const positiveDelays = delays.filter((delay) => delay > 0);
+    expect(positiveDelays.length).toBeGreaterThan(0);
 
     timeoutSpy.mockRestore();
   });
@@ -97,6 +113,7 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
+    const ledgerError = new Error("disk full");
 
     await writeCronStoreSnapshot({
       storePath,
@@ -106,7 +123,7 @@ describe("cron service timer seam coverage", () => {
     const createTaskRecordSpy = vi
       .spyOn(detachedTaskRuntime, "createRunningTaskRun")
       .mockImplementation(() => {
-        throw new Error("disk full");
+        throw ledgerError;
       });
 
     const state = createCronServiceState({
@@ -122,7 +139,7 @@ describe("cron service timer seam coverage", () => {
     await onTimer(state);
 
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "main-heartbeat-job" }),
+      { jobId: "main-heartbeat-job", error: ledgerError },
       "cron: failed to create task ledger record",
     );
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {

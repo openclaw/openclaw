@@ -128,7 +128,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(first.pagePaths).toHaveLength(3);
 
     const sourcePages = await fs.readdir(path.join(vaultDir, "sources"));
-    expect(sourcePages.filter((name) => name.startsWith("bridge-"))).toHaveLength(3);
+    expect(
+      sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
+    ).toBe(3);
 
     const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(memoryPage).toContain("sourceType: memory-bridge");
@@ -152,15 +154,13 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const result = await syncMemoryWikiBridgeSources({ config });
 
-    expect(result).toMatchObject({
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    });
+    expect(result.importedCount).toBe(0);
+    expect(result.updatedCount).toBe(0);
+    expect(result.skippedCount).toBe(0);
+    expect(result.removedCount).toBe(0);
+    expect(result.artifactCount).toBe(0);
+    expect(result.workspaces).toBe(0);
+    expect(result.pagePaths).toEqual([]);
   });
 
   it("returns a no-op result when bridge mode is enabled without exported memory artifacts", async () => {
@@ -187,15 +187,13 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const result = await syncMemoryWikiBridgeSources({ config, appConfig });
 
-    expect(result).toMatchObject({
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    });
+    expect(result.importedCount).toBe(0);
+    expect(result.updatedCount).toBe(0);
+    expect(result.skippedCount).toBe(0);
+    expect(result.removedCount).toBe(0);
+    expect(result.artifactCount).toBe(0);
+    expect(result.workspaces).toBe(0);
+    expect(result.pagePaths).toEqual([]);
   });
 
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
@@ -287,7 +285,9 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
     const firstPagePath = first.pagePaths[0] ?? "";
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
+      "# Durable Memory",
+    );
 
     await fs.rm(path.join(workspaceDir, "MEMORY.md"));
     registerBridgeArtifacts([]);
@@ -295,9 +295,10 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     expect(second.artifactCount).toBe(0);
     expect(second.removedCount).toBe(1);
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   });
 
   it("refuses to overwrite bridge source pages through vault symlinks", async () => {
@@ -431,6 +432,8 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     expect(result.importedCount).toBe(1);
     expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
-    await expect(fs.stat(path.join(vaultDir, pagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, pagePath), "utf8")).resolves.toContain(
+      "# Deep Unicode Note",
+    );
   });
 });

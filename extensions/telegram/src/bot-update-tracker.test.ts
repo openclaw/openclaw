@@ -15,11 +15,23 @@ async function flushTrackerMicrotasks() {
 }
 
 function deferred() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((resolvePromise) => {
     resolve = resolvePromise;
   });
+  if (!resolve) {
+    throw new Error("Expected tracker deferred resolver to be initialized");
+  }
   return { promise, resolve };
+}
+
+function expectTrackerState(
+  state: TelegramUpdateTrackerState,
+  expected: Partial<TelegramUpdateTrackerState>,
+) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(state[key as keyof TelegramUpdateTrackerState]).toEqual(value);
+  }
 }
 
 describe("createTelegramUpdateTracker", () => {
@@ -45,7 +57,7 @@ describe("createTelegramUpdateTracker", () => {
     await flushTrackerMicrotasks();
 
     expect(onAcceptedUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
-    expect(tracker.getState()).toMatchObject({
+    expectTrackerState(tracker.getState(), {
       highestAcceptedUpdateId: 102,
       highestPersistedAcceptedUpdateId: 102,
       highestCompletedUpdateId: 102,
@@ -55,10 +67,48 @@ describe("createTelegramUpdateTracker", () => {
     } satisfies Partial<TelegramUpdateTrackerState>);
 
     tracker.finishUpdate(update101.update, { completed: true });
-    expect(tracker.getState()).toMatchObject({
+    expectTrackerState(tracker.getState(), {
       highestCompletedUpdateId: 102,
       safeCompletedUpdateId: 102,
       pendingUpdateIds: [],
+    } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
+  it("can persist offsets only after successful agent dispatch", async () => {
+    const onAcceptedUpdateId = vi.fn();
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: 100,
+      ackPolicy: "after_agent_dispatch",
+      onAcceptedUpdateId,
+    });
+
+    const update101 = tracker.beginUpdate(updateCtx(101));
+    if (!update101.accepted) {
+      throw new Error("expected update 101 to be accepted");
+    }
+    await flushTrackerMicrotasks();
+    expect(onAcceptedUpdateId).not.toHaveBeenCalled();
+
+    tracker.finishUpdate(update101.update, { completed: false });
+    await flushTrackerMicrotasks();
+    expect(onAcceptedUpdateId).not.toHaveBeenCalled();
+    expectTrackerState(tracker.getState(), {
+      failedUpdateIds: [101],
+      highestPersistedAcceptedUpdateId: 100,
+    } satisfies Partial<TelegramUpdateTrackerState>);
+
+    const retry = tracker.beginUpdate(updateCtx(101));
+    if (!retry.accepted) {
+      throw new Error("expected update 101 retry to be accepted");
+    }
+    tracker.finishUpdate(retry.update, { completed: true });
+    await flushTrackerMicrotasks();
+
+    expect(onAcceptedUpdateId).toHaveBeenCalledWith(101);
+    expectTrackerState(tracker.getState(), {
+      failedUpdateIds: [],
+      highestPersistedAcceptedUpdateId: 101,
+      safeCompletedUpdateId: 101,
     } satisfies Partial<TelegramUpdateTrackerState>);
   });
 
@@ -108,7 +158,7 @@ describe("createTelegramUpdateTracker", () => {
 
     await flushTrackerMicrotasks();
     expect(writes).toEqual([101]);
-    expect(tracker.getState()).toMatchObject({
+    expectTrackerState(tracker.getState(), {
       highestAcceptedUpdateId: 103,
       highestPersistedAcceptedUpdateId: 100,
     } satisfies Partial<TelegramUpdateTrackerState>);
@@ -120,7 +170,7 @@ describe("createTelegramUpdateTracker", () => {
 
     secondWrite.resolve();
     await flushTrackerMicrotasks();
-    expect(tracker.getState()).toMatchObject({
+    expectTrackerState(tracker.getState(), {
       highestPersistedAcceptedUpdateId: 103,
     } satisfies Partial<TelegramUpdateTrackerState>);
   });
@@ -133,7 +183,7 @@ describe("createTelegramUpdateTracker", () => {
     }
     tracker.finishUpdate(first.update, { completed: false });
 
-    expect(tracker.getState()).toMatchObject({
+    expectTrackerState(tracker.getState(), {
       highestAcceptedUpdateId: 201,
       highestCompletedUpdateId: 200,
       safeCompletedUpdateId: 200,
@@ -146,7 +196,7 @@ describe("createTelegramUpdateTracker", () => {
     }
     tracker.finishUpdate(retry.update, { completed: true });
 
-    expect(tracker.getState()).toMatchObject({
+    expectTrackerState(tracker.getState(), {
       highestAcceptedUpdateId: 201,
       highestCompletedUpdateId: 201,
       safeCompletedUpdateId: 201,

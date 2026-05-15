@@ -88,7 +88,17 @@ describe("buildDiscordInboundJob", () => {
       },
       ownerId: "user-1",
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    const serializedPayload = JSON.parse(JSON.stringify(job.payload));
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+      name: "codex",
+      parentId: "forum-1",
+      parent: {
+        id: "forum-1",
+        name: "Forum",
+      },
+      ownerId: "user-1",
+    });
   });
 
   it("normalizes partial thread channels without reading throwing getters", async () => {
@@ -115,7 +125,10 @@ describe("buildDiscordInboundJob", () => {
       parent: undefined,
       ownerId: undefined,
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    const serializedPayload = JSON.parse(JSON.stringify(job.payload));
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+    });
   });
 
   it("re-materializes the process context with an overridden abort signal", async () => {

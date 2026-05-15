@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { requestDiscord } from "@openclaw/discord/api.js";
+import {
+  DiscordApiError,
+  handleDiscordMessageAction,
+  requestDiscord,
+} from "@openclaw/discord/api.js";
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -34,12 +39,15 @@ type DiscordQaRuntimeEnv = {
   driverBotToken: string;
   sutBotToken: string;
   sutApplicationId: string;
+  voiceChannelId?: string;
 };
 
 type DiscordQaScenarioId =
   | "discord-canary"
   | "discord-mention-gating"
   | "discord-native-help-command-registration"
+  | "discord-voice-autojoin"
+  | "discord-thread-reply-filepath-attachment"
   | "discord-status-reactions-tool-only";
 
 type DiscordQaScenarioRun =
@@ -55,9 +63,18 @@ type DiscordQaScenarioRun =
       expectedCommandNames: string[];
     }
   | {
+      kind: "voice-autojoin";
+    }
+  | {
       kind: "status-reactions-tool-only";
       expectedSequence: string[];
       input: string;
+    }
+  | {
+      kind: "thread-reply-filepath-attachment";
+      expectedAttachmentFilename: string;
+      input: string;
+      replyContent: string;
     };
 
 type DiscordQaScenarioDefinition = LiveTransportScenarioDefinition<DiscordQaScenarioId> & {
@@ -74,11 +91,25 @@ type DiscordMessage = {
   id: string;
   channel_id: string;
   guild_id?: string;
+  attachments?: DiscordAttachment[];
   content?: string;
   reactions?: DiscordReaction[];
   timestamp?: string;
   author?: DiscordUser;
   referenced_message?: { id?: string } | null;
+};
+
+type DiscordAttachment = {
+  id?: string;
+  filename?: string;
+  size?: number;
+  url?: string;
+};
+
+type DiscordThread = {
+  id: string;
+  name?: string;
+  parent_id?: string;
 };
 
 type DiscordReaction = {
@@ -93,6 +124,21 @@ type DiscordReaction = {
 type DiscordApplicationCommand = {
   id: string;
   name?: string;
+};
+
+type DiscordChannel = {
+  id: string;
+  guild_id?: string;
+  name?: string;
+  parent_id?: string | null;
+  position?: number;
+  type: number;
+};
+
+type DiscordVoiceState = {
+  channel_id?: string | null;
+  guild_id?: string;
+  user_id?: string;
 };
 
 type DiscordObservedMessage = {
@@ -192,7 +238,28 @@ type DiscordStatusReactionTimeline = {
   triggerMessageId: string;
 };
 
+type DiscordThreadReplyAttachmentEvidence = {
+  attachmentFilenames: string[];
+  channelId?: string;
+  discordWebUrl?: string;
+  expectedAttachmentFilename: string;
+  guildId?: string;
+  htmlPath?: string;
+  messageContent?: string;
+  messageId?: string;
+  parentMessageId?: string;
+  scenarioId: DiscordQaScenarioId;
+  scenarioTitle: string;
+  screenshotPath?: string;
+  screenshotWarning?: string;
+  status: "pass" | "fail";
+  threadId: string;
+  threadName: string;
+};
+
 const DISCORD_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_CONTENT";
+const DISCORD_QA_CAPTURE_UI_METADATA_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA";
+const DISCORD_QA_KEEP_THREADS_ENV = "OPENCLAW_QA_DISCORD_KEEP_THREADS";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const DISCORD_QA_ENV_KEYS = [
   "OPENCLAW_QA_DISCORD_GUILD_ID",
@@ -244,6 +311,14 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
     }),
   },
   {
+    id: "discord-voice-autojoin",
+    title: "Discord voice auto-join connects",
+    timeoutMs: 60_000,
+    buildRun: () => ({
+      kind: "voice-autojoin",
+    }),
+  },
+  {
     id: "discord-status-reactions-tool-only",
     title: "Discord explicit status reactions run in tool-only reply mode",
     timeoutMs: 75_000,
@@ -260,10 +335,27 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
       };
     },
   },
+  {
+    id: "discord-thread-reply-filepath-attachment",
+    title: "Discord thread reply preserves filePath attachment",
+    timeoutMs: 45_000,
+    buildRun: () => {
+      const token = `DISCORD_QA_THREAD_FILE_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        kind: "thread-reply-filepath-attachment",
+        input: `Mantis Discord thread attachment parent ${token}`,
+        replyContent: `Mantis thread attachment reply ${token}`,
+        expectedAttachmentFilename: "mantis-thread-report.md",
+      };
+    },
+  },
 ];
 
 const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
-  (scenario) => scenario.id !== "discord-status-reactions-tool-only",
+  (scenario) =>
+    scenario.id !== "discord-status-reactions-tool-only" &&
+    scenario.id !== "discord-voice-autojoin" &&
+    scenario.id !== "discord-thread-reply-filepath-attachment",
 );
 
 const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
@@ -276,6 +368,7 @@ const discordQaCredentialPayloadSchema = z.object({
   driverBotToken: z.string().trim().min(1),
   sutBotToken: z.string().trim().min(1),
   sutApplicationId: z.string().trim().min(1),
+  voiceChannelId: z.string().trim().min(1).optional(),
 });
 
 function isDiscordSnowflake(value: string) {
@@ -302,12 +395,14 @@ function isTruthyOptIn(value: string | undefined) {
 }
 
 function resolveDiscordQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): DiscordQaRuntimeEnv {
+  const voiceChannelId = env.OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID?.trim();
   const runtimeEnv = {
     guildId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_GUILD_ID"),
     channelId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_CHANNEL_ID"),
     driverBotToken: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN"),
     sutBotToken: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN"),
     sutApplicationId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID"),
+    ...(voiceChannelId ? { voiceChannelId } : {}),
   };
   validateDiscordQaRuntimeEnv(runtimeEnv, "OPENCLAW_QA_DISCORD");
   return runtimeEnv;
@@ -317,6 +412,9 @@ function validateDiscordQaRuntimeEnv(runtimeEnv: DiscordQaRuntimeEnv, prefix: st
   assertDiscordSnowflake(runtimeEnv.guildId, `${prefix}_GUILD_ID`);
   assertDiscordSnowflake(runtimeEnv.channelId, `${prefix}_CHANNEL_ID`);
   assertDiscordSnowflake(runtimeEnv.sutApplicationId, `${prefix}_SUT_APPLICATION_ID`);
+  if (runtimeEnv.voiceChannelId) {
+    assertDiscordSnowflake(runtimeEnv.voiceChannelId, `${prefix}_VOICE_CHANNEL_ID`);
+  }
 }
 
 function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
@@ -327,6 +425,7 @@ function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv 
     driverBotToken: parsed.driverBotToken,
     sutBotToken: parsed.sutBotToken,
     sutApplicationId: parsed.sutApplicationId,
+    ...(parsed.voiceChannelId ? { voiceChannelId: parsed.voiceChannelId } : {}),
   };
   validateDiscordQaRuntimeEnv(runtimeEnv, "Discord credential payload");
   return runtimeEnv;
@@ -343,6 +442,10 @@ function buildDiscordQaConfig(
   },
   options: {
     statusReactionsToolOnly?: boolean;
+    voiceAutoJoin?: {
+      channelId: string;
+      guildId: string;
+    };
   } = {},
 ): OpenClawConfig {
   const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "discord"])];
@@ -376,6 +479,13 @@ function buildDiscordQaConfig(
           visibleReplies: "automatic" as const,
         },
       };
+  const voiceConfig = options.voiceAutoJoin
+    ? {
+        ...baseCfg.channels?.discord?.voice,
+        enabled: true,
+        autoJoin: [options.voiceAutoJoin],
+      }
+    : undefined;
   return {
     ...baseCfg,
     plugins: {
@@ -389,6 +499,7 @@ function buildDiscordQaConfig(
       discord: {
         enabled: true,
         defaultAccount: params.sutAccountId,
+        ...(voiceConfig ? { voice: voiceConfig } : {}),
         accounts: {
           [params.sutAccountId]: {
             enabled: true,
@@ -419,6 +530,125 @@ async function getCurrentDiscordUser(token: string) {
   return await requestDiscord<DiscordUser>("/users/@me", token, {
     timeoutMs: 15_000,
   });
+}
+
+async function listGuildChannels(params: { token: string; guildId: string }) {
+  return await requestDiscord<DiscordChannel[]>(
+    `/guilds/${params.guildId}/channels`,
+    params.token,
+    {
+      timeoutMs: 15_000,
+    },
+  );
+}
+
+async function getDiscordChannel(params: { token: string; channelId: string }) {
+  return await requestDiscord<DiscordChannel>(`/channels/${params.channelId}`, params.token, {
+    timeoutMs: 15_000,
+  });
+}
+
+function isDiscordVoiceChannel(channel: DiscordChannel) {
+  return channel.type === 2 || channel.type === 13;
+}
+
+function formatDiscordChannelLabel(channel: DiscordChannel) {
+  return channel.name?.trim() ? `${channel.name} (${channel.id})` : channel.id;
+}
+
+async function resolveDiscordQaVoiceChannel(params: {
+  guildId: string;
+  token: string;
+  voiceChannelId?: string;
+}) {
+  if (params.voiceChannelId) {
+    const channel = await getDiscordChannel({
+      token: params.token,
+      channelId: params.voiceChannelId,
+    });
+    if (!isDiscordVoiceChannel(channel)) {
+      throw new Error(`Discord voiceChannelId ${params.voiceChannelId} is not a voice channel.`);
+    }
+    if (channel.guild_id && channel.guild_id !== params.guildId) {
+      throw new Error(
+        `Discord voiceChannelId ${params.voiceChannelId} belongs to guild ${channel.guild_id}, not ${params.guildId}.`,
+      );
+    }
+    return channel;
+  }
+
+  const channels = await listGuildChannels({ token: params.token, guildId: params.guildId });
+  const voiceChannels = channels
+    .filter(isDiscordVoiceChannel)
+    .toSorted(
+      (a, b) =>
+        (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER) ||
+        (a.name ?? "").localeCompare(b.name ?? "") ||
+        a.id.localeCompare(b.id),
+    );
+  const first = voiceChannels[0];
+  if (!first) {
+    throw new Error(
+      "Discord voice auto-join scenario could not find a visible voice/stage channel for the SUT bot. Add voiceChannelId to the Convex discord credential payload or set OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID.",
+    );
+  }
+  return first;
+}
+
+async function getCurrentDiscordVoiceState(params: { token: string; guildId: string }) {
+  try {
+    return await requestDiscord<DiscordVoiceState>(
+      `/guilds/${params.guildId}/voice-states/@me`,
+      params.token,
+      {
+        timeoutMs: 15_000,
+      },
+    );
+  } catch (error) {
+    if (error instanceof DiscordApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function waitForDiscordVoiceState(params: {
+  channelId: string;
+  guildId: string;
+  sutBotId: string;
+  timeoutMs: number;
+  token: string;
+}) {
+  const startedAt = Date.now();
+  let lastState: DiscordVoiceState | null = null;
+  let lastError: string | undefined;
+  while (Date.now() - startedAt < params.timeoutMs) {
+    try {
+      const state = await getCurrentDiscordVoiceState({
+        token: params.token,
+        guildId: params.guildId,
+      });
+      lastState = state;
+      lastError = undefined;
+      if (
+        state?.channel_id === params.channelId &&
+        (!state.user_id || state.user_id === params.sutBotId)
+      ) {
+        return state;
+      }
+    } catch (error) {
+      lastError = formatErrorMessage(error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const stateDetails = lastState
+    ? `last voice state channel=${lastState.channel_id ?? "none"} user=${lastState.user_id ?? "unknown"}`
+    : "no current voice state";
+  throw new Error(
+    `SUT bot did not join Discord voice channel ${params.channelId} (${stateDetails}${
+      lastError ? `; last error: ${lastError}` : ""
+    })`,
+  );
 }
 
 async function sendChannelMessage(token: string, channelId: string, content: string) {
@@ -454,6 +684,52 @@ async function listChannelMessagesAfter(params: {
   });
   return await requestDiscord<DiscordMessage[]>(
     `/channels/${params.channelId}/messages?${query.toString()}`,
+    params.token,
+    {
+      timeoutMs: 15_000,
+    },
+  );
+}
+
+async function createThreadFromMessage(params: {
+  token: string;
+  channelId: string;
+  messageId: string;
+  name: string;
+}) {
+  return await requestDiscord<DiscordThread>(
+    `/channels/${params.channelId}/messages/${params.messageId}/threads`,
+    params.token,
+    {
+      body: {
+        name: params.name,
+        auto_archive_duration: 60,
+      },
+      timeoutMs: 15_000,
+    },
+  );
+}
+
+async function archiveDiscordThread(params: { token: string; threadId: string }) {
+  await requestDiscord<DiscordThread>(`/channels/${params.threadId}`, params.token, {
+    body: {
+      archived: true,
+    },
+    method: "PATCH",
+    timeoutMs: 15_000,
+  });
+}
+
+async function joinDiscordThread(params: { token: string; threadId: string }) {
+  await requestDiscord<void>(`/channels/${params.threadId}/thread-members/@me`, params.token, {
+    method: "PUT",
+    timeoutMs: 15_000,
+  });
+}
+
+async function listThreadMessages(params: { token: string; threadId: string }) {
+  return await requestDiscord<DiscordMessage[]>(
+    `/channels/${params.threadId}/messages?limit=50`,
     params.token,
     {
       timeoutMs: 15_000,
@@ -590,6 +866,11 @@ async function writeDiscordStatusReactionEvidence(params: {
     snapshots: params.timeline.snapshots,
   });
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
+  const screenshot = await writeHtmlScreenshot({ htmlPath, screenshotPath });
+  return { htmlPath, ...screenshot };
+}
+
+async function writeHtmlScreenshot(params: { htmlPath: string; screenshotPath: string }) {
   try {
     const browser = await chromium.launch({
       channel: "chrome",
@@ -597,18 +878,128 @@ async function writeDiscordStatusReactionEvidence(params: {
     });
     try {
       const page = await browser.newPage({ viewport: { width: 1104, height: 760 } });
-      await page.goto(pathToFileURL(htmlPath).toString(), {
+      await page.goto(pathToFileURL(params.htmlPath).toString(), {
         waitUntil: "domcontentloaded",
         timeout: 15_000,
       });
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      return { htmlPath, screenshotPath };
+      await fs.mkdir(path.dirname(params.screenshotPath), { recursive: true });
+      await writeExternalFileWithinRoot({
+        rootDir: path.dirname(params.screenshotPath),
+        path: path.basename(params.screenshotPath),
+        write: async (tempPath) => {
+          await page.screenshot({ path: tempPath, fullPage: true });
+        },
+      });
+      return { screenshotPath: params.screenshotPath };
     } finally {
       await browser.close();
     }
   } catch (error) {
-    return { htmlPath, screenshotWarning: formatErrorMessage(error) };
+    return { screenshotWarning: formatErrorMessage(error) };
   }
+}
+
+function renderDiscordThreadReplyAttachmentHtml(params: {
+  attachmentFilenames: readonly string[];
+  expectedAttachmentFilename: string;
+  messageContent?: string;
+  scenarioTitle: string;
+  status: "pass" | "fail";
+  threadName: string;
+}) {
+  const hasAttachment = params.attachmentFilenames.includes(params.expectedAttachmentFilename);
+  const attachmentRows =
+    params.attachmentFilenames.length > 0
+      ? params.attachmentFilenames
+          .map((filename) => `<span class="attachment">${escapeHtml(filename)}</span>`)
+          .join("")
+      : '<span class="missing">No attachments on the SUT thread reply</span>';
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(params.scenarioTitle)}</title>
+  <style>
+    body { margin: 0; background: #313338; color: #f2f3f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: 1040px; padding: 32px; }
+    h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; letter-spacing: 0; }
+    .sub { color: #b5bac1; margin-bottom: 24px; }
+    .message { background: #2b2d31; border-left: 4px solid ${hasAttachment ? "#23a55a" : "#da373c"}; padding: 20px; border-radius: 8px; }
+    .author { color: #f2f3f5; font-weight: 700; margin-bottom: 8px; }
+    .content { color: #dbdee1; line-height: 1.45; margin-bottom: 16px; }
+    .badge { display: inline-flex; align-items: center; border-radius: 16px; padding: 6px 10px; font-size: 13px; font-weight: 700; background: ${hasAttachment ? "#1f3b2d" : "#4a2527"}; border: 1px solid ${hasAttachment ? "#2d7d46" : "#a1282e"}; color: #f2f3f5; margin-bottom: 18px; }
+    .attachments { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    .attachment { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #5865f2; background: #202136; color: #cfd4ff; border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .attachment::before { content: "file"; color: #b5bac1; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 12px; text-transform: uppercase; }
+    .missing { color: #ffb4b4; border: 1px solid #a1282e; background: #3a2023; border-radius: 6px; padding: 10px 12px; }
+    .expected { color: #b5bac1; margin-top: 18px; font-size: 14px; }
+    code { color: #f2f3f5; background: #1e1f22; border-radius: 4px; padding: 2px 5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(params.scenarioTitle)}</h1>
+    <div class="sub">Thread: ${escapeHtml(params.threadName)}</div>
+    <section class="message">
+      <div class="author">OpenClaw Discord SUT</div>
+      <div class="badge">${params.status === "pass" ? "Attachment found" : "Attachment missing"}</div>
+      <div class="content">${escapeHtml(params.messageContent ?? "No SUT reply content captured")}</div>
+      <div class="attachments">${attachmentRows}</div>
+      <div class="expected">Expected attachment: <code>${escapeHtml(params.expectedAttachmentFilename)}</code></div>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+async function writeDiscordThreadReplyAttachmentEvidence(params: {
+  evidence: DiscordThreadReplyAttachmentEvidence;
+  outputDir: string;
+}) {
+  const htmlPath = path.join(params.outputDir, `${params.evidence.scenarioId}-attachment.html`);
+  const uiPath = params.evidence.discordWebUrl
+    ? path.join(params.outputDir, `${params.evidence.scenarioId}-ui.json`)
+    : undefined;
+  const screenshotPath = path.join(
+    params.outputDir,
+    `${params.evidence.scenarioId}-attachment.png`,
+  );
+  const html = renderDiscordThreadReplyAttachmentHtml({
+    attachmentFilenames: params.evidence.attachmentFilenames,
+    expectedAttachmentFilename: params.evidence.expectedAttachmentFilename,
+    messageContent: params.evidence.messageContent,
+    scenarioTitle: params.evidence.scenarioTitle,
+    status: params.evidence.status,
+    threadName: params.evidence.threadName,
+  });
+  await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
+  if (uiPath) {
+    await fs.writeFile(
+      uiPath,
+      `${JSON.stringify(
+        {
+          attachmentFilenames: params.evidence.attachmentFilenames,
+          channelId: params.evidence.channelId,
+          discordWebUrl: params.evidence.discordWebUrl,
+          expectedAttachmentFilename: params.evidence.expectedAttachmentFilename,
+          guildId: params.evidence.guildId,
+          messageContent: params.evidence.messageContent,
+          messageId: params.evidence.messageId,
+          parentMessageId: params.evidence.parentMessageId,
+          scenarioId: params.evidence.scenarioId,
+          scenarioTitle: params.evidence.scenarioTitle,
+          status: params.evidence.status,
+          threadId: params.evidence.threadId,
+          threadName: params.evidence.threadName,
+        },
+        null,
+        2,
+      )}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+  }
+  const screenshot = await writeHtmlScreenshot({ htmlPath, screenshotPath });
+  return { htmlPath, ...(uiPath ? { uiPath } : {}), ...screenshot };
 }
 
 async function observeStatusReactionTimeline(params: {
@@ -667,6 +1058,16 @@ function compareDiscordSnowflakes(a: string, b: string) {
   const left = BigInt(a);
   const right = BigInt(b);
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function buildDiscordWebMessageUrl(params: {
+  guildId: string;
+  messageId?: string;
+  threadId: string;
+}) {
+  return `https://discord.com/channels/${params.guildId}/${params.threadId}${
+    params.messageId ? `/${params.messageId}` : ""
+  }`;
 }
 
 function normalizeDiscordObservedMessage(message: DiscordMessage): DiscordObservedMessage | null {
@@ -728,6 +1129,158 @@ async function pollChannelMessages(params: {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Discord message`);
+}
+
+async function pollThreadReplyMessage(params: {
+  token: string;
+  threadId: string;
+  replyContent: string;
+  sutBotId: string;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const messages = await listThreadMessages({
+      token: params.token,
+      threadId: params.threadId,
+    });
+    const match = messages.find(
+      (message) =>
+        message.author?.id === params.sutBotId &&
+        Boolean(message.content?.includes(params.replyContent)),
+    );
+    if (match) {
+      return match;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return undefined;
+}
+
+async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
+  cfg: OpenClawConfig;
+  driverBotId: string;
+  outputDir: string;
+  runtimeEnv: DiscordQaRuntimeEnv;
+  scenario: DiscordQaScenarioDefinition;
+  scenarioRun: Extract<DiscordQaScenarioRun, { kind: "thread-reply-filepath-attachment" }>;
+  sutAccountId: string;
+  sutBotId: string;
+}) {
+  const captureUiMetadata = isTruthyOptIn(process.env[DISCORD_QA_CAPTURE_UI_METADATA_ENV]);
+  const keepThread = isTruthyOptIn(process.env[DISCORD_QA_KEEP_THREADS_ENV]);
+  const threadName = `mantis-thread-filepath-${randomUUID().slice(0, 8)}`;
+  const parent = await sendChannelMessage(
+    params.runtimeEnv.driverBotToken,
+    params.runtimeEnv.channelId,
+    params.scenarioRun.input,
+  );
+  const thread = await createThreadFromMessage({
+    token: params.runtimeEnv.driverBotToken,
+    channelId: params.runtimeEnv.channelId,
+    messageId: parent.id,
+    name: threadName,
+  });
+  const attachmentPath = path.join(params.outputDir, params.scenarioRun.expectedAttachmentFilename);
+  await fs.writeFile(
+    attachmentPath,
+    [
+      "# Mantis Discord Thread Attachment",
+      "",
+      `Parent message: ${parent.id}`,
+      `Thread: ${thread.id}`,
+      `Marker: ${params.scenarioRun.replyContent}`,
+      "",
+    ].join("\n"),
+    { encoding: "utf8", mode: 0o600 },
+  );
+
+  try {
+    await joinDiscordThread({
+      token: params.runtimeEnv.sutBotToken,
+      threadId: thread.id,
+    });
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        threadId: thread.id,
+        message: params.scenarioRun.replyContent,
+        filePath: attachmentPath,
+      },
+      cfg: params.cfg,
+      accountId: params.sutAccountId,
+      requesterSenderId: params.driverBotId,
+      mediaLocalRoots: [params.outputDir],
+      mediaReadFile: async (filePath) => await fs.readFile(filePath),
+    });
+
+    const reply = await pollThreadReplyMessage({
+      token: params.runtimeEnv.driverBotToken,
+      threadId: thread.id,
+      replyContent: params.scenarioRun.replyContent,
+      sutBotId: params.sutBotId,
+      timeoutMs: params.scenario.timeoutMs,
+    });
+    const attachmentFilenames = (reply?.attachments ?? [])
+      .map((attachment) => attachment.filename?.trim() ?? "")
+      .filter(Boolean)
+      .toSorted();
+    const status = attachmentFilenames.includes(params.scenarioRun.expectedAttachmentFilename)
+      ? "pass"
+      : "fail";
+    const discordWebUrl = buildDiscordWebMessageUrl({
+      guildId: params.runtimeEnv.guildId,
+      messageId: reply?.id,
+      threadId: thread.id,
+    });
+    const evidence: DiscordThreadReplyAttachmentEvidence = {
+      attachmentFilenames,
+      ...(captureUiMetadata
+        ? {
+            channelId: params.runtimeEnv.channelId,
+            discordWebUrl,
+            guildId: params.runtimeEnv.guildId,
+            parentMessageId: parent.id,
+          }
+        : {}),
+      expectedAttachmentFilename: params.scenarioRun.expectedAttachmentFilename,
+      messageContent: reply?.content,
+      messageId: reply?.id,
+      scenarioId: params.scenario.id,
+      scenarioTitle: params.scenario.title,
+      status,
+      threadId: thread.id,
+      threadName,
+    };
+    const artifactEvidence = await writeDiscordThreadReplyAttachmentEvidence({
+      evidence,
+      outputDir: params.outputDir,
+    });
+    return {
+      id: params.scenario.id,
+      title: params.scenario.title,
+      status,
+      details:
+        status === "pass"
+          ? `thread reply attached ${params.scenarioRun.expectedAttachmentFilename}`
+          : reply
+            ? `thread reply omitted ${params.scenarioRun.expectedAttachmentFilename}; saw ${attachmentFilenames.join(", ") || "no attachments"}`
+            : "thread reply was not observed",
+      artifactPaths: {
+        attachmentSource: attachmentPath,
+        html: artifactEvidence.htmlPath,
+        ...(artifactEvidence.screenshotPath ? { screenshot: artifactEvidence.screenshotPath } : {}),
+        ...(artifactEvidence.uiPath ? { ui: artifactEvidence.uiPath } : {}),
+      },
+    } satisfies DiscordQaScenarioResult;
+  } finally {
+    if (!keepThread) {
+      await archiveDiscordThread({
+        token: params.runtimeEnv.driverBotToken,
+        threadId: thread.id,
+      }).catch(() => {});
+    }
+  }
 }
 
 async function waitForDiscordChannelRunning(
@@ -980,9 +1533,17 @@ export async function runDiscordQaLive(params: {
   const statusReactionScenarioRequested = scenarios.some(
     (scenario) => scenario.id === "discord-status-reactions-tool-only",
   );
+  const voiceAutoJoinScenarioRequested = scenarios.some(
+    (scenario) => scenario.id === "discord-voice-autojoin",
+  );
   if (statusReactionScenarioRequested && scenarios.length > 1) {
     throw new Error(
       "discord-status-reactions-tool-only must run by itself because it changes Discord tool-only reply config.",
+    );
+  }
+  if (voiceAutoJoinScenarioRequested && scenarios.length > 1) {
+    throw new Error(
+      "discord-voice-autojoin must run by itself because it changes Discord voice auto-join config.",
     );
   }
 
@@ -1021,6 +1582,13 @@ export async function runDiscordQaLive(params: {
         "Discord QA SUT application id must match the SUT bot user id returned by Discord.",
       );
     }
+    const voiceChannel = voiceAutoJoinScenarioRequested
+      ? await resolveDiscordQaVoiceChannel({
+          guildId: runtimeEnv.guildId,
+          token: runtimeEnv.sutBotToken,
+          voiceChannelId: runtimeEnv.voiceChannelId,
+        })
+      : undefined;
 
     const gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
@@ -1044,7 +1612,15 @@ export async function runDiscordQaLive(params: {
             sutAccountId,
             sutBotToken: runtimeEnv.sutBotToken,
           },
-          { statusReactionsToolOnly: statusReactionScenarioRequested },
+          voiceChannel
+            ? {
+                voiceAutoJoin: {
+                  guildId: runtimeEnv.guildId,
+                  channelId: voiceChannel.id,
+                },
+                statusReactionsToolOnly: statusReactionScenarioRequested,
+              }
+            : { statusReactionsToolOnly: statusReactionScenarioRequested },
         ),
     });
     try {
@@ -1069,6 +1645,50 @@ export async function runDiscordQaLive(params: {
                 ? "native command registered"
                 : `native command registered (${registered.commandNames.join(", ")})`,
             });
+            continue;
+          }
+          if (scenarioRun.kind === "voice-autojoin") {
+            if (!voiceChannel) {
+              throw new Error("Discord voice auto-join scenario did not resolve a voice channel.");
+            }
+            await waitForDiscordVoiceState({
+              token: runtimeEnv.sutBotToken,
+              guildId: runtimeEnv.guildId,
+              channelId: voiceChannel.id,
+              sutBotId: sutIdentity.id,
+              timeoutMs: scenario.timeoutMs,
+            });
+            scenarioResults.push({
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details: redactPublicMetadata
+                ? "SUT bot joined voice channel"
+                : `SUT bot joined voice channel ${formatDiscordChannelLabel(voiceChannel)}`,
+            });
+            continue;
+          }
+          if (scenarioRun.kind === "thread-reply-filepath-attachment") {
+            const result = await runDiscordThreadReplyFilePathAttachmentScenario({
+              cfg: buildDiscordQaConfig(
+                {},
+                {
+                  guildId: runtimeEnv.guildId,
+                  channelId: runtimeEnv.channelId,
+                  driverBotId: driverIdentity.id,
+                  sutAccountId,
+                  sutBotToken: runtimeEnv.sutBotToken,
+                },
+              ),
+              driverBotId: driverIdentity.id,
+              outputDir,
+              runtimeEnv,
+              scenario,
+              scenarioRun,
+              sutAccountId,
+              sutBotId: sutIdentity.id,
+            });
+            scenarioResults.push(result);
             continue;
           }
           const sent = await sendChannelMessage(
@@ -1295,16 +1915,20 @@ export const __testing = {
   assertDiscordScenarioReply,
   assertDiscordApplicationCommandsRegistered,
   buildDiscordQaConfig,
+  buildDiscordWebMessageUrl,
   buildObservedMessagesArtifact,
   findScenario,
   getCurrentDiscordUser,
   getChannelMessage,
+  getCurrentDiscordVoiceState,
   listApplicationCommands,
+  resolveDiscordQaVoiceChannel,
   matchesDiscordScenarioReply,
   normalizeDiscordReactionSnapshot,
   normalizeDiscordObservedMessage,
   parseDiscordQaCredentialPayload,
   renderDiscordStatusReactionHtml,
+  renderDiscordThreadReplyAttachmentHtml,
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -19,6 +20,15 @@ import {
   type PluginDependencySpecMap,
 } from "./status-dependencies.js";
 
+function isRelativePathInsideOrEqual(relativePath: string): boolean {
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath))
+  );
+}
+
 function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | undefined {
   if (!record.packageJson?.path) {
     return undefined;
@@ -26,7 +36,7 @@ function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | un
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = path.resolve(rootDir, record.packageJson.path);
   const relative = path.relative(rootDir, packageJsonPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isRelativePathInsideOrEqual(relative)) {
     return undefined;
   }
   return packageJsonPath;
@@ -126,11 +136,11 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   const relative = path.relative(rootDir, packageJsonPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isRelativePathInsideOrEqual(relative)) {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
-  try {
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
+  const packageJson = tryReadJsonSync<PackageManifest>(packageJsonPath);
+  if (packageJson) {
     const packageManifest = getPackageManifestMetadata(packageJson);
     const dependencies = normalizePluginDependencySpecs({
       dependencies: packageJson.dependencies,
@@ -158,9 +168,8 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
       packageDependencies: dependencies.dependencies,
       packageOptionalDependencies: dependencies.optionalDependencies,
     };
-  } catch {
-    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
+  return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
 }
 
 function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate {

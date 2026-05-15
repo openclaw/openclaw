@@ -1,7 +1,10 @@
-// Public agent/model/runtime helpers for plugins that integrate with core agent flows.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused agent/runtime subpaths
+ * and avoid adding new imports here.
+ */
 
 export * from "../agents/agent-scope.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export * from "../agents/current-time.js";
 export * from "../agents/date-time.js";
 export * from "../agents/defaults.js";
@@ -10,6 +13,7 @@ export * from "../agents/identity.js";
 export * from "../agents/model-auth-markers.js";
 export * from "../agents/model-auth.js";
 export * from "../agents/model-catalog.js";
+export * from "../agents/model-catalog-scope.js";
 export * from "../agents/model-selection.js";
 export * from "../agents/simple-completion-runtime.js";
 export * from "../agents/pi-embedded-block-chunker.js";
@@ -32,7 +36,7 @@ export {
   CODEX_CLI_PROFILE_ID,
   dedupeProfileIds,
   listProfilesForProvider,
-  markAuthProfileGood,
+  markAuthProfileSuccess,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
@@ -54,8 +58,9 @@ export {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
-  markAuthProfileUsed,
+  refreshOAuthCredentialForRuntime,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   resolveApiKeyForProfile,
@@ -68,6 +73,8 @@ export {
 export type {
   ApiKeyCredential,
   AuthCredentialReasonCode,
+  AuthProfileBlockedReason,
+  AuthProfileBlockedSource,
   AuthProfileCredential,
   AuthProfileEligibilityReasonCode,
   AuthProfileFailureReason,

@@ -1,5 +1,6 @@
+import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
@@ -37,6 +38,7 @@ vi.mock("./monitor.state.js", async (importOriginal) => {
 });
 
 import type { RuntimeEnv } from "../runtime-api.js";
+import { resolveRequestClientIp } from "./monitor-transport-runtime-api.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -44,7 +46,7 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
-import { monitorWebhook } from "./monitor.transport.js";
+import { buildFeishuWebhookRateLimitKeyForTest, monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 async function waitForSlowBodyTimeoutResponse(
@@ -150,9 +152,25 @@ async function waitForOversizedBodyResponse(url: string): Promise<string> {
   });
 }
 
+function resolveTestClientIp(remoteAddress: string | undefined): string | undefined {
+  return resolveRequestClientIp({
+    headers: {},
+    socket: { remoteAddress },
+  } as IncomingMessage);
+}
+
 afterEach(() => {
   clearFeishuWebhookRateLimitStateForTest();
   stopFeishuMonitor();
+});
+
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("@larksuiteoapi/node-sdk");
+  vi.doUnmock("./monitor.state.js");
+  vi.resetModules();
 });
 
 describe("Feishu webhook security hardening", () => {
@@ -302,6 +320,51 @@ describe("Feishu webhook security hardening", () => {
 
         expect(saw429).toBe(true);
       },
+    );
+  });
+
+  it("uses one webhook rate-limit key for loopback address-family variants", () => {
+    const base = {
+      accountId: "rate-limit-key",
+      path: "/hook-rate-limit-key",
+    };
+
+    expect([
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("127.0.0.1"),
+      }),
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("127.0.0.42"),
+      }),
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("::ffff:127.0.0.1"),
+      }),
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("::1"),
+      }),
+    ]).toEqual([
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+    ]);
+  });
+
+  it("keeps non-loopback and unknown webhook rate-limit key suffixes distinct", () => {
+    const base = {
+      accountId: "rate-limit-key",
+      path: "/hook-rate-limit-key",
+    };
+
+    expect(buildFeishuWebhookRateLimitKeyForTest({ ...base, clientIp: "10.0.0.1" })).toBe(
+      "rate-limit-key:/hook-rate-limit-key:10.0.0.1",
+    );
+    expect(buildFeishuWebhookRateLimitKeyForTest(base)).toBe(
+      "rate-limit-key:/hook-rate-limit-key:unknown",
     );
   });
 

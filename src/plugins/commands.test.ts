@@ -59,7 +59,6 @@ function createBundledPluginRecord(id: string): PluginRecord {
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -102,13 +101,18 @@ function expectCommandMatch(
   commandBody: string,
   params: { name: string; pluginId: string; args: string },
 ) {
-  expect(matchPluginCommand(commandBody)).toMatchObject({
-    command: expect.objectContaining({
-      name: params.name,
-      pluginId: params.pluginId,
-    }),
-    args: params.args,
-  });
+  const match = requirePluginCommandMatch(commandBody);
+  expect(match.command.name).toBe(params.name);
+  expect(match.command.pluginId).toBe(params.pluginId);
+  expect(match.args).toBe(params.args);
+}
+
+function requirePluginCommandMatch(commandBody: string) {
+  const match = matchPluginCommand(commandBody);
+  if (!match) {
+    throw new Error(`expected plugin command match for ${commandBody}`);
+  }
+  return match;
 }
 
 function expectProviderCommandSpecs(
@@ -370,11 +374,9 @@ describe("registerPluginCommand", () => {
       handler: async () => ({ text: "ok" }),
     });
 
-    expect(matchPluginCommand("/active_memory status")).toMatchObject({
-      command: expect.objectContaining({
-        name: "active-memory",
-        pluginId: "demo-plugin",
-      }),
+    expectCommandMatch("/active_memory status", {
+      name: "active-memory",
+      pluginId: "demo-plugin",
       args: "status",
     });
   });
@@ -404,22 +406,17 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/voice", { channel: "telegram" })).toMatchObject({
-      command: expect.objectContaining({
-        name: "voice",
-        channels: ["telegram"],
-      }),
-    });
+    const telegramMatch = matchPluginCommand("/voice", { channel: "telegram" });
+    expect(telegramMatch?.command.name).toBe("voice");
+    expect(telegramMatch?.command.channels).toEqual(["telegram"]);
     expect(matchPluginCommand("/voice", { channel: "discord" })).toBeNull();
-    expect(matchPluginCommand("/voice")).toMatchObject({
-      command: expect.objectContaining({ name: "voice" }),
-    });
+    expect(matchPluginCommand("/voice")?.command.name).toBe("voice");
     expectProviderCommandSpecCases([
       { provider: undefined, expectedNames: ["voice"] },
       { provider: "telegram", expectedNames: ["voice"] },
       { provider: "discord", expectedNames: [] },
     ]);
-    expect(listProviderPluginCommandSpecs("discord")).toEqual([]);
+    expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
   });
 
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
@@ -455,7 +452,7 @@ describe("registerPluginCommand", () => {
       OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
-    expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
+    expect(getPluginCommandSpecs("discord", { env })).toStrictEqual([]);
     expect(
       getPluginCommandSpecs("discord", {
         env,
@@ -485,10 +482,8 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/voice")).toMatchObject({
-      command: expect.objectContaining({
-        nativeProgressMessages: { telegram: "Running voice command..." },
-      }),
+    expect(matchPluginCommand("/voice")?.command.nativeProgressMessages).toEqual({
+      telegram: "Running voice command...",
     });
   });
 
@@ -593,11 +588,10 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
-    const match = matchPluginCommand("/voice");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/voice");
 
     await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -620,11 +614,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -645,11 +638,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "webchat",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -670,11 +662,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: false,
@@ -741,11 +732,10 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
-    const match = matchPluginCommand("/codex");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/codex");
 
     await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -774,13 +764,12 @@ describe("registerPluginCommand", () => {
       handler: async () => ({ text: "ok" }),
     });
 
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "bundled-plugin",
-        message:
-          'command registration failed: Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
-      }),
+    const diagnostic = pluginRegistry.registry.diagnostics.find(
+      (entry) => entry.pluginId === "bundled-plugin",
+    );
+    expect(diagnostic?.level).toBe("error");
+    expect(diagnostic?.message).toBe(
+      'command registration failed: Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
     );
   });
 
@@ -808,12 +797,9 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
-    expect(second.matchPluginCommand("/voice")).toMatchObject({
-      command: expect.objectContaining({
-        name: "voice",
-        pluginId: "demo-plugin",
-      }),
-    });
+    const secondMatch = second.matchPluginCommand("/voice");
+    expect(secondMatch?.command.name).toBe("voice");
+    expect(secondMatch?.command.pluginId).toBe("demo-plugin");
 
     second.clearPluginCommands();
   });
@@ -1036,10 +1022,8 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ text: "ok" });
-    expect(receivedCtx).toMatchObject({
-      sessionKey: "agent:main:whatsapp:direct:123",
-      sessionId: "session-123",
-    });
+    expect(receivedCtx?.sessionKey).toBe("agent:main:whatsapp:direct:123");
+    expect(receivedCtx?.sessionId).toBe("session-123");
   });
 
   it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
@@ -1060,7 +1044,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
@@ -1130,8 +1114,6 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ text: "ok" });
-    expect(receivedCtx).toMatchObject({
-      accountId: "work",
-    });
+    expect(receivedCtx?.accountId).toBe("work");
   });
 });

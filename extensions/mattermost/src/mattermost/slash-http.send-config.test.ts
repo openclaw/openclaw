@@ -53,7 +53,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("./runtime-api.js", () => {
   return {
     buildModelsProviderData: mockState.buildModelsProviderData,
-    createChannelReplyPipeline: vi.fn(() => ({
+    createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
     })),
@@ -259,10 +259,10 @@ describe("slash-http cfg threading", () => {
     expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
       "channel:chan-1",
       "No models available.",
-      expect.objectContaining({
+      {
         cfg,
         accountId: "default",
-      }),
+      },
     );
   });
 

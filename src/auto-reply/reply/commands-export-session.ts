@@ -6,7 +6,8 @@ import {
   parseSessionEntries,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { pathExists } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -122,15 +123,6 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
 }
 
-async function fileExists(pathName: string): Promise<boolean> {
-  try {
-    await fsp.access(pathName);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function addCollisionSuffix(filePath: string, suffix: number): string {
   const ext = path.extname(filePath);
   const baseName = path.basename(filePath, ext);
@@ -152,7 +144,6 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   }
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
-
 async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   header: SessionHeader | null;
   entries: PiSessionEntry[];
@@ -183,7 +174,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!(await fileExists(sessionFile))) {
+  if (!(await pathExists(sessionFile))) {
     return { text: `❌ Session file not found: ${sessionFile}` };
   }
 

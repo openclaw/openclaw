@@ -224,6 +224,30 @@ describe("exec approvals safe bins", () => {
       setup: (cwd) => fs.writeFileSync(path.join(cwd, "secret.json"), "{}"),
     },
     {
+      name: "blocks POSIX parameter expansion in safe-bin value tokens",
+      argv: ["head", "-c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin long option values",
+      argv: ["head", "--bytes=${IFS}16"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin positional tokens",
+      argv: ["tr", "${IFS}", "_"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
+    {
       name: "blocks safe bins resolved from untrusted directories",
       argv: ["jq", ".foo"],
       resolvedPath: "/tmp/evil-bin/jq",
@@ -352,9 +376,11 @@ describe("exec approvals safe bins", () => {
   it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
     for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
       const profile = SAFE_BIN_PROFILES[name];
-      expect(profile).toBeDefined();
+      if (profile === undefined) {
+        throw new Error(`missing compiled safe-bin profile fixture ${name}`);
+      }
       const fixtureDeniedFlags = fixture.deniedFlags ?? [];
-      const compiledDeniedFlags = profile?.deniedFlags ?? new Set<string>();
+      const compiledDeniedFlags = profile.deniedFlags ?? new Set<string>();
       for (const deniedFlag of fixtureDeniedFlags) {
         expect(compiledDeniedFlags.has(deniedFlag)).toBe(true);
       }

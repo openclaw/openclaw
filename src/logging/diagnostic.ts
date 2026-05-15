@@ -73,8 +73,8 @@ const webhookStats = {
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
-const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 10 * 60_000;
-const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 5;
+const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
+const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
@@ -123,6 +123,7 @@ type StartDiagnosticHeartbeatOptions = {
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
+  startupGraceMs?: number;
 };
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -939,6 +940,8 @@ export function startDiagnosticHeartbeat(
     return;
   }
   startDiagnosticLivenessSampler();
+  const livenessGraceUntil =
+    opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   heartbeatInterval = setInterval(() => {
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
@@ -953,7 +956,10 @@ export function startDiagnosticHeartbeat(
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
-    const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
+    const rawLivenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    // Keep sampling during grace so event-loop delay baselines reset, but suppress startup-only reports.
+    const livenessSample = inStartupGrace ? null : rawLivenessSample;
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =

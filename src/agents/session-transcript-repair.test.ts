@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeToolCallInputs,
@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -127,7 +134,9 @@ describe("sanitizeToolUseResultPairing", () => {
       "toolResult",
       "user",
     ]);
-    expect(getAssistantToolCallBlocks(result.messages)).toMatchObject([
+    expect(
+      getAssistantToolCallBlocks(result.messages).map(({ id, name }) => ({ id, name })),
+    ).toEqual([
       { id: "call_1", name: "read" },
       { id: "call_2", name: "exec" },
       { id: "call_3", name: "write" },
@@ -136,6 +145,52 @@ describe("sanitizeToolUseResultPairing", () => {
     expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
     expect((result.messages[3] as { toolCallId?: string }).toolCallId).toBe("call_3");
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
+  it("keeps parallel tool results when code-mode display turns arrive first", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_search", name: "lcm_expand_query", arguments: {} },
+          { type: "toolCall", id: "call_status", name: "session_status", arguments: {} },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Lcm Expand Query: missing tool result" }],
+        stopReason: "stop",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_status",
+        toolName: "session_status",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_search",
+        toolName: "lcm_expand_query",
+        content: [{ type: "text", text: "expanded" }],
+        isError: false,
+      },
+      { role: "user", content: "next turn" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "assistant",
+      "user",
+    ]);
+    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_search");
+    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_status");
+    expect(result.moved).toBe(true);
   });
 
   it("repairs blank tool result names from matching tool calls", () => {
@@ -168,7 +223,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
+    expect(out.reduce((count, m) => count + (m.role === "toolResult" ? 1 : 0), 0)).toBe(1);
   });
 
   it("drops duplicate tool results for the same id across the transcript", () => {
@@ -316,7 +371,30 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 });
 
-describe("sanitizeToolCallInputs", () => {
+describe("sanitizeToolCallInputs legacy block filtering", () => {
+  it("drops malformed snake_case tool call blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "tool_use", id: "tool_1", name: "read" },
+          { type: "tool_call", tool_call_id: "tool_2", name: "write", arguments: {} },
+          { type: "function_call", call_id: "tool_3", name: "exec", arguments: "{}" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["write", "exec"] });
+
+    expect(getAssistantToolCallBlocks(out).map(({ type, name }) => ({ type, name }))).toEqual([
+      { type: "tool_call", name: "write" },
+      { type: "function_call", name: "exec" },
+    ]);
+  });
+});
+
+describe("sanitizeToolCallInputs allowed-name filtering", () => {
   function sanitizeAssistantContent(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],
@@ -459,7 +537,7 @@ describe("sanitizeToolCallInputs", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
@@ -483,7 +561,7 @@ describe("sanitizeToolCallInputs", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
@@ -549,7 +627,7 @@ describe("sanitizeToolCallInputs", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 

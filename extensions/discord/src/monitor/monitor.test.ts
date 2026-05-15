@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
@@ -9,6 +9,7 @@ import type {
   ModalInteraction,
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
+import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
@@ -43,11 +44,58 @@ let sendComponents: typeof import("../send.components.js");
 
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function mockCall(mock: MockWithCalls, index: number, label: string): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function mockCallArg(mock: MockWithCalls, index: number, label: string): unknown {
+  return mockCall(mock, index, label)[0];
+}
+
 function getLastRecordedCtx(): Record<string, unknown> | undefined {
-  const params = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
-    | { ctx?: Record<string, unknown> }
-    | undefined;
+  const params = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
+    ctx?: Record<string, unknown>;
+  };
   return params?.ctx;
+}
+
+function getLastPluginDispatchCtx(): Record<string, unknown> | undefined {
+  const params = mockCallArg(
+    dispatchPluginInteractiveHandlerMock,
+    -1,
+    "dispatchPluginInteractiveHandler",
+  ) as { ctx?: Record<string, unknown> };
+  return params?.ctx;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  return mockCall(mock, 0, label);
+}
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
+function discordTestSendResult(messageId: string, channelId = "dm-channel") {
+  return {
+    messageId,
+    channelId,
+    receipt: createDiscordSendReceipt({ platformMessageIds: [messageId], channelId, kind: "card" }),
+  };
 }
 
 describe("discord component interactions", () => {
@@ -226,13 +274,9 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          auth: { isAuthorizedSender: params.isAuthorizedSender },
-        }),
-      }),
-    );
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    const auth = requireRecord(getLastPluginDispatchCtx()?.auth, "plugin dispatch auth");
+    expect(auth.isAuthorizedSender).toBe(params.isAuthorizedSender);
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   }
 
@@ -254,10 +298,7 @@ describe("discord component interactions", () => {
   beforeEach(() => {
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
-      .mockResolvedValue({
-        messageId: "msg-1",
-        channelId: "dm-channel",
-      });
+      .mockResolvedValue(discordTestSendResult("msg-1"));
     clearDiscordComponentEntries();
     resetDiscordComponentRuntimeMocks();
     lastDispatchCtx = undefined;
@@ -302,6 +343,11 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    const dispatchParams = firstMockArg(dispatchReplyMock, "dispatchReplyMock") as
+      | DispatchParams
+      | undefined;
+    expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
+    expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
@@ -386,7 +432,11 @@ describe("discord component interactions", () => {
     await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    if (!entry) {
+      throw new Error("expected reusable Discord component entry");
+    }
+    expect(entry.id).toBe("btn_1");
   });
 
   it("blocks buttons when allowedUsers does not match", async () => {
@@ -405,7 +455,11 @@ describe("discord component interactions", () => {
       ephemeral: true,
     });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    if (!entry) {
+      throw new Error("expected unauthorized Discord component entry to remain active");
+    }
+    expect(entry.id).toBe("btn_1");
   });
 
   it("blocks buttons from guilds removed from the allowlist", async () => {
@@ -584,7 +638,11 @@ describe("discord component interactions", () => {
     const { acknowledge } = await runModalSubmission({ reusable: true });
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordModalEntry({ id: "mdl_1", consume: false });
+    if (!entry) {
+      throw new Error("expected reusable Discord modal entry");
+    }
+    expect(entry.id).toBe("mdl_1");
   });
 
   it("passes false auth to plugin Discord interactions for non-allowlisted guild users", async () => {
@@ -637,14 +695,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          conversationId: "channel:group-dm-1",
-          senderId: "123456789",
-        }),
-      }),
-    );
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    const ctx = getLastPluginDispatchCtx();
+    expect(ctx?.conversationId).toBe("channel:group-dm-1");
+    expect(ctx?.senderId).toBe("123456789");
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
@@ -680,11 +734,11 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(lastDispatchCtx).toMatchObject({
-      From: "discord:group:group-dm-1",
-      ChatType: "group",
-      ConversationLabel: "Group DM #incident-room channel id:group-dm-1",
-    });
+    expect(lastDispatchCtx?.From).toBe("discord:group:group-dm-1");
+    expect(lastDispatchCtx?.ChatType).toBe("group");
+    expect(lastDispatchCtx?.ConversationLabel).toBe(
+      "Group DM #incident-room channel id:group-dm-1",
+    );
   });
 
   it("blocks Group DM modal triggers before showing the modal", async () => {
@@ -838,12 +892,15 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(editDiscordComponentMessageMock).toHaveBeenCalledWith(
-      "user:123456789",
-      "msg-1",
-      { text: expect.any(String) },
-      expect.objectContaining({ accountId: "default" }),
+    expect(editDiscordComponentMessageMock).toHaveBeenCalledTimes(1);
+    const [target, messageId, payload, options] = firstMockCall(
+      editDiscordComponentMessageMock,
+      "editDiscordComponentMessageMock",
     );
+    expect(target).toBe("user:123456789");
+    expect(messageId).toBe("msg-1");
+    expect(typeof (payload as { text?: unknown } | undefined)?.text).toBe("string");
+    expect((options as { accountId?: unknown } | undefined)?.accountId).toBe("default");
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });

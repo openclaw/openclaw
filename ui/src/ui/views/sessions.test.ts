@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
-function buildResult(session: SessionsListResult["sessions"][number]): SessionsListResult {
+function buildResult(
+  session: SessionsListResult["sessions"][number],
+  defaults?: Partial<SessionsListResult["defaults"]>,
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
     count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
+    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
   };
 }
@@ -68,6 +71,35 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onRestoreCheckpoint: () => undefined,
   };
 }
+
+function readSessionDetailStats(container: ParentNode): Map<string, string> {
+  return new Map(
+    Array.from(container.querySelectorAll(".session-detail-stat")).map((stat) => [
+      stat.querySelector(".session-detail-stat__label")?.textContent?.trim() ?? "",
+      stat.querySelector(".session-detail-stat__value")?.textContent?.trim() ?? "",
+    ]),
+  );
+}
+
+function sessionTableHeaders(container: HTMLElement): Array<string | undefined> {
+  return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
+}
+
+const SESSION_TABLE_HEADERS = [
+  "",
+  "Key",
+  "Label",
+  "Kind",
+  "Status",
+  "Runtime",
+  "Updated",
+  "Tokens",
+  "Compaction",
+  "Thinking",
+  "Fast",
+  "Verbose",
+  "Reasoning",
+];
 
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
@@ -127,14 +159,17 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last 120 minutes.");
+    expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
+    expect(activeField?.getAttribute("data-tooltip")).toBe(
+      "Loads sessions updated in the last 120 minutes.",
+    );
     expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
     expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
     expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
     expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
     expect(
       Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps active and limit together and renders streamlined source toggles", async () => {
@@ -163,11 +198,18 @@ describe("sessions view", () => {
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
     expect(
-      toggleGroup
-        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
-        ?.closest("label")
-        ?.classList.contains("session-filter-check--active"),
-    ).toBe(true);
+      Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
+        toggle.querySelector("input")?.getAttribute("name"),
+        [...toggle.classList],
+      ]),
+    ).toEqual([
+      [
+        "includeGlobal",
+        ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
+      ],
+      ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
+      ["showArchived", ["session-filter-check", "session-filter-toggle", "session-archive-toggle"]],
+    ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });
 
@@ -188,7 +230,8 @@ describe("sessions view", () => {
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".sessions-filter-bar")).toBeNull();
 
-    toggle?.click();
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    toggle!.click();
 
     expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
   });
@@ -229,7 +272,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -260,7 +303,47 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(
+      Array.from(thinking?.options ?? [])
+        .find((option) => option.value === "adaptive")
+        ?.textContent?.trim(),
+    ).toBe("Override: adaptive");
+  });
+
+  it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+            {
+              modelProvider: "openai-codex",
+              model: "gpt-5.5",
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "high", label: "high" },
+              ],
+            },
+          ),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
+    expect(thinking?.value).toBe("");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
+      ["Inherited: high", "Off", "Override: high"],
+    );
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
@@ -289,7 +372,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("on");
+    ).toBe("Override: on");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -322,7 +405,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const keyCell = container.querySelector(".session-key-cell");
-    expect(keyCell?.textContent).toContain("📊 Data Expert (dingtalk)");
+    expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
     expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
   });
 
@@ -343,7 +426,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const keyCell = container.querySelector(".session-key-cell");
-    expect(keyCell?.textContent).toContain("agent:unknown-agent:telegram:abc123");
+    expect(keyCell?.textContent?.trim()).toBe("agent:unknown-agent:telegram:abc123");
     expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
   });
 
@@ -367,6 +450,90 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
+  it("renders live and terminal run status badges", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "direct",
+              updatedAt: 30,
+              hasActiveRun: true,
+              status: "running",
+            },
+            {
+              key: "agent:main:idle",
+              kind: "direct",
+              updatedAt: 20,
+              hasActiveRun: false,
+            },
+            {
+              key: "agent:main:failed",
+              kind: "direct",
+              updatedAt: 10,
+              status: "failed",
+            },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
+    const badges = Array.from(container.querySelectorAll(".session-status-badge"));
+    expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
+    expect(badges.map((badge) => [...badge.classList])).toEqual([
+      ["session-status-badge", "session-status-badge--live"],
+      ["session-status-badge", "session-status-badge--idle"],
+      ["session-status-badge", "session-status-badge--failed"],
+    ]);
+    expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
+      "Status: Live",
+      "Status: Idle",
+      "Status: Failed",
+    ]);
+  });
+
+  it("renders and filters the session runtime", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:claude",
+              kind: "direct",
+              updatedAt: 20,
+              agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+            },
+            {
+              key: "agent:main:pi",
+              kind: "direct",
+              updatedAt: 10,
+              agentRuntime: { id: "pi", source: "implicit" },
+            },
+          ]),
+        ),
+        searchQuery: "fallback none",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
+    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
+      "claude-cli (fallback none)",
+    );
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
+      "agent:main:claude",
+    );
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(
@@ -384,8 +551,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const text = container.querySelector(".session-key-cell")?.textContent ?? "";
-    expect(text).toContain("agent:constructor:telegram:abc123");
-    expect(text).not.toContain("Object (telegram)");
+    expect(text.trim()).toBe("agent:constructor:telegram:abc123");
   });
 
   it("expands checkpoint details from row activation when checkpoints exist", async () => {
@@ -414,12 +580,128 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const row = container.querySelector("tbody tr.session-data-row");
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
+    expect(row).toBeInstanceOf(HTMLTableRowElement);
+    row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
     expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+  });
+
+  it("renders the checkpoint count as the compaction disclosure", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
+    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe(
+      "1 Checkpoint",
+    );
+    expect(trigger?.textContent?.trim()).toBe("1 Checkpoint");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
+
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("renders expanded session details with compaction history", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            status: "running",
+            runtimeMs: 125000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+        checkpointItemsByKey: {
+          "agent:main:main": [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123456,
+              tokensAfter: 38920,
+              summary: "Trimmed earlier setup chatter and kept the active execution plan.",
+              preCompaction: { sessionId: "session-1" },
+              postCompaction: { sessionId: "session-1" },
+            },
+          ],
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const details = container.querySelector(".session-details-panel");
+    expect(details?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim()).toBe(
+      "Session details",
+    );
+    expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
+      "agent:main:main",
+    );
+    expect(
+      Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
+        (badge) => badge.textContent?.trim(),
+      ),
+    ).toEqual(["Live", "direct"]);
+
+    const stats = readSessionDetailStats(details ?? container);
+    expect(stats.get("Status")).toBe("running");
+    expect(stats.get("Model")).toBe("gpt-5.5");
+    expect(stats.get("Provider")).toBe("openai");
+    expect(stats.get("Runtime")).toBe("2m 5s");
+    expect(stats.get("Tokens")).toBe("123456 / 200000");
+    expect(stats.get("Compaction")).toBe("1 Checkpoint");
+
+    const compactionSection = details?.querySelector(".session-details-section");
+    expect(
+      compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
+    ).toBe("Compaction history");
+    expect(
+      compactionSection?.querySelector(".session-details-section__title")?.textContent?.trim(),
+    ).toBe("1 Checkpoint");
+    expect(
+      compactionSection?.querySelector(".session-checkpoint-card__delta")?.textContent?.trim(),
+    ).toBe("123,456 to 38,920 tokens");
   });
 
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
@@ -455,9 +737,14 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const rows = container.querySelectorAll("tbody tr.session-data-row");
-    const checkbox = rows[0]?.querySelector("input[type=checkbox]");
-    checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const checkbox = rows[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
+    expect(checkbox).toBeInstanceOf(HTMLInputElement);
+    expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
+    if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
+      throw new Error("Expected checkpoint toggle row controls");
+    }
+    checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
   });
@@ -493,10 +780,11 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".session-key-cell")?.textContent).toContain(
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "Data Expert (dingtalk)",
     );
-    expect(container.textContent).not.toContain("code-agent");
   });
 
   it("keeps session selects stable and deselects only the current page", async () => {
@@ -524,11 +812,20 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "full",
+    ]);
     expect(reasoning?.value).toBe("custom-mode");
-    expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
-    ).toBe(true);
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "stream",
+      "custom-mode",
+    ]);
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -559,8 +856,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const headerCheckbox = container.querySelector("thead input[type=checkbox]");
-    headerCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+    const headerCheckbox = container.querySelector<HTMLInputElement>("thead input[type=checkbox]");
+    expect(headerCheckbox).toBeInstanceOf(HTMLInputElement);
+    headerCheckbox!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();
@@ -588,12 +886,17 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("No sessions match your filters.");
-    const showAll = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Show all",
+    const emptyState = container.querySelector(".data-table-empty-state");
+    expect(emptyState?.getAttribute("role")).toBe("status");
+    expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
+      "No sessions match your filters.",
     );
-    expect(showAll).toBeTruthy();
-    showAll?.click();
+    const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
+    if (!(showAll instanceof HTMLButtonElement)) {
+      throw new Error("Expected filtered empty state to render a Show all button");
+    }
+    expect(showAll.textContent?.trim()).toBe("Show all");
+    showAll.click();
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 
@@ -612,7 +915,8 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("No sessions found.");
-    expect(container.textContent).not.toContain("Show all");
+    const emptyCell = container.querySelector(".data-table-empty-cell");
+    expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
+    expect(emptyCell?.querySelector("button")).toBeNull();
   });
 });

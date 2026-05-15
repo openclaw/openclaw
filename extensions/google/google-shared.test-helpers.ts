@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { expect } from "vitest";
 
 function makeZeroUsageSnapshot() {
@@ -19,9 +19,9 @@ function makeZeroUsageSnapshot() {
 }
 
 export const asRecord = (value: unknown): Record<string, unknown> => {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("expected record");
+  }
   return value as Record<string, unknown>;
 };
 

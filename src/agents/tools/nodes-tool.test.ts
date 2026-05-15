@@ -151,15 +151,16 @@ describe("createNodesTool screen_record duration guardrails", () => {
       durationMs: 900_000,
     });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      {},
-      expect.objectContaining({
-        params: expect.objectContaining({
-          durationMs: 300_000,
-        }),
-      }),
-    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | undefined;
+    if (!call) {
+      throw new Error("expected callGatewayTool to be called");
+    }
+    expect(call[0]).toBe("node.invoke");
+    expect(call[1]).toStrictEqual({});
+    expect(call[2].params?.durationMs).toBe(300_000);
   });
 
   it("rejects the removed run action", async () => {

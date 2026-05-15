@@ -1,12 +1,24 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
+import {
+  isExplicitCommandTurn,
+  resolveCommandTurnContext,
+  type CommandTurnContext,
+} from "../command-turn-context.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  CommandAuthorized?: boolean;
+  CommandBody?: string;
   CommandSource?: "text" | "native";
+  CommandTurn?: CommandTurnContext;
 };
+
+export function isExplicitSourceReplyCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+  return isExplicitCommandTurn(resolveCommandTurnContext(ctx));
+}
 
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
@@ -20,7 +32,7 @@ export function resolveSourceReplyDeliveryMode(params: {
       ? "automatic"
       : params.requested;
   }
-  if (params.ctx.CommandSource === "native") {
+  if (isExplicitSourceReplyCommand(params.ctx)) {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);

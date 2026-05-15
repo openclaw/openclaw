@@ -3,7 +3,9 @@ import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
+  startNodesPolling,
   stopLogsPolling,
+  stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
@@ -63,6 +65,7 @@ import {
   type Tab,
 } from "./navigation.ts";
 import {
+  normalizeTextScale,
   saveLocalUserIdentity,
   saveSettings,
   type LocalUserIdentity,
@@ -106,6 +109,7 @@ type SettingsHost = {
   controlUiTabPaintSeq?: number;
   controlUiOverviewRefreshSeq?: number;
   controlUiCronRefreshSeq?: number;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -149,6 +153,7 @@ type SettingsAppHost = SettingsHost &
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
+    textScale: normalizeTextScale(next.textScale),
     lastActiveSessionKey:
       normalizeOptionalString(next.lastActiveSessionKey) ??
       normalizeOptionalString(next.sessionKey) ??
@@ -162,7 +167,8 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     host.themeMode = next.themeMode;
     applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
   }
-  applyBorderRadius(next.borderRadius);
+  applyBorderRadius(normalized.borderRadius);
+  applyTextScale(normalized.textScale);
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
 
@@ -357,7 +363,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "automation":
       case "infrastructure":
       case "aiAgents":
-        await loadConfigSchema(app);
+        void loadConfigSchema(app).finally(() => host.requestUpdate?.());
         await loadConfig(app);
         break;
       case "overview":
@@ -447,6 +453,7 @@ export function syncThemeWithSettings(host: SettingsHost) {
   }
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
   applyBorderRadius(host.settings.borderRadius ?? 50);
+  applyTextScale(host.settings.textScale);
   syncSystemThemeListener(host);
 }
 
@@ -469,6 +476,15 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
   root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
+}
+
+export function applyTextScale(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const scale = normalizeTextScale(value) / 100;
+  root.style.setProperty("--control-ui-text-scale", scale.toFixed(2));
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
@@ -549,6 +565,14 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   applyTabSelection(host, next, { refreshPolicy: "connected" });
 }
 
+function clearPendingSessionsChangedReload(host: SettingsHost) {
+  if (host.sessionsChangedReloadTimer == null) {
+    return;
+  }
+  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
+}
+
 function updateBrowserHistory(url: URL, replace: boolean) {
   const history = typeof window === "undefined" ? undefined : window.history;
   if (!history) {
@@ -569,6 +593,7 @@ function applyTabSelection(
   host.tab = next;
   if (prev !== next) {
     scheduleControlUiTabVisibleTiming(host, prev, next);
+    clearPendingSessionsChangedReload(host);
   }
 
   // Cleanup chat module state when navigating away from chat
@@ -581,6 +606,9 @@ function applyTabSelection(
   }
   (next === "logs" ? startLogsPolling : stopLogsPolling)(
     host as unknown as Parameters<typeof startLogsPolling>[0],
+  );
+  (next === "nodes" ? startNodesPolling : stopNodesPolling)(
+    host as unknown as Parameters<typeof startNodesPolling>[0],
   );
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
@@ -618,7 +646,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(_host: SettingsHost, sessionKey: string, replace: boolean) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;
@@ -837,7 +865,8 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
+  void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+  await Promise.all([loadChannels(app, false), loadConfig(app)]);
 }
 
 export async function loadCron(host: SettingsHost) {

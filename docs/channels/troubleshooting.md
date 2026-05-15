@@ -27,6 +27,25 @@ Healthy baseline:
 - `Capability: read-only`, `write-capable`, or `admin-capable`
 - Channel probe shows transport connected and, where supported, `works` or `audit ok`
 
+## After an update
+
+Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin
+channel disappears after updating.
+
+```bash
+openclaw status --all
+openclaw doctor --fix
+openclaw gateway restart
+openclaw status --all
+```
+
+Look for `plugin load failed: dependency tree corrupted; run openclaw doctor
+--fix` in `openclaw status --all`. That means the channel is configured, but
+the plugin setup/load path hit a corrupt dependency tree instead of registering
+the channel. `openclaw doctor --fix` removes stale plugin dependency staging
+directories and stale auth shadows, then `openclaw gateway restart` reloads the
+clean state.
+
 ## WhatsApp
 
 ### WhatsApp failure signatures
@@ -82,20 +101,19 @@ Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshootin
 
 Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
 
-## iMessage and BlueBubbles
+## iMessage
 
-### iMessage and BlueBubbles failure signatures
+### iMessage failure signatures
 
-| Symptom                          | Fastest check                                                           | Fix                                                   |
-| -------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
-| No inbound events                | Verify webhook/server reachability and app permissions                  | Fix webhook URL or BlueBubbles server state.          |
-| Can send but no receive on macOS | Check macOS privacy permissions for Messages automation                 | Re-grant TCC permissions and restart channel process. |
-| DM sender blocked                | `openclaw pairing list imessage` or `openclaw pairing list bluebubbles` | Approve pairing or update allowlist.                  |
+| Symptom                              | Fastest check                                           | Fix                                                                   |
+| ------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------- |
+| `imsg` missing or fails on non-macOS | `openclaw channels status --probe --channel imessage`   | Run OpenClaw on the Messages Mac or use an SSH wrapper for `cliPath`. |
+| Can send but no receive on macOS     | Check macOS privacy permissions for Messages automation | Re-grant TCC permissions and restart channel process.                 |
+| DM sender blocked                    | `openclaw pairing list imessage`                        | Approve pairing or update allowlist.                                  |
 
 Full troubleshooting:
 
 - [iMessage troubleshooting](/channels/imessage#troubleshooting)
-- [BlueBubbles troubleshooting](/channels/bluebubbles#troubleshooting)
 
 ## Signal
 

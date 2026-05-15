@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -11,7 +11,7 @@ import {
   normalizeInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
   buildDiscordInteractiveComponents,
@@ -104,12 +104,14 @@ export async function handleDiscordMessageAction(
     const silent = readBooleanParam(params, "silent") === true;
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
+    const threadName = readStringParam(params, "threadName");
     return await handleDiscordAction(
       {
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
         content: content ?? "",
+        ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,

@@ -50,4 +50,21 @@ export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
 export { logInboundDrop } from "../channels/logging.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export {
+  buildChannelTurnContext,
+  filterChannelTurnSupplementalContext,
+} from "../channels/turn/context.js";
+export type {
+  BuildChannelTurnContextParams,
+  BuiltChannelTurnContext,
+} from "../channels/turn/context.js";
+export type { CommandFacts } from "../channels/turn/types.js";
+export {
+  createCommandTurnContext,
+  isAuthorizedTextSlashCommandTurn,
+  isExplicitCommandTurn,
+  isNativeCommandTurn,
+  isTextSlashCommandTurn,
+} from "../auto-reply/command-turn-context.js";
+export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
 export { mergeInboundPathRoots } from "../media/inbound-path-policy.js";

@@ -87,6 +87,23 @@ function createDispatcher(record: string[]): ReplyDispatcher {
   };
 }
 
+function lastTypingDispatcherOptions(): Parameters<CreateReplyDispatcherWithTypingFn>[0] {
+  const calls = hoisted.createReplyDispatcherWithTypingMock.mock.calls;
+  const [options] = calls[calls.length - 1] ?? [];
+  if (!options) {
+    throw new Error("expected createReplyDispatcherWithTyping call");
+  }
+  return options as Parameters<CreateReplyDispatcherWithTypingFn>[0];
+}
+
+function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatcherFn>[0] {
+  const call = hoisted.createReplyDispatcherMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected createReplyDispatcher call ${index}`);
+  }
+  return call[0] as Parameters<CreateReplyDispatcherFn>[0];
+}
+
 describe("withReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -210,7 +227,7 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {
@@ -235,8 +252,10 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
-    expect(dispatcherOptions?.beforeDeliver).toEqual(expect.any(Function));
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
 
     const payload = await dispatcherOptions.beforeDeliver(
       { text: "original reply" },
@@ -336,14 +355,11 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(hoisted.createReplyDispatcherWithTypingMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentReplyContext: expect.objectContaining({
-          sessionKey: "agent:test:telegram:direct:8231046597",
-          surface: "telegram",
-        }),
-      }),
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe(
+      "agent:test:telegram:direct:8231046597",
     );
+    expect(dispatcherOptions.silentReplyContext?.surface).toBe("telegram");
   });
 
   it("passes explicit direct conversation type for generic silent-reply policy keys", async () => {
@@ -368,15 +384,10 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(hoisted.createReplyDispatcherWithTypingMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentReplyContext: expect.objectContaining({
-          sessionKey: "agent:test:main",
-          surface: "discord",
-          conversationType: "direct",
-        }),
-      }),
-    );
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe("agent:test:main");
+    expect(dispatcherOptions.silentReplyContext?.surface).toBe("discord");
+    expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
   });
 
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {
@@ -403,14 +414,9 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    const silentReplyContext =
-      hoisted.createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0]?.silentReplyContext;
-    expect(silentReplyContext).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:test:direct:user",
-        surface: "telegram",
-      }),
-    );
-    expect(silentReplyContext).not.toEqual(expect.objectContaining({ conversationType: "group" }));
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe("agent:test:direct:user");
+    expect(dispatcherOptions.silentReplyContext?.surface).toBe("telegram");
+    expect(dispatcherOptions.silentReplyContext?.conversationType).not.toBe("group");
   });
 });
