@@ -225,6 +225,7 @@ export function buildWhatsAppInboundContext(params: {
   combinedBody: string;
   commandBody?: string;
   commandAuthorized?: boolean;
+  commandSource?: "text";
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
@@ -279,6 +280,7 @@ export function buildWhatsAppInboundContext(params: {
     SenderId: params.sender.id ?? params.sender.e164,
     SenderE164: params.sender.e164,
     CommandAuthorized: params.commandAuthorized,
+    CommandSource: params.commandSource,
     ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
     GroupSystemPrompt: params.groupSystemPrompt,
@@ -421,13 +423,22 @@ export async function dispatchWhatsAppBufferedReply(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   const sourceReplyChatType =
     typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType;
+  const sourceReplyCommandSource =
+    params.context.CommandSource === "native" || params.context.CommandSource === "text"
+      ? params.context.CommandSource
+      : undefined;
+  const sourceReplyCommandAuthorized =
+    typeof params.context.CommandAuthorized === "boolean"
+      ? params.context.CommandAuthorized
+      : undefined;
   const sourceReplyDeliveryMode =
     sourceReplyChatType === "group" || sourceReplyChatType === "channel"
       ? resolveChannelMessageSourceReplyDeliveryMode({
           cfg: params.cfg,
           ctx: {
             ChatType: sourceReplyChatType,
-            CommandSource: params.context.CommandSource === "native" ? "native" : undefined,
+            CommandSource: sourceReplyCommandSource,
+            CommandAuthorized: sourceReplyCommandAuthorized,
           },
         })
       : undefined;
