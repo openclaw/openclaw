@@ -374,7 +374,11 @@ function splitCommandSegments(command: string): string[] {
       index += 1;
       continue;
     }
-    if (char === ";") {
+    if (char === "&" && !isShellRedirectionAmpersand(command, index)) {
+      pushCurrent();
+      continue;
+    }
+    if (char === ";" || char === "\n" || char === "\r") {
       pushCurrent();
       continue;
     }
@@ -382,6 +386,12 @@ function splitCommandSegments(command: string): string[] {
   }
   pushCurrent();
   return segments;
+}
+
+function isShellRedirectionAmpersand(command: string, index: number): boolean {
+  const previous = command[index - 1] ?? "";
+  const next = command[index + 1] ?? "";
+  return previous === ">" || previous === "<" || next === ">";
 }
 
 function expandCommandSegment(segment: string): ExpandedCommandSegment[] {
@@ -1433,10 +1443,7 @@ function hasFindExecPredicate(args: readonly string[]): boolean {
 function hasSedInPlaceOption(args: readonly string[]): boolean {
   return args.some(
     (arg) =>
-      arg === "-i" ||
-      arg.startsWith("-i") ||
-      arg === "--in-place" ||
-      arg.startsWith("--in-place="),
+      arg === "-i" || arg.startsWith("-i") || arg === "--in-place" || arg.startsWith("--in-place="),
   );
 }
 
@@ -1584,9 +1591,7 @@ function collectNetworkTransferOperands(
     }
 
     const bodyValue =
-      command === "curl"
-        ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"])
-        : null;
+      command === "curl" ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"]) : null;
     if (bodyValue) {
       uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
       index = Math.max(index, bodyValue.nextIndex);
@@ -1723,9 +1728,7 @@ function formatTargets(args: readonly string[]): string {
 
 function formatNetworkTargets(args: readonly string[]): string {
   return formatNetworkTargetList(
-    args
-      .filter((arg) => /^https?:\/\//i.test(arg))
-      .map((arg) => formatNetworkUrl(arg)),
+    args.filter((arg) => /^https?:\/\//i.test(arg)).map((arg) => formatNetworkUrl(arg)),
   );
 }
 
