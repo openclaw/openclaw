@@ -210,6 +210,20 @@ export type PluginRuntimeCore = {
       resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
+  session: {
+    /**
+     * Cancel an in-flight agent turn for the given session key.
+     *
+     * Gateway-backed runtimes delegate to the same ACP cancellation path used
+     * by operator stop controls. Setup/test runtimes that are not wired for
+     * cancellation return `{ cancelled: false, reason: "not-wired" }`.
+     */
+    cancel: (params: {
+      sessionKey: string;
+      /** Optional reason surfaced in logs/telemetry. Not shown to end users. */
+      reason?: string;
+    }) => Promise<{ cancelled: true; reason: string } | { cancelled: false; reason: string }>;
+  };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
     requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;

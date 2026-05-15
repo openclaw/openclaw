@@ -97,4 +97,12 @@ export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;
+  /**
+   * Optional gateway-injected cancellation bridge. When absent,
+   * `runtime.session.cancel()` degrades to `{ cancelled: false, reason: "not-wired" }`.
+   */
+  cancelSession?: (params: {
+    sessionKey: string;
+    reason?: string;
+  }) => Promise<{ cancelled: boolean }>;
 };

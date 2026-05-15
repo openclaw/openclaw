@@ -399,6 +399,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
       },
     },
+    session: {
+      cancel: vi.fn(async () => ({ cancelled: false, reason: "not-wired" })),
+    },
     system: {
       enqueueSystemEvent: vi.fn() as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
       requestHeartbeat: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeat"],
@@ -659,6 +662,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       outbound: {
         loadAdapter: vi.fn() as unknown as PluginRuntime["channel"]["outbound"]["loadAdapter"],
+        sendToSession: vi.fn(async () => ({ delivered: false, error: "not-wired" })),
       },
       turn: {
         run: runChannelTurnMock,

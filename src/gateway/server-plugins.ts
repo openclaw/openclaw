@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -714,6 +715,18 @@ export function loadGatewayPlugins(params: {
     }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
+      cancelSession: async ({ sessionKey, reason }) => {
+        try {
+          await getAcpSessionManager().cancelSession({
+            cfg: resolvedConfig,
+            sessionKey,
+            reason,
+          });
+          return { cancelled: true };
+        } catch {
+          return { cancelled: false };
+        }
+      },
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts: true,

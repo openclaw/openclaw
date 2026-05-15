@@ -179,6 +179,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
+      sendToSession: async () => ({ delivered: false, error: "not-wired" }),
     },
     turn: {
       run: runChannelTurn,
