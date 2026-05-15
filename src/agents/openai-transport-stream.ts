@@ -2141,28 +2141,12 @@ async function processOpenAICompletionsStream(
     }
     if (currentBlock.type === "toolCall") {
       currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
-      const completed = {
-        ...currentBlock,
-        arguments: parseStreamingJson(currentBlock.partialArgs),
-      };
-      const idx = output.content.indexOf(currentBlock);
-      if (idx !== -1) {
-        output.content[idx] = completed;
-      }
     }
   };
   const finishAllToolCallBlocks = () => {
     for (const block of output.content) {
       if (block.type === "toolCall") {
         block.arguments = parseStreamingJson(block.partialArgs);
-        const completed = {
-          ...block,
-          arguments: parseStreamingJson(block.partialArgs),
-        };
-        const idx = output.content.indexOf(block);
-        if (idx !== -1) {
-          output.content[idx] = completed;
-        }
       }
     }
   };
