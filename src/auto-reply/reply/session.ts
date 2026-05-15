@@ -831,6 +831,16 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
+      // Surface archive failures so /stop followed by /new does not silently
+      // drop the prior transcript on disk error (#81984). The rotation still
+      // proceeds; data loss is at least visible in the gateway log instead of
+      // discovered hours later by downstream ingest tooling.
+      onArchiveError: (error, sourcePath) => {
+        log.warn(
+          `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry.sessionId}`,
+          { error: String(error) },
+        );
+      },
     });
     previousSessionTranscript = resolveStableSessionEndTranscript({
       sessionId: previousSessionEntry.sessionId,

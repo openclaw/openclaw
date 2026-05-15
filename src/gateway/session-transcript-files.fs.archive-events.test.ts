@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { archiveFileOnDisk } from "./session-transcript-files.fs.js";
+import {
+  archiveFileOnDisk,
+  archiveSessionTranscriptsDetailed,
+} from "./session-transcript-files.fs.js";
 
 const subscriptions: Array<() => void> = [];
 
@@ -60,6 +63,69 @@ describe("archiveFileOnDisk transcript updates", () => {
       expect(deletedArchived).toContain(".jsonl.deleted.");
       expect(bakArchived).toContain(".jsonl.bak.");
       expect(updates.map((update) => update.sessionFile)).toEqual([deletedArchived, bakArchived]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("archiveSessionTranscriptsDetailed failure surface (#81984)", () => {
+  it("invokes onArchiveError when fs.renameSync fails and still returns successful entries", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-failure-"));
+    try {
+      const sessionId = "11111111-1111-4111-8111-111111111111";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+
+      const renameError = Object.assign(new Error("EACCES: permission denied"), {
+        code: "EACCES",
+      });
+      const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+        throw renameError;
+      });
+
+      const errors: Array<{ err: unknown; sourcePath: string }> = [];
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+        onArchiveError: (err, sourcePath) => {
+          errors.push({ err, sourcePath });
+        },
+      });
+
+      renameSpy.mockRestore();
+
+      expect(archived).toEqual([]);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].err).toBe(renameError);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("archives normally when no onArchiveError is provided", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-success-"));
+    try {
+      const sessionId = "22222222-2222-4222-8222-222222222222";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      expect(archived.length).toBe(1);
+      expect(archived[0].archivedPath).toContain(".jsonl.reset.");
+      expect(fs.existsSync(archived[0].archivedPath)).toBe(true);
+      expect(fs.existsSync(sessionFile)).toBe(false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
