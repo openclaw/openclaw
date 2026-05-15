@@ -1,3 +1,4 @@
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
@@ -49,6 +50,14 @@ function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPro
   return existing?.source === "run" ? existing : null;
 }
 
+function resolveContextReportAgentId(params: HandleCommandsParams): string {
+  return resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  }).sessionAgentId;
+}
+
 async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
@@ -58,8 +67,9 @@ async function resolveContextReport(
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
+  const sessionAgentId = resolveContextReportAgentId(params);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
@@ -182,18 +192,19 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
+  const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
     typeof report.bootstrapMaxChars === "number" &&
     Number.isFinite(report.bootstrapMaxChars) &&
     report.bootstrapMaxChars > 0
       ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg);
+      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
     typeof report.bootstrapTotalMaxChars === "number" &&
     Number.isFinite(report.bootstrapTotalMaxChars) &&
     report.bootstrapTotalMaxChars > 0
       ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg);
+      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
