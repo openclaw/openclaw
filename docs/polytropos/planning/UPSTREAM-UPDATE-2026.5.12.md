@@ -47,3 +47,48 @@ If conflicts were detected, they would appear in `git diff --name-only --diff-fi
    - run the plugin verification gates
    - run `openclaw doctor`
    - validate release workflow
+
+## Directory-level change counts (top-level)
+
+```
+   7765 src
+   5604 extensions
+   1007 docs
+    595 scripts
+    448 apps
+    395 test
+    390 ui
+    173 vendor
+    135 packages
+     97 .github
+     86 qa
+     37 .agents
+     32 skills
+     10 .pi
+      9 config
+      6 security
+      6 Swabble
+      5 assets
+      4 .vscode
+      2 patches
+      1 vitest.unit.config.ts
+      1 vitest.unit-paths.mjs
+      1 vitest.scoped-config.ts
+      1 vitest.pattern-file.ts
+      1 vitest.live.config.ts
+      1 vitest.gateway.config.ts
+      1 vitest.extensions.config.ts
+      1 vitest.e2e.config.ts
+      1 vitest.contracts.config.ts
+      1 vitest.config.ts
+      1 vitest.channels.config.ts
+      1 vitest.channel-paths.mjs
+      1 tsdown.config.ts
+      1 tsconfig.projects.json
+      1 tsconfig.plugin-sdk.dts.json
+      1 tsconfig.oxlint.json
+      1 tsconfig.json
+      1 tsconfig.extensions.projects.json
+      1 tsconfig.extensions.json
+      1 tsconfig.core.projects.json
+```
