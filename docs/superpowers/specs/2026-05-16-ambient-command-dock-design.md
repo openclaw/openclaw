@@ -8,7 +8,7 @@ Turn the macOS Ambient Overlay from a visual presence layer into a rich, keyboar
 
 The overlay remains ambient and full-screen: transparent, visually alive, and click-through outside the interactive surface. The primary interaction is a bottom-centered chat composer. Typing normal text sends a prompt to the active/current OpenClaw session. Typing `/` opens command suggestions that can run local app actions, adjust overlay settings, inspect status, or open richer surfaces.
 
-Thomas should appear as a separate floating orb, matching the Canvas personality rather than being embedded as a static badge. The orb uses the existing `thomas_avatar.png` asset, a conic glow ring, a pulse ring, and subtle breathing/float motion. It reflects state: ready, focused, sending, working, success, and error.
+Thomas should appear as a separate floating orb, matching the Canvas personality rather than being embedded as a static badge. The orb uses the existing `thomas_avatar.png` asset and borrows the Canvas live-orb language: a circular avatar, conic orbit ring, pulsing outer ring, subtle breathing scale, and independent floating/drifting motion around the composer. It reflects state: ready, focused, sending, working, success, and error.
 
 ## Experience
 
@@ -22,7 +22,7 @@ Thomas should appear as a separate floating orb, matching the Canvas personality
 
 - `Control-Option-Space` arms the overlay.
 - The bottom composer appears above the ambient decoration.
-- Thomas floats above or near the composer as an independent presence.
+- Thomas floats above or near the composer as an independent presence, with Canvas-like motion rather than a fixed badge position.
 - The input field is focused automatically.
 - `Escape` dismisses the composer and returns to ambient-only mode.
 - Clicking outside the composer does not block the underlying app because the fullscreen ambient layer stays click-through.
@@ -123,14 +123,14 @@ Use the existing asset:
 
 The orb should be a separate SwiftUI component with state-driven styling:
 
-- Ready: slow breathing, green/teal status
-- Focused: brighter ring, input active
-- Sending: faster orbit/pulse
-- Working: tool/state label from `WorkActivityStore`
-- Success: short confirmation glow
-- Error: amber/red ring with inline message
+- Ready: slow breathing, gentle drift, green/teal status
+- Focused: brighter ring, active input glow, drift centered above the composer
+- Sending: faster orbit/pulse and slightly tighter float amplitude
+- Working: tool/state label from `WorkActivityStore`, active orbit ring, and slow positional drift so Thomas feels present while work is happening
+- Success: short confirmation glow, relaxed breathing after the flash
+- Error: amber/red ring with inline message and reduced motion to avoid making failures feel frantic
 
-The orb should be visually independent from the composer, floating above or near it, but the actual implementation can live in the same composer panel for v1 to avoid complex multi-panel focus behavior.
+The orb should be visually independent from the composer, floating above or near it. Its motion should use Canvas as the reference: breathing scale, conic spin, pulse ring, and mild vertical/horizontal drift. The actual implementation can live in the same composer panel for v1 to avoid complex multi-panel focus behavior, but it should be coded as its own component so it can later become a separate panel if needed.
 
 ## UI Details
 
@@ -179,6 +179,7 @@ Unit tests should cover:
 - prompt vs slash-command routing
 - composer model state transitions
 - Thomas orb style state mapping
+- Thomas orb motion profile mapping, including ready/focused/sending/working/error variants
 - display/window level ordering remains correct
 
 Smoke tests should cover:
@@ -208,5 +209,5 @@ Manual verification should cover:
 ## Final Decisions For V1
 
 - Prompt submit keeps the composer open briefly, then dismisses after a successful send if the user does not type more.
-- Thomas orb is stateful/decorative in v1, not a separate click target.
+- Thomas orb is stateful/decorative in v1, not a separate click target, and it behaves like the Canvas floating live orb rather than a fixed avatar badge.
 - `/new` opens Chat until the repo has a stable direct new-session API for the macOS app.
