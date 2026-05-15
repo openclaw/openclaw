@@ -1608,6 +1608,7 @@ export async function runReplyAgent(params: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
+      isHeartbeat,
       modelUsed,
       providerUsed,
       contextTokensUsed,
