@@ -482,6 +482,143 @@ describe("telegram message cache", () => {
     expect(context.find((entry) => entry.node.messageId === "34477")).toBeUndefined();
   });
 
+  it("dedupes same-session recent context while preserving ambient messages and reply targets", () => {
+    const cache = createTelegramMessageCache();
+    const record = (params: { id: number; text: string; replyToId?: number }) =>
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "group", title: "Ops" },
+          message_id: params.id,
+          date: 1736380000 + params.id,
+          text: params.text,
+          from: { id: params.id, is_bot: false, first_name: `User ${params.id}` },
+          ...(params.replyToId
+            ? {
+                reply_to_message: {
+                  chat: { id: 7, type: "group", title: "Ops" },
+                  message_id: params.replyToId,
+                  date: 1736380000 + params.replyToId,
+                  text: `message ${params.replyToId}`,
+                  from: {
+                    id: params.replyToId,
+                    is_bot: false,
+                    first_name: `User ${params.replyToId}`,
+                  },
+                } as Message["reply_to_message"],
+              }
+            : {}),
+        } as Message,
+      });
+
+    record({ id: 100, text: "already in this session" });
+    record({ id: 101, text: "ambient group context" });
+    record({ id: 102, text: "reply target already in this session" });
+    const current = record({ id: 103, text: "what about this?", replyToId: 102 })?.sourceMessage;
+    if (!current) {
+      throw new Error("expected current Telegram message");
+    }
+    cache.markSessionBound({
+      accountId: "default",
+      chatId: 7,
+      messageId: "100",
+      sessionKey: "agent:main:telegram:group:7",
+    });
+    cache.markSessionBound({
+      accountId: "default",
+      chatId: 7,
+      messageId: "101",
+      sessionKey: "agent:other:telegram:group:7",
+    });
+    cache.markSessionBound({
+      accountId: "default",
+      chatId: 7,
+      messageId: "102",
+      sessionKey: "agent:main:telegram:group:7",
+    });
+
+    const replyChainNodes = buildTelegramReplyChain({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      msg: current,
+    });
+    const context = buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "103",
+      replyChainNodes,
+      recentLimit: 10,
+      replyTargetWindowSize: 0,
+      dedupeSessionKey: "agent:main:telegram:group:7",
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toEqual(["101", "102"]);
+    expect(context.find((entry) => entry.node.messageId === "102")?.isReplyTarget).toBe(true);
+    expect(context.map((entry) => entry.node.body)).not.toContain("already in this session");
+  });
+
+  it("persists session-bound markers across message cache reloads", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-session-bound-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    const sessionKey = "agent:main:telegram:direct:7";
+    await rm(persistedPath, { force: true });
+    try {
+      const firstCache = createTelegramMessageCache({ persistedPath });
+      firstCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "Ada" },
+          message_id: 200,
+          date: 1736380200,
+          text: "already in the session transcript",
+          from: { id: 7, is_bot: false, first_name: "Ada" },
+        } as Message,
+      });
+      firstCache.markSessionBound({
+        accountId: "default",
+        chatId: 7,
+        messageId: "200",
+        sessionKey,
+      });
+
+      resetTelegramMessageCacheBucketsForTest();
+      const secondCache = createTelegramMessageCache({ persistedPath });
+      secondCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "Ada" },
+          message_id: 201,
+          date: 1736380300,
+          text: "what did I say before?",
+          from: { id: 7, is_bot: false, first_name: "Ada" },
+        } as Message,
+      });
+      const context = buildTelegramConversationContext({
+        cache: secondCache,
+        accountId: "default",
+        chatId: 7,
+        messageId: "201",
+        replyChainNodes: [],
+        recentLimit: 10,
+        replyTargetWindowSize: 0,
+        dedupeSessionKey: sessionKey,
+      });
+
+      expect(
+        secondCache.get({ accountId: "default", chatId: 7, messageId: "200" })?.sessionKeys,
+      ).toContain(sessionKey);
+      expect(context).toEqual([]);
+    } finally {
+      resetTelegramMessageCacheBucketsForTest();
+      await rm(persistedPath, { force: true });
+    }
+  });
+
   it("does not select messages before the latest session reset command", () => {
     const cache = createTelegramMessageCache();
     const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");

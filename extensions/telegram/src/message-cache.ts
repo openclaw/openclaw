@@ -16,6 +16,7 @@ export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[numb
 
 export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
   sourceMessage: Message;
+  sessionKeys?: string[];
 };
 
 export type TelegramConversationContextNode = {
@@ -50,6 +51,12 @@ export type TelegramMessageCache = {
     before: number;
     after: number;
   }) => TelegramCachedMessageNode[];
+  markSessionBound: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId?: string;
+    sessionKey?: string;
+  }) => void;
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
@@ -152,6 +159,11 @@ function readOptionalString(record: Record<string, unknown>, key: string): strin
   return isString(value) ? value : undefined;
 }
 
+function readOptionalStringArray(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  return Array.isArray(value) ? value.filter(isString) : [];
+}
+
 function isTelegramSourceMessage(value: unknown): value is Message {
   return (
     isRecord(value) &&
@@ -167,7 +179,15 @@ function parsePersistedNode(value: unknown): TelegramCachedMessageNode | null {
     return null;
   }
   const threadId = Number(readOptionalString(value, "threadId"));
-  return normalizeMessageNode(value.sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
+  const node = normalizeMessageNode(
+    value.sourceMessage,
+    Number.isFinite(threadId) ? { threadId } : {},
+  );
+  if (!node) {
+    return null;
+  }
+  const sessionKeys = readOptionalStringArray(value, "sessionKeys");
+  return sessionKeys.length > 0 ? { ...node, sessionKeys } : node;
 }
 
 function parsePersistedEntry(value: unknown): {
@@ -303,6 +323,7 @@ function serializePersistedEntry(key: string, node: TelegramCachedMessageNode): 
     node: {
       sourceMessage: node.sourceMessage,
       ...(node.threadId ? { threadId: node.threadId } : {}),
+      ...(node.sessionKeys?.length ? { sessionKeys: node.sessionKeys } : {}),
     },
   })}\n`;
 }
@@ -481,6 +502,39 @@ export function createTelegramMessageCache(params?: {
         targetIndex + Math.max(0, after) + 1,
       );
     },
+    markSessionBound: ({ accountId, chatId, messageId, sessionKey }) => {
+      const normalizedSessionKey = sessionKey?.trim();
+      if (!messageId || !normalizedSessionKey) {
+        return;
+      }
+      const key = telegramMessageCacheKey({ accountId, chatId, messageId });
+      const entry = messages.get(key);
+      if (!entry) {
+        return;
+      }
+      const sessionKeys = entry.sessionKeys ?? [];
+      if (sessionKeys.includes(normalizedSessionKey)) {
+        return;
+      }
+      entry.sessionKeys = [...sessionKeys, normalizedSessionKey];
+      messages.delete(key);
+      messages.set(key, entry);
+      try {
+        bucket.persistedEntryCount += appendPersistedMessage({
+          key,
+          node: entry,
+          persistedPath: params?.persistedPath,
+        });
+        if (bucket.persistedEntryCount > maxMessages * COMPACT_THRESHOLD_RATIO) {
+          bucket.persistedEntryCount = replacePersistedMessages({
+            messages,
+            persistedPath: params?.persistedPath,
+          });
+        }
+      } catch (error) {
+        logVerbose(`telegram: failed to persist message cache session marker: ${String(error)}`);
+      }
+    },
   };
 }
 
@@ -622,13 +676,22 @@ export function buildTelegramConversationContext(params: {
   recentLimit: number;
   replyTargetWindowSize: number;
   minTimestampMs?: number;
+  dedupeSessionKey?: string;
 }): TelegramConversationContextNode[] {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
   const sessionBoundary = resolveSessionBoundaryNode(params);
   const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
+  const dedupeSessionKey = params.dedupeSessionKey?.trim();
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
+      return;
+    }
+    if (
+      dedupeSessionKey &&
+      flags?.replyTarget !== true &&
+      node.sessionKeys?.includes(dedupeSessionKey)
+    ) {
       return;
     }
     if (!isAfterSessionBoundary(node, sessionBoundary)) {
