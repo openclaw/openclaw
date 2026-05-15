@@ -1,562 +1,248 @@
 # Upstream Update Summary (v2): v2026.4.1 → v2026.5.12
 
-This is a high-level summary of what we’d incorporate by updating Polytropos from upstream v2026.4.1 to upstream v2026.5.12.
+## Executive summary
 
-## Evidence gathered
+This update is based on upstream CHANGELOG entries plus repository diff hot-spots. It highlights the biggest upstream themes and what they likely mean for Polytropos.
 
-- Directory heatmaps computed via aggregated at depth=3.
-- Merge conflict check performed via a throwaway branch dry-run merge.
-- Release-notes/changelog sources enumerated from the upstream tree.
+## Upstream CHANGELOG highlights
 
-## Release notes / changelog sources (candidates)
+### 2026.4.1
 
-The repo doesn’t have an obvious single root with per-tag sections. These are the most likely in-tree sources to mine for curated notes:
+- macOS/Voice Wake: add the Voice Wake option to trigger Talk Mode. (#58490) Thanks @SmoothExec.
+- Tasks/chat: add `/tasks` as a chat-native background task board for the current session, with recent task details and agent-local fallback counts when no linked tasks are visible. Related #54226. Thanks @vincentkoc.
+- Web search/SearXNG: add the bundled SearXNG provider plugin for `web_search` with configurable host support. (#57317) Thanks @cgdusek.
+- Telegram/errors: add configurable `errorPolicy` and `errorCooldownMs` controls so Telegram can suppress repeated delivery errors per account, chat, and topic without muting distinct failures. (#51914) Thanks @chinar-amrutkar
 
-## Change surface (depth=3 hot spots)
+### 2026.4.2
 
-Top changed areas by file count (depth=3):
+- Plugins/xAI: move `x_search` settings from the legacy core `tools.web.x_search.*` path to the plugin-owned `plugins.entries.xai.config.xSearch.*` path, standardize `x_search` auth on `plugins.entries.xai.config.webSearch.apiKey` / `XAI_API_KEY`, and migrate legacy config with `openclaw doctor --fix`. (#59674) Thanks @vincentkoc.
+- Plugins/web fetch: move Firecrawl `web_fetch` config from the legacy core `tools.web.fetch.firecrawl.*` path to the plugin-owned `plugins.entries.firecrawl.config.webFetch.*` path, route `web_fetch` fallback through the new fetch-provider boundary instead of a Firecrawl-only core branch, and migrate legacy config with `openclaw doctor --fix`. (#59465) Thanks @vincentkoc.
+- Tasks/Task Flow: restore the core Task Flow substrate with managed-vs-mirrored sync modes, durable flow state/revision tracking, and `openclaw tasks flow` inspection/recovery primitives so background orchestration can persist and be operated separately from plugin authoring layers. (#58930) Thanks @mbelinky.
+- Tasks/Task Flow: add managed child task spawning plus sticky cancel intent, so external orchestrators can stop scheduling immediately and let parent Task Flows settle to `cancelled` once active child tasks finish. (#59610) Thanks @mbelinky.
 
-## What changed (summary)
+### 2026.4.5
 
-From the hot spots + commit subjects, the major themes in this range appear to be:
+- Config: remove legacy public config aliases such as `talk.voiceId` / `talk.apiKey`, `agents.*.sandbox.perSession`, `browser.ssrfPolicy.allowPrivateNetwork`, `hooks.internal.handlers`, and channel/group/room `allow` toggles in favor of the canonical public paths and `enabled`, while keeping load-time compatibility and `openclaw doctor --fix` migration support for existing configs. (#60726) Thanks @vincentkoc.
+- Agents/video generation: add the built-in `video_generate` tool so agents can create videos through configured providers and return the generated media directly in the reply.
+- Agents/music generation: ignore unsupported optional hints such as `durationSeconds` with a warning instead of hard-failing requests on providers like Google Lyria.
+- Providers/Arcee AI: add a bundled Arcee AI provider plugin with `ARCEEAI_API_KEY` onboarding, Trinity model catalog (mini, large-preview, large-thinking), OpenAI-compatible API support, and OpenRouter as an alternative auth path. (#62068) Thanks @arthurbr11.
 
-1. **Extension/provider work continues heavily**
-   - Large churn under including provider-specific runtime + integration logic.
-   - Expect behavior changes and new edge-case handling in channel adapters.
+### 2026.4.7
 
-2. **Core runtime hardening around secrets, security, daemon/gateway, and cron**
-   - Churn in , , , suggests ongoing reliability/security work.
+- CLI/infer: add a first-class `openclaw infer ...` hub for provider-backed inference workflows across model, media, web, and embedding tasks. Thanks @Takhoffman.
+- Tools/media generation: auto-fallback across auth-backed image, music, and video providers by default, preserve intent during provider switches, remap size/aspect/resolution/duration hints to the closest supported option, and surface provider capabilities plus mode-aware video-to-video support.
+- Memory/wiki: restore the bundled `memory-wiki` stack with plugin, CLI, sync/query/apply tooling, memory-host integration, structured claim/evidence fields, compiled digest retrieval, claim-health linting, contradiction clustering, staleness dashboards, and freshness-weighted search. Thanks @vincentkoc.
+- Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
 
-3. **CI/release machinery changes**
-   - Significant + release tooling churn: expect changes in how releases are built/verified/published.
+### 2026.4.8
 
-4. **Memory/media subsystems**
-   - Changes under memory/media-related packages and subsystems imply internal refactors and bugfixes.
+- Telegram/setup: load setup and secret contracts through packaged top-level sidecars so installed npm builds no longer try to import missing `dist/extensions/telegram/src/*` files during gateway startup.
+- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across BlueBubbles, Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
+- Bundled plugins: align packaged plugin compatibility metadata with the release version so bundled channels and providers load on OpenClaw 2026.4.8.
+- Agents/progress: keep `update_plan` available for OpenAI-family runs while returning compact success payloads and allowing `tools.experimental.planTool=false` to opt out.
 
-## Representative diffs (stat-only)
+### 2026.4.9
 
-Below are stat-only summaries for a small set of the hottest directories.
+- Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit/reset flows, cleaner durable-fact extraction, and live short-term promotion integration so old daily notes can replay into Dreams and durable memory without a second memory stack. Thanks @mbelinky.
+- Control UI/dreaming: add a structured diary view with timeline navigation, backfill/reset controls, traceable dreaming summaries, and a grounded Scene lane with promotion hints plus a safe clear-grounded action for staged backfill signals. (#63395) Thanks @mbelinky.
+- QA/lab: add character-vibes evaluation reports with model selection and parallel runs so live QA can compare candidate behavior faster.
+- Plugins/provider-auth: let provider manifests declare `providerAuthAliases` so provider variants can share env vars, auth profiles, config-backed auth, and API-key onboarding choices without core-specific wiring.
 
-### extensions/discord/src
+### 2026.4.10
 
-extensions/discord/src/account-inspect.test.ts | 2 +-
-extensions/discord/src/account-inspect.ts | 14 +-
-extensions/discord/src/accounts.test.ts | 211 +-
-extensions/discord/src/accounts.ts | 121 +-
-.../src/actions/handle-action.guild-admin.ts | 84 +-
-.../discord/src/actions/handle-action.test.ts | 348 ++-
-extensions/discord/src/actions/handle-action.ts | 107 +-
-extensions/discord/src/actions/runtime.guild.ts | 350 +--
-.../src/actions/runtime.messaging.messages.ts | 205 ++
-.../src/actions/runtime.messaging.reactions.ts | 67 +
-.../src/actions/runtime.messaging.runtime.ts | 69 +
-.../discord/src/actions/runtime.messaging.send.ts | 248 ++
-.../src/actions/runtime.messaging.shared.ts | 97 +
-.../discord/src/actions/runtime.messaging.ts | 654 +----
-.../src/actions/runtime.moderation.authz.test.ts | 111 +-
-.../discord/src/actions/runtime.moderation.ts | 81 +-
-.../discord/src/actions/runtime.presence.test.ts | 13 +-
-extensions/discord/src/actions/runtime.presence.ts | 20 +-
-extensions/discord/src/actions/runtime.shared.ts | 72 +-
-extensions/discord/src/actions/runtime.test.ts | 631 +++--
-extensions/discord/src/actions/runtime.ts | 14 +-
-extensions/discord/src/api-barrel.test.ts | 80 +
-extensions/discord/src/api.test.ts | 82 +-
-extensions/discord/src/api.ts | 115 +-
-.../discord/src/approval-handler.runtime.test.ts | 41 +
-extensions/discord/src/approval-handler.runtime.ts | 636 +++++
-extensions/discord/src/approval-native.test.ts | 179 +-
-extensions/discord/src/approval-native.ts | 179 +-
-extensions/discord/src/approval-runtime.ts | 14 +
-extensions/discord/src/approval-shared.ts | 56 +
-extensions/discord/src/audit-core.ts | 178 ++
-extensions/discord/src/audit.test.ts | 118 +-
-extensions/discord/src/audit.ts | 136 +-
-.../discord/src/channel-actions.contract.test.ts | 45 +
-extensions/discord/src/channel-actions.runtime.ts | 1 +
-extensions/discord/src/channel-actions.test.ts | 395 ++-
-extensions/discord/src/channel-actions.ts | 124 +-
-extensions/discord/src/channel-api.ts | 29 +
-extensions/discord/src/channel.conversation.ts | 159 ++
-extensions/discord/src/channel.loaders.ts | 50 +
+- Models/Codex: add the bundled Codex provider and plugin-owned app-server harness so `codex/gpt-*` models use Codex-managed auth, native threads, model discovery, and compaction while `openai/gpt-*` stays on the normal OpenAI provider path. (#64298).
+- Memory/Active Memory: add a new optional Active Memory plugin that gives OpenClaw a dedicated memory sub-agent right before the main reply, so ongoing chats can automatically pull in relevant preferences, context, and past details without making users remember to manually say "remember this" or "search memory" first. Includes configurable message/recent/full context modes, live `/verbose` inspection, advanced prompt/thinking overrides for tuning, and opt-in transcript persistence for debugging. Docs: https://docs.openclaw.ai/concepts/active-memory. (#63286) Thanks @Takhoffman.
+- macOS/Talk: add an experimental local MLX speech provider for Talk Mode, with explicit provider selection, local utterance playback, interruption handling, and system-voice fallback. (#63539) Thanks @ImLukeF.
+- Tools/video generation: add Seedance 2.0 model refs to the bundled fal provider and submit the provider-specific duration, resolution, audio, and seed metadata fields needed for live Seedance 2.0 runs.
 
-### src/auto-reply/reply
+### 2026.4.11
 
-src/auto-reply/reply/abort-cutoff.ts | 17 +-
-src/auto-reply/reply/abort-primitives.ts | 10 +-
-src/auto-reply/reply/abort.runtime-types.ts | 15 +
-src/auto-reply/reply/abort.test.ts | 47 +-
-src/auto-reply/reply/abort.ts | 78 +-
-src/auto-reply/reply/acp-projector.test.ts | 59 +-
-src/auto-reply/reply/acp-projector.ts | 40 +-
-src/auto-reply/reply/acp-reset-target.ts | 45 +-
-src/auto-reply/reply/acp-stream-settings.test.ts | 4 +-
-src/auto-reply/reply/acp-stream-settings.ts | 4 +-
-src/auto-reply/reply/agent-runner-auth-profile.ts | 20 +-
-.../agent-runner-direct-runtime-config.test.ts | 327 ++
-.../reply/agent-runner-execution.runtime.ts | 1 -
-.../reply/agent-runner-execution.test.ts | 3265 ++++++++++++-
-src/auto-reply/reply/agent-runner-execution.ts | 1743 ++++++-
-src/auto-reply/reply/agent-runner-helpers.test.ts | 53 +-
-src/auto-reply/reply/agent-runner-helpers.ts | 42 +-
-.../reply/agent-runner-memory.dedup.test.ts | 2 +-
-.../reply/agent-runner-memory.runtime.ts | 1 -
-src/auto-reply/reply/agent-runner-memory.test.ts | 1084 +++++
-src/auto-reply/reply/agent-runner-memory.ts | 432 +-
-src/auto-reply/reply/agent-runner-payloads.test.ts | 523 +-
-src/auto-reply/reply/agent-runner-payloads.ts | 333 +-
-.../reply/agent-runner-reminder-guard.ts | 7 +-
-src/auto-reply/reply/agent-runner-run-params.ts | 96 +
-.../reply/agent-runner-runtime-config.test.ts | 78 +
-.../reply/agent-runner-session-reset.test.ts | 146 +
-src/auto-reply/reply/agent-runner-session-reset.ts | 142 +
-src/auto-reply/reply/agent-runner-usage-line.ts | 23 +-
-.../agent-runner-utils.secret-resolution.test.ts | 191 +
-src/auto-reply/reply/agent-runner-utils.test.ts | 107 +-
-src/auto-reply/reply/agent-runner-utils.ts | 180 +-
-.../reply/agent-runner.media-paths.test.ts | 285 +-
-.../reply/agent-runner.misc.runreplyagent.test.ts | 2368 +++++----
-.../reply/agent-runner.runreplyagent.e2e.test.ts | 2611 ++++------
-src/auto-reply/reply/agent-runner.test-fixtures.ts | 42 +
-src/auto-reply/reply/agent-runner.ts | 1874 +++++++-
-src/auto-reply/reply/auto-topic-label-config.ts | 36 -
-src/auto-reply/reply/auto-topic-label.test.ts | 174 -
-src/auto-reply/reply/auto-topic-label.ts | 101 -
+- Dreaming/memory-wiki: add ChatGPT import ingestion plus new `Imported Insights` and `Memory Palace` diary subtabs so Dreaming can inspect imported source chats, compiled wiki pages, and full source pages directly from the UI. (#64505).
+- Control UI/webchat: render assistant media/reply/voice directives as structured chat bubbles, add the `[embed ...]` rich output tag, and gate external embed URLs behind config. (#64104).
+- Tools/video_generate: add URL-only generated asset delivery, typed `providerOptions`, reference audio inputs, per-asset role hints, `adaptive` aspect-ratio support, and a higher image-input cap so video providers can expose richer generation modes without forcing large files into memory. (#61987, #61988) Thanks @xieyongliang.
+- Feishu: improve document comment sessions with richer context parsing, comment reactions, and typing feedback so document-thread conversations behave more like chat conversations. (#63785).
 
-### extensions/telegram/src
+### 2026.4.12
 
-extensions/telegram/src/access-groups.ts | 72 +
-extensions/telegram/src/account-config.ts | 80 +
-extensions/telegram/src/account-inspect.test.ts | 4 +-
-extensions/telegram/src/account-inspect.ts | 35 +-
-extensions/telegram/src/account-selection.ts | 151 +
-extensions/telegram/src/account-throttler.test.ts | 17 +
-extensions/telegram/src/account-throttler.ts | 21 +
-extensions/telegram/src/accounts.test.ts | 233 +-
-extensions/telegram/src/accounts.ts | 134 +-
-extensions/telegram/src/action-runtime.test.ts | 594 ++--
-extensions/telegram/src/action-runtime.ts | 205 +-
-extensions/telegram/src/action-threading.test.ts | 39 +-
-extensions/telegram/src/action-threading.ts | 9 +-
-extensions/telegram/src/agent-config.ts | 21 +
-extensions/telegram/src/allow-from.ts | 6 +
-extensions/telegram/src/allowed-updates.test.ts | 18 +-
-extensions/telegram/src/allowed-updates.ts | 54 +-
-extensions/telegram/src/api-fetch.test.ts | 39 +-
-extensions/telegram/src/api-fetch.ts | 2 +-
-extensions/telegram/src/api-logging.ts | 2 +-
-extensions/telegram/src/api-root.test.ts | 38 +
-extensions/telegram/src/api-root.ts | 49 +
-extensions/telegram/src/approval-buttons.ts | 44 -
-.../telegram/src/approval-callback-data.test.ts | 33 +
-extensions/telegram/src/approval-callback-data.ts | 23 +
-.../telegram/src/approval-handler.runtime.test.ts | 121 +
-.../telegram/src/approval-handler.runtime.ts | 195 ++
-extensions/telegram/src/approval-native.test.ts | 100 +-
-extensions/telegram/src/approval-native.ts | 169 +-
-.../telegram/src/audit-membership-runtime.ts | 9 +-
-extensions/telegram/src/audit.test.ts | 24 +-
-extensions/telegram/src/audit.ts | 47 +-
-extensions/telegram/src/audit.types.ts | 29 +
-extensions/telegram/src/auto-topic-label-config.ts | 24 +
-extensions/telegram/src/auto-topic-label.test.ts | 60 +
-extensions/telegram/src/auto-topic-label.ts | 16 +
-extensions/telegram/src/bot-access.ts | 42 +-
-extensions/telegram/src/bot-core.ts | 643 ++++
-extensions/telegram/src/bot-deps.ts | 34 +-
-.../telegram/src/bot-handlers.agent.runtime.ts | 5 +
+- QA/lab: add Convex-backed pooled Telegram credential leasing plus `openclaw qa credentials` admin commands and broker setup docs. (#65596) Thanks @joshavant.
+- Memory/Active Memory: add a new optional Active Memory plugin that gives OpenClaw a dedicated memory sub-agent right before the main reply, so ongoing chats can automatically pull in relevant preferences, context, and past details without making users remember to manually say "remember this" or "search memory" first. Includes configurable message/recent/full context modes, live `/verbose` inspection, advanced prompt/thinking overrides for tuning, and opt-in transcript persistence for debugging. Docs: https://docs.openclaw.ai/concepts/active-memory. (#63286) Thanks @Takhoffman.
+- macOS/Talk: add an experimental local MLX speech provider for Talk Mode, with explicit provider selection, local utterance playback, interruption handling, and system-voice fallback. (#63539) Thanks @ImLukeF.
+- CLI/exec policy: add a local `openclaw exec-policy` command with `show`, `preset`, and `set` subcommands for synchronizing requested `tools.exec.*` config with the local exec approvals file, plus follow-up hardening for node-host rejection, rollback safety, and sync conflict detection. (#64050) Thanks @rugvedS07.
 
-### ui/src/ui
+### 2026.4.14
 
-ui/src/ui/app-channels.test.ts | 148 ++
-ui/src/ui/app-channels.ts | 91 +-
-ui/src/ui/app-chat.test.ts | 1449 ++++++++++++-
-ui/src/ui/app-chat.ts | 649 +++++-
-ui/src/ui/app-defaults.test.ts | 11 +
-ui/src/ui/app-defaults.ts | 5 +
-ui/src/ui/app-gateway-chat-load.node.test.ts | 231 ++
-ui/src/ui/app-gateway.node.test.ts | 846 +++++++-
-ui/src/ui/app-gateway.sessions.node.test.ts | 296 ++-
-ui/src/ui/app-gateway.ts | 541 ++++-
-ui/src/ui/app-last-active-session.ts | 14 +
-ui/src/ui/app-lifecycle-connect.node.test.ts | 52 +-
-ui/src/ui/app-lifecycle.node.test.ts | 30 +-
-ui/src/ui/app-lifecycle.ts | 64 +-
-ui/src/ui/app-native-bridge.test.ts | 196 ++
-ui/src/ui/app-native-bridge.ts | 70 +
-ui/src/ui/app-polling.node.test.ts | 62 +
-ui/src/ui/app-polling.ts | 20 +-
-ui/src/ui/app-render-usage-tab.ts | 41 +
-ui/src/ui/app-render.assistant-avatar.test.ts | 296 +++
-ui/src/ui/app-render.exec-policy.test.ts | 81 +
-ui/src/ui/app-render.helpers.browser.test.ts | 265 +++
-ui/src/ui/app-render.helpers.node.test.ts | 853 +++++++-
-ui/src/ui/app-render.helpers.ts | 912 +++-----
-ui/src/ui/app-render.ts | 2197 +++++++++++++-------
-ui/src/ui/app-scroll.test.ts | 218 ++
-ui/src/ui/app-scroll.ts | 45 +
-.../app-settings.refresh-active-tab.node.test.ts | 453 ++++
-ui/src/ui/app-settings.test.ts | 266 ++-
-ui/src/ui/app-settings.ts | 647 ++++--
-ui/src/ui/app-tool-stream.node.test.ts | 274 ++-
-ui/src/ui/app-tool-stream.ts | 164 +-
-ui/src/ui/app-view-state.ts | 145 +-
-ui/src/ui/app.talk.test.ts | 66 +
-ui/src/ui/app.ts | 610 +++++-
-ui/src/ui/assistant-identity.test.ts | 27 +
-ui/src/ui/assistant-identity.ts | 47 +-
-ui/src/ui/canvas-url.test.ts | 39 +
-ui/src/ui/canvas-url.ts | 74 +
-ui/src/ui/chat-event-reload.test.ts | 38 +-
+- OpenAI Codex/models: add forward-compat support for `gpt-5.4-pro`, including Codex pricing/limits and list/status visibility before the upstream catalog catches up. (#66453) Thanks @jepson-liu.
+- Telegram/forum topics: surface human topic names in agent context, prompt metadata, and plugin hook metadata by learning names from Telegram forum service messages. (#65973) Thanks @ptahdunbar.
+- Agents/Ollama: forward the configured embedded-run timeout into the global undici stream timeout tuning so slow local Ollama runs no longer inherit the default stream cutoff instead of the operator-set run timeout. (#63175) Thanks @mindcraftreader and @vincentkoc.
+- Models/Codex: include `apiKey` in the codex provider catalog output so the Pi ModelRegistry validator no longer rejects the entry and silently drops all custom models from every provider in `models.json`. (#66180) Thanks @hoyyeva.
 
-### extensions/browser/src
+### 2026.4.15
 
-extensions/browser/src/browser-control-state.ts | 70 +
-extensions/browser/src/browser-gateway-contract.ts | 3 +
-extensions/browser/src/browser-runtime.ts | 3 +
-extensions/browser/src/browser-tool.actions.ts | 252 ++-
-extensions/browser/src/browser-tool.runtime.ts | 48 +
-extensions/browser/src/browser-tool.schema.ts | 10 +-
-extensions/browser/src/browser-tool.test.ts | 935 ++++++++---
-extensions/browser/src/browser-tool.ts | 282 +++-
-extensions/browser/src/browser/act-policy.ts | 44 +
-.../browser/src/browser/bridge-auth-registry.ts | 6 +-
-.../browser/src/browser/bridge-server.auth.test.ts | 15 +-
-extensions/browser/src/browser/bridge-server.ts | 55 +-
-.../browser/src/browser/browser-proxy-mode.test.ts | 53 +
-.../browser/src/browser/browser-proxy-mode.ts | 55 +
-.../browser/src/browser/browser-utils.test.ts | 21 +-
-.../browser/src/browser/cdp-proxy-bypass.test.ts | 60 +-
-.../browser/src/browser/cdp-reachability-policy.ts | 33 +
-.../browser/src/browser/cdp-target-filter.ts | 22 +
-.../browser/src/browser/cdp-timeouts.test.ts | 69 -
-extensions/browser/src/browser/cdp-timeouts.ts | 21 +-
-.../browser/src/browser/cdp.helpers.fuzz.test.ts | 438 ++++++
-.../src/browser/cdp.helpers.internal.test.ts | 503 ++++++
-extensions/browser/src/browser/cdp.helpers.test.ts | 269 ++++
-extensions/browser/src/browser/cdp.helpers.ts | 341 +++-
-.../browser/src/browser/cdp.internal.test.ts | 1189 ++++++++++++++
-.../src/browser/cdp.screenshot-params.test.ts | 162 +-
-extensions/browser/src/browser/cdp.test.ts | 372 ++++-
-extensions/browser/src/browser/cdp.ts | 848 ++++++++--
-.../browser/src/browser/chrome-mcp.runtime.ts | 5 +
-.../browser/src/browser/chrome-mcp.snapshot.ts | 17 +-
-extensions/browser/src/browser/chrome-mcp.test.ts | 479 +++++-
-extensions/browser/src/browser/chrome-mcp.ts | 825 ++++++++--
-.../src/browser/chrome.default-browser.test.ts | 56 +-
-.../browser/src/browser/chrome.diagnostics.ts | 398 +++++
-.../browser/src/browser/chrome.executables.ts | 88 +-
-.../browser/src/browser/chrome.internal.test.ts | 1306 ++++++++++++++++
-.../browser/src/browser/chrome.launch-args.test.ts | 46 -
-.../chrome.loopback-ssrf.integration.test.ts | 70 +
-.../src/browser/chrome.profile-decoration.ts | 89 +-
-extensions/browser/src/browser/chrome.test.ts | 565 ++++++-
+- Anthropic/models: default Anthropic selections, `opus` aliases, Claude CLI defaults, and bundled image understanding to Claude Opus 4.7.
+- Google/TTS: add Gemini text-to-speech support to the bundled `google` plugin, including provider registration, voice selection, WAV reply output, PCM telephony output, and setup/docs guidance. (#67515) Thanks @barronlroth.
+- Control UI/Overview: add a Model Auth status card showing OAuth token health and provider rate-limit pressure at a glance, with attention callouts when OAuth tokens are expiring or expired. Backed by a new `models.authStatus` gateway method that strips credentials and caches for 60s. (#66211) Thanks @omarshahine.
+- Memory/LanceDB: add cloud storage support to `memory-lancedb` so durable memory indexes can run on remote object storage instead of local disk only. (#63502) Thanks @rugvedS07.
 
-### extensions/matrix/src
+### 2026.4.18
 
-extensions/matrix/src/account-selection.test.ts | 141 ++
-extensions/matrix/src/account-selection.ts | 150 +-
-.../matrix/src/actions.account-propagation.test.ts | 164 +-
-extensions/matrix/src/actions.test.ts | 111 +-
-extensions/matrix/src/actions.ts | 113 +-
-extensions/matrix/src/approval-auth.ts | 25 +-
-.../matrix/src/approval-handler.runtime.test.ts | 567 +++++
-extensions/matrix/src/approval-handler.runtime.ts | 585 +++++
-extensions/matrix/src/approval-ids.ts | 6 +
-extensions/matrix/src/approval-native.test.ts | 329 +++
-extensions/matrix/src/approval-native.ts | 348 +++
-extensions/matrix/src/approval-reaction-auth.ts | 45 +
-extensions/matrix/src/approval-reactions.test.ts | 187 ++
-extensions/matrix/src/approval-reactions.ts | 313 +++
-extensions/matrix/src/channel-account-paths.ts | 97 +
-.../matrix/src/channel.account-paths.test.ts | 30 +-
-extensions/matrix/src/channel.directory.test.ts | 179 +-
-.../matrix/src/channel.message-adapter.test.ts | 245 +++
-extensions/matrix/src/channel.resolve.test.ts | 33 +-
-extensions/matrix/src/channel.runtime.ts | 3 +-
-extensions/matrix/src/channel.setup.test.ts | 57 +-
-extensions/matrix/src/channel.setup.ts | 48 +
-extensions/matrix/src/channel.ts | 426 ++--
-extensions/matrix/src/cli-metadata.ts | 19 +
-extensions/matrix/src/cli.test.ts | 1075 ++++++++-
-extensions/matrix/src/cli.ts | 1307 ++++++++++-
-extensions/matrix/src/config-adapter.ts | 41 +
-extensions/matrix/src/config-schema.test.ts | 94 +
-extensions/matrix/src/config-schema.ts | 64 +-
-extensions/matrix/src/config-ui-hints.ts | 28 +
-extensions/matrix/src/directory-live.test.ts | 37 +-
-extensions/matrix/src/directory-live.ts | 33 +-
-extensions/matrix/src/doctor-contract.ts | 287 +++
-extensions/matrix/src/doctor.test.ts | 403 ++++
-extensions/matrix/src/doctor.ts | 262 +++
-.../matrix/src/exec-approval-resolver.test.ts | 68 +
-extensions/matrix/src/exec-approval-resolver.ts | 23 +
-extensions/matrix/src/exec-approvals.test.ts | 483 +++++
-extensions/matrix/src/exec-approvals.ts | 293 +++
-extensions/matrix/src/group-mentions.test.ts | 29 +
+- Anthropic/models: add Claude Opus 4.7 `xhigh` reasoning effort support and keep it separate from adaptive thinking.
+- Control UI/settings: overhaul the settings and slash-command experience with faster presets, quick-create flows, and refreshed command discovery. (#67819) Thanks @BunsDev.
+- macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+- Codex/gateway: fix gateway crashes when the codex-acp subprocess terminates abruptly; pending requests now shut down gracefully instead of propagating an uncaught EPIPE through the gateway daemon and connected channels. Fixes #67886. (#67947) Thanks @openperf.
 
-### src/agents/pi-embedded-runner
+### 2026.4.20
 
-src/agents/pi-embedded-runner/abort.ts | 6 +-
-src/agents/pi-embedded-runner/aliases.test.ts | 17 +
-.../anthropic-cache-control-payload.test.ts | 35 +
-.../anthropic-cache-control-payload.ts | 1 +
-.../anthropic-cache-retention.ts | 30 -
-.../anthropic-family-cache-semantics.ts | 106 +
-.../anthropic-family-tool-payload-compat.ts | 102 +-
-.../pi-embedded-runner/bedrock-stream-wrappers.ts | 16 -
-src/agents/pi-embedded-runner/cache-ttl.test.ts | 133 +-
-src/agents/pi-embedded-runner/cache-ttl.ts | 81 +-
-.../pi-embedded-runner/compact-reasons.test.ts | 32 +-
-src/agents/pi-embedded-runner/compact-reasons.ts | 21 +-
-.../pi-embedded-runner/compact.hooks.harness.ts | 361 +-
-.../pi-embedded-runner/compact.hooks.test.ts | 864 ++++-
-src/agents/pi-embedded-runner/compact.queued.ts | 354 ++
-src/agents/pi-embedded-runner/compact.runtime.ts | 14 +-
-.../pi-embedded-runner/compact.runtime.types.ts | 6 +
-src/agents/pi-embedded-runner/compact.ts | 1535 +++++----
-src/agents/pi-embedded-runner/compact.types.ts | 91 +
-.../compaction-duplicate-user-messages.test.ts | 76 +
-.../compaction-duplicate-user-messages.ts | 109 +
-src/agents/pi-embedded-runner/compaction-hooks.ts | 45 +-
-.../compaction-runtime-context.test.ts | 171 +-
-.../compaction-runtime-context.ts | 22 +-
-.../compaction-safety-timeout.ts | 2 +-
-.../compaction-successor-transcript.test.ts | 472 +++
-.../compaction-successor-transcript.ts | 289 ++
-.../context-engine-capabilities.ts | 85 +
-.../context-engine-maintenance.test.ts | 1159 ++++++-
-.../context-engine-maintenance.ts | 645 +++-
-.../context-truncation-notice.ts | 5 +
-src/agents/pi-embedded-runner/delivery-evidence.ts | 124 +
-.../effective-tool-policy.test.ts | 186 ++
-.../pi-embedded-runner/effective-tool-policy.ts | 179 +
-.../pi-embedded-runner/empty-assistant-turn.ts | 57 +
-src/agents/pi-embedded-runner/extensions.test.ts | 61 +-
-src/agents/pi-embedded-runner/extensions.ts | 88 +-
-.../extra-params.cache-retention-default.test.ts | 196 +-
-.../pi-embedded-runner/extra-params.google.test.ts | 86 +-
-.../extra-params.kilocode.test.ts | 4 +-
+- Onboard/wizard: restyle the setup security disclaimer with a single yellow warning banner, section headings and bulleted checklists, and un-dim the note body so key guidance is easy to scan; add a loading spinner during the initial model catalog load so the wizard no longer goes blank while it runs; add an "API key" placeholder to provider API key prompts. (#69553) Thanks @Patrick-Erichsen.
+- Agents/prompts: strengthen the default system prompt and OpenAI GPT-5 overlay with clearer completion bias, live-state checks, weak-result recovery, and verification-before-final guidance.
+- Models/costs: support tiered model pricing from cached catalogs and configured models, and include bundled Moonshot Kimi K2.6/K2.5 cost estimates for token-usage reports. (#67605) Thanks @sliverp.
+- Sessions/Maintenance: enforce the built-in entry cap and age prune by default, and prune oversized stores at load time so accumulated cron/executor session backlogs cannot OOM the gateway before the write path runs. (#69404) Thanks @bobrenze-bot.
 
-### extensions/slack/src
+### 2026.4.21
 
-extensions/slack/src/account-inspect.ts | 3 +-
-extensions/slack/src/account-reply-mode.ts | 37 +
-extensions/slack/src/account-surface-fields.ts | 2 +-
-extensions/slack/src/accounts.runtime.ts | 1 +
-extensions/slack/src/accounts.test.ts | 335 +++-
-extensions/slack/src/accounts.ts | 133 +-
-extensions/slack/src/action-runtime.runtime.ts | 1 +
-extensions/slack/src/action-runtime.test.ts | 492 +++--
-extensions/slack/src/action-runtime.ts | 216 ++-
-extensions/slack/src/action-threading.test.ts | 17 +-
-extensions/slack/src/action-threading.ts | 13 +-
-extensions/slack/src/actions.blocks.test.ts | 99 +-
-extensions/slack/src/actions.download-file.test.ts | 101 +-
-extensions/slack/src/actions.reactions.test.ts | 157 ++
-extensions/slack/src/actions.read.test.ts | 55 +
-extensions/slack/src/actions.runtime.ts | 16 +
-extensions/slack/src/actions.ts | 145 +-
-extensions/slack/src/approval-auth.ts | 11 +-
-.../slack/src/approval-handler.runtime.test.ts | 251 +++
-extensions/slack/src/approval-handler.runtime.ts | 352 ++++
-extensions/slack/src/approval-native.test.ts | 199 +-
-extensions/slack/src/approval-native.ts | 183 +-
-extensions/slack/src/block-kit-tables.test.ts | 68 -
-extensions/slack/src/block-kit-tables.ts | 134 --
-extensions/slack/src/blocks-fallback.test.ts | 31 -
-extensions/slack/src/blocks-input.test.ts | 57 -
-extensions/slack/src/blocks-render.ts | 174 +-
-extensions/slack/src/blocks.test-helpers.ts | 16 +-
-extensions/slack/src/blocks.test.ts | 145 ++
-.../channel-actions-setup-status.contract.test.ts | 137 ++
-extensions/slack/src/channel-actions.ts | 83 +-
-extensions/slack/src/channel-api.ts | 27 +
-extensions/slack/src/channel-migration.ts | 9 +-
-extensions/slack/src/channel-type.test.ts | 201 ++
-extensions/slack/src/channel-type.ts | 103 +-
-extensions/slack/src/channel.lazy-seams.test.ts | 358 ++++
-.../slack/src/channel.message-adapter.test.ts | 228 +++
-extensions/slack/src/channel.runtime.ts | 5 -
-extensions/slack/src/channel.setup.ts | 89 +-
-extensions/slack/src/channel.test.ts | 880 +++++++--
+- OpenAI/images: default the bundled image-generation provider and live media smoke tests to `gpt-image-2`, and advertise the newer 2K/4K OpenAI size hints in image-generation docs and tool metadata.
+- Plugins/skills: add the Skill Workshop plugin, which captures reusable workflow corrections as pending or auto-applied workspace skills, runs threshold-based reviewer passes for stronger completion bias on reusable procedures, quarantines unsafe proposals, and refreshes skill availability after safe writes.
+- Plugin SDK/channels: add presentation and skills runtime contracts, decouple channel presentation rendering, and document message presentation cards so plugins can own richer interactive surfaces without channel-specific glue.
+- Fireworks/models: add Kimi K2.6 (`fireworks/accounts/fireworks/models/kimi-k2p6`) to the bundled catalog and live-model priority list, while keeping Kimi thinking disabled for Fireworks K2.6 requests.
 
-### src/channels/plugins
+### 2026.4.22
 
-src/channels/plugins/account-helpers.ts | 36 +-
-src/channels/plugins/acp-bindings.test.ts | 61 +-
-.../plugins/acp-configured-binding-consumer.ts | 9 +-
-.../plugins/acp-stateful-target-driver.test.ts | 77 ++
-src/channels/plugins/acp-stateful-target-driver.ts | 51 +-
-.../plugins/acp-stateful-target-reset.runtime.ts | 1 +
-.../actions/discord/handle-action.guild-admin.ts | 1 -
-.../plugins/actions/discord/handle-action.ts | 1 -
-src/channels/plugins/allowlist-match.ts | 2 +-
-src/channels/plugins/approval-native.types.ts | 44 +
-src/channels/plugins/approvals.test.ts | 76 ++
-src/channels/plugins/approvals.ts | 31 +-
-src/channels/plugins/binding-provider.ts | 11 -
-src/channels/plugins/binding-routing.test.ts | 178 ++++
-src/channels/plugins/binding-routing.ts | 114 +-
-src/channels/plugins/binding-targets.test.ts | 2 +
-src/channels/plugins/binding-targets.ts | 38 +-
-src/channels/plugins/binding-types.ts | 4 +-
-src/channels/plugins/bluebubbles-actions.ts | 34 -
-src/channels/plugins/bootstrap-registry.ts | 108 ++
-src/channels/plugins/bundled-ids.ts | 29 +
-src/channels/plugins/bundled-root-caches.test.ts | 237 +++++
-src/channels/plugins/bundled-root.ts | 50 +
-src/channels/plugins/bundled.shape-guard.test.ts | 944 ++++++++++++++++-
-src/channels/plugins/bundled.ts | 906 +++++++++++++---
-src/channels/plugins/catalog.test.ts | 23 +
-src/channels/plugins/catalog.ts | 307 +++---
-src/channels/plugins/channel-id.types.ts | 3 +
-src/channels/plugins/channel-meta.ts | 63 ++
-.../plugins/channel-runtime-surface.types.ts | 44 +
-src/channels/plugins/chat-target-prefixes.ts | 22 +-
-src/channels/plugins/config-helpers.ts | 2 +-
-src/channels/plugins/config-schema.test.ts | 69 +-
-src/channels/plugins/config-schema.ts | 93 +-
-src/channels/plugins/config-write-policy-shared.ts | 206 ++++
-src/channels/plugins/config-writes.ts | 190 +---
-.../plugins/configured-binding-builtins.ts | 9 +-
-.../plugins/configured-binding-compiler.ts | 48 +-
-.../plugins/configured-binding-consumers.ts | 6 +-
-src/channels/plugins/configured-binding-match.ts | 8 +-
+- Providers/xAI: add image generation, text-to-speech, and speech-to-text support, including `grok-imagine-image` / `grok-imagine-image-pro`, reference-image edits, six live xAI voices, MP3/WAV/PCM/G.711 TTS formats, `grok-stt` audio transcription, and xAI realtime transcription for Voice Call streaming. (#68694) Thanks @KateWilkins.
+- Providers/STT: add Voice Call streaming transcription for Deepgram, ElevenLabs, and Mistral, alongside the existing OpenAI and xAI realtime STT paths; ElevenLabs also gains Scribe v2 batch audio transcription for inbound media.
+- TUI: add local embedded mode for running terminal chats without a Gateway while keeping plugin approval gates enforced. (#66767) Thanks @fuller-stack-dev.
+- Onboarding: auto-install missing provider and channel plugins during setup so first-run configuration can complete without manual plugin recovery. Thanks @vincentkoc.
 
-### extensions/qqbot/src
+### 2026.4.23
 
-extensions/qqbot/src/api.ts | 991 -------------
-extensions/qqbot/src/bridge/approval/capability.ts | 237 ++++
-.../qqbot/src/bridge/approval/handler-runtime.ts | 204 +++
-extensions/qqbot/src/bridge/bootstrap.ts | 135 ++
-extensions/qqbot/src/bridge/channel-entry.ts | 18 +
-.../commands/framework-context-adapter.test.ts | 55 +
-.../bridge/commands/framework-context-adapter.ts | 60 +
-.../bridge/commands/framework-registration.test.ts | 118 ++
-.../src/bridge/commands/framework-registration.ts | 66 +
-.../qqbot/src/bridge/commands/from-parser.test.ts | 86 ++
-.../qqbot/src/bridge/commands/from-parser.ts | 60 +
-.../qqbot/src/bridge/commands/result-dispatcher.ts | 76 +
-extensions/qqbot/src/bridge/config-shared.ts | 132 ++
-extensions/qqbot/src/bridge/config.ts | 176 +++
-extensions/qqbot/src/bridge/gateway.ts | 179 +++
-extensions/qqbot/src/bridge/logger.ts | 31 +
-extensions/qqbot/src/bridge/narrowing.ts | 31 +
-extensions/qqbot/src/bridge/plugin-version.test.ts | 146 ++
-extensions/qqbot/src/bridge/plugin-version.ts | 102 ++
-extensions/qqbot/src/bridge/runtime.ts | 25 +
-extensions/qqbot/src/bridge/sdk-adapter.ts | 167 +++
-extensions/qqbot/src/bridge/setup/finalize.ts | 144 ++
-extensions/qqbot/src/bridge/setup/surface.ts | 34 +
-extensions/qqbot/src/bridge/tools/channel.ts | 58 +
-extensions/qqbot/src/bridge/tools/index.ts | 15 +
-extensions/qqbot/src/bridge/tools/remind.test.ts | 141 ++
-extensions/qqbot/src/bridge/tools/remind.ts | 91 ++
-.../qqbot/src/channel.message-adapter.test.ts | 89 ++
-extensions/qqbot/src/channel.setup.ts | 150 +-
-extensions/qqbot/src/channel.ts | 476 ++++---
-extensions/qqbot/src/command-auth.test.ts | 69 +-
-extensions/qqbot/src/config-schema.ts | 50 +-
-extensions/qqbot/src/config.test.ts | 216 ++-
-extensions/qqbot/src/config.ts | 199 ---
-extensions/qqbot/src/engine/access/index.ts | 2 +
-.../qqbot/src/engine/access/resolve-policy.test.ts | 61 +
-.../qqbot/src/engine/access/resolve-policy.ts | 30 +
-.../qqbot/src/engine/access/sender-match.test.ts | 60 +
-extensions/qqbot/src/engine/access/sender-match.ts | 55 +
-extensions/qqbot/src/engine/access/types.ts | 2 +
+- Providers/OpenAI: add image generation and reference-image editing through Codex OAuth, so `openai/gpt-image-2` works without an `OPENAI_API_KEY`. Fixes #70703.
+- Providers/OpenRouter: add image generation and reference-image editing through `image_generate`, so OpenRouter image models work with `OPENROUTER_API_KEY`. Fixes #55066 via #67668. Thanks @notamicrodose.
+- Image generation: let agents request provider-supported quality and output format hints, and pass OpenAI-specific background, moderation, compression, and user hints through the `image_generate` tool. (#70503) Thanks @ottodeng.
+- Agents/subagents: add optional forked context for native `sessions_spawn` runs so agents can let a child inherit the requester transcript when needed, while keeping clean isolated sessions as the default; includes prompt guidance, context-engine hook metadata, docs, and QA coverage.
 
-### extensions/whatsapp/src
+### 2026.4.24
 
-extensions/whatsapp/src/account-config.ts | 51 +-
-extensions/whatsapp/src/account-ids.ts | 13 +
-extensions/whatsapp/src/account-types.ts | 5 +
-extensions/whatsapp/src/accounts.test.ts | 108 ++
-extensions/whatsapp/src/accounts.ts | 25 +-
-.../whatsapp/src/accounts.whatsapp-auth.test.ts | 2 +-
-.../whatsapp/src/action-runtime-target-auth.ts | 8 +-
-extensions/whatsapp/src/action-runtime.test.ts | 123 ++-
-extensions/whatsapp/src/action-runtime.ts | 11 +-
-extensions/whatsapp/src/active-listener.test.ts | 83 +-
-extensions/whatsapp/src/active-listener.ts | 115 +-
-extensions/whatsapp/src/agent-tools-login.test.ts | 81 ++
-extensions/whatsapp/src/agent-tools-login.ts | 65 +-
-extensions/whatsapp/src/approval-auth.ts | 4 +-
-extensions/whatsapp/src/auth-store.runtime.ts | 1 +
-extensions/whatsapp/src/auth-store.test.ts | 322 ++++++
-extensions/whatsapp/src/auth-store.ts | 332 +++++-
-.../auto-reply.broadcast-groups.combined.test.ts | 58 +-
-.../auto-reply.broadcast-groups.test-harness.ts | 2 +-
-extensions/whatsapp/src/auto-reply.impl.ts | 1 -
-extensions/whatsapp/src/auto-reply.test-harness.ts | 170 ++-
-...eply.compresses-common-formats-jpeg-cap.test.ts | 38 +-
-...b-auto-reply.connection-and-logging.e2e.test.ts | 690 +++++++++++-
-.../auto-reply.web-auto-reply.last-route.test.ts | 159 ++-
-.../whatsapp/src/auto-reply/config.runtime.ts | 16 +
-.../whatsapp/src/auto-reply/deliver-reply.test.ts | 662 +++++++++++-
-.../whatsapp/src/auto-reply/deliver-reply.ts | 309 ++++--
-.../src/auto-reply/heartbeat-runner.test.ts | 269 -----
-.../whatsapp/src/auto-reply/heartbeat-runner.ts | 334 ------
-extensions/whatsapp/src/auto-reply/mentions.ts | 34 +-
-.../whatsapp/src/auto-reply/monitor-state.test.ts | 117 ++
-.../whatsapp/src/auto-reply/monitor-state.ts | 22 +-
-extensions/whatsapp/src/auto-reply/monitor.ts | 909 ++++++++++------
-.../src/auto-reply/monitor/ack-reaction.test.ts | 146 ++-
-.../src/auto-reply/monitor/ack-reaction.ts | 56 +-
-.../auto-reply/monitor/audio-preflight.runtime.ts | 9 +
-.../whatsapp/src/auto-reply/monitor/broadcast.ts | 42 +-
-.../whatsapp/src/auto-reply/monitor/commands.ts | 8 -
-extensions/whatsapp/src/auto-reply/monitor/echo.ts | 2 +-
-.../auto-reply/monitor/group-activation.runtime.ts | 1 +
+- Google Meet joins OpenClaw as a bundled participant plugin, with personal Google auth, Chrome/Twilio realtime sessions, paired-node Chrome support, artifact/attendance exports, and recovery tooling for already-open Meet tabs.
+- DeepSeek V4 Flash and V4 Pro are in the bundled catalog, V4 Flash is the onboarding default, and DeepSeek thinking/replay behavior is fixed for follow-up tool-call turns.
+- Talk, Voice Call, and Google Meet can use realtime voice loops that consult the full OpenClaw agent for deeper tool-backed answers.
+- Providers/OpenRouter: add native video generation through `video_generate`, so OpenRouter video models work with `OPENROUTER_API_KEY`. (#72700) Thanks @notamicrodose.
 
-### extensions/qa-lab/src
+### 2026.4.25
 
-.../qa-lab/src/agentic-parity-report.test.ts | 717 ++++
-extensions/qa-lab/src/agentic-parity-report.ts | 541 ++++
-extensions/qa-lab/src/agentic-parity.ts | 90 +
-extensions/qa-lab/src/browser-runtime.test.ts | 169 +
-extensions/qa-lab/src/browser-runtime.ts | 210 ++
-extensions/qa-lab/src/bundled-plugin-staging.ts | 463 +++
-extensions/qa-lab/src/bus-queries.ts | 167 +
-extensions/qa-lab/src/bus-server.test.ts | 94 +
-extensions/qa-lab/src/bus-server.ts | 217 ++
-extensions/qa-lab/src/bus-state.test.ts | 173 +
-extensions/qa-lab/src/bus-state.ts | 296 ++
-extensions/qa-lab/src/bus-waiters.ts | 135 +
-extensions/qa-lab/src/character-eval.test.ts | 633 ++++
-extensions/qa-lab/src/character-eval.ts | 726 +++++
-extensions/qa-lab/src/cli-options.ts | 4 +
-extensions/qa-lab/src/cli-paths.ts | 86 +
-extensions/qa-lab/src/cli.runtime.test.ts | 1342 ++++++++
-extensions/qa-lab/src/cli.runtime.ts | 1005 ++++++
-extensions/qa-lab/src/cli.test.ts | 623 ++++
-extensions/qa-lab/src/cli.ts | 672 ++++
-extensions/qa-lab/src/coverage-report.test.ts | 31 +
-extensions/qa-lab/src/coverage-report.ts | 192 ++
-extensions/qa-lab/src/cron-run-wait.test.ts | 53 +
-extensions/qa-lab/src/cron-run-wait.ts | 57 +
-extensions/qa-lab/src/discovery-eval.test.ts | 101 +
-extensions/qa-lab/src/discovery-eval.ts | 72 +
-extensions/qa-lab/src/docker-harness.test.ts | 123 +
-extensions/qa-lab/src/docker-harness.ts | 383 +++
-extensions/qa-lab/src/docker-runtime.ts | 278 ++
-extensions/qa-lab/src/docker-up.runtime.test.ts | 272 ++
-extensions/qa-lab/src/docker-up.runtime.ts | 141 +
-extensions/qa-lab/src/extract-tool-payload.ts | 1 +
-extensions/qa-lab/src/gateway-child.test.ts | 1410 ++++++++
-extensions/qa-lab/src/gateway-child.ts | 979 ++++++
-extensions/qa-lab/src/gateway-log-redaction.ts | 48 +
-extensions/qa-lab/src/gateway-rpc-client.test.ts | 198 ++
-extensions/qa-lab/src/gateway-rpc-client.ts | 77 +
-extensions/qa-lab/src/harness-runtime.ts | 89 +
-extensions/qa-lab/src/lab-server-capture.test.ts | 59 +
-extensions/qa-lab/src/lab-server-capture.ts | 127 +
+- Voice replies get a full TTS upgrade: `/tts latest`, chat-scoped auto-TTS controls, personas, per-agent/per-account overrides, and new Azure Speech, Xiaomi, Local CLI, Inworld, Volcengine, and ElevenLabs v3 provider coverage. Thanks @leonchui, @zoujiejun, @solar2ain, @cshape, @xuruiray, @itsuzef, and @barronlroth.
+- Plugin startup and install paths move to the cold persisted registry, cutting broad manifest scans while making plugin update, repair, provider discovery, and install metadata more deterministic. Thanks @vincentkoc and @shakkernerd.
+- OpenTelemetry coverage expands across model calls, token usage, tool loops, harness runs, exec processes, outbound delivery, context assembly, and memory pressure with bounded low-cardinality attributes. Thanks @vincentkoc, @jlapenna, @Lidang-Jiang, and @oc-factus.
+- Browser automation gets safer tab URLs, iframe-aware role snapshots, CDP readiness tuning, headless one-shot launch, and deeper browser doctor probes for slow hosts. Thanks @beat843796 and @BenediktSchackenberg.
 
-## Merge conflicts (if we update today)
+### 2026.4.26
 
-Dry-run merge exit code: 1
+- Control UI/Talk: add a generic browser realtime transport contract, Google Live browser Talk sessions with constrained ephemeral tokens, and a Gateway relay for backend-only realtime voice plugins. Thanks @VACInc.
+- CLI/models: route provider-filtered model listing through an explicit source plan so user config, installed manifest rows, Provider Index previews, and scoped runtime fallbacks keep a stable authority order without adding another catalog cache. Thanks @shakkernerd.
+- Plugins/cron: add a typed `cron_changed` hook for observing gateway-owned cron lifecycle updates without depending on internal cron events. Thanks @amknight.
+- Providers: add Cerebras as a bundled plugin with onboarding, static model catalog, docs, and manifest-owned endpoint metadata.
+
+### 2026.4.27
+
+- Codex Computer Use setup now ships with status/install commands, marketplace discovery, and fail-closed MCP checks for Codex-mode desktop control. Thanks @pash-openai.
+- DeepInfra joins the bundled provider set with model discovery, media generation/editing, TTS, embeddings, and provider-owned onboarding policy. Thanks @ats3v.
+- Tencent Yuanbao and QQBot support expand channel coverage with Yuanbao docs/catalog entries and QQBot group chat, streaming, media upload, and pipeline refactors. Thanks @loongfay and @cxyhhhhh.
+- Plugin startup and model catalogs move toward manifest-first metadata, reducing Gateway boot work and making provider rows/aliases/suppressions easier to audit. Thanks @shakkernerd.
+
+### 2026.4.29
+
+- Messaging and automation get active-run steering by default, visible-reply enforcement, spawned subagent routing metadata, and opt-in follow-up commitments for heartbeat-delivered reminders. Thanks @vincentkoc, @scoootscooob, @samzong, and @vignesh07.
+- Memory grows into a people-aware wiki with provenance views, per-conversation Active Memory filters, partial recall on timeout, and bounded REM preview diagnostics. Thanks @vincentkoc, @quengh, @joeykrug, and @samzong.
+- Provider/model coverage expands with NVIDIA onboarding/catalogs plus faster manifest-backed model/auth paths, Bedrock Opus 4.7 thinking parity, and safer Codex/OpenAI-compatible replay and streaming behavior. Thanks @eleqtrizit, @shakkernerd, @prasad-yashdeep, @woodhouse-bot, and @LyHug.
+- Gateway and packaged-plugin reliability focuses on slow-host startup, reusable model catalogs, event-loop readiness diagnostics, runtime-dependency repair, stale-session recovery, and version-scoped update caches. Thanks @lpendeavors, @DerFlash, @vincentkoc, @pashpashpash, and @jhsmith409.
+
+### 2026.5.2
+
+- External plugin installation now covers diagnostics, onboarding, doctor repair, channel setup, install/update records, and artifact metadata while keeping bare package installs on npm for the first cutover. Thanks @vincentkoc.
+- Gateway startup, session listing, task maintenance, prompt prep, plugin loading, and filesystem hot paths get targeted cache and fanout reductions for large or plugin-heavy installs.
+- Control UI and WebChat reliability improves across Sessions, Cron, long-running Gateway WebSockets, grouped-message width, slash-command feedback, iOS PWA bounds, selection contrast, and Talk diagnostics.
+- Channel and provider fixes cover Telegram topic commands and networking, Discord delivery and startup edge cases, OpenAI-compatible TTS/Realtime, OpenRouter/DeepSeek replay, Anthropic-compatible streaming, Brave/SearXNG/Firecrawl web search, and voice-call routing.
+
+### 2026.5.3
+
+- Plugins/file-transfer: add bundled file-transfer plugin with `file_fetch`, `dir_list`, `dir_fetch`, and `file_write` agent tools for binary file ops on paired nodes; default-deny per-node path policy under `plugins.entries.file-transfer.config.nodes` with operator approval, symlink traversal refused by default (opt-in `followSymlinks`), and a 16 MB byte ceiling per round-trip. (#74742) Thanks @omarshahine.
+- Plugins/install: harden official plugin install, uninstall, update, onboarding, ClawHub fallback, npm dependency-state reporting, and beta-channel update paths so externalized plugins behave like first-class package installs.
+- Gateway/performance: trim startup and Control UI hot paths by lazy-loading plugin/runtime discovery, cron, schema, shutdown, sessions, and model metadata work only when needed.
+- Channels/replies: improve Discord status reactions and degraded transport reporting, add WhatsApp Channel/Newsletter targets, and tighten Telegram, Feishu, Matrix, Microsoft Teams, and Slack delivery/recovery behavior.
+
+### 2026.5.3-1
+
+- Plugins/security: stop the install scanner from blocking official bundled plugin packages when `process.env` access and normal API sends only appear in distant parts of the same compiled bundle. Thanks @vincentkoc.
+
+### 2026.5.4
+
+- Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
+- Gateway/Windows: bind the default loopback gateway listener only to `127.0.0.1` on Windows so libuv's dual-stack `::1` behavior cannot wedge localhost HTTP requests. (#69701, fixes #69674) Thanks @SARAMALI15792.
+- Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.
+- OpenAI/Codex media: advertise Codex audio transcription in runtime and manifest metadata and route active Codex chat models to the OpenAI transcription default instead of sending chat model ids to audio transcription. Thanks @vincentkoc.
+
+### 2026.5.5
+
+- Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
+- Doctor/Codex OAuth: preserve working `openai-codex/*` PI routes during `doctor --fix`, recover 2026.5.5-rewritten `openai/*` GPT-5 routes when only Codex OAuth auth is available, and warn without rewriting mixed Codex OAuth plus direct OpenAI PI routes, so update repair does not break subscription-auth setups. Fixes #78407. Thanks @shakkernerd.
+- Plugins/runtime fetch: drop third-party symbol metadata from plain request header dictionaries before passing them into native `fetch` or `Headers`, so SDK and guarded/proxy fetch paths do not reject otherwise valid plugin requests. Fixes #77846. Thanks @shakkernerd.
+- Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
+
+### 2026.5.6
+
+- Doctor/OpenAI config: keep the 2026.5.6 release branch clear of the legacy Codex route rewrite that could change OpenAI model config during `doctor --fix`, preserving existing OpenAI routes unless a supported repair path applies.
+- Plugins/runtime fetch: drop third-party symbol metadata from plain request header dictionaries before passing them into native `fetch` or `Headers`, so SDK and guarded/proxy fetch paths do not reject otherwise valid plugin requests. Fixes #77846. Thanks @shakkernerd.
+- Debug proxy: normalize captured fetch header dictionaries before replaying requests so symbol metadata from caller-owned header objects cannot make debug-proxy fetches fail.
+- Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
+
+### 2026.5.7
+
+- Release/plugin publishing: retry transient ClawHub CLI dependency install failures, keep preview-passing plugins publishable when one preview cell flakes, and verify every expected ClawHub package version after publish so maintenance releases are faster to recover and less likely to hide partial plugin publishes.
+- OpenAI: support `openai/chat-latest` as an explicit direct API-key model override for trying the moving ChatGPT Instant API alias without changing the stable default model.
+- Cron CLI: include computed `status` in `cron list --json` and `cron show --json` output so external tooling can read disabled/running/ok/error/skipped/idle state without reimplementing cron status derivation. (#78701) Thanks @aweiker.
+- Channels CLI: make `openclaw channels list` channel-only, add `--all` for bundled and catalog channels, render installed/configured/enabled state, and move model auth/usage details to `openclaw models auth list`, `openclaw status`, and `openclaw models list`. (#78456) Thanks @sliverp.
+
+### 2026.5.9
+
+- Skills: add `skills.load.allowSymlinkTargets` so intentional symlinked skill folders can resolve into trusted sibling repos without disabling root containment.
+- Agents/tools: add core Tool Search so agents can search and call large OpenClaw, MCP, and client tool catalogs through one compact PI bridge.
+- Doctor: warn when a per-agent model config omits the `fallbacks` key and `agents.defaults.model.fallbacks` is non-empty. Covers both string-form (`"model": "..."`) and partial-object form (`"model": { "primary": "..." }`) — both silently clobber the defaults chain at runtime. Use `"fallbacks": []` to explicitly opt out of fallbacks, or add `"fallbacks": [...]` to inherit or override. Fixes #79369.
+- Chat commands: add `/think default` and `/fast default` to clear session overrides and inherit configured/provider defaults. (#79385) Thanks @VACInc.
+
+### 2026.5.12
+
+- Amazon Bedrock: externalize the Bedrock and Bedrock Mantle provider packages so core installs no longer pull AWS SDK dependencies unless those providers are installed.
+- Plugins: externalize Slack, OpenShell sandbox, and Anthropic Vertex so their runtime dependency cones install only when those plugins are installed.
+- Control UI/WebChat: add a persisted auto-scroll mode selector so users can keep the current near-bottom behavior, always follow streaming output, or turn automatic streaming scroll off and use the New messages button manually. Fixes #7648 and #81287. Thanks @BunsDev.
+- ACP: add `acp.fallbacks` so ACP turns can try configured backup runtime backends when the primary backend is unavailable before any output is emitted. (#69542) Thanks @kaseonedge.
+
+## Change hot-spots (depth=3, by file count)
+
+```
+  460 extensions/discord/src
+  406 src/auto-reply/reply
+  296 extensions/telegram/src
+  281 ui/src/ui
+  279 extensions/browser/src
+  265 extensions/matrix/src
+  255 src/agents/pi-embedded-runner
+  235 extensions/slack/src
+  223 src/channels/plugins
+  216 extensions/qqbot/src
+  208 extensions/whatsapp/src
+  193 extensions/qa-lab/src
+```
+
+## Merge conflicts if we update today (fork main → upstream tag)
+
+Conflict detection method: `git merge-tree --write-tree --name-only main v2026.5.12` (does not touch working tree).
 
 Conflicting files:
 
-Raw merge output (first ~40 lines):
+```
+package.json
+```
+
+## Polytropos impact checklist
+
+- Re-run plugin verification + `openclaw plugins doctor` after merge
+- Re-check release workflows and CI assumptions
+- Re-verify Discord/Telegram behavior (approvals/audit/runtime)
+- Re-verify agent runtime behavior (session reset, streaming, memory)
