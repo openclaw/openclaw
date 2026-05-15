@@ -61,9 +61,9 @@ function isTimedProxylineManagedDispatcher(dispatcher: unknown): dispatcher is U
 }
 
 function withDefaultDispatchTimeout(
-  timeout: UndiciDispatchOptions["bodyTimeout"] | UndiciDispatchOptions["headersTimeout"],
+  timeout: UndiciDispatchOptions["bodyTimeout"],
   timeoutMs: number,
-): UndiciDispatchOptions["bodyTimeout"] | UndiciDispatchOptions["headersTimeout"] {
+): UndiciDispatchOptions["bodyTimeout"] {
   return timeout == null ? timeoutMs : timeout;
 }
 
@@ -165,7 +165,7 @@ function resolveEnvProxyBootstrapKey(
 ): string {
   const entries = Object.entries((options ?? {}) as Record<string, unknown>)
     .filter(([, value]) => value !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b));
+    .toSorted(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(entries);
 }
 
