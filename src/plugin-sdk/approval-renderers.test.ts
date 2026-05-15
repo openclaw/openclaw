@@ -528,6 +528,77 @@ describe("plugin-sdk/approval-renderers", () => {
     );
   });
 
+  it("treats redirected read commands as file writes", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-cat-redirect",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: cat notes.txt > out.txt",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nRun a terminal command");
+    expect(payload.text).toContain("- write terminal output into a file: out.txt");
+    expect(payload.text).toContain("Command preview\ncat notes.txt > out.txt");
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).toContain("Shell redirection can create or overwrite files.");
+    expect(payload.text).not.toContain("- read file contents: notes.txt");
+    expect(payload.text).not.toContain("Risk: Low");
+  });
+
+  it("treats sed in-place edits as writes", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-sed-in-place",
+        request: {
+          title: "Codex app-server command approval",
+          description: String.raw`Command: sed -i 's/a/b/' file.txt`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- edit files in place: file.txt");
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).toContain("sed -i can overwrite files in place.");
+    expect(payload.text).not.toContain("- read file contents");
+  });
+
+  it("treats sourced scripts as shell execution", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-source-script",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: source ./setup.sh",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run commands from a sourced file: ./setup.sh");
+    expect(payload.text).toContain("Command preview\nsource ./setup.sh");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Sourcing a file runs its shell code in the current process.");
+    expect(payload.text).not.toContain("load a local environment/script file");
+    expect(payload.text).not.toContain("Risk: Low");
+  });
+
   it("summarizes timeout and shell-wrapper command approvals by their inner actions", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
@@ -547,13 +618,15 @@ describe("plugin-sdk/approval-renderers", () => {
 
     expect(payload.text).toContain("Action\nUse the network or download data");
     expect(payload.text).toContain("- check whether a condition or file exists: .env.auth");
-    expect(payload.text).toContain("- load a local environment/script file: ./.env.auth");
+    expect(payload.text).toContain("- run commands from a sourced file: ./.env.auth");
     expect(payload.text).toContain(
       "- make a network request or download data: http://127.0.0.1:3025/api/health",
     );
-    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Sourcing a file runs its shell code in the current process.");
     expect(payload.text).not.toContain("run terminal command: timeout");
-    expect(payload.text).not.toContain("Authorization: Bearer");
+    expect(payload.text).toContain("Authorization: Bearer [redacted]");
+    expect(payload.text).not.toContain("$FINANCE_TOOL_TOKEN");
     expect(payload.text).not.toContain("Technical details:");
   });
 

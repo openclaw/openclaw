@@ -38,6 +38,8 @@ export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
 const SIMPLE_COMMAND_PREVIEW_MAX_LENGTH = 180;
+const SHELL_OUTPUT_REDIRECTION_RE =
+  /(?:^|\s)(?:\d?>>?|&>>?|>>?)\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
 export const DEFAULT_PLUGIN_APPROVAL_LANGUAGE =
   "original" as const satisfies PluginApprovalLanguage;
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
@@ -523,7 +525,8 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
   const targetText = formatTargets(nonOptionArgs);
   const sensitiveTarget = nonOptionArgs.some(isSensitivePath);
   const systemTarget = nonOptionArgs.some(isSystemPath);
-  const redirected = /(?:^|\s)(?:>>?|2>|&>)\s*\S+/.test(segment);
+  const redirectionTargets = getShellOutputRedirectionTargets(segment);
+  const redirected = redirectionTargets.length > 0;
 
   if (hasShellExecutionExpansion(segment)) {
     return withSudo(
@@ -568,14 +571,11 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "source":
       return withSudo(
         {
-          text: `load a local environment/script file${targetText}`,
-          risk: sensitiveTarget || systemTarget ? "medium" : "low",
-          kind: "read",
-          reason: sensitiveTarget
-            ? "It may load secrets or credentials into the command environment."
-            : systemTarget
-              ? "It reads a system-level file."
-              : undefined,
+          text: `run commands from a sourced file${targetText}`,
+          risk: "high",
+          kind: "unknown",
+          reason: "Sourcing a file runs its shell code in the current process.",
+          showCommandPreview: true,
         },
         sudoPrefix,
       );
@@ -623,6 +623,9 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         sudoPrefix,
       );
     case "ls":
+      if (redirected) {
+        return summarizeRedirectedWrite(redirectionTargets, sudoPrefix);
+      }
       return withSudo(
         {
           text: `list files or folders${targetText}`,
@@ -664,6 +667,9 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
           sudoPrefix,
         );
       }
+      if (redirected) {
+        return summarizeRedirectedWrite(redirectionTargets, sudoPrefix);
+      }
       return withSudo(
         {
           text: `search/list files${targetText}`,
@@ -680,6 +686,9 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     }
     case "rg":
     case "grep":
+      if (redirected) {
+        return summarizeRedirectedWrite(redirectionTargets, sudoPrefix);
+      }
       return withSudo(
         {
           text: `search text/files${targetText}`,
@@ -698,6 +707,25 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "less":
     case "sed":
     case "tail":
+      if (redirected) {
+        return summarizeRedirectedWrite(redirectionTargets, sudoPrefix);
+      }
+      if (command === "sed" && hasSedInPlaceOption(args)) {
+        const sedTargets = getSedInPlaceTargets(args);
+        const sedTargetText = formatTargets(sedTargets.length > 0 ? sedTargets : nonOptionArgs);
+        const sedSensitiveTarget = sedTargets.some(isSensitivePath);
+        const sedSystemTarget = sedTargets.some(isSystemPath);
+        return withSudo(
+          {
+            text: `edit files in place${sedTargetText}`,
+            risk: sedSensitiveTarget || sedSystemTarget ? "high" : "medium",
+            kind: "write",
+            reason: "sed -i can overwrite files in place.",
+            showCommandPreview: true,
+          },
+          sudoPrefix,
+        );
+      }
       return withSudo(
         {
           text: formatReadFileAction(command, nonOptionArgs),
@@ -1380,6 +1408,16 @@ function hasFindExecPredicate(args: readonly string[]): boolean {
   return args.some((arg) => FIND_EXEC_PREDICATES.has(arg));
 }
 
+function hasSedInPlaceOption(args: readonly string[]): boolean {
+  return args.some(
+    (arg) =>
+      arg === "-i" ||
+      arg.startsWith("-i") ||
+      arg === "--in-place" ||
+      arg.startsWith("--in-place="),
+  );
+}
+
 function getFindSearchRoots(args: readonly string[]): string[] {
   const roots: string[] = [];
   for (const arg of args) {
@@ -1392,6 +1430,81 @@ function getFindSearchRoots(args: readonly string[]): string[] {
     roots.push(arg);
   }
   return roots;
+}
+
+function getSedInPlaceTargets(args: readonly string[]): string[] {
+  const targets: string[] = [];
+  let hasExplicitProgram = false;
+  let consumedImplicitProgram = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg || /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      continue;
+    }
+    if (
+      arg === "-i" ||
+      arg === "--in-place" ||
+      arg.startsWith("-i") ||
+      arg.startsWith("--in-place=")
+    ) {
+      continue;
+    }
+    if (arg === "-e" || arg === "--expression" || arg === "-f" || arg === "--file") {
+      hasExplicitProgram = true;
+      index += 1;
+      continue;
+    }
+    if (
+      arg.startsWith("-e") ||
+      arg.startsWith("--expression=") ||
+      arg.startsWith("-f") ||
+      arg.startsWith("--file=")
+    ) {
+      hasExplicitProgram = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (!hasExplicitProgram && !consumedImplicitProgram) {
+      consumedImplicitProgram = true;
+      continue;
+    }
+    targets.push(arg);
+  }
+  return targets;
+}
+
+function getShellOutputRedirectionTargets(segment: string): string[] {
+  const targets: string[] = [];
+  for (const match of segment.matchAll(SHELL_OUTPUT_REDIRECTION_RE)) {
+    const target = match[1]?.trim();
+    if (target) {
+      targets.push(stripShellWordQuotes(target));
+    }
+  }
+  return targets;
+}
+
+function summarizeRedirectedWrite(
+  redirectionTargets: readonly string[],
+  sudoPrefix: { risk: "high"; reason: string } | null,
+): CommandActionSummary {
+  const touchesSensitivePath = redirectionTargets.some(isSensitivePath);
+  const touchesSystemPath = redirectionTargets.some(isSystemPath);
+  return withSudo(
+    {
+      text: `write terminal output into a file${formatTargets(redirectionTargets)}`,
+      risk: touchesSensitivePath || touchesSystemPath ? "high" : "medium",
+      kind: "write",
+      reason:
+        touchesSensitivePath || touchesSystemPath
+          ? "Shell redirection writes to a sensitive or system path."
+          : "Shell redirection can create or overwrite files.",
+      showCommandPreview: true,
+    },
+    sudoPrefix,
+  );
 }
 
 function getCommandOptionValueFlags(command: string): ReadonlySet<string> {
@@ -1466,6 +1579,10 @@ function basename(command: string): string {
 
 function cleanCommandName(command: string): string {
   return command.replace(/^['"]+|['"]+$/g, "");
+}
+
+function stripShellWordQuotes(value: string): string {
+  return value.replace(/^(["'])(.*)\1$/, "$2");
 }
 
 function isSensitivePath(path: string): boolean {
