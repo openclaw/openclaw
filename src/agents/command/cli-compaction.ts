@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +19,7 @@ import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBefor
 import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../pi-embedded-runner/tool-result-truncation.js";
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPreparedEmbeddedPiSettingsManager as createPreparedEmbeddedPiSettingsManagerImpl } from "../pi-project-settings.js";
+import { SessionManager } from "../pi-session-manager-memory-bound.js";
 import {
   applyPiAutoCompactionGuard as applyPiAutoCompactionGuardImpl,
   resolveEffectiveCompactionMode,

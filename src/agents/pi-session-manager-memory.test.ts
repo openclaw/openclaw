@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import { SessionManager } from "./pi-session-manager-memory-bound.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
