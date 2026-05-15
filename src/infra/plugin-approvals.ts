@@ -431,7 +431,7 @@ function redactSensitiveCommandText(command: string): string {
       "$1$2$3[redacted]",
     )
     .replace(/(^|\s)(--cookie)(=|\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
-    .replace(/(https?:\/\/[^:\s/@]+:)[^@\s/]+@/gi, "$1[redacted]@");
+    .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[redacted]@");
 }
 
 function splitCommandSegments(command: string): string[] {
@@ -1964,6 +1964,7 @@ function summarizeNetworkCommand(
     transfer.usesDefaultCredentialSource ||
     transfer.usesAmbiguousCredentialSource ||
     transfer.usesInlineCredentialSource ||
+    transfer.usesUrlCredentialSource ||
     transfer.usesHeaderCredentialSource
   ) {
     const actions: string[] = [];
@@ -1991,6 +1992,9 @@ function summarizeNetworkCommand(
     if (transfer.usesInlineCredentialSource) {
       actions.push("send network credentials from command options");
     }
+    if (transfer.usesUrlCredentialSource) {
+      actions.push("send network credentials embedded in URLs");
+    }
     if (transfer.usesHeaderCredentialSource) {
       actions.push("send network credentials in headers");
     }
@@ -2017,6 +2021,7 @@ function summarizeNetworkCommand(
         transfer.usesDefaultCredentialSource,
         transfer.usesAmbiguousCredentialSource,
         transfer.usesInlineCredentialSource,
+        transfer.usesUrlCredentialSource,
         transfer.usesHeaderCredentialSource,
         cookieJarFiles,
       ),
@@ -2047,6 +2052,7 @@ function collectNetworkTransferOperands(
   usesDefaultCredentialSource: boolean;
   usesAmbiguousCredentialSource: boolean;
   usesInlineCredentialSource: boolean;
+  usesUrlCredentialSource: boolean;
   usesHeaderCredentialSource: boolean;
 } {
   const uploadFiles: string[] = [];
@@ -2061,6 +2067,7 @@ function collectNetworkTransferOperands(
   let usesDefaultCredentialSource = false;
   let usesAmbiguousCredentialSource = false;
   let usesInlineCredentialSource = false;
+  let usesUrlCredentialSource = false;
   let usesHeaderCredentialSource = false;
   const recordStdinUpload = () => {
     if (inputRedirection.targets.length > 0) {
@@ -2071,8 +2078,11 @@ function collectNetworkTransferOperands(
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
-    if (/^https?:\/\//i.test(arg)) {
+    if (isNetworkUrl(arg)) {
       urls.push(formatNetworkUrl(arg));
+      if (hasNetworkUrlCredentials(arg)) {
+        usesUrlCredentialSource = true;
+      }
     }
 
     const configValue =
@@ -2287,6 +2297,7 @@ function collectNetworkTransferOperands(
     usesDefaultCredentialSource,
     usesAmbiguousCredentialSource,
     usesInlineCredentialSource,
+    usesUrlCredentialSource,
     usesHeaderCredentialSource,
   };
 }
@@ -2403,6 +2414,7 @@ function buildNetworkTransferRiskReason(
   usesDefaultCredentialSource = false,
   usesAmbiguousCredentialSource = false,
   usesInlineCredentialSource = false,
+  usesUrlCredentialSource = false,
   usesHeaderCredentialSource = false,
   cookieJarFiles: readonly string[] = [],
 ): string {
@@ -2417,6 +2429,7 @@ function buildNetworkTransferRiskReason(
     usesDefaultCredentialSource ||
     usesAmbiguousCredentialSource ||
     usesInlineCredentialSource ||
+    usesUrlCredentialSource ||
     usesHeaderCredentialSource
   ) {
     return "Network credential options can expose cookies, tokens, or login/password data.";
@@ -2489,7 +2502,7 @@ function formatTargets(args: readonly string[]): string {
 
 function formatNetworkTargets(args: readonly string[]): string {
   return formatNetworkTargetList(
-    args.filter((arg) => /^https?:\/\//i.test(arg)).map((arg) => formatNetworkUrl(arg)),
+    args.filter((arg) => isNetworkUrl(arg)).map((arg) => formatNetworkUrl(arg)),
   );
 }
 
@@ -2503,10 +2516,24 @@ function formatNetworkTargetList(targets: readonly string[]): string {
 
 function formatNetworkUrl(arg: string): string {
   try {
-    const url = new URL(arg);
+    const url = new URL(stripShellWordQuotes(arg.trim()));
     return `${url.origin}${url.pathname}`;
   } catch {
     return arg;
+  }
+}
+
+function isNetworkUrl(arg: string): boolean {
+  return /^https?:\/\//i.test(stripShellWordQuotes(arg.trim()));
+}
+
+function hasNetworkUrlCredentials(arg: string): boolean {
+  const value = stripShellWordQuotes(arg.trim());
+  try {
+    const url = new URL(value);
+    return url.username.length > 0 || url.password.length > 0;
+  } catch {
+    return /^https?:\/\/[^/\s@]+@/i.test(value);
   }
 }
 

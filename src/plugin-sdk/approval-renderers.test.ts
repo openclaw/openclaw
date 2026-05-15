@@ -410,7 +410,7 @@ describe("plugin-sdk/approval-renderers", () => {
 
     expect(payload.text).toContain("- run custom-tool");
     expect(payload.text).toContain(
-      "Command preview\nGITHUB_TOKEN=[redacted] AWS_SECRET_ACCESS_KEY=[redacted] custom-tool --token [redacted] --send https://user:[redacted]@example.test/path",
+      "Command preview\nGITHUB_TOKEN=[redacted] AWS_SECRET_ACCESS_KEY=[redacted] custom-tool --token [redacted] --send https://[redacted]@example.test/path",
     );
     expect(payload.text).not.toContain("s3cr3t");
     expect(payload.text).not.toContain("top secret");
@@ -890,6 +890,44 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("alice:s3cr3t");
     expect(payload.text).not.toContain("proxy:p4ss");
     expect(payload.text).toContain("Risk: High");
+  });
+
+  it.each([
+    {
+      command: "curl https://user:s3cr3t@example.test/path",
+      id: "plugin-command-curl-url-credentials",
+    },
+    {
+      command: "wget https://token@example.test/path",
+      id: "plugin-command-wget-url-credentials",
+    },
+  ])("fails closed on credential-bearing network URLs: $command", ({ command, id }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- send network credentials embedded in URLs");
+    expect(payload.text).toContain("contact: https://example.test/path");
+    expect(payload.text).toContain("Command preview");
+    expect(payload.text).toContain("https://[redacted]@example.test/path");
+    expect(payload.text).not.toContain("user:s3cr3t");
+    expect(payload.text).not.toContain("token@example.test");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "Network credential options can expose cookies, tokens, or login/password data.",
+    );
+    expect(payload.text).not.toContain("Risk: Medium");
   });
 
   it("redacts curl OAuth bearer tokens in command previews", () => {
