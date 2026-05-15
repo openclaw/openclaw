@@ -26,6 +26,7 @@ const DEFAULT_TARGETS = [
     testPath: "src/agents/tools/sessions-spawn-tool.test.ts",
     requiredTestSnippets: [
       "rejects side-effectful spawn tasks without an execution packet",
+      "review source code for subagent handling",
       "executionPacketForTest",
       "requires an executionPacket",
     ],
@@ -42,6 +43,7 @@ const DEFAULT_TARGETS = [
     testPath: "src/agents/tools/cron-tool.runtime-packet.test.ts",
     requiredTestSnippets: [
       "rejects side-effectful cron agentTurn jobs without an execution packet",
+      "allows read-only source review cron agentTurn jobs without an execution packet",
       "allows side-effectful cron agentTurn jobs with an execution packet",
       "strips cron execution packet aliases before forwarding",
       "requires an executionPacket",

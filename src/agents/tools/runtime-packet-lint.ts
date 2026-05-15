@@ -1,7 +1,7 @@
 import { isRecord } from "../../utils.js";
 
 const SIDE_EFFECT_TASK_RE =
-  /\b(add|apply|build|change|commit|create|delete|deploy|disable|edit|enable|fix|install|modify|move|patch|publish|remove|repair|restart|source|update|write)\b/i;
+  /\b(add|apply|build|change|commit|create|delete|deploy|disable|edit|enable|fix|install|modify|move|patch|publish|remove|repair|restart|update|write)\b/i;
 
 const READ_ONLY_TASK_RE =
   /\b(read-only|readonly|scan-only|dry-run|inspect|analy[sz]e|summari[sz]e|classify|list|status|audit|review|research)\b/i;

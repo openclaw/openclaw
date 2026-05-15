@@ -154,6 +154,36 @@
           "minimum": 0,
           "type": "number"
         },
+        "executionPacket": {
+          "additionalProperties": true,
+          "description": "Bounded execution packet for side-effectful agentTurn jobs. Required when the scheduled agent task edits, writes, builds, patches, restarts, deploys, or otherwise mutates state.",
+          "properties": {
+            "confidenceLoop": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            },
+            "domainMethodologyRefs": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            },
+            "foundationConflictRule": {
+              "type": "string"
+            },
+            "foundationRefs": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            },
+            "taskDoctrineRefs": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
         "gatewayToken": {
           "type": "string"
         },
@@ -283,6 +313,36 @@
               "properties": {
                 "allowUnsafeExternalContent": {
                   "type": "boolean"
+                },
+                "executionPacket": {
+                  "additionalProperties": true,
+                  "description": "Bounded execution packet for side-effectful agentTurn jobs. Required when the scheduled agent task edits, writes, builds, patches, restarts, deploys, or otherwise mutates state.",
+                  "properties": {
+                    "confidenceLoop": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    },
+                    "domainMethodologyRefs": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    },
+                    "foundationConflictRule": {
+                      "type": "string"
+                    },
+                    "foundationRefs": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    },
+                    "taskDoctrineRefs": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
                 },
                 "fallbacks": {
                   "description": "Fallback models",
@@ -501,6 +561,36 @@
               "properties": {
                 "allowUnsafeExternalContent": {
                   "type": "boolean"
+                },
+                "executionPacket": {
+                  "additionalProperties": true,
+                  "description": "Bounded execution packet for side-effectful agentTurn jobs. Required when the scheduled agent task edits, writes, builds, patches, restarts, deploys, or otherwise mutates state.",
+                  "properties": {
+                    "confidenceLoop": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    },
+                    "domainMethodologyRefs": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    },
+                    "foundationConflictRule": {
+                      "type": "string"
+                    },
+                    "foundationRefs": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    },
+                    "taskDoctrineRefs": {
+                      "additionalProperties": true,
+                      "properties": {},
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
                 },
                 "fallbacks": {
                   "description": "Fallback models",
@@ -1042,6 +1132,36 @@
         },
         "cwd": {
           "type": "string"
+        },
+        "executionPacket": {
+          "additionalProperties": true,
+          "description": "Bounded execution packet for side-effectful delegated work. Required when the task edits, writes, builds, patches, restarts, deploys, or otherwise mutates state.",
+          "properties": {
+            "confidenceLoop": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            },
+            "domainMethodologyRefs": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            },
+            "foundationConflictRule": {
+              "type": "string"
+            },
+            "foundationRefs": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            },
+            "taskDoctrineRefs": {
+              "additionalProperties": true,
+              "properties": {},
+              "type": "object"
+            }
+          },
+          "type": "object"
         },
         "label": {
           "type": "string"

@@ -53,6 +53,24 @@ describe("cron tool runtime packet forwarding", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("allows read-only source review cron agentTurn jobs without an execution packet", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-cron-read-only-source-review", {
+      action: "add",
+      job: {
+        name: "review-runtime-source",
+        schedule: { at: new Date(123).toISOString() },
+        payload: {
+          kind: "agentTurn",
+          message: "review source code for runtime packet lint behavior",
+        },
+      },
+    });
+
+    expectSingleGatewayCallMethod("cron.add");
+  });
+
   it("allows side-effectful cron agentTurn jobs with an execution packet", async () => {
     const tool = createTestCronTool();
 

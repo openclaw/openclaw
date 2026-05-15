@@ -362,7 +362,7 @@ describe("sessions_spawn tool", () => {
     );
 
     const result = await tool.execute("call-task-name", {
-      task: "review subagent handling",
+      task: "review source code for subagent handling",
       taskName: "review_subagents",
     });
 
@@ -371,7 +371,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:main:subagent:1",
     });
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.task).toBe("review subagent handling");
+    expect(spawnArgs.task).toBe("review source code for subagent handling");
     expect(spawnArgs.taskName).toBe("review_subagents");
   });
 
