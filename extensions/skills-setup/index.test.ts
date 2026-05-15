@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -276,6 +277,29 @@ metadata:
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(respond.mock.calls[0]?.[1]).toEqual({
       error: "setup.script escapes the skill directory",
+    });
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+    });
+  });
+
+  it("reports invalid slugs as invalid requests", async () => {
+    const workspaceDir = await makeTempDir();
+    const { handler } = registerSkillsSetupPlugin({ workspaceDir, config: {} });
+
+    const respond = await callGatewayMethod({
+      handler,
+      config: {},
+      requestParams: { slug: "../bad" },
+    });
+
+    expect(commandMocks.runPluginCommandWithTimeout).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[1]).toEqual({
+      error: "invalid skill slug",
+    });
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
     });
   });
 });

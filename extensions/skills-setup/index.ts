@@ -62,10 +62,10 @@ function normalizeString(value: unknown): string {
 function normalizeSlug(value: unknown): string {
   const slug = normalizeString(value).toLowerCase();
   if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
-    throw new Error("invalid skill slug");
+    throw invalidRequest("invalid skill slug");
   }
   if (!VALID_SLUG_PATTERN.test(slug)) {
-    throw new Error("invalid skill slug");
+    throw invalidRequest("invalid skill slug");
   }
   return slug;
 }
@@ -79,11 +79,22 @@ function normalizeAgentId(value: unknown): string {
 // #region Installed skill path resolution
 
 const ERR_SKILL_NOT_FOUND = "SKILL_NOT_FOUND";
+const ERR_INVALID_REQUEST = "INVALID_REQUEST";
+
+function invalidRequest(message: string): Error & { code: typeof ERR_INVALID_REQUEST } {
+  const err = new Error(message) as Error & { code: typeof ERR_INVALID_REQUEST };
+  err.code = ERR_INVALID_REQUEST;
+  return err;
+}
 
 function skillNotFound(message: string): Error & { code: typeof ERR_SKILL_NOT_FOUND } {
   const err = new Error(message) as Error & { code: typeof ERR_SKILL_NOT_FOUND };
   err.code = ERR_SKILL_NOT_FOUND;
   return err;
+}
+
+function isInvalidRequestError(error: unknown): boolean {
+  return hasErrorCode(error, ERR_SKILL_NOT_FOUND) || hasErrorCode(error, ERR_INVALID_REQUEST);
 }
 
 async function resolveRealSkillDirCandidate({
@@ -103,7 +114,7 @@ async function resolveRealSkillDirCandidate({
     throw error;
   }
   if (!isPathInside(skillsDirReal, candidateDirReal)) {
-    throw new Error("skill directory escapes skills root");
+    throw invalidRequest("skill directory escapes skills root");
   }
 
   let skillMarkdownReal;
@@ -120,7 +131,7 @@ async function resolveRealSkillDirCandidate({
     throw error;
   }
   if (!isPathInside(candidateDirReal, skillMarkdownReal)) {
-    throw new Error("skill manifest escapes skill directory");
+    throw invalidRequest("skill manifest escapes skill directory");
   }
 
   return candidateDirReal;
@@ -136,7 +147,7 @@ async function resolveInstalledSkillDir({
   const skillsDir = path.join(path.resolve(workspaceDir), "skills");
   const targetDir = path.resolve(skillsDir, slug);
   if (!isPathInside(skillsDir, targetDir)) {
-    throw new Error("invalid skill target path");
+    throw invalidRequest("invalid skill target path");
   }
   let skillsDirReal;
   try {
@@ -159,7 +170,7 @@ async function resolveInstalledSkillDir({
     .toSorted((left, right) => left.name.localeCompare(right.name, "en"))) {
     const groupedTargetDir = path.resolve(skillsDirReal, entry.name, slug);
     if (!isPathInside(skillsDirReal, groupedTargetDir)) {
-      throw new Error("invalid grouped skill target path");
+      throw invalidRequest("invalid grouped skill target path");
     }
     const groupedDir = await resolveRealSkillDirCandidate({
       skillsDirReal,
@@ -379,15 +390,15 @@ async function resolveSetupScriptPath(skillDir: string): Promise<SetupScriptReso
     return undefined;
   }
   if (path.isAbsolute(script) || script.includes("\0")) {
-    throw new Error("setup.script must be a relative path inside the skill directory");
+    throw invalidRequest("setup.script must be a relative path inside the skill directory");
   }
   const scriptPath = path.resolve(skillDir, script);
   if (!isPathInside(skillDir, scriptPath)) {
-    throw new Error("setup.script escapes the skill directory");
+    throw invalidRequest("setup.script escapes the skill directory");
   }
   const scriptPathReal = await realpath(scriptPath);
   if (!isPathInside(skillDir, scriptPathReal)) {
-    throw new Error("setup.script resolves outside the skill directory");
+    throw invalidRequest("setup.script resolves outside the skill directory");
   }
   await access(scriptPathReal);
   return { scriptPath: scriptPathReal, skillKey: metadata.skillKey };
@@ -559,10 +570,9 @@ export default definePluginEntry({
           // installed skill on this agent — no generic NOT_FOUND code at v2026.5.5
           // (see openclaw src/gateway/protocol/schema/error-codes.ts). Reserve
           // UNAVAILABLE for transient / server-side execution failures.
-          const code =
-            hasErrorCode(error, ERR_SKILL_NOT_FOUND)
-              ? ErrorCodes.INVALID_REQUEST
-              : ErrorCodes.UNAVAILABLE;
+          const code = isInvalidRequestError(error)
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE;
           api.logger.warn(
             `skills.setup ${slugForLog} (agent=${agentIdForLog}) failed: ${message} durationMs=${Date.now() - startedAt}`,
           );
