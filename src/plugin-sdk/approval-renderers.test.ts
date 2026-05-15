@@ -433,6 +433,52 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Low");
   });
 
+  it("unwraps env options before summarizing the inner command", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-env-wrapper",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: env -u FOO rm -rf /tmp/x",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- delete files or folders: /tmp/x");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Delete commands can permanently remove data.");
+    expect(payload.text).not.toContain("- run FOO");
+  });
+
+  it("fails closed on env split-string wrappers", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-env-split",
+        request: {
+          title: "Codex app-server command approval",
+          description: 'Command: env -S "rm -rf /tmp/x"',
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run command through an environment wrapper");
+    expect(payload.text).toContain('Command preview\nenv -S "rm -rf /tmp/x"');
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "This command uses env options I cannot fully summarize, so review it before approving.",
+    );
+  });
+
   it("summarizes timeout and shell-wrapper command approvals by their inner actions", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

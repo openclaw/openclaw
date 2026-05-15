@@ -136,6 +136,19 @@ const GREP_OPTION_VALUE_FLAGS = new Set([
 ]);
 const HEAD_TAIL_OPTION_VALUE_FLAGS = new Set(["-c", "-n", "--bytes", "--lines"]);
 const SED_OPTION_VALUE_FLAGS = new Set(["-e", "-f", "--expression", "--file"]);
+const ENV_SEPARATE_VALUE_FLAGS = new Set(["-a", "-C", "-u", "--argv0", "--chdir", "--unset"]);
+const ENV_INLINE_VALUE_FLAGS = new Set(["--argv0", "--chdir", "--unset"]);
+const ENV_BOOLEAN_FLAGS = new Set([
+  "-0",
+  "-i",
+  "-v",
+  "--debug",
+  "--ignore-environment",
+  "--list-signal-handling",
+  "--null",
+  "--version",
+]);
+const ENV_UNSAFE_SPLIT_FLAGS = new Set(["-S", "--split-string"]);
 
 function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): string[] {
   const command = extractApprovalCommand(payload);
@@ -483,6 +496,24 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
   }
 
   const resolved = resolveCommandWords(segment);
+  const sudoPrefix = resolved.usedSudo
+    ? {
+        risk: "high" as const,
+        reason: "It uses sudo, which can change protected parts of the machine.",
+      }
+    : null;
+  if (resolved.wrapperParseFailed) {
+    return withSudo(
+      {
+        text: "run command through an environment wrapper",
+        risk: "high",
+        kind: "unknown",
+        reason:
+          "This command uses env options I cannot fully summarize, so review it before approving.",
+      },
+      sudoPrefix,
+    );
+  }
   const command = cleanCommandName(basename(resolved.words[0] ?? ""));
   const args = resolved.words.slice(1);
   const nonOptionArgs = getCommandTargetArgs(command, args);
@@ -490,12 +521,6 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
   const sensitiveTarget = nonOptionArgs.some(isSensitivePath);
   const systemTarget = nonOptionArgs.some(isSystemPath);
   const redirected = /(?:^|\s)(?:>>?|2>|&>)\s*\S+/.test(segment);
-  const sudoPrefix = resolved.usedSudo
-    ? {
-        risk: "high" as const,
-        reason: "It uses sudo, which can change protected parts of the machine.",
-      }
-    : null;
 
   if (hasShellExecutionExpansion(segment)) {
     return withSudo(
@@ -1050,7 +1075,11 @@ function buildCommandHeadline(summaries: readonly CommandActionSummary[]): strin
   return "run a terminal command";
 }
 
-function resolveCommandWords(segment: string): { words: string[]; usedSudo: boolean } {
+function resolveCommandWords(segment: string): {
+  words: string[];
+  usedSudo: boolean;
+  wrapperParseFailed?: boolean;
+} {
   const words = splitShellWords(segment);
   let usedSudo = false;
   while (words.length > 0) {
@@ -1069,10 +1098,11 @@ function resolveCommandWords(segment: string): { words: string[]; usedSudo: bool
       continue;
     }
     if (first === "env") {
-      words.shift();
-      while (words[0] && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || words[0]?.startsWith("-"))) {
-        words.shift();
+      const stripped = stripEnvWrapperWords(words);
+      if (!stripped) {
+        return { words, usedSudo, wrapperParseFailed: true };
       }
+      words.splice(0, words.length, ...stripped);
       continue;
     }
     if (first === "timeout" || first === "gtimeout") {
@@ -1095,6 +1125,68 @@ function resolveCommandWords(segment: string): { words: string[]; usedSudo: bool
     break;
   }
   return { words, usedSudo };
+}
+
+function stripEnvWrapperWords(words: readonly string[]): string[] | null {
+  const rest = words.slice(1);
+  while (rest.length > 0) {
+    const arg = rest[0] ?? "";
+    if (!arg) {
+      rest.shift();
+      continue;
+    }
+    if (arg === "--") {
+      rest.shift();
+      break;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      rest.shift();
+      continue;
+    }
+    if (isEnvUnsafeSplitFlag(arg)) {
+      return null;
+    }
+    if (isEnvInlineValueFlag(arg) || isEnvInlineShortValueFlag(arg)) {
+      rest.shift();
+      continue;
+    }
+    if (ENV_SEPARATE_VALUE_FLAGS.has(arg)) {
+      rest.shift();
+      if (rest.length === 0) {
+        return null;
+      }
+      rest.shift();
+      continue;
+    }
+    if (ENV_BOOLEAN_FLAGS.has(arg) || isEnvOptionalInlineValueFlag(arg)) {
+      rest.shift();
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return null;
+    }
+    break;
+  }
+  return rest;
+}
+
+function isEnvInlineValueFlag(arg: string): boolean {
+  const separatorIndex = arg.indexOf("=");
+  return separatorIndex > 0 && ENV_INLINE_VALUE_FLAGS.has(arg.slice(0, separatorIndex));
+}
+
+function isEnvInlineShortValueFlag(arg: string): boolean {
+  return /^-[aCu].+/.test(arg);
+}
+
+function isEnvUnsafeSplitFlag(arg: string): boolean {
+  return (
+    ENV_UNSAFE_SPLIT_FLAGS.has(arg) || arg.startsWith("-S") || arg.startsWith("--split-string=")
+  );
+}
+
+function isEnvOptionalInlineValueFlag(arg: string): boolean {
+  return /^(?:--block-signal|--default-signal|--ignore-signal)(?:=|$)/.test(arg);
 }
 
 function splitShellWords(input: string): string[] {
