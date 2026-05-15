@@ -6,7 +6,6 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
@@ -18,7 +17,6 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -57,13 +55,6 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
-  /**
-   * Set by callers that know the parent session has at least one pending
-   * spawned child whose completion will deliver the real reply. If omitted, the
-   * outbound plan consults the registered runtime query (see
-   * `pending-spawn-query.ts`).
-   */
-  hasPendingSpawnedChildren?: boolean;
   extractMarkdownImages?: boolean;
 };
 
@@ -188,14 +179,6 @@ export function createOutboundPayloadPlan(
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
   // heartbeat-specific token semantics remain outside this plan boundary.
-  const resolvedSilentReplySettings = resolveSilentReplySettings({
-    cfg: context.cfg,
-    sessionKey: context.sessionKey,
-    surface: context.surface,
-    conversationType: context.conversationType,
-  });
-  const hasPendingSpawnedChildren =
-    context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: IndexedPreparedOutboundPayloadPlanEntry[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
@@ -206,16 +189,6 @@ export function createOutboundPayloadPlan(
     }
     prepared.push({ ...entry, sourceIndex });
   }
-  const hasVisibleNonSilentContent = prepared.some((entry) => {
-    if (entry.isSilent) {
-      return false;
-    }
-    const parts = resolveSendableOutboundReplyParts(entry.payload);
-    return hasReplyPayloadContent(
-      { ...entry.payload, text: parts.text, mediaUrls: parts.mediaUrls },
-      { hasChannelData: entry.hasChannelData },
-    );
-  });
   const plan: OutboundPayloadPlan[] = [];
   for (const entry of prepared) {
     if (!entry.isSilent) {
@@ -227,12 +200,6 @@ export function createOutboundPayloadPlan(
         hasInteractive: entry.hasInteractive,
         hasChannelData: entry.hasChannelData,
       });
-      continue;
-    }
-    if (hasVisibleNonSilentContent || resolvedSilentReplySettings.policy === "allow") {
-      continue;
-    }
-    if (hasPendingSpawnedChildren) {
       continue;
     }
   }

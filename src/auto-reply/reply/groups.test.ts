@@ -63,7 +63,7 @@ describe("group runtime loading", () => {
     vi.doUnmock("./groups.runtime.js");
   });
 
-  it("builds direct chat context from the resolved silent reply policy", () => {
+  it("builds direct chat context without silent-token guidance", () => {
     expect(
       groups.buildDirectChatContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
@@ -71,13 +71,6 @@ describe("group runtime loading", () => {
     ).toBe(
       "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation.",
     );
-
-    expect(
-      groups.buildDirectChatContext({
-        sessionCtx: { ChatType: "direct", Provider: "telegram" },
-      }),
-    ).not.toContain("NO_REPLY");
-
     expect(
       groups.buildDirectChatContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },

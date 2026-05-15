@@ -241,13 +241,19 @@ function removeLegacyAgentRuntimePolicy(
   }
 }
 
+function hasOwnRecordProperty(value: unknown, key: string): boolean {
+  const record = getRecord(value);
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+}
+
 function hasSurfaceSilentReplyRewrite(value: unknown): boolean {
   const surfaces = getRecord(value);
   if (!surfaces) {
     return false;
   }
-  return Object.values(surfaces).some(
-    (surface) => getRecord(getRecord(surface)?.silentReplyRewrite) !== null,
+  return Object.entries(surfaces).some(
+    ([surfaceId, surface]) =>
+      !isBlockedObjectKey(surfaceId) && hasOwnRecordProperty(surface, "silentReplyRewrite"),
   );
 }
 
@@ -271,7 +277,7 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
     delete defaultSilentReply.direct;
     changes.push("Removed agents.defaults.silentReply.direct; direct chats never use NO_REPLY.");
   }
-  if (defaults && getRecord(defaults.silentReplyRewrite) !== null) {
+  if (defaults && hasOwnRecordProperty(defaults, "silentReplyRewrite")) {
     delete defaults.silentReplyRewrite;
     changes.push("Removed agents.defaults.silentReplyRewrite.");
   }
@@ -295,7 +301,7 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
         `Removed surfaces.${surfaceId}.silentReply.direct; direct chats never use NO_REPLY.`,
       );
     }
-    if (getRecord(surface.silentReplyRewrite) !== null) {
+    if (hasOwnRecordProperty(surface, "silentReplyRewrite")) {
       delete surface.silentReplyRewrite;
       changes.push(`Removed surfaces.${surfaceId}.silentReplyRewrite.`);
     }

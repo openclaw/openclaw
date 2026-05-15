@@ -202,9 +202,8 @@ raw runner details are shown only when `/verbose` is `on` or `full`.
 Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply`
 can override group/internal policy per surface.
 
-When the parent session has one or more pending spawned subagent runs, bare
-silent replies are dropped on all surfaces, so the parent stays quiet until the
-child completion event delivers the real reply.
+Bare silent replies are dropped on all surfaces, so parent sessions stay quiet
+instead of rewriting sentinel text into fallback chatter.
 
 ## Related
 

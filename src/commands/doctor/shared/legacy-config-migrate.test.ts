@@ -69,6 +69,28 @@ describe("legacy silent reply config migrate", () => {
       "Removed surfaces.telegram.silentReplyRewrite",
     ]);
   });
+
+  it("removes malformed silent reply rewrite keys by presence", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReplyRewrite: true,
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReplyRewrite: false,
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
 });
 
 describe("legacy session maintenance migrate", () => {
