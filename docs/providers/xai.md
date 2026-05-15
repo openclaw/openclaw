@@ -38,9 +38,9 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
 credential from `openclaw onboard --auth-choice xai-api-key` or
 `openclaw onboard --auth-choice xai-oauth` can also power first-class
-`x_search`, remote `code_execution`, xAI media generation, speech, and
-transcription. `XAI_API_KEY` or plugin web-search config can power
-Grok-backed `web_search` too.
+`x_search`, remote `code_execution`, and xAI image/video generation.
+Speech and transcription currently require `XAI_API_KEY` or provider config.
+`XAI_API_KEY` or plugin web-search config can power Grok-backed `web_search` too.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
 Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
