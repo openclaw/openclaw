@@ -134,6 +134,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   topP?: number;
+  responseFormat?: Record<string, unknown>;
 };
 export type SupportedTransport = AgentRuntimeTransport;
 
@@ -385,6 +386,18 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  const resolvedResponseFormat = resolveAliasedParamValue(
+    [extraParams],
+    "response_format",
+    "responseFormat",
+  );
+  if (
+    resolvedResponseFormat &&
+    typeof resolvedResponseFormat === "object" &&
+    !Array.isArray(resolvedResponseFormat)
+  ) {
+    streamParams.responseFormat = resolvedResponseFormat as Record<string, unknown>;
   }
   const transport = resolveSupportedTransport(extraParams.transport);
   if (transport) {

@@ -86,4 +86,33 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.temperature).toBe(0.4);
     expect(callOptions?.topP).toBe(0.9);
   });
+
+  it("forwards response_format aliases into the underlying streamFn options", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
+      response_format: { type: "json_object" },
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
+      { messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as { responseFormat?: Record<string, unknown> } | undefined;
+    expect(callOptions?.responseFormat).toEqual({ type: "json_object" });
+  });
 });
