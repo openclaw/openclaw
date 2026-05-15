@@ -466,18 +466,16 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
-    commandTurn:
+    command:
       commandSource === "native"
         ? {
             kind: "native",
-            source: "native",
             authorized: commandAuthorized,
             body: commandBody,
           }
         : commandSource === "text"
           ? {
               kind: "text-slash",
-              source: "text",
               authorized: commandAuthorized,
               body: commandBody,
             }

@@ -19,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -218,10 +219,7 @@ export async function getReplyFromConfig(
     isFastTestEnv,
   });
   const finalized = finalizeInboundContext(ctx);
-  const targetSessionKey =
-    finalized.CommandSource === "native"
-      ? normalizeOptionalString(finalized.CommandTargetSessionKey)
-      : undefined;
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
   const agentSessionKey = targetSessionKey || finalized.SessionKey;
   const traceAttributes = {
     surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",

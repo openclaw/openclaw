@@ -468,6 +468,35 @@ type SendPayloadParts = {
   silent?: boolean;
 };
 
+function collectMessageAttachmentMediaHints(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  const pushMedia = (entry: unknown) => {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    mediaUrls.push(normalized);
+  };
+  for (const attachment of value) {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      continue;
+    }
+    const record = attachment as Record<string, unknown>;
+    pushMedia(record.media);
+    pushMedia(record.mediaUrl);
+    pushMedia(record.path);
+    pushMedia(record.filePath);
+    pushMedia(record.fileUrl);
+    pushMedia(record.url);
+  }
+  return mediaUrls;
+}
+
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   for (const key of ["channel", "target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
@@ -692,12 +721,14 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
     readStringParam(actionParams, "fileUrl", { trim: false });
+  const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
+  const hasMediaHint = Boolean(mediaHint) || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !mediaHint && !hasPresentation && !hasInteractive,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -719,6 +750,9 @@ async function buildSendPayloadParts(params: {
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
+  for (const attachmentMediaHint of attachmentMediaHints) {
+    pushMedia(attachmentMediaHint);
+  }
   for (const url of parsed.mediaUrls ?? []) {
     pushMedia(url);
   }

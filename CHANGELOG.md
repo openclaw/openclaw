@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/SDK: add normalized command turn facts to channel turn construction and expose command-turn helpers for plugin inbound contexts.
 - Agents/config: support per-agent bootstrap profile overrides for `contextInjection`, `bootstrapMaxChars`, and `bootstrapTotalMaxChars`, inheriting from `agents.defaults` when omitted. Fixes #69966. Thanks @BunsDev.
 - Dependencies: route root ambient Node proxy agents through `@openclaw/proxyline` and drop root `proxy-agent`, `https-proxy-agent`, and `minimatch` dependencies.
 - Canvas: lazy-load HTTP host, hosted media resolver, CLI implementation, and tool runtime modules so Gateway startup only pays Canvas implementation cost on first use. (#82001) Thanks @samzong.
@@ -34,9 +35,18 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Bind shell script operands after combined options [AI]. (#81882) Thanks @pgondhi987.
+- fix(canvas): validate snapshot response formats [AI]. (#81881) Thanks @pgondhi987.
+- Constrain provider catalog entry paths [AI]. (#81884) Thanks @pgondhi987.
+- Require canonical node platform IDs [AI]. (#81880) Thanks @pgondhi987.
 - Agents/Azure OpenAI Responses: default unset Azure OpenAI API versions to `preview` so `/openai/v1/responses` calls use Azure's current Responses API route. (#82026) Thanks @leoge007.
+- Control UI/WebChat: compact the desktop chat header controls into a single aligned row so the session, model, thinking, and action controls no longer waste vertical space. Thanks @BunsDev.
 - Agents: retry empty final turns for generic `anthropic-messages` providers instead of limiting non-visible recovery to Kimi, so custom/proxied Anthropic-compatible routes can recover with a visible answer. Addresses #46080. Thanks @wmgx, @w1tv, and @iFwu.
+- Agents/replies: strip workflow `<function_response>` scaffolding from user-visible sanitizer paths so raw tool output does not leak into chat history, transcript mirrors, or channel replies. Fixes #47444. Thanks @5toCode.
+- Agents/media: deliver generated image, music, and video results through structured attachments, keep message-tool-only Codex completions on the message tool, and fail completion handoff when expected media is not actually sent.
+- Diagnostics/Codex: recover stalled embedded Codex app-server runs after the shorter default stalled-run window so queued turns resume sooner.
 - Control UI: rotate browser service-worker caches per build so updated Gateways are less likely to keep serving stale dashboard bundles that trigger protocol mismatch errors.
+- Gateway/protocol: lazy-compile protocol validators on first use instead of compiling every AJV schema during cold import, reducing startup CPU and RSS. (#82064) Thanks @samzong.
 - Discord: report unresolved configured bot-token SecretRefs during startup instead of treating the account as unconfigured. (#82009) Thanks @giodl73-repo.
 - CLI/config: preserve numeric-looking object keys such as Discord guild IDs during `config patch` recursive merges. (#81999) Thanks @giodl73-repo.
 - Gateway/OpenAI-compatible HTTP: forward `response_format` from `/v1/chat/completions` requests through agent stream params to upstream Chat Completions and Responses transports, restoring structured-output support. Fixes #82003. (#82004) Thanks @Lellansin.
