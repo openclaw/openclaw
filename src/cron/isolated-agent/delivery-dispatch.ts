@@ -1,12 +1,6 @@
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
 import {
@@ -49,44 +43,12 @@ import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { normalizeSilentReplyText } from "./silent-reply-normalization.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
-}
-
-type NormalizedSilentReplyText = {
-  text: string | undefined;
-  strippedTrailingSilentToken: boolean;
-};
-
-function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
-  if (!text) {
-    return { text, strippedTrailingSilentToken: false };
-  }
-  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-    return { text: undefined, strippedTrailingSilentToken: false };
-  }
-
-  let next = text;
-  const hasLeadingSilentToken = startsWithSilentToken(next, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    next = stripLeadingSilentToken(next, SILENT_REPLY_TOKEN);
-  }
-
-  let strippedTrailingSilentToken = false;
-  if (hasLeadingSilentToken || next.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    const trimmedBefore = next.trim();
-    const stripped = stripSilentToken(next, SILENT_REPLY_TOKEN);
-    strippedTrailingSilentToken = stripped !== trimmedBefore;
-    next = stripped;
-  }
-
-  if (!next.trim() || isSilentReplyText(next, SILENT_REPLY_TOKEN)) {
-    return { text: undefined, strippedTrailingSilentToken };
-  }
-  return { text: next, strippedTrailingSilentToken };
 }
 
 export function matchesMessagingToolDeliveryTarget(

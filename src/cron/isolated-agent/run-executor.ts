@@ -32,6 +32,7 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import { isSilentForCronDelivery } from "./silent-reply-normalization.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
@@ -622,7 +623,7 @@ export async function executeCronRun(params: {
         !runResult.didSendViaMessagingTool &&
         !repairedPayloadHasStructuredContent &&
         !repairedPayloads.some((payload) => payload?.isError === true) &&
-        repairedText.length === 0;
+        (repairedText.length === 0 || isSilentForCronDelivery(repairedText));
     }
   }
 

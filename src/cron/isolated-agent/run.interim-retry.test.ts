@@ -435,4 +435,26 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
   });
+
+  it("fails explicitly when the repair pass returns a silent NO_REPLY token", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("repair pass did not recover a final reply");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+  });
 });
