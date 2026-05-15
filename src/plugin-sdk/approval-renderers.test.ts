@@ -907,6 +907,52 @@ describe("plugin-sdk/approval-renderers", () => {
 
   it.each([
     {
+      id: "plugin-command-curl-auth-header-only",
+      description: 'Command: curl -H "Authorization: Bearer s3cr3t" https://example.test',
+      action: "- send network credentials in headers",
+      preview: 'Command preview\ncurl -H "Authorization: Bearer [redacted]" https://example.test',
+    },
+    {
+      id: "plugin-command-curl-basic-auth-only",
+      description: "Command: curl -u alice:s3cr3t https://example.test",
+      action: "- send network credentials from command options",
+      preview: "Command preview\ncurl -u [redacted] https://example.test",
+    },
+    {
+      id: "plugin-command-curl-oauth-only",
+      description: "Command: curl --oauth2-bearer s3cr3t https://example.test",
+      action: "- send network credentials from command options",
+      preview: "Command preview\ncurl --oauth2-bearer [redacted] https://example.test",
+    },
+  ])("surfaces auth-only curl credentials: $id", ({ id, description, action, preview }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain(action);
+    expect(payload.text).toContain("contact: https://example.test");
+    expect(payload.text).toContain(preview);
+    expect(payload.text).not.toContain("s3cr3t");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "Network credential options can expose cookies, tokens, or login/password data.",
+    );
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
+  it.each([
+    {
       id: "plugin-command-curl-cookie-inline-short",
       description: "Command: curl -b session=s3cr3t https://example.test",
       action: "- send network credentials from command options",

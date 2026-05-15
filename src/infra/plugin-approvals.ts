@@ -170,6 +170,20 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
 const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
 const CURL_NETRC_FILE_FLAGS = new Set(["--netrc-file"]);
 const CURL_NETRC_FLAGS = new Set(["-n", "--netrc", "--netrc-optional"]);
+const CURL_AUTH_VALUE_FLAGS = new Set([
+  "-u",
+  "-U",
+  "--ftp-account",
+  "--ftp-password",
+  "--ftp-user",
+  "--http-password",
+  "--http-user",
+  "--oauth2-bearer",
+  "--password",
+  "--proxy-password",
+  "--proxy-user",
+  "--user",
+]);
 const CURL_COOKIE_FLAGS = new Set(["-b", "--cookie"]);
 const CURL_COOKIE_JAR_FLAGS = new Set(["-c", "--cookie-jar"]);
 const CURL_HEADER_FLAGS = new Set(["-H", "--header"]);
@@ -1833,6 +1847,20 @@ function collectNetworkTransferOperands(
 
     if (command === "curl" && CURL_NETRC_FLAGS.has(arg)) {
       usesDefaultCredentialSource = true;
+      continue;
+    }
+
+    const authValue =
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_AUTH_VALUE_FLAGS, ["-u", "-U"])
+        : null;
+    if (authValue) {
+      usesInlineCredentialSource = true;
+      index = Math.max(index, authValue.nextIndex);
+      continue;
+    }
+    if (command === "curl" && CURL_AUTH_VALUE_FLAGS.has(arg)) {
+      usesAmbiguousCredentialSource = true;
       continue;
     }
 
