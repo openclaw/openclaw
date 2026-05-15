@@ -248,9 +248,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       lastResponse = response;
     }
 
-    expect(firstResponse).toBeDefined();
     expect(firstResponse?.status).toBe(401);
-    expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(429);
     expect(await lastResponse?.text()).toBe("Too Many Requests");
   });
@@ -273,7 +271,6 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       });
     }
 
-    expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(200);
   });
 });

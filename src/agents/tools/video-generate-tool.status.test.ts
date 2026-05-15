@@ -26,7 +26,7 @@ describe("createVideoGenerateTool status actions", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns active task status instead of starting a duplicate generation", async () => {
+  it("returns active task status instead of starting a duplicate generation", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",
@@ -47,28 +47,43 @@ describe("createVideoGenerateTool status actions", () => {
     ]);
 
     const result = createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123");
-    const text = (result?.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(result).not.toBeNull();
+    const [content] = result?.content ?? [];
+    expect(result?.content).toStrictEqual([
+      {
+        type: "text",
+        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Wait for the completion event; I will post the finished video here.",
+      },
+    ]);
+    const text = content?.text ?? "";
     expect(text).toContain("Video generation task task-active is already running with openai.");
     expect(text).toContain("Do not call video_generate again for this request.");
-    expect(result?.details).toMatchObject({
-      action: "status",
-      duplicateGuard: true,
-      active: true,
-      existingTask: true,
-      status: "running",
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      provider: "openai",
-      task: {
-        taskId: "task-active",
-        runId: "tool:video_generate:active",
-      },
-      progressSummary: "Generating video",
-    });
+    const details = result?.details as
+      | {
+          action?: unknown;
+          duplicateGuard?: unknown;
+          active?: unknown;
+          existingTask?: unknown;
+          status?: unknown;
+          taskKind?: unknown;
+          provider?: unknown;
+          task?: { taskId?: unknown; runId?: unknown };
+          progressSummary?: unknown;
+        }
+      | undefined;
+    expect(details?.action).toBe("status");
+    expect(details?.duplicateGuard).toBe(true);
+    expect(details?.active).toBe(true);
+    expect(details?.existingTask).toBe(true);
+    expect(details?.status).toBe("running");
+    expect(details?.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
+    expect(details?.provider).toBe("openai");
+    expect(details?.task?.taskId).toBe("task-active");
+    expect(details?.task?.runId).toBe("tool:video_generate:active");
+    expect(details?.progressSummary).toBe("Generating video");
   });
 
-  it("reports active task status when action=status is requested", async () => {
+  it("reports active task status when action=status is requested", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",
@@ -92,17 +107,23 @@ describe("createVideoGenerateTool status actions", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Video generation task task-active is already queued with google.");
-    expect(result.details).toMatchObject({
-      action: "status",
-      active: true,
-      existingTask: true,
-      status: "queued",
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      provider: "google",
-      task: {
-        taskId: "task-active",
-      },
-      progressSummary: "Queued video generation",
-    });
+    const details = result.details as {
+      action?: unknown;
+      active?: unknown;
+      existingTask?: unknown;
+      status?: unknown;
+      taskKind?: unknown;
+      provider?: unknown;
+      task?: { taskId?: unknown };
+      progressSummary?: unknown;
+    };
+    expect(details.action).toBe("status");
+    expect(details.active).toBe(true);
+    expect(details.existingTask).toBe(true);
+    expect(details.status).toBe("queued");
+    expect(details.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
+    expect(details.provider).toBe("google");
+    expect(details.task?.taskId).toBe("task-active");
+    expect(details.progressSummary).toBe("Queued video generation");
   });
 });

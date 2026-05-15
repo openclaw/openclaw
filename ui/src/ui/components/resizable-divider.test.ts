@@ -44,10 +44,13 @@ async function renderDivider() {
 
   const root = container.querySelector<HTMLDivElement>("#split-root");
   const divider = container.querySelector<ResizableDivider>("resizable-divider");
-  expect(root).not.toBeNull();
-  expect(divider).not.toBeNull();
+  expect(root?.id).toBe("split-root");
+  expect(divider?.tagName.toLowerCase()).toBe("resizable-divider");
+  if (!root || !divider) {
+    throw new Error("expected resizable divider fixture");
+  }
 
-  root!.getBoundingClientRect = vi.fn(() => ({
+  root.getBoundingClientRect = vi.fn(() => ({
     bottom: 0,
     height: 0,
     left: 0,
@@ -59,9 +62,9 @@ async function renderDivider() {
     toJSON: () => ({}),
   }));
 
-  await divider!.updateComplete;
+  await divider.updateComplete;
   await nextFrame();
-  return divider!;
+  return divider;
 }
 
 function dispatchPointer(target: EventTarget, type: string, clientX: number) {
@@ -75,6 +78,11 @@ function dispatchPointer(target: EventTarget, type: string, clientX: number) {
       pointerType: "touch",
     }),
   );
+}
+
+function expectLastResizeRatio(resized: ReturnType<typeof vi.fn>, splitRatio: number) {
+  const event = resized.mock.lastCall?.[0] as CustomEvent<{ splitRatio: number }> | undefined;
+  expect(event?.detail.splitRatio).toBe(splitRatio);
 }
 
 describe("resizable-divider", () => {
@@ -132,9 +140,7 @@ describe("resizable-divider", () => {
     });
     divider.dispatchEvent(arrowLeft);
     expect(arrowLeft.defaultPrevented).toBe(true);
-    expect(resized).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: { splitRatio: 0.58 } }),
-    );
+    expectLastResizeRatio(resized, 0.58);
 
     const arrowRight = new KeyboardEvent("keydown", {
       key: "ArrowRight",
@@ -144,19 +150,13 @@ describe("resizable-divider", () => {
     });
     divider.dispatchEvent(arrowRight);
     expect(arrowRight.defaultPrevented).toBe(true);
-    expect(resized).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: { splitRatio: 0.65 } }),
-    );
+    expectLastResizeRatio(resized, 0.65);
 
     divider.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
-    expect(resized).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: { splitRatio: 0.4 } }),
-    );
+    expectLastResizeRatio(resized, 0.4);
 
     divider.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(resized).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: { splitRatio: 0.7 } }),
-    );
+    expectLastResizeRatio(resized, 0.7);
   });
 
   it("uses pointer events for mouse, pen, and touch dragging", async () => {
@@ -172,16 +172,14 @@ describe("resizable-divider", () => {
 
     dispatchPointer(divider, "pointerdown", 100);
     expect(document.activeElement).toBe(divider);
-    expect(divider.classList.contains("dragging")).toBe(true);
+    expect([...divider.classList]).toEqual(["dragging"]);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 
     dispatchPointer(document, "pointermove", 220);
-    expect(resized).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: { splitRatio: 0.7 } }),
-    );
+    expectLastResizeRatio(resized, 0.7);
 
     dispatchPointer(document, "pointerup", 220);
-    expect(divider.classList.contains("dragging")).toBe(false);
+    expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 });

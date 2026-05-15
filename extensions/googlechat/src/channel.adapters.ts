@@ -19,11 +19,11 @@ import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type ResolvedGoogleChatAccount,
   chunkTextForOutbound,
-  fetchRemoteMedia,
+  readRemoteMediaBuffer,
   isGoogleChatUserTarget,
   loadOutboundMediaFromUrl,
   missingTargetError,
@@ -280,7 +280,7 @@ export const googlechatOutboundAdapter = {
       });
       const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
       const loaded = /^https?:\/\//i.test(mediaUrl)
-        ? await fetchRemoteMedia({
+        ? await readRemoteMediaBuffer({
             url: mediaUrl,
             maxBytes: effectiveMaxBytes,
           })

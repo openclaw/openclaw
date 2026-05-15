@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
 
@@ -47,7 +47,7 @@ describe("telegramMessageActions", () => {
     } as never);
 
     expect(handleTelegramActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         action: "sendMessage",
         to: "123456",
         interactive: {
@@ -59,12 +59,12 @@ describe("telegramMessageActions", () => {
           ],
         },
         accountId: "default",
-      }),
-      expect.anything(),
-      expect.objectContaining({
+      },
+      {},
+      {
         mediaLocalRoots: [],
         sessionKey: "telegram-session",
-      }),
+      },
     );
   });
 
@@ -191,9 +191,8 @@ describe("telegramMessageActions", () => {
           cfg: testCase.cfg,
         })?.actions ?? [];
       if (testCase.expectSticker) {
-        expect(actions, testCase.name).toEqual(
-          expect.arrayContaining(["sticker", "sticker-search"]),
-        );
+        expect(actions, testCase.name).toContain("sticker");
+        expect(actions, testCase.name).toContain("sticker-search");
       } else {
         expect(actions, testCase.name).not.toContain("sticker");
         expect(actions, testCase.name).not.toContain("sticker-search");
@@ -298,18 +297,20 @@ describe("telegramMessageActions", () => {
         toolContext: "toolContext" in testCase ? testCase.toolContext : undefined,
       });
 
-      const call = handleTelegramActionMock.mock.calls[0]?.[0] as
+      const call = handleTelegramActionMock.mock.calls.at(0)?.[0] as
         | Record<string, unknown>
         | undefined;
-      expect(call, testCase.name).toBeDefined();
-      expect(call?.action, testCase.name).toBe("react");
-      expect(String(call?.[testCase.expectedChannelField]), testCase.name).toBe(
+      if (!call) {
+        throw new Error(`expected Telegram action call for ${testCase.name}`);
+      }
+      expect(call.action, testCase.name).toBe("react");
+      expect(String(call[testCase.expectedChannelField]), testCase.name).toBe(
         testCase.expectedChannelValue,
       );
       if (testCase.expectedMessageId === undefined) {
-        expect(call?.messageId, testCase.name).toBeUndefined();
+        expect(call.messageId, testCase.name).toBeUndefined();
       } else {
-        expect(String(call?.messageId), testCase.name).toBe(testCase.expectedMessageId);
+        expect(String(call.messageId), testCase.name).toBe(testCase.expectedMessageId);
       }
     }
   });

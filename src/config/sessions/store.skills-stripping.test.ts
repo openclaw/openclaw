@@ -111,7 +111,6 @@ describe("session store strips resolvedSkills from persistence", () => {
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
     const persistedSnapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
-    expect(persistedSnapshot).toBeDefined();
     expect(persistedSnapshot?.prompt).toBe(snapshot.prompt);
     expect(persistedSnapshot?.skills).toEqual(snapshot.skills);
     expect(persistedSnapshot?.skillFilter).toEqual(["skill-0"]);
@@ -204,7 +203,7 @@ describe("embedded runner falls back to disk when resolvedSkills is absent", () 
     });
 
     expect(result.shouldLoadSkillEntries).toBe(false);
-    expect(result.skillEntries).toEqual([]);
+    expect(result.skillEntries).toStrictEqual([]);
   });
 });
 

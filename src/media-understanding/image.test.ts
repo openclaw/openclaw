@@ -19,7 +19,9 @@ const hoisted = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
+  resolveCopilotApiTokenMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -32,7 +34,9 @@ const {
   fetchMock,
   registerProviderStreamForModelMock,
   prepareProviderDynamicModelMock,
+  resolveModelAsyncMock,
   resolveModelWithRegistryMock,
+  resolveCopilotApiTokenMock,
 } = hoisted;
 
 type ResolveModelWithRegistryTestParams = {
@@ -41,8 +45,40 @@ type ResolveModelWithRegistryTestParams = {
   modelId: string;
 };
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+type AuthRequestCall = {
+  profileId?: string;
+  store?: unknown;
+};
+
+function requireMockCallAt<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  index: number,
+  label: string,
+): Calls[number] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index}`);
+  }
+  return call as Calls[number];
+}
+
+function requireFirstMockCall<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  label: string,
+): Calls[number] {
+  return requireMockCallAt(mock, 0, label);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...actual,
     complete: completeMock,
@@ -81,7 +117,16 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelWithRegistry: resolveModelWithRegistryMock,
+  resolveModelAsync: resolveModelAsyncMock,
+}));
+
+vi.mock("../plugin-sdk/provider-auth.js", () => ({
+  buildCopilotIdeHeaders: () => ({
+    "Editor-Version": "vscode/1.107.0",
+    "User-Agent": "GitHubCopilotChat/0.35.0",
+  }),
+  COPILOT_INTEGRATION_ID: "vscode-chat",
+  resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -121,7 +166,37 @@ describe("describeImageWithModel", () => {
       ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
         modelRegistry.find(provider, modelId),
     );
+    resolveModelAsyncMock.mockImplementation(
+      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+        const authStorage = {
+          setRuntimeApiKey: setRuntimeApiKeyMock,
+        };
+        const modelRegistry = discoverModelsMock(authStorage, agentDir);
+        const model = resolveModelWithRegistryMock({
+          provider,
+          modelId,
+          modelRegistry,
+          cfg,
+          agentDir,
+        });
+        return { authStorage, model, modelRegistry };
+      },
+    );
+    resolveCopilotApiTokenMock.mockResolvedValue({
+      token: "copilot-api-token",
+      expiresAt: Date.now() + 60_000,
+      source: "test",
+      baseUrl: "https://api.githubcopilot.com",
+    });
   });
+
+  function getApiKeyForModelCall(index = 0): AuthRequestCall {
+    const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
+    if (!call) {
+      throw new Error(`Expected getApiKeyForModel call ${index}`);
+    }
+    return call[0] as AuthRequestCall;
+  }
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
@@ -144,27 +219,27 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({ store: authStore }),
-    );
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.minimax.io/v1/coding_plan/vlm",
-      expect.objectContaining({
-        method: "POST",
-        headers: {
-          Authorization: "Bearer oauth-test",
-          "Content-Type": "application/json",
-          "MM-API-Source": "OpenClaw",
-        },
-        body: JSON.stringify({
-          prompt: "Describe the image.",
-          image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
-        }),
-        signal: expect.any(AbortSignal),
+    const [fetchUrl, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
+    expect(fetchUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+    expect(fetchOptions).toEqual({
+      method: "POST",
+      headers: {
+        Authorization: "Bearer oauth-test",
+        "Content-Type": "application/json",
+        "MM-API-Source": "OpenClaw",
+      },
+      body: JSON.stringify({
+        prompt: "Describe the image.",
+        image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       }),
-    );
+      signal: fetchOptions.signal,
+    });
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
   });
@@ -204,16 +279,20 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
-    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          provider: "minimax-portal",
-          id: "custom-vision",
-        }),
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
-      }),
+    const [streamRequest] = requireFirstMockCall(
+      registerProviderStreamForModelMock,
+      "provider stream registration",
     );
+    expect(streamRequest).toEqual({
+      model: {
+        provider: "minimax-portal",
+        id: "custom-vision",
+        input: ["text", "image"],
+        baseUrl: "https://api.minimax.io/anthropic",
+      },
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -277,21 +356,24 @@ describe("describeImageWithModel", () => {
       model: "google/gemma-4-e2b",
     });
     expect(registryFind).not.toHaveBeenCalled();
-    expect(resolveModelWithRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "lmstudio",
-        modelId: "google/gemma-4-e2b",
-        cfg: expect.objectContaining({
-          models: expect.objectContaining({
-            providers: expect.objectContaining({
-              lmstudio: expect.objectContaining({
-                baseUrl: "http://127.0.0.1:1234",
-              }),
-            }),
-          }),
-        }),
-      }),
+    const [resolveRequestValue] = requireFirstMockCall(
+      resolveModelWithRegistryMock,
+      "model registry resolution",
     );
+    const resolveRequest = requireRecord(resolveRequestValue, "model registry request");
+    expect(resolveRequest.provider).toBe("lmstudio");
+    expect(resolveRequest.modelId).toBe("google/gemma-4-e2b");
+    expect(resolveRequest.agentDir).toBe("/tmp/openclaw-agent");
+    expect(
+      requireRecord(
+        requireRecord(
+          requireRecord(requireRecord(resolveRequest.cfg, "request config").models, "models")
+            .providers,
+          "model providers",
+        ).lmstudio,
+        "lmstudio provider",
+      ).baseUrl,
+    ).toBe("http://127.0.0.1:1234");
     expect(prepareProviderDynamicModelMock).not.toHaveBeenCalled();
     expect(completeMock).toHaveBeenCalledOnce();
   });
@@ -361,29 +443,33 @@ describe("describeImageWithModel", () => {
       model: "gpt-5.4",
     });
     expect(completeMock).toHaveBeenCalledOnce();
-    expect(completeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.4",
-      }),
-      expect.objectContaining({
-        systemPrompt: "Describe the image.",
-        messages: [
-          expect.objectContaining({
-            role: "user",
-            content: [
-              expect.objectContaining({
-                type: "image",
-                mimeType: "image/png",
-              }),
-            ],
-          }),
-        ],
-      }),
-      expect.any(Object),
-    );
-    const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.messages?.[0]?.content).toHaveLength(1);
+    const firstCall = requireFirstMockCall(completeMock, "image completion");
+    const [completionModel, context, options] = firstCall;
+    expect(completionModel).toEqual({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      input: ["text", "image"],
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+    expect(context.systemPrompt).toBe("Describe the image.");
+    expect(context.messages).toHaveLength(1);
+    expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
+    expect(options.apiKey).toBe("oauth-test");
+    expect(options.maxTokens).toBe(512);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.timeoutMs).toBeGreaterThan(0);
+    expect(options.timeoutMs).toBeLessThanOrEqual(1000);
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected image completion user message");
+    }
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toHaveLength(1);
+    expect(userMessage.content[0]).toEqual({
+      type: "image",
+      data: Buffer.from("png-bytes").toString("base64"),
+      mimeType: "image/png",
+    });
   });
 
   it("places OpenRouter image prompts in user content before images", async () => {
@@ -422,14 +508,20 @@ describe("describeImageWithModel", () => {
       text: "openrouter ok",
       model: "google/gemini-2.5-flash",
     });
-    const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.systemPrompt).toBeUndefined();
-    expect(context?.messages?.[0]?.content).toEqual([
+    const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
+    const [, context] = firstCall;
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected OpenRouter image completion user message");
+    }
+    expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
-      expect.objectContaining({
+      {
         type: "image",
+        data: Buffer.from("png-bytes").toString("base64"),
         mimeType: "image/png",
-      }),
+      },
     ]);
   });
 
@@ -536,15 +628,18 @@ describe("describeImageWithModel", () => {
         model: model.id,
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
-      const [, , retryOptions] = completeMock.mock.calls[1] ?? [];
-      expect(retryOptions?.onPayload).toEqual(expect.any(Function));
-      const retryPayload = await retryOptions?.onPayload?.(
+      const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
+      const [retryModel, , retryOptions] = retryCall;
+      if (!retryOptions?.onPayload) {
+        throw new Error("expected retry payload mapper");
+      }
+      const retryPayload = await retryOptions.onPayload(
         {
           reasoning: { effort: "high", summary: "auto" },
           reasoning_effort: "high",
           include: ["reasoning.encrypted_content"],
         },
-        completeMock.mock.calls[1]?.[0],
+        retryModel,
       );
       expect(retryPayload).toEqual(expectedRetryPayload);
     },
@@ -578,9 +673,13 @@ describe("describeImageWithModel", () => {
     const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
-    const [, , options] = completeMock.mock.calls[0] ?? [];
-    expect(options?.signal?.aborted).toBe(true);
-    expect(options?.timeoutMs).toBe(25);
+    const firstCall = requireFirstMockCall(completeMock, "timed image completion");
+    const [, , options] = firstCall;
+    if (!options?.signal) {
+      throw new Error("Expected image completion abort signal");
+    }
+    expect(options.signal.aborted).toBe(true);
+    expect(options.timeoutMs).toBe(25);
   });
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
@@ -645,11 +744,8 @@ describe("describeImageWithModel", () => {
       model: "gemini-3-flash-preview",
     });
     expect(findMock).toHaveBeenCalledOnce();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "google:default",
-      }),
-    );
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
@@ -693,11 +789,149 @@ describe("describeImageWithModel", () => {
       model: "gemini-3.1-flash-lite-preview",
     });
     expect(findMock).toHaveBeenCalledOnce();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "google:default",
-      }),
-    );
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("places image prompt in user content for github-copilot provider", async () => {
+    const providerStreamResult = {
+      role: "assistant",
+      api: "openai-completions",
+      provider: "github-copilot",
+      model: "gemini-3.1-pro-preview",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "A solid red square." }],
+    };
+    const providerStreamFn = vi.fn(() => ({
+      result: vi.fn(async () => providerStreamResult),
+    }));
+    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        input: ["text", "image"],
+        api: "openai-completions",
+        baseUrl: "https://stale.example.test",
+      })),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gemini-3.1-pro-preview",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(providerStreamFn).toHaveBeenCalledOnce();
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: "oauth-test",
+    });
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
+    const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
+      { baseUrl?: string },
+      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
+      { apiKey?: string; headers?: Record<string, string> },
+    ];
+    expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(options.apiKey).toBe("copilot-api-token");
+    expect(options.headers).toMatchObject({
+      "Copilot-Integration-Id": "vscode-chat",
+      "Copilot-Vision-Request": "true",
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+    });
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages?.find((m) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    expect(contentTypes).toContain("text");
+    expect(contentTypes).toContain("image");
+  });
+
+  it("fails github-copilot image runtime setup when token exchange fails", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        input: ["text", "image"],
+        api: "openai-completions",
+        baseUrl: "https://api.githubcopilot.com",
+      })),
+    });
+    resolveCopilotApiTokenMock.mockRejectedValueOnce(
+      new Error("Copilot token exchange failed: HTTP 401"),
+    );
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "github-copilot",
+        model: "gemini-3.1-pro-preview",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
+
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalledWith("github-copilot", "oauth-test");
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not place image prompt in user content for non-copilot providers", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-4o",
+        input: ["text", "image"],
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-4o",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "A solid red square." }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-4o",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(completeMock).toHaveBeenCalledOnce();
+    const [, context] = completeMock.mock.calls[0] as [
+      unknown,
+      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
+    ];
+    // Non-Copilot providers keep prompt in system message, images in user message
+    expect(context.systemPrompt).toBe("Describe the image.");
+    const userMessage = context.messages?.find((m) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    expect(contentTypes).not.toContain("text");
+    expect(contentTypes).toContain("image");
   });
 });

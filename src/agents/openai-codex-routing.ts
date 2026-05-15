@@ -112,17 +112,12 @@ export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
   provider: string;
   harnessRuntime?: string;
   agentHarnessId?: string;
-  sessionAgentHarnessId?: string;
-  sessionAgentRuntimeOverride?: string;
 }): string[] {
   if (!isOpenAIProvider(params.provider)) {
     return [params.provider];
   }
   const runtime = normalizeEmbeddedAgentRuntime(
-    normalizeExplicitRuntimePin(params.sessionAgentRuntimeOverride) ??
-      normalizeExplicitRuntimePin(params.sessionAgentHarnessId) ??
-      normalizeExplicitRuntimePin(params.agentHarnessId) ??
-      params.harnessRuntime,
+    normalizeExplicitRuntimePin(params.agentHarnessId) ?? params.harnessRuntime,
   );
   if (runtime === "codex") {
     return [OPENAI_CODEX_PROVIDER_ID];
@@ -153,4 +148,16 @@ export function resolveOpenAIRuntimeProviderForPi(params: {
   return shouldRouteOpenAIPiThroughCodexAuthProvider(params)
     ? OPENAI_CODEX_PROVIDER_ID
     : params.provider;
+}
+
+export function resolveContextConfigProviderForRuntime(params: {
+  provider: string;
+  runtimeId?: string;
+}): string {
+  const provider = normalizeProviderId(params.provider);
+  const runtimeId = normalizeEmbeddedAgentRuntime(params.runtimeId);
+  if (provider === OPENAI_PROVIDER_ID && runtimeId === "codex") {
+    return OPENAI_CODEX_PROVIDER_ID;
+  }
+  return params.provider;
 }

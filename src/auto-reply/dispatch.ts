@@ -10,6 +10,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
+import { resolveCommandTurnContext } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -25,6 +26,92 @@ import {
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
+
+type ForegroundReplyFenceState = {
+  generation: number;
+  activeDispatches: number;
+};
+
+type ForegroundReplyFenceSnapshot = {
+  key: string;
+  generation: number;
+};
+
+const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
+
+function normalizeForegroundReplyFencePart(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string | undefined {
+  const sessionKey = normalizeForegroundReplyFencePart(finalized.SessionKey);
+  const channel =
+    normalizeForegroundReplyFencePart(finalized.OriginatingChannel) ??
+    normalizeForegroundReplyFencePart(finalized.Surface) ??
+    normalizeForegroundReplyFencePart(finalized.Provider);
+  const target =
+    normalizeForegroundReplyFencePart(finalized.OriginatingTo) ??
+    normalizeForegroundReplyFencePart(finalized.NativeChannelId) ??
+    normalizeForegroundReplyFencePart(finalized.From) ??
+    normalizeForegroundReplyFencePart(finalized.To);
+
+  if (!sessionKey || !channel || !target) {
+    return undefined;
+  }
+
+  return JSON.stringify([
+    "foreground",
+    channel,
+    normalizeForegroundReplyFencePart(finalized.AccountId) ?? "default",
+    sessionKey,
+    normalizeChatType(finalized.ChatType) ?? "unknown",
+    target,
+  ]);
+}
+
+function beginForegroundReplyFence(
+  finalized: FinalizedMsgContext,
+): ForegroundReplyFenceSnapshot | undefined {
+  const key = resolveForegroundReplyFenceKey(finalized);
+  if (!key) {
+    return undefined;
+  }
+  const state = foregroundReplyFenceByKey.get(key) ?? {
+    generation: 0,
+    activeDispatches: 0,
+  };
+  state.generation += 1;
+  state.activeDispatches += 1;
+  foregroundReplyFenceByKey.set(key, state);
+  return {
+    key,
+    generation: state.generation,
+  };
+}
+
+function isForegroundReplyFenceSuperseded(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+): boolean {
+  return Boolean(
+    snapshot &&
+    (foregroundReplyFenceByKey.get(snapshot.key)?.generation ?? 0) !== snapshot.generation,
+  );
+}
+
+function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
+  const state = foregroundReplyFenceByKey.get(snapshot.key);
+  if (!state) {
+    return;
+  }
+  state.activeDispatches -= 1;
+  if (state.activeDispatches <= 0) {
+    foregroundReplyFenceByKey.delete(snapshot.key);
+  }
+}
 
 function resolveDispatcherSilentReplyContext(
   ctx: MsgContext | FinalizedMsgContext,
@@ -100,6 +187,7 @@ function buildMessageSendingBeforeDeliver(
 }
 
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
+  const commandTurn = resolveCommandTurnContext(ctx);
   return {
     surface:
       typeof ctx.Surface === "string"
@@ -109,7 +197,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
           : "unknown",
     hasSessionKey:
       typeof ctx.SessionKey === "string" || typeof ctx.CommandTargetSessionKey === "string",
-    commandSource: typeof ctx.CommandSource === "string" ? ctx.CommandSource : "message",
+    commandSource: commandTurn.source,
   };
 }
 
@@ -200,9 +288,26 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
-  const beforeDeliver =
-    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx);
+  const finalized = finalizeInboundContext(params.ctx);
+  const foregroundReplyFence = beginForegroundReplyFence(finalized);
+  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
+  const configuredBeforeDeliver =
+    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);
+  const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
+    foregroundReplyFence || configuredBeforeDeliver
+      ? async (payload, info) => {
+          if (isForegroundReplyFenceSuperseded(foregroundReplyFence)) {
+            return null;
+          }
+          const deliverPayload = configuredBeforeDeliver
+            ? await configuredBeforeDeliver(payload, info)
+            : payload;
+          if (!deliverPayload || isForegroundReplyFenceSuperseded(foregroundReplyFence)) {
+            return null;
+          }
+          return deliverPayload;
+        }
+      : undefined;
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
@@ -211,7 +316,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     });
   try {
     return await dispatchInboundMessage({
-      ctx: params.ctx,
+      ctx: finalized,
       cfg: params.cfg,
       dispatcher,
       replyResolver: params.replyResolver,
@@ -221,6 +326,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       },
     });
   } finally {
+    if (foregroundReplyFence) {
+      endForegroundReplyFence(foregroundReplyFence);
+    }
     markRunComplete();
     markDispatchIdle();
   }

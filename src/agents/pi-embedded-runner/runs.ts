@@ -40,6 +40,60 @@ export {
   type EmbeddedRunModelSwitchRequest,
 } from "./run-state.js";
 
+export type EmbeddedPiQueueFailureReason =
+  | "no_active_run"
+  | "not_streaming"
+  | "compacting"
+  | "runtime_rejected";
+
+export type EmbeddedPiQueueMessageOutcome =
+  | {
+      queued: true;
+      sessionId: string;
+      target: "embedded_run" | "reply_run";
+      gatewayHealth: "live";
+    }
+  | {
+      queued: false;
+      sessionId: string;
+      reason: EmbeddedPiQueueFailureReason;
+      gatewayHealth: "live";
+      errorMessage?: string;
+    };
+
+type PreparedEmbeddedPiQueueMessage =
+  | {
+      kind: "complete";
+      outcome: EmbeddedPiQueueMessageOutcome;
+    }
+  | {
+      kind: "embedded_run";
+      handle: EmbeddedPiQueueHandle;
+    };
+
+function createQueueFailureOutcome(
+  sessionId: string,
+  reason: EmbeddedPiQueueFailureReason,
+  errorMessage?: string,
+): EmbeddedPiQueueMessageOutcome {
+  return {
+    queued: false,
+    sessionId,
+    reason,
+    gatewayHealth: "live",
+    ...(errorMessage ? { errorMessage } : {}),
+  };
+}
+
+export function formatEmbeddedPiQueueFailureSummary(
+  outcome: EmbeddedPiQueueMessageOutcome,
+): string | undefined {
+  if (outcome.queued) {
+    return undefined;
+  }
+  const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
+  return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
+}
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
@@ -63,32 +117,109 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
+/**
+ * @deprecated Use queueEmbeddedPiMessageWithOutcomeAsync for delivery decisions.
+ * This boolean helper only reports immediate queue eligibility; it cannot surface
+ * async runtime rejection from the active run.
+ */
 export function queueEmbeddedPiMessage(
   sessionId: string,
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): boolean {
+  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+}
+
+/**
+ * @deprecated Prefer queueEmbeddedPiMessageWithOutcomeAsync when callers need to
+ * know whether steering was accepted. This sync helper is fire-and-forget after
+ * initial eligibility and only logs later runtime rejection.
+ */
+export function queueEmbeddedPiMessageWithOutcome(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): EmbeddedPiQueueMessageOutcome {
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  if (prepared.kind === "complete") {
+    return prepared.outcome;
+  }
+  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+  void prepared.handle
+    .queueMessage(text, options ?? { steeringMode: "all" })
+    .catch((err: unknown) => {
+      diag.debug(
+        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatQueueError(err)}`,
+      );
+    });
+  return {
+    queued: true,
+    sessionId,
+    target: "embedded_run",
+    gatewayHealth: "live",
+  };
+}
+
+function formatQueueError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+export async function queueEmbeddedPiMessageWithOutcomeAsync(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): Promise<EmbeddedPiQueueMessageOutcome> {
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  if (prepared.kind === "complete") {
+    return prepared.outcome;
+  }
+  try {
+    await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
+  } catch (err) {
+    const errorMessage = formatQueueError(err);
+    diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
+    return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
+  }
+  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+  return {
+    queued: true,
+    sessionId,
+    target: "embedded_run",
+    gatewayHealth: "live",
+  };
+}
+
+function prepareEmbeddedPiQueueMessage(
+  sessionId: string,
+  text: string,
+): PreparedEmbeddedPiQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-      return true;
+      return {
+        kind: "complete",
+        outcome: {
+          queued: true,
+          sessionId,
+          target: "reply_run",
+          gatewayHealth: "live",
+        },
+      };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    return false;
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }
   if (!handle.isStreaming()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
-    return false;
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
   }
-  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text, options ?? { steeringMode: "all" });
-  return true;
+  return { kind: "embedded_run", handle };
 }
 
 /**

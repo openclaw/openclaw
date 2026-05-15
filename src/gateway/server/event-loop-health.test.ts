@@ -1,6 +1,9 @@
 import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
-import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
+import {
+  classifyGatewayEventLoopHealthReasons,
+  createGatewayEventLoopHealthMonitor,
+} from "./event-loop-health.js";
 
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
 type DelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
@@ -19,7 +22,10 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
   const delayMonitor = {
     enable: vi.fn(),
     disable: vi.fn(),
-    reset: vi.fn(),
+    reset: vi.fn(() => {
+      delayP99Ms = 0;
+      delayMaxMs = 0;
+    }),
     percentile: vi.fn(() => delayP99Ms * 1_000_000),
     get max() {
       return delayMaxMs * 1_000_000;
@@ -59,6 +65,7 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
 
   return {
     monitor,
+    delayMonitor,
     cpuUsage,
     eventLoopUtilization,
     setNow: (value: number) => {
@@ -71,8 +78,103 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
   };
 }
 
+function expectSnapshotFields(snapshot: unknown, expected: Record<string, unknown>) {
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error("expected event loop health snapshot");
+  }
+  const actual = snapshot as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+describe("classifyGatewayEventLoopHealthReasons", () => {
+  it("does not degrade on utilization or CPU from a sub-second sample", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 250,
+        delayP99Ms: 20,
+        delayMaxMs: 25,
+        utilization: 1,
+        cpuCoreRatio: 1,
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not degrade on utilization or CPU without delay co-evidence", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 1_000,
+        delayP99Ms: 0,
+        delayMaxMs: 0,
+        utilization: 1,
+        cpuCoreRatio: 1,
+      }),
+    ).toEqual([]);
+  });
+
+  it("degrades on utilization and CPU after a sustained sample window with delay co-evidence", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 1_000,
+        delayP99Ms: 20,
+        delayMaxMs: 25,
+        utilization: 0.99,
+        cpuCoreRatio: 0.95,
+      }),
+    ).toEqual(["event_loop_utilization", "cpu"]);
+  });
+
+  it.each([
+    {
+      cpuCoreRatio: 0.1,
+      expected: ["event_loop_utilization"],
+      name: "utilization only",
+      utilization: 0.99,
+    },
+    {
+      cpuCoreRatio: 0.95,
+      expected: ["cpu"],
+      name: "CPU only",
+      utilization: 0.1,
+    },
+    {
+      cpuCoreRatio: 0.1,
+      expected: [],
+      name: "neither load counter",
+      utilization: 0.1,
+    },
+  ] as const)(
+    "classifies delay-backed sustained load when $name is saturated",
+    ({ cpuCoreRatio, expected, utilization }) => {
+      expect(
+        classifyGatewayEventLoopHealthReasons({
+          intervalMs: 1_000,
+          delayP99Ms: 30,
+          delayMaxMs: 0,
+          utilization,
+          cpuCoreRatio,
+        }),
+      ).toEqual(expected);
+    },
+  );
+
+  it("still degrades on event-loop delay from a short sample", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 250,
+        delayP99Ms: 20,
+        delayMaxMs: 1_500,
+        utilization: 0.1,
+        cpuCoreRatio: 0.1,
+      }),
+    ).toEqual(["event_loop_delay"]);
+  });
+});
+
 describe("createGatewayEventLoopHealthMonitor", () => {
-  it("waits for a sustained sample window before reporting CPU-only saturation", () => {
+  it("waits for delay co-evidence before reporting load-only saturation", () => {
     const harness = createMonitorHarness();
 
     harness.setNow(42);
@@ -81,11 +183,27 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
 
     harness.setNow(1_000);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      reasons: [],
+      intervalMs: 1_000,
+      delayP99Ms: 0,
+      delayMaxMs: 0,
+      utilization: 1,
+      cpuCoreRatio: 1,
+    });
+  });
+
+  it("reports CPU and utilization saturation when delay co-evidence is present", () => {
+    const harness = createMonitorHarness();
+    harness.setDelay({ p99Ms: 30 });
+    harness.setNow(1_000);
+
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: true,
       reasons: ["event_loop_utilization", "cpu"],
       intervalMs: 1_000,
-      delayP99Ms: 0,
+      delayP99Ms: 30,
       delayMaxMs: 0,
       utilization: 1,
       cpuCoreRatio: 1,
@@ -97,7 +215,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setDelay({ maxMs: 1_500 });
     harness.setNow(42);
 
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: true,
       reasons: ["event_loop_delay"],
       intervalMs: 42,
@@ -110,12 +228,67 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
     harness.setNow(1_000);
 
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
       reasons: [],
       intervalMs: 1_000,
       utilization: 0.2,
       cpuCoreRatio: 0.1,
     });
+  });
+
+  it("keeps rate baselines and the last snapshot until a full sample window is available", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setNow(1_000);
+    const first = harness.monitor.snapshot();
+
+    expectSnapshotFields(first, { intervalMs: 1_000 });
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
+    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
+
+    harness.setNow(1_250);
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
+    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
+
+    harness.setNow(2_000);
+    const second = harness.monitor.snapshot();
+
+    expectSnapshotFields(second, { intervalMs: 1_000 });
+    expect(second).not.toBe(first);
+  });
+
+  it("preserves moderate delay co-evidence across rapid probes until the load window completes", () => {
+    const harness = createMonitorHarness();
+    harness.setNow(1_000);
+    const first = harness.monitor.snapshot();
+
+    harness.setDelay({ p99Ms: 30 });
+    harness.setNow(1_250);
+    expect(harness.monitor.snapshot()).toBe(first);
+
+    harness.setNow(2_000);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: true,
+      reasons: ["event_loop_utilization", "cpu"],
+      intervalMs: 1_000,
+      delayP99Ms: 30,
+      delayMaxMs: 0,
+      utilization: 1,
+      cpuCoreRatio: 1,
+    });
+  });
+
+  it("clears the cached snapshot when stopped", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setNow(1_000);
+
+    expectSnapshotFields(harness.monitor.snapshot(), { degraded: false, intervalMs: 1_000 });
+
+    harness.setNow(1_250);
+    harness.monitor.stop();
+
+    expect(harness.delayMonitor.disable).toHaveBeenCalledTimes(1);
+    expect(harness.monitor.snapshot()).toBeUndefined();
   });
 });

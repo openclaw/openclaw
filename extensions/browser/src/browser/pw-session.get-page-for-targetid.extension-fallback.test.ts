@@ -22,6 +22,25 @@ type BrowserMockBundle = {
   pages: import("playwright-core").Page[];
 };
 
+type FetchInitWithDispatcher = RequestInit & { dispatcher?: unknown };
+
+function requireFetchCall(fetchSpy: {
+  mock: { calls: Parameters<typeof fetch>[] };
+}): Parameters<typeof fetch> {
+  const [call] = fetchSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected fallback fetch call");
+  }
+  return call;
+}
+
+function requireFetchInit(init: Parameters<typeof fetch>[1]): FetchInitWithDispatcher {
+  if (!init || typeof init !== "object") {
+    throw new Error("expected fallback fetch init");
+  }
+  return init as FetchInitWithDispatcher;
+}
+
 function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   let context: import("playwright-core").BrowserContext;
   const browserClose = vi.fn(async () => {});
@@ -139,10 +158,16 @@ describe("pw-session getPageForTargetId", () => {
         targetId: "TARGET_B",
       });
       expect(resolved).toBe(pageB);
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "http://127.0.0.1:18792/json/list?token=abc",
-        expect.any(Object),
-      );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [fetchUrl, fetchInitOptions] = requireFetchCall(fetchSpy);
+      expect(fetchUrl).toBe("http://127.0.0.1:18792/json/list?token=abc");
+      const fetchInit = requireFetchInit(fetchInitOptions);
+      expect(fetchInit.headers).toEqual({});
+      expect(fetchInit.redirect).toBe("manual");
+      expect(fetchInit.signal).toBeInstanceOf(AbortSignal);
+      if (fetchInit.dispatcher === undefined) {
+        throw new Error("expected extension fallback fetch dispatcher");
+      }
     } finally {
       fetchSpy.mockRestore();
     }

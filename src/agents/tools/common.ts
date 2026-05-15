@@ -2,7 +2,7 @@ import type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-} from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
@@ -119,6 +119,23 @@ export function readStringParam(
     return undefined;
   }
   return value;
+}
+
+/**
+ * Normalize tool model override input.
+ * - empty/whitespace => undefined
+ * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
+ * - otherwise returns trimmed explicit model string
+ */
+export function normalizeToolModelOverride(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function readStringOrNumberParam(

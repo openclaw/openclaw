@@ -280,6 +280,19 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips workflow function response wrappers before user-facing delivery", () => {
+    const input = [
+      "Before",
+      "<function_response>",
+      'Searching for: "what skills matter most in the age of AI"',
+      "...",
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
   it("preserves literal tool-call tag examples in user-facing prose", () => {
     const input = "Use `<tool_call>` to describe the XML tag in docs.";
     expect(sanitizeUserFacingText(input)).toBe(input);
@@ -506,7 +519,7 @@ describe("stripThoughtSignatures", () => {
     ]);
   });
   it("handles empty array", () => {
-    expect(stripThoughtSignatures([])).toEqual([]);
+    expect(stripThoughtSignatures([])).toStrictEqual([]);
   });
   it("handles null/undefined blocks in array", () => {
     const input = [null, undefined, { type: "text", text: "hello" }];
@@ -638,7 +651,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
       },
     ];
 
-    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([]);
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toStrictEqual([]);
   });
 
   it("keeps non-reasoning thinking signatures", () => {

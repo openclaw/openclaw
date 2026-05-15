@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readCredsJsonRaw,
   restoreCredsFromBackupIfNeeded,
@@ -20,13 +20,11 @@ import {
 } from "./auth-store.js";
 import {
   enqueueCredsSave,
-  waitForCredsSaveQueue,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
-  type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
-import { formatError, getStatusCode } from "./session-errors.js";
+import { getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -119,7 +117,7 @@ async function safeSaveCreds(
 }
 
 async function printTerminalQr(qr: string): Promise<void> {
-  const output = await renderQrTerminal(qr, { small: true });
+  const output = await renderQrTerminal(qr);
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
@@ -184,38 +182,35 @@ export async function createWaSocket(
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
-  sock.ev.on(
-    "connection.update",
-    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
-      try {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-          opts.onQr?.(qr);
-          if (printQr) {
-            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-            void printTerminalQr(qr).catch((err) => {
-              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
-            });
-          }
+  sock.ev.on("connection.update", async (update: Partial<import("baileys").ConnectionState>) => {
+    try {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr) {
+        opts.onQr?.(qr);
+        if (printQr) {
+          console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+          void printTerminalQr(qr).catch((err) => {
+            sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+          });
         }
-        if (connection === "close") {
-          const status = getStatusCode(lastDisconnect?.error);
-          if (status === LOGGED_OUT_STATUS) {
-            console.error(
-              danger(
-                `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
-              ),
-            );
-          }
-        }
-        if (connection === "open" && verbose) {
-          console.log(success("WhatsApp Web connected."));
-        }
-      } catch (err) {
-        sessionLogger.error({ error: String(err) }, "connection.update handler error");
       }
-    },
-  );
+      if (connection === "close") {
+        const status = getStatusCode(lastDisconnect?.error);
+        if (status === LOGGED_OUT_STATUS) {
+          console.error(
+            danger(
+              `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
+            ),
+          );
+        }
+      }
+      if (connection === "open" && verbose) {
+        console.log(success("WhatsApp Web connected."));
+      }
+    } catch (err) {
+      sessionLogger.error({ error: String(err) }, "connection.update handler error");
+    }
+  });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
   if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
@@ -310,7 +305,7 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     const evWithOff = sock.ev as unknown as OffCapable;
 
     const handler = (...args: unknown[]) => {
-      const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
+      const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
       if (update.connection === "open") {
         evWithOff.off?.("connection.update", handler);
         resolve();

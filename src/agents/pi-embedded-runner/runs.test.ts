@@ -8,7 +8,9 @@ import {
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedPiRunHandleActive,
-  queueEmbeddedPiMessage,
+  formatEmbeddedPiQueueFailureSummary,
+  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedPiMessageWithOutcomeAsync,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
@@ -19,12 +21,12 @@ import {
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
-  overrides: { isCompacting?: boolean; abort?: () => void } = {},
+  overrides: { isCompacting?: boolean; isStreaming?: boolean; abort?: () => void } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
-    isStreaming: () => true,
+    isStreaming: () => overrides.isStreaming ?? true,
     isCompacting: () => overrides.isCompacting ?? false,
     abort,
   };
@@ -75,10 +77,12 @@ describe("pi-embedded runner run registry", () => {
     });
 
     expect(
-      queueEmbeddedPiMessage("session-steer", "continue", { steeringMode: "one-at-a-time" }),
+      queueEmbeddedPiMessageWithOutcome("session-steer", "continue", {
+        steeringMode: "all",
+      }).queued,
     ).toBe(true);
 
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "one-at-a-time" });
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
   });
 
   it("defaults active embedded steering to all pending messages", () => {
@@ -88,9 +92,65 @@ describe("pi-embedded runner run registry", () => {
       queueMessage,
     });
 
-    expect(queueEmbeddedPiMessage("session-default-steer", "continue")).toBe(true);
+    expect(queueEmbeddedPiMessageWithOutcome("session-default-steer", "continue").queued).toBe(
+      true,
+    );
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("returns a structured no-active-run queue failure", () => {
+    const outcome = queueEmbeddedPiMessageWithOutcome("session-missing", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-missing",
+      reason: "no_active_run",
+      gatewayHealth: "live",
+    });
+    expect(formatEmbeddedPiQueueFailureSummary(outcome)).toBe(
+      "queue_message_failed reason=no_active_run sessionId=session-missing gatewayHealth=live",
+    );
+  });
+
+  it("returns structured queue failures for inactive active-run states", () => {
+    setActiveEmbeddedRun("session-not-streaming", createRunHandle({ isStreaming: false }));
+    setActiveEmbeddedRun("session-compacting", createRunHandle({ isCompacting: true }));
+
+    expect(queueEmbeddedPiMessageWithOutcome("session-not-streaming", "continue")).toEqual({
+      queued: false,
+      sessionId: "session-not-streaming",
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome("session-compacting", "continue")).toEqual({
+      queued: false,
+      sessionId: "session-compacting",
+      reason: "compacting",
+      gatewayHealth: "live",
+    });
+  });
+
+  it("returns runtime rejection details when async queue delivery fails", async () => {
+    setActiveEmbeddedRun("session-rejected", {
+      ...createRunHandle(),
+      queueMessage: async () => {
+        throw new Error("cannot steer a compact turn");
+      },
+    });
+
+    const outcome = await queueEmbeddedPiMessageWithOutcomeAsync("session-rejected", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-rejected",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+      errorMessage: "cannot steer a compact turn",
+    });
+    expect(formatEmbeddedPiQueueFailureSummary(outcome)).toBe(
+      "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
+    );
   });
 
   it("force-clears an aborted run that does not drain", async () => {

@@ -3,18 +3,7 @@ import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsRuntimeFacade,
-  TtsSynthesisResult,
-  TtsSynthesisStreamResult,
-  TtsStreamResult,
-  TtsTelephonyResult,
-} from "./tts-runtime.types.js";
+import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -31,6 +20,10 @@ function loadFacadeModule(): FacadeModule {
     dirName: "speech-core",
     artifactBasename: "runtime-api.js",
   });
+}
+
+export function prewarmTtsRuntimeFacade(): void {
+  loadFacadeModule();
 }
 
 export const _test: FacadeModule["_test"] = createLazyFacadeObjectValue(

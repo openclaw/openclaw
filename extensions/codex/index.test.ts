@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
+  return mockCall(mock, index)?.at(argIndex);
+}
+
 describe("codex plugin", () => {
   it("is opt-in by default", () => {
     const manifest = JSON.parse(
@@ -40,33 +48,46 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerProvider.mock.calls[0]?.[0]).toMatchObject({ id: "codex", label: "Codex" });
-    expect(registerAgentHarness.mock.calls[0]?.[0]).toMatchObject({
-      id: "codex",
-      label: "Codex agent harness",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
-      dispose: expect.any(Function),
+    const providerRegistration = mockCallArg(registerProvider) as Record<string, unknown>;
+    const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
+    const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
+      | Record<string, unknown>
+      | undefined;
+    const inboundClaimRegistration = mockCall(on) as [unknown, unknown] | undefined;
+    const bindingResolvedRegistration = mockCall(onConversationBindingResolved) as
+      | [unknown]
+      | undefined;
+
+    expect(providerRegistration.id).toBe("codex");
+    expect(providerRegistration.label).toBe("Codex");
+    expect(agentHarnessRegistration.id).toBe("codex");
+    expect(agentHarnessRegistration.label).toBe("Codex agent harness");
+    expect(agentHarnessRegistration.deliveryDefaults).toEqual({
+      sourceVisibleReplies: "message_tool",
     });
-    expect(registerMediaUnderstandingProvider.mock.calls[0]?.[0]).toMatchObject({
-      id: "codex",
-      capabilities: ["image"],
-      defaultModels: { image: "gpt-5.5" },
-      describeImage: expect.any(Function),
-      describeImages: expect.any(Function),
-    });
-    expect(registerCommand.mock.calls[0]?.[0]).toMatchObject({
-      name: "codex",
-      description: "Inspect and control the Codex app-server harness",
-    });
-    expect(registerMigrationProvider.mock.calls[0]?.[0]).toMatchObject({
-      id: "codex",
-      label: "Codex",
-    });
-    expect(on).toHaveBeenCalledWith("inbound_claim", expect.any(Function));
-    expect(onConversationBindingResolved).toHaveBeenCalledWith(expect.any(Function));
+    expect(typeof agentHarnessRegistration.dispose).toBe("function");
+    expect(mediaProviderRegistration?.id).toBe("codex");
+    expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
+    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.5" });
+    expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
+    expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
+    const commandRegistration = mockCallArg(registerCommand) as Record<string, unknown> | undefined;
+    expect(commandRegistration?.name).toBe("codex");
+    expect(commandRegistration?.description).toBe(
+      "Inspect and control the Codex app-server harness",
+    );
+    const migrationRegistration = mockCallArg(registerMigrationProvider) as
+      | Record<string, unknown>
+      | undefined;
+    expect(migrationRegistration?.id).toBe("codex");
+    expect(migrationRegistration?.label).toBe("Codex");
+    expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
+    expect(typeof inboundClaimRegistration?.[1]).toBe("function");
+    expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
   });
 
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
+    const registerProvider = vi.fn();
     const api = createTestPluginApi({
       id: "codex",
       name: "Codex",
@@ -77,14 +98,14 @@ describe("codex plugin", () => {
       registerAgentHarness: vi.fn(),
       registerCommand: vi.fn(),
       registerMediaUnderstandingProvider: vi.fn(),
-      registerProvider: vi.fn(),
+      registerProvider,
       on: vi.fn(),
-    }) as ReturnType<typeof createTestPluginApi> & {
-      onConversationBindingResolved?: ReturnType<typeof vi.fn>;
-    };
+    });
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
-    expect(() => plugin.register(api)).not.toThrow();
+    plugin.register(api);
+    expect(registerProvider).toHaveBeenCalledTimes(1);
+    expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
   });
 
   it("only claims the codex provider by default", () => {
@@ -95,12 +116,11 @@ describe("codex plugin", () => {
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
     ).toBe(true);
-    expect(
-      harness.supports({
-        provider: "openai-codex",
-        modelId: "gpt-5.4",
-        requestedRuntime: "auto",
-      }),
-    ).toMatchObject({ supported: false });
+    const unsupported = harness.supports({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      requestedRuntime: "auto",
+    });
+    expect(unsupported.supported).toBe(false);
   });
 });

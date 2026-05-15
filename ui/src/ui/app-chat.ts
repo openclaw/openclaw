@@ -17,6 +17,7 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -66,6 +67,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
+  requestUpdate?: () => void;
   refreshSessionsAfterChat: Set<string>;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
@@ -78,7 +80,12 @@ export type ChatSendOptions = {
   restoreDraft?: boolean;
 };
 
+export type ChatAbortOptions = {
+  preserveDraft?: boolean;
+};
+
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -150,20 +157,25 @@ function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
-export async function handleAbortChat(host: ChatHost) {
+export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
   const activeRunId = host.chatRunId;
-  // If disconnected but this session is abortable, queue the abort for when we reconnect.
-  if (!host.connected && hasAbortableSessionRun(host)) {
+  const clearDraft = () => {
+    if (opts?.preserveDraft) {
+      return;
+    }
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
+  };
+  // If disconnected but this session is abortable, queue the abort for when we reconnect.
+  if (!host.connected && hasAbortableSessionRun(host)) {
+    clearDraft();
     host.pendingAbort = { runId: activeRunId, sessionKey: host.sessionKey };
     return;
   }
   if (!host.connected) {
     return;
   }
-  host.chatMessage = "";
-  resetChatInputHistoryNavigation(host);
+  clearDraft();
   await abortChatRun(host as unknown as ChatState);
 }
 
@@ -720,13 +732,22 @@ async function clearChatHistory(host: ChatHost) {
   if (!host.client || !host.connected) {
     return;
   }
+  const hadActiveRun = hasAbortableSessionRun(host);
   try {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
     host.chatSideResult = null;
-    host.chatSideResultTerminalRuns?.clear();
-    host.chatStream = null;
-    host.chatRunId = null;
+    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      outcome: hadActiveRun ? "interrupted" : undefined,
+      sessionStatus: "killed",
+      runId: host.chatRunId,
+      sessionKey: host.sessionKey,
+      clearLocalRun: true,
+      clearChatStream: true,
+      clearToolStream: true,
+      clearSideResultTerminalRuns: true,
+      clearRunStatus: !hadActiveRun,
+    });
     await loadChatHistory(host as unknown as ChatState);
   } catch (err) {
     host.lastError = String(err);
@@ -745,22 +766,36 @@ function injectCommandResult(host: ChatHost, content: string) {
   ];
 }
 
-export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
-  void Promise.allSettled([
+export async function refreshChat(
+  host: ChatHost,
+  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
+) {
+  const requestUpdate = () => host.requestUpdate?.();
+  const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
+    if (opts?.scheduleScroll !== false) {
+      scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    }
+    requestUpdate();
+  });
+  const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
+      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
     refreshChatCommands(host),
-  ]);
-  await loadChatHistory(host as unknown as ChatState);
-  if (opts?.scheduleScroll !== false) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  ]).finally(requestUpdate);
+  void historyRefresh;
+  void secondaryRefresh;
+  if (opts?.awaitHistory === true) {
+    await historyRefresh;
+    return;
   }
+  await Promise.resolve();
 }
 
 async function refreshChatModels(host: ChatHost) {

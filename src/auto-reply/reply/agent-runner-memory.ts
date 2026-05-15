@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -24,13 +24,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -44,10 +46,13 @@ import {
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
+
+const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 
 const piEmbeddedRuntimeLoader = createLazyImportLoader<PiEmbeddedRuntime>(
   () => import("../../agents/pi-embedded.js"),
@@ -155,6 +160,30 @@ function resolveMemoryFlushModelFallbackOptions(
     ...options,
     model: override,
     fallbacksOverride: [],
+  };
+}
+
+function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
+  return (payloads ?? []).filter(
+    (payload) => payload.isError === true && isRenderablePayload(payload),
+  );
+}
+
+function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
+  if (isAbortError(err)) {
+    return undefined;
+  }
+  const message = normalizeOptionalString(formatErrorMessage(err));
+  if (!message) {
+    return undefined;
+  }
+  const visibleText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
+  return {
+    text:
+      visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
+        ? `${visibleText.slice(0, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
+        : visibleText,
+    isError: true,
   };
 }
 
@@ -691,6 +720,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
@@ -956,6 +986,10 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        const visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
+        if (visibleErrorPayloads.length > 0) {
+          params.onVisibleErrorPayloads?.(visibleErrorPayloads);
+        }
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
@@ -968,13 +1002,13 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    let memoryFlushCompactionCount =
+    const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      const nextCount = await memoryDeps.incrementCompactionCount({
+      await memoryDeps.incrementCompactionCount({
         cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -1001,9 +1035,6 @@ export async function runMemoryFlushIfNeeded(params: {
           });
         }
       }
-      if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
-      }
     }
     if (params.storePath && params.sessionKey) {
       try {
@@ -1012,7 +1043,7 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
-            memoryFlushCompactionCount,
+            memoryFlushCompactionCount: flushedCompactionCount,
           }),
         });
         if (updatedEntry) {
@@ -1029,6 +1060,10 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+    const visibleErrorPayload = buildMemoryFlushErrorPayload(err);
+    if (visibleErrorPayload) {
+      params.onVisibleErrorPayloads?.([visibleErrorPayload]);
+    }
   }
 
   return activeSessionEntry;

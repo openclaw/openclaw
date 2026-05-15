@@ -48,6 +48,37 @@ beforeEach(() => {
   supervisorMock.spawn.mockReset();
 });
 
+function expectExecTarget(
+  actual: ReturnType<typeof resolveExecTarget>,
+  expected: {
+    configuredTarget: string;
+    requestedTarget: string | null;
+    selectedTarget: string;
+    effectiveHost: string;
+  },
+) {
+  expect(actual.configuredTarget).toBe(expected.configuredTarget);
+  expect(actual.requestedTarget).toBe(expected.requestedTarget);
+  expect(actual.selectedTarget).toBe(expected.selectedTarget);
+  expect(actual.effectiveHost).toBe(expected.effectiveHost);
+}
+
+function requireSystemEventCall(): [string, Record<string, unknown>] {
+  const call = enqueueSystemEventMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected system event call");
+  }
+  return call as [string, Record<string, unknown>];
+}
+
+function requireHeartbeatCall(): Record<string, unknown> {
+  const call = requestHeartbeatMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected heartbeat call");
+  }
+  return call[0] as Record<string, unknown>;
+}
+
 describe("detectCursorKeyMode", () => {
   it("returns null when no toggle found", () => {
     expect(detectCursorKeyMode("hello world")).toBe(null);
@@ -78,65 +109,69 @@ describe("detectCursorKeyMode", () => {
 
 describe("resolveExecTarget", () => {
   it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: null,
-      selectedTarget: "auto",
-      effectiveHost: "sandbox",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: null,
+        selectedTarget: "auto",
+        effectiveHost: "sandbox",
+      },
+    );
   });
 
   it("keeps implicit auto on gateway when no sandbox runtime is available", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: null,
-      selectedTarget: "auto",
-      effectiveHost: "gateway",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: null,
+        selectedTarget: "auto",
+        effectiveHost: "gateway",
+      },
+    );
   });
 
   it("allows per-call host=node override when configured host is auto", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "node",
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "node",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
+    );
   });
 
   it("allows per-call host=gateway override when configured host is auto and no sandbox", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "gateway",
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "gateway",
-      selectedTarget: "gateway",
-      effectiveHost: "gateway",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        selectedTarget: "gateway",
+        effectiveHost: "gateway",
+      },
+    );
   });
 
   it("rejects per-call host=gateway override from auto when sandbox is available", () => {
@@ -166,19 +201,20 @@ describe("resolveExecTarget", () => {
   });
 
   it("allows per-call host=sandbox override when configured host is auto", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "sandbox",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "sandbox",
-      selectedTarget: "sandbox",
-      effectiveHost: "sandbox",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        selectedTarget: "sandbox",
+        effectiveHost: "sandbox",
+      },
+    );
   });
 
   it("rejects cross-host override when configured target is a concrete host", () => {
@@ -195,19 +231,20 @@ describe("resolveExecTarget", () => {
   });
 
   it("allows explicit auto request when configured host is auto", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "auto",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "auto",
-      selectedTarget: "auto",
-      effectiveHost: "sandbox",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: "auto",
+        selectedTarget: "auto",
+        effectiveHost: "sandbox",
+      },
+    );
   });
 
   it("requires an exact match for non-auto configured targets", () => {
@@ -224,82 +261,87 @@ describe("resolveExecTarget", () => {
   });
 
   it("allows exact node matches", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "node",
         requestedTarget: "node",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toMatchObject({
-      configuredTarget: "node",
-      requestedTarget: "node",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+      {
+        configuredTarget: "node",
+        requestedTarget: "node",
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
+    );
   });
 
   it("forces elevated requests onto the gateway host when configured target is auto", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "sandbox",
         elevatedRequested: true,
         sandboxAvailable: true,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "sandbox",
-      selectedTarget: "gateway",
-      effectiveHost: "gateway",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        selectedTarget: "gateway",
+        effectiveHost: "gateway",
+      },
+    );
   });
 
   it("keeps explicit node override under elevated requests when configured target is auto", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "node",
         elevatedRequested: true,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "node",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+      {
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
+    );
   });
 
   it("honours node target for elevated requests when configured target is node", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "node",
         requestedTarget: "node",
         elevatedRequested: true,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "node",
-      requestedTarget: "node",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+      {
+        configuredTarget: "node",
+        requestedTarget: "node",
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
+    );
   });
 
   it("routes to node for elevated when configured=node and no per-call override", () => {
-    expect(
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "node",
         elevatedRequested: true,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "node",
-      requestedTarget: null,
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+      {
+        configuredTarget: "node",
+        requestedTarget: null,
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
+    );
   });
 
   it("rejects mismatched requestedTarget under elevated+node", () => {
@@ -398,21 +440,27 @@ describe("exec notifyOnExit suppression", () => {
   it("notifies for manual-cancelled background execs with output", async () => {
     await runBackgroundedExit({ reason: "manual-cancel", stdout: "partial output\n" });
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("partial output"),
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
-    );
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    const [message, options] = requireSystemEventCall();
+    expect(message).toContain("partial output");
+    expect(options.sessionKey).toBe("agent:main:main");
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
     await runBackgroundedExit({ reason: "overall-timeout" });
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Exec failed"),
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
-    );
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    const [message, options] = requireSystemEventCall();
+    expect(message).toContain("Exec failed");
+    expect(options.sessionKey).toBe("agent:main:main");
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 });
 
@@ -443,13 +491,53 @@ describe("emitExecSystemEvent", () => {
       },
       trusted: false,
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        coalesceMs: 0,
-        reason: "exec-event",
-        sessionKey: "agent:ops:main",
-      }),
-    );
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:ops:main");
+  });
+
+  it("remaps cron-run event enqueue and wake targets to the drained agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:ops:cron:nightly:run:run-1",
+      contextKey: "exec:run-cron",
+      mainKey: "primary",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:ops:primary",
+      contextKey: "exec:run-cron",
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ coalesceMs?: number; reason?: string; sessionKey?: string }]
+    >;
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(heartbeatParams.sessionKey).toBe("agent:ops:primary");
+  });
+
+  it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
+      contextKey: "exec:run-global",
+      sessionScope: "global",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "global",
+      contextKey: "exec:run-global",
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ agentId?: string; coalesceMs?: number; reason?: string }]
+    >;
+    expect(heartbeatParams.agentId).toBe("ops");
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {
@@ -463,12 +551,9 @@ describe("emitExecSystemEvent", () => {
       contextKey: "exec:run-global",
       trusted: false,
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        coalesceMs: 0,
-        reason: "exec-event",
-      }),
-    );
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
   });
 
   it("ignores events without a session key", () => {
@@ -478,6 +563,21 @@ describe("emitExecSystemEvent", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("skips heartbeat wake for subagent session keys", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+      deliveryContext: undefined,
+      trusted: false,
+    });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 });
@@ -518,52 +618,52 @@ describe("formatExecFailureReason", () => {
 
 describe("buildExecExitOutcome", () => {
   it("keeps non-zero normal exits in the completed path", () => {
-    expect(
-      buildExecExitOutcome({
-        exit: {
-          reason: "exit",
-          exitCode: 1,
-          exitSignal: null,
-          durationMs: 123,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        },
-        aggregated: "done",
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
         durationMs: 123,
-        timeoutSec: 30,
-      }),
-    ).toMatchObject({
-      status: "completed",
-      exitCode: 1,
-      aggregated: "done\n\n(Command exited with code 1)",
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "done",
+      durationMs: 123,
+      timeoutSec: 30,
     });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.aggregated).toBe("done\n\n(Command exited with code 1)");
   });
 
   it("classifies timed out exits as failures with a reason", () => {
-    expect(
-      buildExecExitOutcome({
-        exit: {
-          reason: "overall-timeout",
-          exitCode: null,
-          exitSignal: "SIGKILL",
-          durationMs: 123,
-          stdout: "",
-          stderr: "",
-          timedOut: true,
-          noOutputTimedOut: false,
-        },
-        aggregated: "",
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
         durationMs: 123,
-        timeoutSec: 30,
-      }),
-    ).toMatchObject({
-      status: "failed",
-      failureKind: "overall-timeout",
-      timedOut: true,
-      reason: expect.stringContaining("30 seconds"),
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      },
+      aggregated: "",
+      durationMs: 123,
+      timeoutSec: 30,
     });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected timeout to fail, got ${outcome.status}`);
+    }
+    expect(outcome.failureKind).toBe("overall-timeout");
+    expect(outcome.timedOut).toBe(true);
+    expect(outcome.reason).toContain("30 seconds");
   });
 
   it("keeps timed out shell-backgrounded commands on the failed path", () => {
@@ -586,7 +686,8 @@ describe("buildExecExitOutcome", () => {
     if (outcome.status !== "failed") {
       throw new Error(`Expected timeout to fail, got ${outcome.status}`);
     }
-    expect(outcome).toMatchObject({ failureKind: "overall-timeout", timedOut: true });
+    expect(outcome.failureKind).toBe("overall-timeout");
+    expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("background=true");
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");
   });

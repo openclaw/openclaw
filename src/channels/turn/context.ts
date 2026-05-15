@@ -1,3 +1,4 @@
+import type { CommandTurnContext } from "../../auto-reply/command-turn-context.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
@@ -28,10 +29,24 @@ export type BuildChannelTurnContextParams = {
   reply: ReplyPlanFacts;
   message: MessageFacts;
   access?: AccessFacts;
+  commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
   contextVisibility?: ContextVisibilityMode;
   extra?: Record<string, unknown>;
+};
+
+export type BuiltChannelTurnContext = FinalizedMsgContext & {
+  Body: string;
+  BodyForAgent: string;
+  BodyForCommands: string;
+  ChatType: ConversationFacts["kind"];
+  CommandAuthorized: boolean;
+  CommandBody: string;
+  From: string;
+  RawBody: string;
+  SessionKey: string;
+  To: string;
 };
 
 function compactStrings(values: Array<string | undefined>): string[] | undefined {
@@ -44,14 +59,6 @@ function mediaTranscribedIndexes(media: InboundMediaFacts[]): number[] | undefin
     .map((item, index) => (item.transcribed ? index : undefined))
     .filter((index): index is number => index !== undefined);
   return indexes.length > 0 ? indexes : undefined;
-}
-
-function commandAuthorized(access: AccessFacts | undefined): boolean | undefined {
-  const commands = access?.commands;
-  if (!commands) {
-    return undefined;
-  }
-  return commands.authorizers.some((entry) => entry.allowed);
 }
 
 function keepSupplementalContext(params: {
@@ -110,9 +117,16 @@ export function filterChannelTurnSupplementalContext(params: {
   };
 }
 
+function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): boolean | undefined {
+  const commands = access?.commands;
+  return typeof commands?.authorized === "boolean"
+    ? commands.authorized
+    : commands?.authorizers?.some((entry) => entry.allowed);
+}
+
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
-): FinalizedMsgContext {
+): BuiltChannelTurnContext {
   const media = params.media ?? [];
   const supplemental = filterChannelTurnSupplementalContext({
     supplemental: params.supplemental,
@@ -159,12 +173,7 @@ export function buildChannelTurnContext(
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
     GroupSystemPrompt: supplemental?.groupSystemPrompt,
-    UntrustedStructuredContext: Array.isArray(supplemental?.untrustedContext)
-      ? supplemental.untrustedContext.map((payload, index) => ({
-          label: `context ${index + 1}`,
-          payload,
-        }))
-      : undefined,
+    UntrustedStructuredContext: supplemental?.untrustedContext,
     SenderName: params.sender.name ?? params.sender.displayLabel,
     SenderId: params.sender.id,
     SenderUsername: params.sender.username,
@@ -174,7 +183,8 @@ export function buildChannelTurnContext(
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
-    CommandAuthorized: commandAuthorized(params.access),
+    CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
+    CommandTurn: params.commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     OriginatingChannel: params.channel,

@@ -125,7 +125,7 @@ function createMessageEndContext(
     noteLastAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
-    log: { debug: vi.fn(), warn: params.warn ?? vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
@@ -135,6 +135,18 @@ function createMessageEndContext(
     flushBlockReplyBuffer: vi.fn(),
     blockChunker: null,
   } as unknown as EmbeddedPiSubscribeContext;
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  return firstMockCall(mock, label)[0];
 }
 
 describe("resolveSilentReplyFallbackText", () => {
@@ -261,7 +273,7 @@ describe("pending assistant reply directives", () => {
   });
 });
 
-describe("handleMessageUpdate", () => {
+describe("handleMessageUpdate text signatures", () => {
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
@@ -378,7 +390,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       audioAsVoice: undefined,
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does not append queued image tool media when the reply already names media", () => {
@@ -397,7 +409,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       text: "done",
       mediaUrls: ["./selected.png"],
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
@@ -418,7 +430,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       text: "done",
       mediaUrls: ["/tmp/assistant-provided.opus"],
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
@@ -471,12 +483,12 @@ describe("consumePendingToolMediaReply", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
   });
 });
 
-describe("handleMessageUpdate", () => {
+describe("handleMessageUpdate commentary phase", () => {
   it("suppresses commentary-phase partial delivery and text_end flush", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -584,13 +596,12 @@ describe("handleMessageUpdate", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
-        text: "Done.",
-        delta: "Done.",
-      },
-    });
+    const event = firstMockArg(onAgentEvent, "agent event") as
+      | { stream?: string; data?: { text?: string; delta?: string } }
+      | undefined;
+    expect(event?.stream).toBe("assistant");
+    expect(event?.data?.text).toBe("Done.");
+    expect(event?.data?.delta).toBe("Done.");
   });
 
   it("contains synchronous text_end flush failures", async () => {
@@ -630,18 +641,28 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    expect(warn).toHaveBeenCalledWith(
+    const warnCall = firstMockCall(warn, "warning log");
+    expect(warnCall?.[0]).toBe(
       "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "ollama",
-        model: "qwen-local",
-        pattern: "json_tool_call",
-        toolName: "read",
-        registeredTool: true,
-      }),
     );
+    const metadata = warnCall?.[1] as
+      | {
+          runId?: string;
+          sessionId?: string;
+          provider?: string;
+          model?: string;
+          pattern?: string;
+          toolName?: string;
+          registeredTool?: boolean;
+        }
+      | undefined;
+    expect(metadata?.runId).toBe("run-1");
+    expect(metadata?.sessionId).toBe("session-1");
+    expect(metadata?.provider).toBe("ollama");
+    expect(metadata?.model).toBe("qwen-local");
+    expect(metadata?.pattern).toBe("json_tool_call");
+    expect(metadata?.toolName).toBe("read");
+    expect(metadata?.registeredTool).toBe(true);
   });
 
   it("does not warn when the assistant emitted a structured tool call", () => {
@@ -830,13 +851,12 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
-        text: "Done.",
-        delta: "",
-        replace: true,
-      },
-    });
+    const event = firstMockArg(onAgentEvent, "agent event") as
+      | { stream?: string; data?: { text?: string; delta?: string; replace?: boolean } }
+      | undefined;
+    expect(event?.stream).toBe("assistant");
+    expect(event?.data?.text).toBe("Done.");
+    expect(event?.data?.delta).toBe("");
+    expect(event?.data?.replace).toBe(true);
   });
 });

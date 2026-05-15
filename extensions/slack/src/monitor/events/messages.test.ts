@@ -15,10 +15,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  readStoreAllowFromForDmPolicy: async () => [],
-}));
-
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
 }));
@@ -45,6 +41,13 @@ function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemE
     handler: harness.getHandler(eventName) as MessageHandler | null,
     handleSlackMessage,
   };
+}
+
+function requireMessageHandler(handler: MessageHandler | null): MessageHandler {
+  if (!handler) {
+    throw new Error("expected Slack message event handler");
+  }
+  return handler;
 }
 
 function resetMessageMocks(): void {
@@ -140,8 +143,7 @@ async function invokeRegisteredHandler(input: {
   body?: unknown;
 }) {
   const { handler, handleSlackMessage } = createHandlers(input.eventName, input.overrides);
-  expect(handler).toBeTruthy();
-  await handler!({
+  await requireMessageHandler(handler)({
     event: input.event,
     body: input.body ?? {},
   });
@@ -150,8 +152,7 @@ async function invokeRegisteredHandler(input: {
 
 async function runMessageCase(input: MessageCase = {}): Promise<void> {
   const { handler } = createHandlers("message", input.overrides);
-  expect(handler).toBeTruthy();
-  await handler!({
+  await requireMessageHandler(handler)({
     event: (input.event ?? makeChangedEvent()) as Record<string, unknown>,
     body: input.body ?? {},
   });
@@ -220,14 +221,13 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(handleSlackMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        subtype: "thread_broadcast",
-        channel: "C1",
-        user: "U1",
-      }),
-      { source: "message" },
-    );
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
+      | [{ subtype?: string; channel?: string; user?: string }, { source?: string }]
+      | undefined;
+    expect(call?.[0]?.subtype).toBe("thread_broadcast");
+    expect(call?.[0]?.channel).toBe("C1");
+    expect(call?.[0]?.user).toBe("U1");
+    expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
@@ -239,17 +239,27 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(handleSlackMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "D1",
-        channel_type: "im",
-        user: "UREAL123",
-        text: "assistant wrapped user text",
-        ts: "123.456",
-        thread_ts: "123.000",
-      }),
-      { source: "message" },
-    );
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
+      | [
+          {
+            channel?: string;
+            channel_type?: string;
+            user?: string;
+            text?: string;
+            ts?: string;
+            thread_ts?: string;
+          },
+          { source?: string },
+        ]
+      | undefined;
+    const message = call?.[0];
+    expect(message?.channel).toBe("D1");
+    expect(message?.channel_type).toBe("im");
+    expect(message?.user).toBe("UREAL123");
+    expect(message?.text).toBe("assistant wrapped user text");
+    expect(message?.ts).toBe("123.456");
+    expect(message?.thread_ts).toBe("123.000");
+    expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
@@ -306,7 +316,7 @@ describe("registerSlackMessageEvents", () => {
       channelType: "channel",
     });
 
-    expect(handler).toBeTruthy();
+    const messageHandler = requireMessageHandler(handler);
 
     // channel_type distinguishes the source; all arrive as event type "message"
     const channelMessage = {
@@ -317,8 +327,8 @@ describe("registerSlackMessageEvents", () => {
       text: "hello channel",
       ts: "123.100",
     };
-    await handler!({ event: channelMessage, body: {} });
-    await handler!({
+    await messageHandler({ event: channelMessage, body: {} });
+    await messageHandler({
       event: {
         ...channelMessage,
         channel_type: "group",

@@ -2,16 +2,22 @@ import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "./channel.js";
 import type { TelegramMonitorFn } from "./monitor.types.js";
+import {
+  acquireTelegramPollingLease,
+  resetTelegramPollingLeasesForTests,
+} from "./polling-lease.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramProbeFn } from "./runtime.types.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { resetTelegramStartupProbeLimiterForTests } from "./startup-probe-limiter.js";
 
 const probeTelegram = vi.fn();
 const monitorTelegramProvider = vi.fn();
+const sendMessageTelegram = vi.fn();
 
 function installTelegramRuntime() {
   const runtime = createPluginRuntimeMock();
@@ -22,6 +28,7 @@ function installTelegramRuntime() {
       telegram: {
         probeTelegram: probeTelegram as TelegramProbeFn,
         monitorTelegramProvider: monitorTelegramProvider as TelegramMonitorFn,
+        sendMessageTelegram,
       },
     },
   } as unknown as TelegramRuntime);
@@ -59,25 +66,64 @@ function createTelegramConfig(
 function startTelegramAccount(
   accountId = "default",
   telegramOverrides: Record<string, unknown> = {},
+  abortSignal?: AbortSignal,
 ) {
   const cfg = createTelegramConfig(accountId, telegramOverrides);
   const account = telegramPlugin.config.resolveAccount(cfg, accountId);
   const startAccount = telegramPlugin.gateway?.startAccount;
-  expect(startAccount).toBeDefined();
+  if (!startAccount) {
+    throw new Error("expected Telegram startAccount gateway handler");
+  }
   const ctx = createStartAccountContext({
     account,
     cfg,
+    ...(abortSignal ? { abortSignal } : {}),
   });
   return {
     ctx,
-    task: startAccount!(ctx),
+    task: startAccount(ctx),
   };
+}
+
+function latestMonitorOptions(): {
+  token?: string;
+  accountId?: string;
+  useWebhook?: boolean;
+  botInfo?: unknown;
+} {
+  const calls = monitorTelegramProvider.mock.calls;
+  const options = calls[calls.length - 1]?.[0];
+  if (!options || typeof options !== "object") {
+    throw new Error("expected monitor Telegram options");
+  }
+  return options;
+}
+
+function sendMessageOptionsAt(index: number): Record<string, unknown> {
+  const options = sendMessageTelegram.mock.calls[index]?.[2];
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected sendMessageTelegram options ${index}`);
+  }
+  return options;
+}
+
+async function waitForCondition(check: () => boolean, message: string, attempts = 100) {
+  for (let i = 0; i < attempts; i += 1) {
+    if (check()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(message);
 }
 
 afterEach(() => {
   clearTelegramRuntime();
+  resetTelegramPollingLeasesForTests();
+  resetTelegramStartupProbeLimiterForTests();
   probeTelegram.mockReset();
   monitorTelegramProvider.mockReset();
+  sendMessageTelegram.mockReset();
 });
 
 describe("telegramPlugin gateway startup", () => {
@@ -107,7 +153,7 @@ describe("telegramPlugin gateway startup", () => {
     await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
     expect(ctx.log?.error).toHaveBeenCalledWith(
-      expect.stringContaining('Telegram bot token unauthorized for account "ops"'),
+      '[ops] Telegram bot token unauthorized for account "ops" (getMe returned 401 from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.',
     );
   });
 
@@ -124,13 +170,10 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    expect(monitorTelegramProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "123456:bad-token",
-        accountId: "default",
-        useWebhook: false,
-      }),
-    );
+    const monitorOptions = latestMonitorOptions();
+    expect(monitorOptions.token).toBe("123456:bad-token");
+    expect(monitorOptions.accountId).toBe("default");
+    expect(monitorOptions.useWebhook).toBe(false);
   });
 
   it("uses the getMe request guard for startup probe timeout", async () => {
@@ -146,14 +189,13 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    expect(probeTelegram).toHaveBeenCalledWith(
-      "123456:bad-token",
-      15_000,
-      expect.objectContaining({
-        accountId: "default",
-        includeWebhookInfo: false,
-      }),
-    );
+    expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 15_000, {
+      accountId: "default",
+      proxyUrl: undefined,
+      network: undefined,
+      apiRoot: undefined,
+      includeWebhookInfo: false,
+    });
   });
 
   it("passes successful startup probe botInfo into the polling monitor", async () => {
@@ -188,11 +230,7 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    expect(monitorTelegramProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        botInfo,
-      }),
-    );
+    expect(latestMonitorOptions().botInfo).toBe(botInfo);
   });
 
   it("honors higher per-account timeoutSeconds for startup probe", async () => {
@@ -208,13 +246,182 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
 
     await expect(task).resolves.toBeUndefined();
-    expect(probeTelegram).toHaveBeenCalledWith(
-      "123456:bad-token",
-      60_000,
-      expect.objectContaining({
-        accountId: "ops",
-        includeWebhookInfo: false,
-      }),
+    expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 60_000, {
+      accountId: "ops",
+      proxyUrl: undefined,
+      network: undefined,
+      apiRoot: undefined,
+      includeWebhookInfo: false,
+    });
+  });
+
+  it("limits concurrent startup probes across Telegram accounts", async () => {
+    installTelegramRuntime();
+    const releaseProbe: Array<() => void> = [];
+    let activeProbes = 0;
+    let maxActiveProbes = 0;
+    probeTelegram.mockImplementation(async () => {
+      activeProbes += 1;
+      maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
+      await new Promise<void>((resolve) => {
+        releaseProbe.push(resolve);
+      });
+      activeProbes -= 1;
+      return {
+        ok: true,
+        status: null,
+        error: null,
+        elapsedMs: 12,
+      };
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const first = startTelegramAccount("alpha");
+    const second = startTelegramAccount("bravo");
+    const third = startTelegramAccount("charlie");
+
+    await waitForCondition(
+      () => probeTelegram.mock.calls.length === 2,
+      "expected two startup probes to begin",
     );
+    expect(maxActiveProbes).toBe(2);
+    expect(releaseProbe).toHaveLength(2);
+
+    releaseProbe.shift()?.();
+    await waitForCondition(
+      () => probeTelegram.mock.calls.length === 3,
+      "expected queued startup probe to begin after a slot opens",
+    );
+    expect(maxActiveProbes).toBe(2);
+
+    for (const release of releaseProbe.splice(0)) {
+      release();
+    }
+    await Promise.all([first.task, second.task, third.task]);
+    expect(monitorTelegramProvider).toHaveBeenCalledTimes(3);
+  });
+
+  it("abandons a queued startup probe when the account aborts", async () => {
+    installTelegramRuntime();
+    const releaseProbe: Array<() => void> = [];
+    probeTelegram.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          releaseProbe.push(() =>
+            resolve({
+              ok: true,
+              status: null,
+              error: null,
+              elapsedMs: 12,
+            }),
+          );
+        }),
+    );
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const first = startTelegramAccount("alpha");
+    const second = startTelegramAccount("bravo");
+    const abortQueued = new AbortController();
+    const queued = startTelegramAccount("charlie", {}, abortQueued.signal);
+
+    await waitForCondition(
+      () => probeTelegram.mock.calls.length === 2,
+      "expected startup probe slots to fill",
+    );
+    abortQueued.abort();
+    await expect(queued.task).resolves.toBeUndefined();
+
+    for (const release of releaseProbe.splice(0)) {
+      release();
+    }
+    await Promise.all([first.task, second.task]);
+    expect(probeTelegram).toHaveBeenCalledTimes(2);
+    expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a stopped stale polling lease for the account token", async () => {
+    vi.useFakeTimers();
+    try {
+      const cfg = createTelegramConfig();
+      const account = telegramPlugin.config.resolveAccount(cfg, "default");
+      const stopAccount = telegramPlugin.gateway?.stopAccount;
+      if (!stopAccount) {
+        throw new Error("expected Telegram stopAccount gateway handler");
+      }
+
+      const abort = new AbortController();
+      await acquireTelegramPollingLease({
+        token: "123456:bad-token",
+        accountId: "default",
+        abortSignal: abort.signal,
+      });
+      abort.abort();
+
+      const stop = stopAccount(
+        createStartAccountContext({
+          account,
+          abortSignal: abort.signal,
+          cfg,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stop;
+
+      const next = await acquireTelegramPollingLease({
+        token: "123456:bad-token",
+        accountId: "default",
+      });
+      next.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("telegramPlugin outbound attachments", () => {
+  it("preserves default markdown rendering unless a parse mode is explicit", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+    const sendText = telegramPlugin.outbound?.sendText;
+    if (!sendText) {
+      throw new Error("Expected Telegram outbound sendText");
+    }
+
+    await sendText({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "hi **boss**",
+    });
+    expect(sendMessageOptionsAt(0)).not.toHaveProperty("textMode");
+
+    await sendText({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "<b>hi boss</b>",
+      formatting: { parseMode: "HTML" },
+    });
+    expect(sendMessageOptionsAt(1).textMode).toBe("html");
+  });
+
+  it("preserves explicit HTML parse mode for payload media captions", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
+    const sendPayload = telegramPlugin.outbound?.sendPayload;
+    if (!sendPayload) {
+      throw new Error("Expected Telegram outbound sendPayload");
+    }
+
+    await sendPayload({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "<b>report</b>",
+        mediaUrl: "https://example.com/report.png",
+      },
+      formatting: { parseMode: "HTML" },
+    });
+
+    expect(sendMessageOptionsAt(0).textMode).toBe("html");
   });
 });

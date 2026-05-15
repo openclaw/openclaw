@@ -30,7 +30,8 @@ describe("subscribeEmbeddedPiSession lifecycle billing errors", () => {
     });
 
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
-    expect(lifecycleError).toBeDefined();
+    expect(lifecycleError?.stream).toBe("lifecycle");
+    expect(lifecycleError?.data?.phase).toBe("error");
     expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
   });
 });
