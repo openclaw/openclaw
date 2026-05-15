@@ -136,7 +136,15 @@ function writePersistedInstallRecords(
   });
 }
 
-function makeIndex(pluginId = "demo"): InstalledPluginIndex {
+function makeIndex(
+  pluginId = "demo",
+  options: {
+    manifestPath?: string;
+    rootDir?: string;
+  } = {},
+): InstalledPluginIndex {
+  const rootDir = options.rootDir ?? `/plugins/${pluginId}`;
+  const manifestPath = options.manifestPath ?? path.join(rootDir, "openclaw.plugin.json");
   return {
     version: 1,
     hostContractVersion: "test",
@@ -149,9 +157,9 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
     plugins: [
       {
         pluginId,
-        manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
+        manifestPath,
         manifestHash: `${pluginId}-manifest`,
-        rootDir: `/plugins/${pluginId}`,
+        rootDir,
         origin: "global",
         enabled: true,
         startup: {
@@ -265,6 +273,33 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes policy-stale derived snapshots when derived plugin files change", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    const pluginDir = path.join(stateDir, "current", "derived");
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    writeJson(manifestPath, { id: "derived", version: "1.0.0" });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("derived", { manifestPath, rootDir: pluginDir }),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-policy",
+          message: "policy changed",
+        },
+      ],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("derived"));
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    writeJson(manifestPath, { id: "derived", version: "2.0.0" });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
   });
 
   it.each([

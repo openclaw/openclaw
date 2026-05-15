@@ -380,6 +380,7 @@ function hashWatchedFiles(watchedFiles: readonly string[]): string {
 
 function resolvePersistedRegistryMemoState(params: {
   env: NodeJS.ProcessEnv;
+  index?: InstalledPluginIndex;
   preferPersisted?: boolean;
   stateDir?: string;
 }): PersistedRegistryMemoState {
@@ -405,7 +406,7 @@ function resolvePersistedRegistryMemoState(params: {
   const npmRoot = params.stateDir
     ? path.join(params.stateDir, "npm")
     : resolveDefaultPluginNpmDir(params.env);
-  const index = readJsonObject(indexPath);
+  const index = params.index ?? readJsonObject(indexPath);
   const plugins = Array.isArray(index?.plugins) ? index.plugins : [];
   const diagnostics = Array.isArray(index?.diagnostics) ? index.diagnostics : [];
   const pluginRootById = new Map<string, string>();
@@ -420,10 +421,12 @@ function resolvePersistedRegistryMemoState(params: {
       pluginRootById.set(pluginId, rootDir);
     }
   }
-  const installRecords = loadInstalledPluginIndexInstallRecordsSync({
-    env: params.env,
-    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-  });
+  const installRecords =
+    params.index?.installRecords ??
+    loadInstalledPluginIndexInstallRecordsSync({
+      env: params.env,
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    });
   const watchedPlugins = plugins.map((rawPlugin) => {
     if (!isRecord(rawPlugin)) {
       return rawPlugin;
@@ -739,9 +742,20 @@ export function loadPluginMetadataSnapshot(
     },
   );
   if (canMemoizePluginMetadataSnapshotResult(result)) {
+    const cachedRegistryState =
+      result.registrySource === "derived"
+        ? resolvePersistedRegistryMemoState({
+            env,
+            index: result.snapshot.index,
+            ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
+            ...(params.preferPersisted !== undefined
+              ? { preferPersisted: params.preferPersisted }
+              : {}),
+          })
+        : registryState;
     pluginMetadataSnapshotMemo = {
-      key: memoKey,
-      registryState,
+      key: computePluginMetadataSnapshotMemoKey({ params, registryState: cachedRegistryState }),
+      registryState: cachedRegistryState,
       snapshot: clonePluginMetadataSnapshot(result.snapshot),
     };
   }
