@@ -1,6 +1,7 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   computeBackoff,
   formatDurationPrecise,
@@ -43,6 +44,20 @@ const POLL_STOP_GRACE_MS = 15_000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
+
+function normalizeTelegramAccountId(accountId?: string | null): string {
+  return accountId?.trim() || "default";
+}
+
+function shouldBypassReconnectBackoff(lastError?: string): boolean {
+  if (!lastError) {
+    return false;
+  }
+  return isRecoverableTelegramNetworkError(new Error(lastError), {
+    context: "send",
+    allowMessageMatch: true,
+  });
+}
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -114,6 +129,7 @@ export class TelegramPollingSession {
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
   #stallThresholdMs: number;
+  #deliveryDrainInFlight = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -200,6 +216,35 @@ export class TelegramPollingSession {
     return this.#waitBeforeRestart(
       (delay) => `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${delay}.`,
     );
+  }
+
+  #drainPendingDeliveriesAfterReconnect() {
+    if (this.#deliveryDrainInFlight) {
+      return;
+    }
+    this.#deliveryDrainInFlight = true;
+    const accountId = normalizeTelegramAccountId(this.opts.accountId);
+    void drainPendingDeliveries({
+      drainKey: `telegram:${accountId}`,
+      logLabel: "Telegram reconnect drain",
+      cfg: this.opts.config,
+      log: {
+        info: (message) => this.opts.log(`[telegram][diag] ${message}`),
+        warn: (message) => this.opts.log(`[telegram] ${message}`),
+        error: (message) => this.opts.log(`[telegram] ${message}`),
+      },
+      selectEntry: (entry) => ({
+        match:
+          entry.channel === "telegram" && normalizeTelegramAccountId(entry.accountId) === accountId,
+        bypassBackoff: shouldBypassReconnectBackoff(entry.lastError),
+      }),
+    })
+      .catch((err) => {
+        this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
+      })
+      .finally(() => {
+        this.#deliveryDrainInFlight = false;
+      });
   }
 
   async #createPollingBot(): Promise<TelegramBot | undefined> {
@@ -359,6 +404,7 @@ export class TelegramPollingSession {
       }
       if (message.type === "poll-success") {
         this.#status.notePollSuccess(message.finishedAt);
+        this.#drainPendingDeliveriesAfterReconnect();
         pollState.outcome = `ok:${message.count}`;
         return;
       }
@@ -428,7 +474,10 @@ export class TelegramPollingSession {
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     const liveness = new TelegramPollingLivenessTracker({
-      onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
+      onPollSuccess: (finishedAt) => {
+        this.#status.notePollSuccess(finishedAt);
+        this.#drainPendingDeliveriesAfterReconnect();
+      },
     });
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {

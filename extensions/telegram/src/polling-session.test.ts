@@ -9,6 +9,7 @@ const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
 const computeBackoffMock = vi.hoisted(() => vi.fn(() => 0));
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
+const drainPendingDeliveriesMock = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 
 vi.mock("@grammyjs/runner", () => ({
   run: runMock,
@@ -20,6 +21,10 @@ vi.mock("./bot.js", () => ({
 
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
+  drainPendingDeliveries: drainPendingDeliveriesMock,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -54,6 +59,18 @@ type TelegramApiMiddleware = (
   method: string,
   payload: unknown,
 ) => Promise<unknown>;
+type DrainPendingDeliveriesCall = {
+  drainKey: string;
+  logLabel: string;
+  selectEntry: (
+    entry: {
+      channel: string;
+      accountId?: string;
+      lastError?: string;
+    },
+    now: number,
+  ) => { match: boolean; bypassBackoff: boolean };
+};
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -162,6 +179,14 @@ function expectTelegramBotTransportSequence(firstTransport: unknown, secondTrans
   expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
   expect(createTelegramBotMock.mock.calls.at(0)?.[0]?.telegramTransport).toBe(firstTransport);
   expect(createTelegramBotMock.mock.calls.at(1)?.[0]?.telegramTransport).toBe(secondTransport);
+}
+
+function expectDrainPendingDeliveriesCall(index = 0): DrainPendingDeliveriesCall {
+  const call = drainPendingDeliveriesMock.mock.calls[index]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error(`Expected drainPendingDeliveries call ${index}`);
+  }
+  return call as DrainPendingDeliveriesCall;
 }
 
 function makeTelegramTransport() {
@@ -292,6 +317,7 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
+    drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -452,6 +478,58 @@ describe("TelegramPollingSession", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("drains Telegram delivery queue after isolated ingress reports poll success", async () => {
+    const abort = new AbortController();
+    const init = vi.fn(async () => undefined);
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init,
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    let onMessage:
+      | ((message: { type: "poll-success"; finishedAt: number; count: number }) => void)
+      | undefined;
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((handler) => {
+        onMessage = handler;
+        return () => undefined;
+      }),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      isolatedIngress: {
+        enabled: true,
+        createWorker,
+        drainIntervalMs: 10,
+      },
+    });
+
+    const runPromise = session.runUntilAbort();
+    await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
+    onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+
+    abort.abort();
+    await runPromise;
   });
 
   it("lets isolated ingress drain interleave different Telegram topic lanes", async () => {
@@ -1173,6 +1251,87 @@ describe("TelegramPollingSession", () => {
       mode: "polling",
       connected: false,
     });
+  });
+
+  it("drains Telegram delivery queue after getUpdates confirms polling reconnect", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+    const drain = expectDrainPendingDeliveriesCall();
+    expect(drain.drainKey).toBe("telegram:default");
+    expect(drain.logLabel).toBe("Telegram reconnect drain");
+    expect(drain.selectEntry({ channel: "telegram" }, Date.now())).toEqual({
+      match: true,
+      bypassBackoff: false,
+    });
+    expect(
+      drain.selectEntry(
+        {
+          channel: "telegram",
+          accountId: "default",
+          lastError: "Network request for 'sendMessage' failed!",
+        },
+        Date.now(),
+      ),
+    ).toEqual({
+      match: true,
+      bypassBackoff: true,
+    });
+    expect(drain.selectEntry({ channel: "telegram", accountId: "alerts" }, Date.now()).match).toBe(
+      false,
+    );
+    expect(drain.selectEntry({ channel: "whatsapp" }, Date.now()).match).toBe(false);
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("drains Telegram delivery queue after each getUpdates success", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 2 },
+    );
+
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
   });
 
   it("keeps polling marked connected across recoverable restart cycles", async () => {
