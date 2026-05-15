@@ -235,6 +235,21 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     }));
   });
 
+  it("threads params.env into loaded provider workspace resolution", async () => {
+    const provider = buildProvider();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+    const env = { OPENCLAW_DEFAULT_AGENT_ID: "envagent" };
+
+    await applyAuthChoiceLoadedPluginProvider(buildParams({ env }));
+
+    expect(resolveDefaultAgentId).toHaveBeenCalledWith({}, env);
+    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith({}, "default", env);
+  });
+
   it("returns an agent model override when default model application is deferred", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
@@ -678,6 +693,29 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "claude-cli/claude-opus-4-6": { alias: "Opus" },
       "openai/gpt-5.2": {},
     });
+  });
+
+  it("threads params.env into direct plugin provider workspace resolution", async () => {
+    const provider = buildProvider();
+    resolvePluginProviders.mockReturnValue([provider]);
+    const env = { OPENCLAW_DEFAULT_AGENT_ID: "envagent" };
+
+    await applyAuthChoicePluginProvider(
+      buildParams({
+        authChoice: `provider-plugin:${LOCAL_PROVIDER_ID}:${LOCAL_AUTH_METHOD_ID}`,
+        env,
+      }),
+      {
+        authChoice: `provider-plugin:${LOCAL_PROVIDER_ID}:${LOCAL_AUTH_METHOD_ID}`,
+        pluginId: LOCAL_PROVIDER_ID,
+        providerId: LOCAL_PROVIDER_ID,
+        methodId: LOCAL_AUTH_METHOD_ID,
+        label: LOCAL_PROVIDER_LABEL,
+      },
+    );
+
+    expect(resolveDefaultAgentId).toHaveBeenCalledWith(expect.any(Object), env);
+    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "default", env);
   });
 
   it("returns an agent-scoped override for plugin auth choices when default model application is deferred", async () => {

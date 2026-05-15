@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   listAgentIds,
+  resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
@@ -59,6 +60,27 @@ describe("resolveDefaultAgentId", () => {
   it("returns DEFAULT_AGENT_ID when nothing is configured", () => {
     const result = resolveDefaultAgentId({}, {});
     expect(result).toBe("main");
+  });
+});
+
+describe("resolveAgentWorkspaceDir", () => {
+  it("routes an env-selected default agent through the default workspace", () => {
+    const result = resolveAgentWorkspaceDir({}, "envagent", {
+      HOME: "/tmp/home",
+      OPENCLAW_DEFAULT_AGENT_ID: "envagent",
+    });
+
+    expect(result).toBe(path.join("/tmp/home", ".openclaw", "workspace"));
+  });
+
+  it("routes non-default agents under the configured default workspace", () => {
+    const result = resolveAgentWorkspaceDir(
+      { agents: { defaults: { workspace: "/workspace-root" } } },
+      "other",
+      { OPENCLAW_DEFAULT_AGENT_ID: "envagent" },
+    );
+
+    expect(result).toBe(path.join("/workspace-root", "other"));
   });
 });
 

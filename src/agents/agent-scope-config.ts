@@ -197,7 +197,7 @@ export function resolveAgentWorkspaceDir(
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg, env);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
     if (fallback) {
