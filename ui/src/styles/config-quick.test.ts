@@ -31,13 +31,15 @@ describe("config-quick styles", () => {
     expect(css).toContain(".qs-identity-card__actions");
     expect(css).toContain("grid-template-columns: repeat(12, minmax(0, 1fr));");
     expect(css).toContain("grid-column: 1 / -1;");
-    expect(css).toContain("grid-column: span 4;");
+    expect(css).toContain(".qs-side-stack {\n  display: grid;\n  grid-column: span 3;");
+    expect(css).toContain(".qs-card--personal {\n  grid-column: span 9;");
     expect(css).toContain("grid-template-columns: repeat(2, minmax(0, 1fr));");
     expect(css).toContain("align-items: stretch;");
     expect(css).toContain("display: contents;");
-    expect(css).toContain(".qs-card--appearance {\n    order: 4;");
+    expect(css).toContain(".qs-card--personal {\n    order: 4;");
+    expect(css).toContain(".qs-card--appearance {\n    order: 5;");
     expect(css).toContain(".qs-card--appearance");
-    expect(css).toContain("order: 4");
+    expect(css).toContain("order: 5");
     expect(css).toContain(".qs-card--automations");
     expect(css).toContain("order: 6");
   });

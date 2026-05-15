@@ -51,7 +51,7 @@
 
 .qs-side-stack {
   display: grid;
-  grid-column: span 4;
+  grid-column: span 3;
   grid-template-rows: auto 1fr;
   align-self: stretch;
   gap: 14px;
@@ -87,7 +87,7 @@
 }
 
 .qs-card--personal {
-  grid-column: span 8;
+  grid-column: span 9;
 }
 
 .qs-card--personal .qs-identity-grid {
@@ -1130,11 +1130,11 @@
   }
 
   .qs-card--appearance {
-    order: 4;
+    order: 5;
   }
 
   .qs-card--personal {
-    order: 5;
+    order: 4;
   }
 
   .qs-card--automations {
