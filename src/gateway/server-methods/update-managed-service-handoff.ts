@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveRestartSentinelPath } from "../../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -61,6 +62,97 @@ function cleanupSensitiveFiles() {
   }
 }
 
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonFile(filePath, value) {
+  const dir = path.dirname(filePath);
+  const tempPath = path.join(
+    dir,
+    "." + path.basename(filePath) + "." + process.pid + "." + Date.now() + ".tmp",
+  );
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+    fs.renameSync(tempPath, filePath);
+  } catch (err) {
+    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Best effort only.
+    }
+  }
+}
+
+function isPendingUpdatePayload(payload) {
+  const reason = payload && payload.stats && payload.stats.reason;
+  return (
+    payload &&
+    payload.kind === "update" &&
+    payload.status === "skipped" &&
+    (reason === "managed-service-handoff-started" || reason === "restart-health-pending")
+  );
+}
+
+function buildFallbackFailurePayload(reason) {
+  const metaFile = params.metaPath ? readJsonFile(params.metaPath) : null;
+  const meta = metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {};
+  const payload = {
+    kind: "update",
+    status: "error",
+    ts: Date.now(),
+    message: typeof meta.note === "string" ? meta.note : null,
+    stats: {
+      mode: "unknown",
+      ...(typeof meta.handoffId === "string" && meta.handoffId.trim()
+        ? { handoffId: meta.handoffId }
+        : {}),
+      reason,
+      steps: [],
+      durationMs: 0,
+    },
+  };
+  if (typeof meta.sessionKey === "string" && meta.sessionKey.trim()) {
+    payload.sessionKey = meta.sessionKey;
+  }
+  if (meta.deliveryContext && typeof meta.deliveryContext === "object") {
+    payload.deliveryContext = meta.deliveryContext;
+  }
+  if (typeof meta.threadId === "string" && meta.threadId.trim()) {
+    payload.threadId = meta.threadId;
+  }
+  return payload;
+}
+
+function markUpdateSentinelFailureIfPending(reason) {
+  if (!params.sentinelPath) {
+    return;
+  }
+  const current = readJsonFile(params.sentinelPath);
+  let payload = current && current.version === 1 ? current.payload : null;
+  if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
+    return;
+  }
+  const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
+  if (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId)) {
+    return;
+  }
+  if (payload) {
+    payload = { ...payload, status: "error" };
+    delete payload.continuation;
+    payload.stats = { ...(payload.stats || {}), reason };
+  } else {
+    payload = buildFallbackFailurePayload(reason);
+  }
+  writeJsonFile(params.sentinelPath, { version: 1, payload });
+}
+
 (async () => {
   const deadline = Date.now() + params.parentExitTimeoutMs;
   while (isPidAlive(params.parentPid) && Date.now() < deadline) {
@@ -68,6 +160,7 @@ function cleanupSensitiveFiles() {
   }
   if (isPidAlive(params.parentPid)) {
     appendLog("gateway parent pid " + params.parentPid + " did not exit before handoff timeout");
+    markUpdateSentinelFailureIfPending("managed-service-handoff-parent-timeout");
     cleanupSensitiveFiles();
     process.exitCode = 1;
     return;
@@ -90,6 +183,7 @@ function cleanupSensitiveFiles() {
     });
     if (exit && exit.error) {
       appendLog("managed update command failed to start: " + (exit.error && exit.error.stack ? exit.error.stack : String(exit.error)));
+      markUpdateSentinelFailureIfPending("managed-service-handoff-spawn-failed");
       process.exitCode = 1;
       return;
     }
@@ -100,8 +194,10 @@ function cleanupSensitiveFiles() {
         (exit && exit.signal ? exit.signal : "null"),
     );
     if (exit && typeof exit.code === "number" && exit.code !== 0) {
+      markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
       process.exitCode = exit.code;
     } else if (exit && exit.signal) {
+      markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
       process.exitCode = 1;
     }
   } finally {
@@ -116,6 +212,7 @@ function cleanupSensitiveFiles() {
   }
 })().catch((err) => {
   appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
+  markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed");
   cleanupSensitiveFiles();
   process.exitCode = 1;
 });
@@ -181,6 +278,7 @@ export async function startManagedServiceUpdateHandoff(params: {
   timeoutMs?: number;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
+  handoffId?: string;
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   argv1?: string;
@@ -207,7 +305,10 @@ export async function startManagedServiceUpdateHandoff(params: {
     cwd: params.root,
     commandArgv,
     commandLabel,
+    handoffId: params.handoffId,
     logPath,
+    metaPath,
+    sentinelPath: resolveRestartSentinelPath(),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
   };
 

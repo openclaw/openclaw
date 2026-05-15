@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -111,11 +112,14 @@ export const updateHandlers: GatewayRequestHandlers = {
         if (supervisor) {
           try {
             const startedAt = Date.now();
+            const handoffId = randomUUID();
+            sentinelMeta.handoffId = handoffId;
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
               restartDelayMs,
               meta: sentinelMeta,
+              handoffId,
             });
             handoff = {
               status: "started",

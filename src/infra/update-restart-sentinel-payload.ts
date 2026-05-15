@@ -13,6 +13,7 @@ export type UpdateRestartSentinelMeta = {
     accountId?: string;
   };
   threadId?: string;
+  handoffId?: string;
   note?: string | null;
   continuationMessage?: string | null;
 };
@@ -43,6 +44,7 @@ export function buildUpdateRestartSentinelPayload(params: {
     stats: {
       mode: result.mode,
       ...(result.root ? { root: result.root } : {}),
+      ...(meta.handoffId ? { handoffId: meta.handoffId } : {}),
       before: result.before ?? null,
       after: result.after ?? null,
       steps: result.steps.map((step) => ({

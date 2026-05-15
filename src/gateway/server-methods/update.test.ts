@@ -3,6 +3,7 @@ import {
   DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   type RestartSentinelPayload,
 } from "../../infra/restart-sentinel.js";
+import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
 
 // Capture the sentinel payload written during update.run
@@ -19,7 +20,7 @@ const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | 
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
-const detectRespawnSupervisorMock = vi.fn(() => null);
+const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
   status: "started" as const,
   pid: 12345,
@@ -365,9 +366,17 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/tmp/openclaw",
-        meta: expect.any(Object),
+        handoffId: expect.any(String),
+        meta: expect.objectContaining({
+          handoffId: expect.any(String),
+        }),
       }),
     );
+    const [handoffParams] = firstMockCall(
+      startManagedServiceUpdateHandoffMock,
+      "managed handoff",
+    ) as [{ handoffId?: string; meta?: { handoffId?: string } }];
+    expect(handoffParams.meta?.handoffId).toBe(handoffParams.handoffId);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     const [restartParams] = firstMockCall(
       scheduleGatewaySigusr1RestartMock,
@@ -392,6 +401,7 @@ describe("update.run restart scheduling", () => {
     expect(sentinel.status).toBe("skipped");
     expect(sentinel.stats).toEqual(
       expect.objectContaining({
+        handoffId: handoffParams.handoffId,
         reason: "managed-service-handoff-started",
       }),
     );
