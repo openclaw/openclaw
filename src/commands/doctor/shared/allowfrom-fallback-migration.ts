@@ -114,11 +114,12 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       continue;
     }
     for (const [accountId, accountConfig] of Object.entries(accounts)) {
-      if (!accountConfig || typeof accountConfig !== "object" || isDisabled(accountConfig)) {
+      const account = asObjectRecord(accountConfig);
+      if (!account || isDisabled(account)) {
         continue;
       }
       migrateRecord({
-        account: accountConfig,
+        account,
         channelName,
         changes,
         parent: channelConfig,
