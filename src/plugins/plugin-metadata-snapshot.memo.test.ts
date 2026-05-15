@@ -295,7 +295,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("derived"));
 
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    writeJson(manifestPath, { id: "derived", version: "2.0.0" });
+    writeJson(manifestPath, { id: "derived", version: "2.0.0", commandAliases: [{ name: "new" }] });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
