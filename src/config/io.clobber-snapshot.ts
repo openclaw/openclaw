@@ -137,6 +137,20 @@ function compareClobberedSiblings(
   );
 }
 
+function createClobberedSiblingSnapshot(params: {
+  dir: string;
+  entry: string;
+  prefix: string;
+  mtimeMs: number;
+}): ClobberedSiblingSnapshot {
+  return {
+    name: params.entry,
+    path: path.join(params.dir, params.entry),
+    timestampKey: params.entry.slice(params.prefix.length).replace(/-\d{2}$/, ""),
+    mtimeMs: params.mtimeMs,
+  };
+}
+
 async function listClobberedSiblings(
   deps: ConfigClobberSnapshotDeps,
   dir: string,
@@ -149,14 +163,15 @@ async function listClobberedSiblings(
       if (!entry.startsWith(prefix)) {
         continue;
       }
-      const snapshotPath = path.join(dir, entry);
-      const stat = await deps.fs.promises.stat(snapshotPath).catch(() => null);
-      snapshots.push({
-        name: entry,
-        path: snapshotPath,
-        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
-        mtimeMs: stat?.mtimeMs ?? 0,
-      });
+      const stat = await deps.fs.promises.stat(path.join(dir, entry)).catch(() => null);
+      snapshots.push(
+        createClobberedSiblingSnapshot({
+          dir,
+          entry,
+          prefix,
+          mtimeMs: stat?.mtimeMs ?? 0,
+        }),
+      );
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {
@@ -175,14 +190,15 @@ function listClobberedSiblingsSync(
       if (!entry.startsWith(prefix)) {
         continue;
       }
-      const snapshotPath = path.join(dir, entry);
-      const stat = deps.fs.statSync(snapshotPath, { throwIfNoEntry: false });
-      snapshots.push({
-        name: entry,
-        path: snapshotPath,
-        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
-        mtimeMs: stat?.mtimeMs ?? 0,
-      });
+      const stat = deps.fs.statSync(path.join(dir, entry), { throwIfNoEntry: false });
+      snapshots.push(
+        createClobberedSiblingSnapshot({
+          dir,
+          entry,
+          prefix,
+          mtimeMs: stat?.mtimeMs ?? 0,
+        }),
+      );
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {

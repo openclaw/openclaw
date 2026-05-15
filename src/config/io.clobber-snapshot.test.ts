@@ -75,6 +75,23 @@ describe("config clobber snapshots", () => {
     }
   }
 
+  function touchClobberFilesByContentOrderSync(configPath: string): void {
+    const dir = path.dirname(configPath);
+    const prefix = `${path.basename(configPath)}.clobbered.`;
+    for (const entry of fs.readdirSync(dir)) {
+      if (!entry.startsWith(prefix)) {
+        continue;
+      }
+      const targetPath = path.join(dir, entry);
+      const match = /^polluted-(\d+)\n$/.exec(fs.readFileSync(targetPath, "utf-8"));
+      if (!match) {
+        continue;
+      }
+      const touchedAt = new Date(`2026-05-03T00:00:${match[1].padStart(2, "0")}.000Z`);
+      fs.utimesSync(targetPath, touchedAt, touchedAt);
+    }
+  }
+
   it("keeps concurrent async snapshots under the per-path cap by rotating oldest files", async () => {
     await withCase(async (configPath) => {
       const warn = vi.fn();
@@ -225,6 +242,44 @@ describe("config clobber snapshots", () => {
           typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
       );
       expect(capWarnings).toHaveLength(1);
+    });
+  });
+
+  it("keeps rotating same-timestamp sync snapshots after the base artifact is reused", async () => {
+    await withCase(async (configPath) => {
+      const warn = vi.fn();
+      const observedAt = "2026-05-03T00:00:00.000Z";
+
+      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT; index++) {
+        persistBoundedClobberedConfigSnapshotSync({
+          deps: { fs, logger: { warn } },
+          configPath,
+          raw: `polluted-${index}\n`,
+          observedAt,
+        });
+      }
+      touchClobberFilesByContentOrderSync(configPath);
+
+      for (
+        let index = CONFIG_CLOBBER_SNAPSHOT_LIMIT;
+        index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3;
+        index++
+      ) {
+        persistBoundedClobberedConfigSnapshotSync({
+          deps: { fs, logger: { warn } },
+          configPath,
+          raw: `polluted-${index}\n`,
+          observedAt,
+        });
+      }
+
+      const clobberFiles = await listClobberFiles(configPath);
+      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const contents = await readClobberFileContents(configPath);
+      expect(contents).not.toContain("polluted-0\n");
+      expect(contents).not.toContain("polluted-1\n");
+      expect(contents).not.toContain("polluted-2\n");
+      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
     });
   });
 });
