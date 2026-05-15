@@ -178,6 +178,83 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBeUndefined();
   });
 
+  it("includes trusted requester identity from session identity links", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        SenderId: " 123456789 ",
+        SenderName: "Spoofable Display Name",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      {
+        identityLinks: {
+          alice: ["telegram:123456789"],
+        },
+      },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["requester_identity"]).toEqual({
+      canonical_id: "alice",
+      source: "session.identityLinks",
+      confidence: "trusted_config_match",
+      matched_by: "sender_id",
+    });
+    expect(payload["sender_id"]).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain("Spoofable Display Name");
+  });
+
+  it("does not trust display names or usernames as requester identity", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        SenderName: "alice",
+        SenderUsername: "alice",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      {
+        identityLinks: {
+          alice: ["telegram:123456789"],
+        },
+      },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["requester_identity"]).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain("alice");
+  });
+
+  it("can resolve trusted requester identity from native direct user id", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        NativeDirectUserId: "U123",
+        OriginatingTo: "slack:D111",
+        OriginatingChannel: "slack",
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "direct",
+      } as TemplateContext,
+      {
+        includeFormattingHints: false,
+        identityLinks: {
+          alice: ["slack:u123"],
+        },
+      },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["requester_identity"]).toEqual({
+      canonical_id: "alice",
+      source: "session.identityLinks",
+      confidence: "trusted_config_match",
+      matched_by: "native_direct_user_id",
+    });
+  });
+
   it("includes Slack mrkdwn response format hints for Slack chats", () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
