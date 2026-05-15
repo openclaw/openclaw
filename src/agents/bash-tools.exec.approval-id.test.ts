@@ -1081,7 +1081,35 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
+  it("waits for native webchat approval and returns approved gateway output as a foreground result", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "webchat",
+    });
+
+    const result = await tool.execute("call-gw-native-webchat", {
+      command: "printf webchat-ok",
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("webchat-ok");
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("keeps approved internal commands asynchronous without a webchat turn source", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
