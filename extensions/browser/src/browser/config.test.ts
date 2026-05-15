@@ -556,6 +556,24 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
+  it("prefers explicit cdpPort when cdpUrl has no port", () => {
+    // cdpUrl "http://127.0.0.1" (no port) should not override
+    // the explicit cdpPort with default port 80.
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        openclaw: {
+          cdpPort: 18800,
+          cdpUrl: "http://127.0.0.1",
+          color: "#FF4500",
+          driver: "openclaw",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "openclaw");
+    expect(profile?.cdpPort).toBe(18800);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
+  });
+
   it("prefers cdpPort over stale WebSocket devtools cdpUrl when both are set", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
