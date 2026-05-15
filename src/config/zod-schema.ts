@@ -314,6 +314,22 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    codex: z
+      .object({
+        agents: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i),
+          )
+          .min(1)
+          .optional(),
+        defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
+        default_tools_approval_mode: z.enum(["auto", "prompt", "approve"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .catchall(z.unknown());
 

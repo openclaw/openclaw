@@ -72,6 +72,7 @@ const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
+  agentId?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
@@ -83,7 +84,12 @@ export async function startOrResumeThread(params: {
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const contextEngineBinding = buildContextEngineBinding(params.params);
-  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(params.params.config);
+  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(
+    params.params.config,
+    {
+      agentId: params.agentId ?? params.params.agentId,
+    },
+  );
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,

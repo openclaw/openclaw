@@ -797,6 +797,7 @@ export async function runCodexAppServerAttempt(
           const threadLifecycleParams = {
             client: startupClient,
             params: runtimeParams,
+            agentId: sessionAgentId,
             cwd: effectiveWorkspace,
             dynamicTools: toolBridge.specs,
             appServer: pluginAppServer,
