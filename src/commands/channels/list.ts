@@ -5,6 +5,11 @@ import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import {
+  normalizeRuntimeChannelAccountSnapshots,
+  resolveChannelAccountStatusRows,
+  type RuntimeChannelStatusPayload,
+} from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -18,42 +23,13 @@ export type ChannelsListOptions = {
   all?: boolean;
 };
 
-type RuntimeChannelStatus = {
-  channelAccounts?: Record<string, unknown>;
-};
-
-function normalizeRuntimeAccounts(
-  payload: RuntimeChannelStatus | null,
-): Map<string, ChannelAccountSnapshot[]> {
-  const out = new Map<string, ChannelAccountSnapshot[]>();
-  const rawAccounts = payload?.channelAccounts;
-  if (!rawAccounts || typeof rawAccounts !== "object") {
-    return out;
-  }
-  for (const [channelId, accounts] of Object.entries(rawAccounts)) {
-    if (!Array.isArray(accounts)) {
-      continue;
-    }
-    const normalized = accounts.filter(
-      (account): account is ChannelAccountSnapshot =>
-        Boolean(account) &&
-        typeof account === "object" &&
-        typeof (account as { accountId?: unknown }).accountId === "string",
-    );
-    if (normalized.length > 0) {
-      out.set(channelId, normalized);
-    }
-  }
-  return out;
-}
-
-async function readGatewayChannelStatus(): Promise<RuntimeChannelStatus | null> {
+async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
   try {
     return (await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs: 5_000 },
       timeoutMs: 5_000,
-    })) as RuntimeChannelStatus;
+    })) as RuntimeChannelStatusPayload;
   } catch {
     return null;
   }
@@ -180,7 +156,7 @@ export async function channelsListCommand(
   const runtimeAccountsByChannel =
     opts.json === true
       ? new Map<string, ChannelAccountSnapshot[]>()
-      : normalizeRuntimeAccounts(await readGatewayChannelStatus());
+      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
   const installedByChannelId = new Map<string, boolean>();
   for (const entry of catalogEntries) {
     installedByChannelId.set(
@@ -211,16 +187,16 @@ export async function channelsListCommand(
     if (accountIds && accountIds.length > 0) {
       renderedChannelIds.add(plugin.id);
       const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
-      const mergedAccountIds = [
-        ...new Set([...accountIds, ...runtimeAccounts.map((account) => account.accountId)]),
-      ];
-      for (const accountId of mergedAccountIds) {
-        const runtimeSnapshot = runtimeAccounts.find((account) => account.accountId === accountId);
-        const snapshot =
-          runtimeSnapshot ?? (await buildChannelAccountSnapshot({ plugin, cfg, accountId }));
+      const rows = await resolveChannelAccountStatusRows({
+        localAccountIds: accountIds,
+        runtimeAccounts,
+        resolveLocalSnapshot: (accountId) =>
+          buildChannelAccountSnapshot({ plugin, cfg, accountId }),
+      });
+      for (const row of rows) {
         accountLines.push({
           plugin,
-          snapshot,
+          snapshot: row.snapshot,
           installed: isInstalled(plugin.id),
         });
       }

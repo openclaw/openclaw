@@ -33,8 +33,12 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram: apply method-aware Bot API request timeouts to direct message/action clients so `openclaw message delete --channel telegram` no longer waits on grammY's 500-second default when the API request wedges. Fixes #81908. Thanks @DashLabsDev.
+- Cron: treat attempt dispatch and assembled context as execution-start milestones so isolated agent jobs that have reached backend dispatch are governed by their configured job timeout instead of the 60s pre-execution watchdog. Fixes #81368. (#81871) Thanks @alexph-dev.
+- Doctor/auth: warn about stale per-agent OAuth auth profile shadows and let `openclaw doctor --fix` remove the local shadow so agents inherit the fresher main-agent credential.
+- Status/channels: show configured channels whose plugin setup failed to load as `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` instead of silently dropping them from `openclaw status`.
 - Discord/channels: make `openclaw channels list --all` prefer reachable Gateway runtime account status and mark configured-but-unavailable credentials, avoiding false `not configured` output when Discord is running from service-only env. Fixes #79343. Thanks @EricY019.
 - WhatsApp: mark text slash commands as command turns so authorized group command replies stay visible under message-tool-only group reply mode. (#81972) Thanks @barbarhan.
+- Providers/OpenCode Go: stop sending unsupported reasoning parameters to Kimi K2.5/K2.6, avoiding OpenCode Go payload-validation failures while preserving DeepSeek V4 reasoning support.
 - Installer: handle noninteractive git installs from moving refs without tag-fetch conflicts, while keeping immutable refs on frozen lockfile installs. (#81875) Thanks @keshavbotagent.
 - Codex app-server: inject native client factories per run and compaction attempt instead of using module-scope test state, avoiding temporal-dead-zone reads during cyclic startup. (#81148) Thanks @bdjben.
 - Plugin skills: replace generated Windows plugin-skill directories before publishing the current skill link, avoiding repeated `EINVAL` warnings from stale non-symlink entries. Fixes #81432. (#81446) Thanks @hclsys and @vincentkoc.
@@ -54,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/WebChat: render `/tts audio` replies as playable audio attachments through the assistant-media ticket path, with structured-audio compatibility for older live payloads. (#81722) Thanks @Conan-Scott.
 - Bind gateway approval access to requester metadata [AI]. (#81380) Thanks @pgondhi987.
 - Telegram: let isolated polling drain independent topics, DMs, and status/control commands concurrently while preserving same-lane order. (#81849) Thanks @VACInc.
+- Telegram: derive readable plain-text retries from HTML fallback sends so parse failures show `label (url)` links instead of raw anchors. (#81764) Thanks @alexph-dev.
 - Ollama/Doctor: copy explicit native Ollama `contextWindow` or `maxTokens` provider/model budgets into `params.num_ctx` during `openclaw doctor --fix`, preserving large-context configs after native Ollama stopped inferring per-request `num_ctx`. Fixes #81878. (#81928) Thanks @joshavant and @ArthurusDent.
 - Discord: honor `threadName` on `message send` to existing threads by renaming the thread after successful delivery, and warn when the rename cannot be applied. Fixes #81836. (#81933) Thanks @joshavant.
 - Build: keep externalized Slack, OpenShell sandbox, and Anthropic Vertex runtime dependency declarations out of the root dist artifact build.
