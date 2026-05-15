@@ -751,6 +751,7 @@ public struct AgentParams: Codable, Sendable {
     public let internalruntimehandoffid: String?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
+    public let sourcereplydeliverymode: AnyCodable?
     public let voicewaketrigger: String?
     public let idempotencykey: String
     public let label: String?
@@ -788,6 +789,7 @@ public struct AgentParams: Codable, Sendable {
         internalruntimehandoffid: String?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
+        sourcereplydeliverymode: AnyCodable?,
         voicewaketrigger: String?,
         idempotencykey: String,
         label: String?)
@@ -824,6 +826,7 @@ public struct AgentParams: Codable, Sendable {
         self.internalruntimehandoffid = internalruntimehandoffid
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
+        self.sourcereplydeliverymode = sourcereplydeliverymode
         self.voicewaketrigger = voicewaketrigger
         self.idempotencykey = idempotencykey
         self.label = label
@@ -862,6 +865,7 @@ public struct AgentParams: Codable, Sendable {
         case internalruntimehandoffid = "internalRuntimeHandoffId"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
+        case sourcereplydeliverymode = "sourceReplyDeliveryMode"
         case voicewaketrigger = "voiceWakeTrigger"
         case idempotencykey = "idempotencyKey"
         case label
