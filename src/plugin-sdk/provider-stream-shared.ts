@@ -181,7 +181,7 @@ function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void
   }
 }
 
-function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
+export function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
   if (!Array.isArray(payload.messages)) {
     return;
   }

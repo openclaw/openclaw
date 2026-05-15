@@ -4,7 +4,11 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "../../plugin-sdk/provider-stream-shared.js";
+import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createPayloadPatchStreamWrapper,
+  ensureDeepSeekV4AssistantReasoningContent,
+} from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   type ProviderRuntimePluginHandle,
@@ -751,6 +755,32 @@ function applyPostPluginStreamWrappers(
       thinkingLevel: ctx.thinkingLevel,
       shouldPatchModel: isDeepSeekV4OpenAICompatibleModel,
     });
+
+    // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
+    // format. When MiMo is reached through an unowned proxy/custom provider
+    // (e.g. a custom provider pointed at token-plan-*.xiaomimimo.com), the bundled
+    // xiaomi plugin's wrapStreamFn does not fire, so apply the shared wrapper
+    // here as a fallback so multi-turn tool calls succeed.
+    ctx.agent.streamFn = createPayloadPatchStreamWrapper(
+      ctx.agent.streamFn,
+      ({ payload }) => ensureDeepSeekV4AssistantReasoningContent(payload),
+      {
+        shouldPatch: ({ model }) => {
+          const id =
+            typeof model.id === "string"
+              ? model.id.trim().toLowerCase().split("/").pop()
+              : "";
+          return (
+            model.api === "openai-completions" &&
+            (id.includes("mimo-v2.5-pro") ||
+              id.includes("mimo-v2.5") ||
+              id.includes("mimo-v2-pro") ||
+              id.includes("mimo-v2-omni") ||
+              id.includes("mimo-v2.6-pro"))
+          );
+        },
+      },
+    );
 
     // Guard Google-family payloads against invalid negative thinking budgets
     // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
