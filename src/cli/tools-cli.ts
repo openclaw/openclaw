@@ -5,6 +5,7 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   executeToolPlan,
+  type ExecutePlanResult,
   type ExecutePlanInput,
   type ExecutePlanToolInvokeResult,
 } from "../tools/execute-plan.js";
@@ -36,16 +37,25 @@ function resolvePlanFile(argumentFile: string | undefined, opts: ToolsExecutePla
   return file;
 }
 
-function renderTextSummary(result: Awaited<ReturnType<typeof executeToolPlan>>): void {
-  for (const step of result.steps) {
+export function formatExecutePlanTextSummary(result: ExecutePlanResult): string[] {
+  const lines = result.steps.map((step) => {
     const suffix = step.error ? ` - ${step.error.message}` : "";
-    defaultRuntime.log(`${step.index + 1}. ${step.action}: ${step.status}${suffix}`);
-  }
+    return `${step.index + 1}. ${step.action}: ${step.status}${suffix}`;
+  });
+
   if (result.ok) {
-    defaultRuntime.log("plan completed");
-    return;
+    return [...lines, "plan completed"];
   }
-  defaultRuntime.log(`plan stopped: ${result.stopReason ?? "tool_error"}`);
+  if (result.stopped) {
+    return [...lines, `plan stopped: ${result.stopReason ?? "tool_error"}`];
+  }
+  return [...lines, "plan completed with errors"];
+}
+
+function renderTextSummary(result: Awaited<ReturnType<typeof executeToolPlan>>): void {
+  for (const line of formatExecutePlanTextSummary(result)) {
+    defaultRuntime.log(line);
+  }
 }
 
 async function runExecutePlan(argumentFile: string | undefined, opts: ToolsExecutePlanOpts) {
