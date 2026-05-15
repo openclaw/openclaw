@@ -683,9 +683,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "查看 token 流向、工作階段何時飆升，以及成本由何而來。",
-    },
     common: {
       emptyValue: "—",
       unknown: "未知",
@@ -1009,6 +1006,10 @@ export const zh_TW: TranslationMap = {
     settings: "聊天設定",
     thinkingToggle: "切換助手思考/工作輸出",
     toolCallsToggle: "切換工具呼叫與工具結果",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "切換專注模式 (隱藏側邊欄 + 頁面頁眉)",
     hideCronSessions: "隱藏定時任務會話",
     showCronSessions: "顯示定時任務會話",

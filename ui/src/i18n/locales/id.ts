@@ -693,9 +693,6 @@ export const id: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Lihat ke mana token digunakan, kapan sesi melonjak, dan apa yang mendorong biaya.",
-    },
     common: {
       emptyValue: "—",
       unknown: "tidak diketahui",
@@ -1041,6 +1038,10 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",
     hideCronSessions: "Sembunyikan sesi cron",
     showCronSessions: "Tampilkan sesi cron",

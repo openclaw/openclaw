@@ -177,13 +177,14 @@ Keep provider refs and runtime policy separate:
 
 Common command routing:
 
-| User intent                     | Use                                     |
-| ------------------------------- | --------------------------------------- |
-| Attach the current chat         | `/codex bind [--cwd <path>]`            |
-| Resume an existing Codex thread | `/codex resume <thread-id>`             |
-| List or filter Codex threads    | `/codex threads [filter]`               |
-| Send Codex feedback only        | `/codex diagnostics [note]`             |
-| Start an ACP/acpx task          | ACP/acpx session commands, not `/codex` |
+| User intent                                           | Use                                                                                                   |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Attach the current chat                               | `/codex bind [--cwd <path>]`                                                                          |
+| Resume an existing Codex thread                       | `/codex resume <thread-id>`                                                                           |
+| List or filter Codex threads                          | `/codex threads [filter]`                                                                             |
+| Attach an existing Codex CLI session on a paired node | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
+| Send Codex feedback only                              | `/codex diagnostics [note]`                                                                           |
+| Start an ACP/acpx task                                | ACP/acpx session commands, not `/codex`                                                               |
 
 | Use case                                             | Configure                                                        | Verify                                  | Notes                              |
 | ---------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------- | ---------------------------------- |
@@ -424,6 +425,13 @@ time when Codex reports one and tries the next ordered auth profile for the same
 Codex run. When the reset time passes, the subscription profile becomes eligible
 again without changing the selected `openai/gpt-*` model or Codex runtime.
 
+For local stdio app-server launches, OpenClaw sets `CODEX_HOME` to a per-agent
+directory so Codex config, auth/account files, plugin cache/data, and native
+thread state do not read or write the operator's personal `~/.codex` by
+default. OpenClaw preserves the normal process `HOME`; Codex-run subprocesses
+can still find user-home config and tokens, and Codex may discover shared
+`$HOME/.agents/skills` and `$HOME/.agents/plugins/marketplace.json` entries.
+
 If a deployment needs additional environment isolation, add those variables to
 `appServer.clearEnv`:
 
@@ -445,6 +453,9 @@ If a deployment needs additional environment isolation, add those variables to
 ```
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
+OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
+normalization: `CODEX_HOME` stays per-agent, and `HOME` stays inherited so
+subprocesses can use normal user-home state.
 
 Codex dynamic tools default to `searchable` loading. OpenClaw does not expose
 dynamic tools that duplicate Codex-native workspace operations: `read`, `write`,
@@ -480,7 +491,7 @@ Supported `appServer` fields:
 | `url`                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                               |
 | `authToken`                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                   |
 | `headers`                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                |
-| `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. `CODEX_HOME` and `HOME` are reserved for OpenClaw's per-agent Codex isolation on local launches.    |
+| `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                      |
 | `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                             |
 | `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after a turn-scoped Codex app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                     |
 | `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                   |

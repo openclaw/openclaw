@@ -49,6 +49,31 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const high = String.fromCharCode(0xd83d);
+    const low = String.fromCharCode(0xdc00);
+
+    const request = harness.client.request("thread/start", {
+      prompt: `left${high}right`,
+      nested: [`low${low}end`, "emoji 🙈 ok"],
+    });
+
+    expect(harness.writes[0]).not.toContain("\\ud83d");
+    expect(harness.writes[0]).not.toContain("\\udc00");
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as {
+      params?: { prompt?: string; nested?: string[] };
+    };
+    expect(outbound.params?.prompt).toBe("leftright");
+    expect(outbound.params?.nested).toEqual(["lowend", "emoji 🙈 ok"]);
+    harness.send({
+      id: JSON.parse(harness.writes[0] ?? "{}").id,
+      result: { threadId: "thread-1" },
+    });
+    await expect(request).resolves.toEqual({ threadId: "thread-1" });
+  });
+
   it("logs a redacted preview for malformed app-server messages", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
@@ -125,6 +150,42 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
     await expect(request).rejects.toHaveProperty("code", -32601);
     await expect(request).rejects.toHaveProperty("message", "Method not found");
+  });
+
+  it("surfaces relogin details from Codex app-server RPC errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("thread/start", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: outbound.id,
+      error: {
+        code: -32602,
+        message: "failed to load configuration",
+        data: {
+          reason: "cloudRequirements",
+          errorCode: "Auth",
+          action: "relogin",
+          statusCode: 401,
+          detail:
+            "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+        },
+      },
+    });
+
+    await expect(request).rejects.toHaveProperty(
+      "message",
+      "failed to load configuration: Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    );
+    await expect(request).rejects.toHaveProperty("data", {
+      reason: "cloudRequirements",
+      errorCode: "Auth",
+      action: "relogin",
+      statusCode: 401,
+      detail:
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    });
   });
 
   it("rejects timed-out requests and ignores late responses", async () => {

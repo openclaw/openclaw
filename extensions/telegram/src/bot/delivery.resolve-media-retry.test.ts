@@ -568,6 +568,45 @@ describe("resolveMedia getFile retry", () => {
     });
   });
 
+  it("copies trusted local file paths whose names start with dots", async () => {
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/..photo.jpg" });
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("image-data"),
+      realPath: "/var/lib/telegram-bot-api/..photo.jpg",
+      stat: { size: 10 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/photo.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const result = await resolveMediaWithDefaults(
+      makeCtx("document", getFile, { file_name: "..photo.jpg", mime_type: "image/jpeg" }),
+      { trustedLocalFileRoots: ["/var/lib/telegram-bot-api"] },
+    );
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(rootRead).toHaveBeenCalledWith({
+      rootDir: "/var/lib/telegram-bot-api",
+      relativePath: "..photo.jpg",
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("image-data"),
+      "image/jpeg",
+      "inbound",
+      MAX_MEDIA_BYTES,
+      "..photo.jpg",
+    );
+    expectResolvedMediaFields(result, "trusted local dot-prefixed document", {
+      path: "/tmp/inbound/photo.jpg",
+      contentType: "image/jpeg",
+      placeholder: "<media:document>",
+    });
+  });
+
   it("copies trusted local absolute file paths into inbound media storage for sticker downloads", async () => {
     const getFile = vi
       .fn()

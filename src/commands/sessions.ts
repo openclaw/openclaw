@@ -7,7 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { isCronSessionKey, isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
+import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
@@ -31,7 +32,7 @@ import {
 
 type SessionRow = SessionDisplayRow & {
   agentId: string;
-  kind: "cron" | "direct" | "group" | "global" | "unknown";
+  kind: SessionKind;
   agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   runtimeLabel: string;
   /**
@@ -45,7 +46,7 @@ type SessionRow = SessionDisplayRow & {
 };
 
 const AGENT_PAD = 10;
-const KIND_PAD = 6;
+const KIND_PAD = 11; // "spawn-child".length — longest kind label
 const RUNTIME_PAD = 18;
 const TOKENS_PAD = 20;
 const DEFAULT_SESSIONS_LIMIT = 100;
@@ -172,25 +173,6 @@ async function lookupContextTokensForDisplay(model: string): Promise<number | un
   return lookupContextTokens(model, { allowAsyncLoad: false });
 }
 
-function classifySessionKey(key: string, entry?: { chatType?: string | null }): SessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (isCronSessionKey(key)) {
-    return "cron";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
-}
-
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   const label = kind.padEnd(KIND_PAD);
   if (!rich) {
@@ -313,12 +295,14 @@ export async function sessionsCommand(
           provider: modelRef.provider,
           model: modelRef.model,
           sessionKey: row.key,
+          acpRuntime,
+          acpBackend: entry?.acp?.backend,
         });
         return Object.assign({}, row, {
           agentId,
           acpRuntime,
           agentRuntime,
-          kind: classifySessionKey(row.key, store[row.key]),
+          kind: classifySessionKind(row.key, store[row.key]),
           runtimeLabel: resolveSessionRuntimeLabel({
             cfg,
             entry,

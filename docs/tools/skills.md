@@ -31,9 +31,12 @@ If a skill name conflicts, the highest source wins.
 
 Codex CLI's native `$CODEX_HOME/skills` directory is not one of these OpenClaw
 skill roots. In Codex harness mode, local app-server launches use isolated
-per-agent Codex homes, so personal Codex CLI skills are not loaded implicitly.
-Use `openclaw migrate codex --dry-run` to inventory them and
-`openclaw migrate codex` to choose skill directories with an interactive
+per-agent Codex homes, so skills in the operator's personal `~/.codex/skills`
+are not loaded implicitly. Codex-native `.agents` discovery uses inherited
+`HOME` separately; OpenClaw's own skill roots above already include
+`~/.agents/skills`. Use `openclaw migrate codex --dry-run` to inventory skills
+from the Codex home, then `openclaw migrate codex` to choose skill directories
+with an interactive
 checkbox prompt before copying them into the current OpenClaw agent workspace.
 For non-interactive runs, repeat `--skill <name>` for the exact skills to copy.
 
@@ -167,7 +170,7 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
 [Sandboxing](/gateway/sandboxing) for the agent-side controls.
 </Warning>
 
-- Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
+- Workspace, project-agent, and extra-dir skill discovery only accepts skill roots whose resolved realpath stays inside the configured root unless `skills.load.allowSymlinkTargets` explicitly trusts a target root. Bundled skills always stay contained. Managed `~/.openclaw/skills` and personal `~/.agents/skills` roots may contain symlinked skill folders installed by ClawHub or another local skill manager, but every `SKILL.md` realpath must still stay inside its resolved skill directory.
 - Gateway private archive installs are off by default. When explicitly enabled,
   they require a committed zip upload containing `SKILL.md` and reuse the same
   archive extraction, path traversal, symlink, force, and rollback protections as
@@ -445,10 +448,12 @@ when `SKILL.md` files change. Configure under `skills.load`:
 }
 ```
 
-Use `allowSymlinkTargets` for intentional sibling-repo layouts where a built-in
-skill root contains a symlink, for example
-`~/.agents/skills/manager -> ~/Projects/manager/skills`. The target list is
-matched after realpath resolution and should stay narrow.
+Use `allowSymlinkTargets` for intentional workspace, project-agent, or extra-dir
+layouts where a skill root contains a symlink, for example
+`<workspace>/skills/manager -> ~/Projects/manager/skills`. Managed
+`~/.openclaw/skills` and personal `~/.agents/skills` can follow skill-directory
+symlinks from local skill managers by default, but the target list is still
+matched after realpath resolution and should stay narrow when configured.
 
 ### Remote macOS nodes (Linux gateway)
 

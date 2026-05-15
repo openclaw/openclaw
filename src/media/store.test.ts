@@ -942,6 +942,18 @@ describe("media store", () => {
         expected: "报告_2024.pdf",
         basePath: "/media",
       },
+      {
+        name: "extracts from Windows paths on non-Windows hosts",
+        filename: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        expected: "report.pdf",
+        basePath: String.raw`C:\media\inbound`,
+      },
+      {
+        name: "extracts from mixed-separator paths",
+        filename: "photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+        expected: "photo.png",
+        basePath: String.raw`C:\media/inbound`,
+      },
     ] as const)("$name", async ({ filename, expected, basePath }) => {
       await expectOriginalFilenameCase({ filename, expected, basePath });
     });

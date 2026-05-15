@@ -474,6 +474,7 @@ describe("scripts/changed-lanes", () => {
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
       "dependency pin guard",
+      "package patch guard",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -755,6 +756,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
+      "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -956,6 +958,7 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 
@@ -977,6 +980,7 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 });

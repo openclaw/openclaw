@@ -122,7 +122,12 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
     return initialRes;
   }
 
-  const resolvedUrl = new URL(redirectUrl, parsed.href);
+  let resolvedUrl: URL;
+  try {
+    resolvedUrl = new URL(redirectUrl, parsed.href);
+  } catch {
+    return initialRes;
+  }
   if (resolvedUrl.protocol !== "https:") {
     return initialRes;
   }

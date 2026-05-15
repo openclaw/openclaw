@@ -23,6 +23,7 @@ import type {
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -149,24 +150,21 @@ export type RunEmbeddedPiAgentParams = {
   >;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
+  /**
+   * Explicit per-run timeout override, in milliseconds, when the caller knows
+   * the run was launched with a deliberate per-run value (e.g. a cron payload's
+   * `timeoutSeconds`) rather than inheriting `agents.defaults.timeoutSeconds`.
+   * When set, the LLM idle watchdog honors this value directly instead of
+   * inferring "explicitness" from `timeoutMs !== agents.defaults.timeoutSeconds`,
+   * which fails when the explicit value happens to numerically equal the agent
+   * default.
+   */
+  runTimeoutOverrideMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
-    phase:
-      | "runner_entered"
-      | "workspace"
-      | "runtime_plugins"
-      | "model_resolution"
-      | "auth"
-      | "context_engine"
-      | "attempt_dispatch"
-      | "context_assembled"
-      | "turn_accepted"
-      | "process_spawned"
-      | "tool_execution_started"
-      | "assistant_output_started"
-      | "model_call_started";
+    phase: EmbeddedAgentExecutionPhase;
     provider?: string;
     model?: string;
     backend?: string;

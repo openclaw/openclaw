@@ -2,6 +2,7 @@ import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { buildCodexMcpServersConfig } from "../codex-mcp-config.js";
 import {
   applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
@@ -70,14 +71,7 @@ export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
   config: BundleMcpConfig,
 ): string[] {
-  const overrides = serializeTomlInlineValue(
-    Object.fromEntries(
-      Object.entries(config.mcpServers).map(([name, server]) => [
-        name,
-        normalizeCodexServerConfig(name, server),
-      ]),
-    ),
-  );
+  const overrides = serializeTomlInlineValue(buildCodexMcpServersConfig(config));
   return [...(args ?? []), "-c", `mcp_servers=${overrides}`];
 }
 

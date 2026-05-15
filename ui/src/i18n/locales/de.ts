@@ -699,9 +699,6 @@ export const de: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Sieh, wohin Tokens gehen, wann Sitzungen zunehmen und was die Kosten antreibt.",
-    },
     common: {
       emptyValue: "—",
       unknown: "unbekannt",
@@ -1050,6 +1047,10 @@ export const de: TranslationMap = {
     settings: "Chat-Einstellungen",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
     hideCronSessions: "Cron-Sitzungen ausblenden",
     showCronSessions: "Cron-Sitzungen anzeigen",

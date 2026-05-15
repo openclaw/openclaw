@@ -697,10 +697,6 @@ export const tr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
-    },
     common: {
       emptyValue: "—",
       unknown: "bilinmiyor",
@@ -1048,6 +1044,10 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",
     hideCronSessions: "Cron oturumlarını gizle",
     showCronSessions: "Cron oturumlarını göster",

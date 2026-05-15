@@ -70,6 +70,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/task-registry-control.runtime.js",
+  "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
@@ -124,7 +125,7 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["doctor", "--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
-  ["models", "list", "--provider", "amazon-bedrock"],
+  ["models", "list", "--provider", "openai"],
 ] as const;
 export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = [
   "doctor",
