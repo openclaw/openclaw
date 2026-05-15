@@ -110,3 +110,45 @@ struct AmbientThomasOrbMotionProfile: Equatable {
         }
     }
 }
+
+struct AmbientThomasOrbMotionSample: Equatable {
+    var offsetX: Double
+    var offsetY: Double
+    var tiltDegrees: Double
+    var spinDegrees: Double
+
+    static func sample(time: TimeInterval, state: AmbientThomasOrbState) -> AmbientThomasOrbMotionSample {
+        let profile = AmbientThomasOrbMotionProfile.profile(for: state)
+        let anchors: [(x: Double, y: Double)] = [
+            (-34, -34),
+            (30, -24),
+            (38, 28),
+            (-22, 32),
+            (-38, 2),
+        ]
+        let hopSeconds = max(2.4, profile.orbitSeconds * 0.34)
+        let rawIndex = Int(floor(time / hopSeconds))
+        let current = anchors[rawIndex % anchors.count]
+        let next = anchors[(rawIndex + 1) % anchors.count]
+        let progress = Self.smoothStep(time.truncatingRemainder(dividingBy: hopSeconds) / hopSeconds)
+        let sway = cos(time / 1.6 + Double(rawIndex)) * (profile.floatAmplitude * 0.28)
+        let drift = sin(time / 1.2 + Double(rawIndex)) * (profile.floatAmplitude * 0.38)
+        let x = Self.lerp(current.x, next.x, progress) + sway
+        let y = Self.lerp(current.y, next.y, progress) + drift
+
+        return AmbientThomasOrbMotionSample(
+            offsetX: x,
+            offsetY: y,
+            tiltDegrees: sin(time / 0.76 + Double(rawIndex)) * 5.5,
+            spinDegrees: (time.truncatingRemainder(dividingBy: profile.orbitSeconds) / profile.orbitSeconds) * 360)
+    }
+
+    private static func lerp(_ lhs: Double, _ rhs: Double, _ progress: Double) -> Double {
+        lhs + ((rhs - lhs) * progress)
+    }
+
+    private static func smoothStep(_ progress: Double) -> Double {
+        let clamped = min(max(progress, 0), 1)
+        return clamped * clamped * (3 - (2 * clamped))
+    }
+}
