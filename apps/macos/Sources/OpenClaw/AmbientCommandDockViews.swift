@@ -226,7 +226,9 @@ struct AmbientCommandDockView: View {
                 .focused(self.$focused)
                 .font(.system(size: 14, weight: .regular))
                 .onSubmit {
-                    if let selected = self.model.suggestions[safe: self.model.selectedSuggestionIndex] {
+                    if self.model.shouldAcceptSuggestionOnReturn,
+                       let selected = self.model.suggestions[safe: self.model.selectedSuggestionIndex]
+                    {
                         self.model.acceptSuggestion(selected)
                     } else {
                         Task { await self.model.submit() }

@@ -14,6 +14,13 @@ final class AmbientCommandDockModel {
     var thomasState: AmbientThomasOrbState = .ready
     var sessionLabel: String = "main session"
     var isSubmitting = false
+    var shouldAcceptSuggestionOnReturn: Bool {
+        guard !self.suggestions.isEmpty else { return false }
+        if case .command = self.parsedInput() {
+            return false
+        }
+        return true
+    }
 
     private let registry: AmbientCommandRegistry
     private let actions: AmbientCommandDockActionExecutor

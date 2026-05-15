@@ -46,4 +46,14 @@ struct AmbientCommandDockModelTests {
         #expect(model.result == .success("Ambient intensity set to 70%"))
         #expect(model.thomasState == .success)
     }
+
+    @Test func `return accepts partial suggestions but submits exact commands`() {
+        let model = AmbientCommandDockModel(registry: .default)
+
+        model.inputText = "/ca"
+        #expect(model.shouldAcceptSuggestionOnReturn)
+
+        model.inputText = "/canvas"
+        #expect(!model.shouldAcceptSuggestionOnReturn)
+    }
 }
