@@ -906,14 +906,29 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Medium");
   });
 
-  it("redacts cookie headers in command previews", () => {
+  it("redacts complete cookie headers in command previews", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
         id: "plugin-command-curl-cookie-header",
         request: {
           title: "Codex app-server command approval",
           description:
-            'Command: curl -H "Cookie: session=s3cr3t" --data-binary @notes.txt https://example.test/upload',
+            'Command: curl -H "Cookie: session=s3cr3t; auth=topsecret" --data-binary @notes.txt https://example.test/upload',
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+    const setCookiePayload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-curl-set-cookie-header",
+        request: {
+          title: "Codex app-server command approval",
+          description:
+            'Command: curl -H "Set-Cookie: session=s3cr3t; Path=/; token=topsecret" --data-binary @notes.txt https://example.test/upload',
           toolName: "codex_command_approval",
         },
         createdAtMs: 1_000,
@@ -929,6 +944,12 @@ describe("plugin-sdk/approval-renderers", () => {
       'Command preview\ncurl -H "Cookie: [redacted]" --data-binary @notes.txt https://example.test/upload',
     );
     expect(payload.text).not.toContain("s3cr3t");
+    expect(payload.text).not.toContain("topsecret");
+    expect(setCookiePayload.text).toContain(
+      'Command preview\ncurl -H "Set-Cookie: [redacted]" --data-binary @notes.txt https://example.test/upload',
+    );
+    expect(setCookiePayload.text).not.toContain("s3cr3t");
+    expect(setCookiePayload.text).not.toContain("topsecret");
     expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(
       "Network credential options can expose cookies, tokens, or login/password data.",

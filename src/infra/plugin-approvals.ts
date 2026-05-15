@@ -389,8 +389,15 @@ function buildCommandPreview(command: string): string {
   return `${compact.slice(0, SIMPLE_COMMAND_PREVIEW_MAX_LENGTH - 1).trimEnd()}...`;
 }
 
+function redactQuotedCookieHeaderValues(command: string): string {
+  return command.replace(
+    /(["'])([^"']*\b(?:set-)?cookie:\s*)[^"']*\1/gi,
+    (_match: string, quote: string, prefix: string) => `${quote}${prefix}[redacted]${quote}`,
+  );
+}
+
 function redactSensitiveCommandText(command: string): string {
-  return command
+  return redactQuotedCookieHeaderValues(command)
     .replace(
       /(authorization:\s*(?:(?:bearer|basic|token)\s+)?)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
