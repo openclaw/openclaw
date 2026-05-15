@@ -42,7 +42,9 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   const senderUsername = normalizeOptionalString(params.senderUsername);
   const senderE164 = normalizeOptionalString(params.senderE164);
   const senderLabel = buildSenderLabel({ senderId, senderName, senderUsername, senderE164 });
-  const sourceChannel = normalizeOptionalString(params.messageProvider ?? params.messageChannel);
+  const sourceChannel = normalizeOptionalString(
+    params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
+  );
   return {
     role: "user",
     content: params.prompt,

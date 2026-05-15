@@ -311,7 +311,8 @@ describe("CodexAppServerEventProjector", () => {
     const params = await createParams();
     const projector = await createProjector({
       ...params,
-      messageProvider: "discord",
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
       senderId: "user-123",
       senderName: "Test User",
       senderUsername: "testuser",
