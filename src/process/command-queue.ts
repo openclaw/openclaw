@@ -98,6 +98,13 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
  */
+
+// Store the current session lane max concurrent configuration
+let currentSessionLaneMaxConcurrent = 1;
+
+export function setSessionLaneMaxConcurrent(maxConcurrent: number) {
+  currentSessionLaneMaxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+}
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 function getQueueState() {
@@ -144,11 +151,14 @@ function getLaneState(lane: string): LaneState {
   if (existing) {
     return existing;
   }
+  // Use session lane concurrency for session: lanes, default to 1 otherwise
+  const isSessionLane = lane.startsWith("session:");
+  const defaultMaxConcurrent = isSessionLane ? currentSessionLaneMaxConcurrent : 1;
   const created: LaneState = {
     lane,
     queue: [],
     activeTaskIds: new Set(),
-    maxConcurrent: 1,
+    maxConcurrent: defaultMaxConcurrent,
     draining: false,
     generation: 0,
   };

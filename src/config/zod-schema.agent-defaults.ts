@@ -259,6 +259,7 @@ export const AgentDefaultsSchema = z
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
+    sessionLaneMaxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),

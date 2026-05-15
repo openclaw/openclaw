@@ -71,7 +71,10 @@ export {
   resolveTelegramCustomCommands,
 } from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
-export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
+export {
+  resolveAgentMaxConcurrent,
+  resolveSessionLaneMaxConcurrent,
+} from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
 export { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 export { coerceSecretRef } from "../config/types.secrets.js";

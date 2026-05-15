@@ -5,6 +5,7 @@ export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
 // Keep depth-1 subagents as leaves unless config explicitly opts into nesting.
 export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 1;
+export const DEFAULT_SESSION_LANE_MAX_CONCURRENT = 1;
 
 export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.maxConcurrent;
@@ -20,4 +21,12 @@ export function resolveSubagentMaxConcurrent(cfg?: OpenClawConfig): number {
     return Math.max(1, Math.floor(raw));
   }
   return DEFAULT_SUBAGENT_MAX_CONCURRENT;
+}
+
+export function resolveSessionLaneMaxConcurrent(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.sessionLaneMaxConcurrent;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(1, Math.floor(raw));
+  }
+  return DEFAULT_SESSION_LANE_MAX_CONCURRENT;
 }

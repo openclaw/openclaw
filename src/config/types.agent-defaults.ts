@@ -434,6 +434,8 @@ export type AgentDefaultsConfig = {
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
+  /** Max concurrent runs per session lane (e.g., Telegram forum topics). Default: 1 (sequential per session). */
+  sessionLaneMaxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
     /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */

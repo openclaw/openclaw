@@ -2,7 +2,11 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SESSION_LANE_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "./agent-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
@@ -394,7 +398,10 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  const hasSessionLaneMax =
+    typeof defaults?.sessionLaneMaxConcurrent === "number" &&
+    Number.isFinite(defaults.sessionLaneMaxConcurrent);
+  if (hasMax && hasSubMax && hasSessionLaneMax) {
     return cfg;
   }
 
@@ -402,6 +409,11 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
     nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
+    mutated = true;
+  }
+
+  if (!hasSessionLaneMax) {
+    nextDefaults.sessionLaneMaxConcurrent = DEFAULT_SESSION_LANE_MAX_CONCURRENT;
     mutated = true;
   }
 
