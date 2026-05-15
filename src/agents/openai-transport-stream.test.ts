@@ -5326,3 +5326,71 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });
+
+describe("buildOpenAICompletionsParams strips response-only reasoning fields", () => {
+  // OpenRouter and other OpenAI-Completions providers echo `reasoning_details`
+  // (array) and `reasoning_content` (string) in response choices to expose the
+  // model's chain of thought. If those fields leak back into a follow-up
+  // request, OpenRouter rejects the call with HTTP 500 ("Internal Server
+  // Error"). buildOpenAICompletionsParams must scrub them before the wire.
+  // Repro recipe (verified against live OpenRouter):
+  //   POST /chat/completions with messages[*].reasoning_details: "..." => 500
+  //   Same body without that key                                       => 200
+
+  const baseModel = {
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek v4 Flash",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  function getAssistantMessage(params: { messages: unknown }) {
+    expect(Array.isArray(params.messages)).toBe(true);
+    const list = params.messages as Array<Record<string, unknown>>;
+    const assistant = list.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    return assistant as Record<string, unknown>;
+  }
+
+  it("removes reasoning_details, reasoning_content, and reasoning from assistant replay", () => {
+    const params = buildOpenAICompletionsParams(
+      baseModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "你好" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-flash",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "User said hi, I should respond politely.",
+                thinkingSignature: "considering",
+              },
+              { type: "text", text: "Hello!" },
+            ],
+          },
+          { role: "user", content: "再来一个" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+
+    const assistant = getAssistantMessage(params);
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning_content");
+    expect(assistant).not.toHaveProperty("reasoning");
+  });
+});

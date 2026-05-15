@@ -2376,6 +2376,46 @@ function injectToolCallThoughtSignatures(
   }
 }
 
+// OpenRouter / many OpenAI-Completions providers ECHO `reasoning_details`
+// (array) and `reasoning_content` (string) inside response choices to surface
+// the model's chain of thought. Some downstream message builders inadvertently
+// preserve those fields when persisting an assistant turn, so they get
+// replayed verbatim on the next request. The Chat Completions request schema
+// does NOT accept either field on input messages — and worse, OpenRouter
+// rejects the call with a generic HTTP 500 ("Internal Server Error") instead
+// of a 4xx with a parse error, which makes the failure look like an upstream
+// outage. Always strip them from outgoing messages before we hit the wire.
+//
+// This is a defensive guard at the last possible point in the pipeline; the
+// underlying serializer (pi-ai's `convertMessages`) is the one that ought to
+// drop these, but until that is fixed upstream we cannot let a single stale
+// reasoning echo break every subsequent turn for the session.
+const COMPLETIONS_RESPONSE_ONLY_MESSAGE_FIELDS = [
+  "reasoning_details",
+  "reasoning_content",
+  "reasoning",
+] as const;
+
+function stripCompletionsResponseOnlyFields(messages: unknown): void {
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const record = msg as Record<string, unknown>;
+    if (record.role !== "assistant") {
+      continue;
+    }
+    for (const field of COMPLETIONS_RESPONSE_ONLY_MESSAGE_FIELDS) {
+      if (field in record) {
+        delete record[field];
+      }
+    }
+  }
+}
+
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
@@ -2391,6 +2431,7 @@ export function buildOpenAICompletionsParams(
     : context;
   let messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  stripCompletionsResponseOnlyFields(messages);
   if (compat.strictMessageKeys) {
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
