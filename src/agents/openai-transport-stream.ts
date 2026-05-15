@@ -572,8 +572,7 @@ function convertResponsesMessages(
       const textResult = msg.content
         .filter((item) => item.type === "text")
         .map((item) => item.text)
-        .join("
-");
+        .join("\n");
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
       messages.push({
@@ -819,9 +818,7 @@ async function processResponsesStream(
                 const summaryPart = part as { text?: string };
                 return summaryPart.text ?? "";
               })
-              .join("
-
-")
+              .join("\n\n")
           : "";
         currentBlock.thinking = summary;
         currentBlock.thinkingSignature = JSON.stringify(item);

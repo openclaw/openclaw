@@ -1296,7 +1296,7 @@ describe("openai image generation provider", () => {
 
       expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=preview",
       );
     });
 
@@ -1321,7 +1321,7 @@ describe("openai image generation provider", () => {
       });
 
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2-1/images/generations?api-version=2024-12-01-preview",
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2-1/images/generations?api-version=preview",
       );
       expect(jsonRequestCall().body).toEqual({
         prompt: "Azure cat",
@@ -1382,7 +1382,7 @@ describe("openai image generation provider", () => {
       });
 
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=preview",
       );
       expect(jsonRequestCall().body).toEqual({
         prompt: "Transparent Azure sticker",
@@ -1415,7 +1415,7 @@ describe("openai image generation provider", () => {
 
       expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=preview",
       );
     });
 
@@ -1441,7 +1441,7 @@ describe("openai image generation provider", () => {
 
       expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
       expect(jsonRequestCall().url).toBe(
-        "https://my-resource.services.ai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        "https://my-resource.services.ai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=preview",
       );
     });
 
@@ -1499,7 +1499,7 @@ describe("openai image generation provider", () => {
       });
 
       expect(multipartRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/edits?api-version=2024-12-01-preview",
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/edits?api-version=preview",
       );
       expect(multipartRequestCall().body).toBeInstanceOf(FormData);
     });
@@ -1560,7 +1560,7 @@ describe("openai image generation provider", () => {
       });
 
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=preview",
       );
     });
 
@@ -1585,7 +1585,7 @@ describe("openai image generation provider", () => {
       });
 
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=preview",
       );
     });
 
