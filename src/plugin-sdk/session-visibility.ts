@@ -27,10 +27,15 @@ export type AgentToAgentDecision =
 
 export type AgentToAgentPolicy = {
   enabled: boolean;
-  matchesGlobalParticipation: (agentId: string) => boolean;
+  matchesGlobalParticipation?: (agentId: string) => boolean;
   matchesAllow: (agentId: string) => boolean;
-  evaluateAccess: (requesterAgentId: string, targetAgentId: string) => AgentToAgentDecision;
+  evaluateAccess?: (requesterAgentId: string, targetAgentId: string) => AgentToAgentDecision;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
+};
+
+export type EvaluatingAgentToAgentPolicy = AgentToAgentPolicy & {
+  matchesGlobalParticipation: (agentId: string) => boolean;
+  evaluateAccess: (requesterAgentId: string, targetAgentId: string) => AgentToAgentDecision;
 };
 
 export type SessionAccessAction = "history" | "send" | "list" | "status";
@@ -102,7 +107,7 @@ export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spaw
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
-export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
+export function createAgentToAgentPolicy(cfg: OpenClawConfig): EvaluatingAgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
   const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
@@ -231,6 +236,25 @@ export function formatAgentToAgentAccessError(
   return a2aDeniedMessage(action, decision.reason);
 }
 
+function evaluateAgentToAgentPolicyAccess(
+  policy: AgentToAgentPolicy,
+  requesterAgentId: string,
+  targetAgentId: string,
+): AgentToAgentDecision {
+  if (typeof policy.evaluateAccess === "function") {
+    return policy.evaluateAccess(requesterAgentId, targetAgentId);
+  }
+  if (normalizeAgentId(requesterAgentId) === normalizeAgentId(targetAgentId)) {
+    return { allowed: true };
+  }
+  if (!policy.enabled) {
+    return { allowed: false, reason: "disabled" };
+  }
+  return policy.isAllowed(requesterAgentId, targetAgentId)
+    ? { allowed: true }
+    : { allowed: false, reason: "global_participation" };
+}
+
 function crossVisibilityMessage(action: SessionAccessAction): string {
   if (action === "history") {
     return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
@@ -318,7 +342,11 @@ export function createSessionVisibilityRowChecker(params: {
           error: crossVisibilityMessage(params.action),
         };
       }
-      const a2aDecision = params.a2aPolicy.evaluateAccess(requesterAgentId, targetAgentId);
+      const a2aDecision = evaluateAgentToAgentPolicyAccess(
+        params.a2aPolicy,
+        requesterAgentId,
+        targetAgentId,
+      );
       if (!a2aDecision.allowed) {
         return {
           allowed: false,
