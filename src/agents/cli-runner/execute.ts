@@ -815,14 +815,30 @@ export async function executePreparedCliRun(
     }
     throw error;
   } finally {
+    // Each cleanup awaits in its own try/catch so a rejection in one cannot
+    // shortcut the finally and skip the remaining steps. In particular the
+    // trajectory flush at the end must always run, otherwise queued
+    // session.ended events for the current run are lost on disk.
     if (claudeSkillsPlugin && !claudeSkillsPluginCleanupOwned) {
-      await claudeSkillsPlugin.cleanup();
+      try {
+        await claudeSkillsPlugin.cleanup();
+      } catch {
+        // Swallow so the remaining cleanups (and trajectory flush) still run.
+      }
     }
     if (systemPromptFile) {
-      await systemPromptFile.cleanup();
+      try {
+        await systemPromptFile.cleanup();
+      } catch {
+        // Swallow so the remaining cleanups (and trajectory flush) still run.
+      }
     }
     if (cleanupImages) {
-      await cleanupImages();
+      try {
+        await cleanupImages();
+      } catch {
+        // Swallow so the trajectory flush below still runs.
+      }
     }
     if (trajectoryRecorder) {
       if (!trajectoryTerminalRecorded) {
