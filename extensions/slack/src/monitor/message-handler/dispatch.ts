@@ -873,7 +873,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
 
-  let draftPreviewFinalized = false;
+  let draftPreviewCommitted = false;
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -892,7 +892,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         payload,
         adapter: defineFinalizableLivePreviewAdapter({
           draft:
-            draftStream && !draftPreviewFinalized
+            draftStream && !draftPreviewCommitted
               ? {
                   flush: draftStream.flush,
                   clear: draftStream.clear,
@@ -938,7 +938,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             });
           },
           onPreviewFinalized: (_preview) => {
-            draftPreviewFinalized = true;
+            // The preview edit promotes the draft message into the final answer.
+            // Later same-turn payloads must not let fallback cleanup clear it.
+            draftPreviewCommitted = true;
             const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
             observedReplyDelivery = true;
             replyPlan.markSent();
