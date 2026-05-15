@@ -224,7 +224,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       proxyUrl,
       bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
     });
-    ensureGlobalUndiciEnvProxyDispatcher();
+    forceResetGlobalDispatcher();
     registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
   } catch (err) {
     restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);

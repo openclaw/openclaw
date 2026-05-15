@@ -268,8 +268,8 @@ describe("startProxy", () => {
     await stopProxy(expectProxyHandle(handle));
 
     expect(proxylineStopMock).toHaveBeenCalledOnce();
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
-    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledTimes(2);
   });
 
   it("reinstalls inherited Proxyline routing when startProxy takes ownership", async () => {
@@ -338,8 +338,8 @@ describe("startProxy", () => {
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
     expect(proxylineStopMock).toHaveBeenCalledOnce();
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
-    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps same-url overlapping handles active until the final stop", async () => {
@@ -353,21 +353,22 @@ describe("startProxy", () => {
     });
 
     expect(installGlobalProxyMock).toHaveBeenCalledOnce();
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
 
     await stopProxy(secondHandle);
 
     expect(proxylineStopMock).not.toHaveBeenCalled();
-    expect(forceResetGlobalDispatcherMock).not.toHaveBeenCalled();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
 
     await stopProxy(firstHandle);
 
     expect(proxylineStopMock).toHaveBeenCalledOnce();
-    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledTimes(2);
     expect(process.env["HTTP_PROXY"]).toBeUndefined();
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
   });
