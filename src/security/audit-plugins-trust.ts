@@ -433,7 +433,7 @@ export async function collectPluginsTrustFindings(params: {
             `Enabled extension plugins: ${enabledExtensionPluginIds.join(", ")}.\n` +
             `Permissive tool policy contexts:\n${permissiveContexts.map((entry) => `- ${entry}`).join("\n")}`,
           remediation:
-            "Use restrictive profiles (`minimal`/`coding`) or explicit tool allowlists that exclude plugin tools for agents handling untrusted input.",
+            "Use restrictive profiles (`minimal`/`coding`/`text-only`) or explicit tool allowlists that exclude plugin tools for agents handling untrusted input.",
         });
       }
     }

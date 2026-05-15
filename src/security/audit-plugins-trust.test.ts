@@ -144,7 +144,7 @@ vi.mock("../agents/tool-policy-match.js", () => ({
 
 vi.mock("../agents/tool-policy.js", () => ({
   resolveToolProfilePolicy: (profile: unknown) =>
-    profile === "coding" || profile === "minimal" ? {} : undefined,
+    profile === "coding" || profile === "minimal" || profile === "text-only" ? {} : undefined,
 }));
 
 vi.mock("./audit-tool-policy.js", () => ({
