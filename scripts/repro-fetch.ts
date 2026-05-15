@@ -1,3 +1,4 @@
+import { handleDiscordMessageAction } from "../extensions/discord/src/actions/handle-action.js";
 /**
  * Repro script for PR #81243: action: "fetch" for Discord single-message retrieval.
  *
@@ -5,25 +6,31 @@
  * end-to-end against the real Discord API, without needing a full gateway boot.
  *
  * Usage:
- *   DISCORD_CHANNEL_ID=<id> DISCORD_MESSAGE_ID=<id> node --import tsx scripts/repro-fetch.ts
- *   DISCORD_MESSAGE_URL=<url> node --import tsx scripts/repro-fetch.ts
+ *   DISCORD_BOT_TOKEN=<token> DISCORD_CHANNEL_ID=<id> DISCORD_MESSAGE_ID=<id> \
+ *     node --import tsx scripts/repro-fetch.ts
+ *   DISCORD_BOT_TOKEN=<token> DISCORD_MESSAGE_URL=<url> \
+ *     node --import tsx scripts/repro-fetch.ts
  *
- * Bot token is read from ~/.openclaw config. No credentials are printed.
+ * DISCORD_BOT_TOKEN is read from env only — never from config files, never printed.
  * Redact all IDs before pasting output into PR bodies.
  */
-import { handleDiscordMessageAction } from "../extensions/discord/src/actions/handle-action.js";
-import { loadConfig } from "../src/config/io.js";
+import type { OpenClawConfig } from "../src/config/types.js";
 
 const channelId = process.env.DISCORD_CHANNEL_ID?.trim();
 const messageId = process.env.DISCORD_MESSAGE_ID?.trim();
 const messageUrl = process.env.DISCORD_MESSAGE_URL?.trim();
 
+if (!process.env.DISCORD_BOT_TOKEN) {
+  console.error("Error: DISCORD_BOT_TOKEN env var is required");
+  process.exit(1);
+}
 if (!messageUrl && (!channelId || !messageId)) {
   console.error("Error: set DISCORD_MESSAGE_URL or both DISCORD_CHANNEL_ID + DISCORD_MESSAGE_ID");
   process.exit(1);
 }
 
-const cfg = loadConfig();
+// Minimal config — token is picked up from DISCORD_BOT_TOKEN env by the Discord extension.
+const cfg = { channels: { discord: { enabled: true } } } as unknown as OpenClawConfig;
 
 const params: Record<string, string> = {};
 if (messageUrl) {
