@@ -557,7 +557,55 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("does not abort embedded runs while a native tool call is active", async () => {
+  it("does not abort embedded runs while a native tool call is below the abort threshold", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 90_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      vi.advanceTimersByTime(61_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "blocked_tool_call",
+        reason: "blocked_tool_call",
+        activeWorkKind: "tool_call",
+        activeToolName: "bash",
+        activeToolCallId: "cmd-1",
+      },
+    );
+  });
+
+  it("aborts stale blocked tool calls after the abort threshold", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
@@ -589,7 +637,6 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(recoverStuckSession).not.toHaveBeenCalled();
     expectRecordFields(
       requireRecord(
         events.findLast((event) => event.type === "session.stalled"),
@@ -603,6 +650,14 @@ describe("stuck session diagnostics threshold", () => {
         activeToolCallId: "cmd-1",
       },
     );
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+      allowActiveAbort: true,
+      stateGeneration: expect.any(Number),
+    });
   });
 
   it("uses diagnostics.stuckSessionAbortMs for stalled active-work recovery", () => {

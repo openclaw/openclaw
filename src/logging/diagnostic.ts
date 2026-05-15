@@ -466,6 +466,19 @@ function isStalledEmbeddedRunRecoveryEligible(params: {
   );
 }
 
+function isBlockedToolCallRecoveryEligible(params: {
+  classification: SessionAttentionClassification | undefined;
+  ageMs: number;
+  stuckSessionAbortMs: number;
+}): boolean {
+  return (
+    params.classification?.eventType === "session.stalled" &&
+    params.classification.classification === "blocked_tool_call" &&
+    params.classification.activeWorkKind === "tool_call" &&
+    params.ageMs >= params.stuckSessionAbortMs
+  );
+}
+
 export function logWebhookReceived(params: {
   channel: string;
   updateType?: string;
@@ -766,6 +779,12 @@ export function logSessionAttention(
   });
   const recoveryEligible =
     classification.recoveryEligible ||
+    isBlockedToolCallRecoveryEligible({
+      classification,
+      ageMs: params.ageMs,
+      stuckSessionAbortMs:
+        params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
+    }) ||
     isStalledEmbeddedRunRecoveryEligible({
       classification,
       ageMs: params.ageMs,
@@ -1024,6 +1043,26 @@ export function startDiagnosticHeartbeat(
               sessionKey: state.sessionKey,
               ageMs,
               queueDepth: state.queueDepth,
+              stateGeneration: state.generation,
+            },
+          });
+        } else if (
+          classification &&
+          isBlockedToolCallRecoveryEligible({
+            classification,
+            ageMs,
+            stuckSessionAbortMs,
+          })
+        ) {
+          requestStuckSessionRecovery({
+            recover: opts?.recoverStuckSession ?? recoverStuckSession,
+            classification,
+            request: {
+              sessionId: state.sessionId,
+              sessionKey: state.sessionKey,
+              ageMs,
+              queueDepth: state.queueDepth,
+              allowActiveAbort: true,
               stateGeneration: state.generation,
             },
           });
