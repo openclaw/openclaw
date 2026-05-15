@@ -120,4 +120,40 @@ describe("telegram inbound turn delivery", () => {
     endRoomEvent();
     endUserRequest();
   });
+
+  it("keeps a newer overlapping room-event correlation when an older one ends", () => {
+    let firstCount = 0;
+    let secondCount = 0;
+    const endFirst = beginTelegramInboundTurnDeliveryCorrelation(
+      "sess:overlap",
+      {
+        outboundTo: "999",
+        markInboundTurnDelivered: () => {
+          firstCount += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+    const endSecond = beginTelegramInboundTurnDeliveryCorrelation(
+      "sess:overlap",
+      {
+        outboundTo: "999",
+        markInboundTurnDelivered: () => {
+          secondCount += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    endFirst();
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:overlap",
+      to: "999",
+      inboundTurnKind: "room_event",
+    });
+
+    expect(firstCount).toBe(0);
+    expect(secondCount).toBe(1);
+    endSecond();
+  });
 });

@@ -58,7 +58,9 @@ export function beginTelegramInboundTurnDeliveryCorrelation(
   }
   registry.set(key, turn);
   return () => {
-    registry.delete(key);
+    if (registry.get(key) === turn) {
+      registry.delete(key);
+    }
   };
 }
 
