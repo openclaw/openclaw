@@ -136,6 +136,8 @@ describe("ensureOggOpus", () => {
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
     ]);
     const ffmpegOutputPath = ffmpegArgs.at(-1);
     expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
@@ -173,6 +175,8 @@ describe("ensureOggOpus", () => {
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
     ]);
     const ffmpegOutputPath = ffmpegArgs.at(-1);
     expectStagedFfmpegOutput(ffmpegOutputPath, result.path);

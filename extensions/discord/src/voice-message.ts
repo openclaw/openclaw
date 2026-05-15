@@ -250,6 +250,8 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
       tempPath,
     ],
   });
