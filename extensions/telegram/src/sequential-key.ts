@@ -1,4 +1,4 @@
-import type { Message, UserFromGetMe } from "@grammyjs/types";
+import type { Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   listChatCommands,
