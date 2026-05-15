@@ -3,6 +3,7 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
@@ -45,23 +46,39 @@ async function requestGraph(params: {
   errorPrefix?: string;
 }): Promise<Response> {
   const hasBody = params.body !== undefined;
-  const res = await fetch(`${params.root ?? GRAPH_ROOT}${params.path}`, {
-    method: params.method,
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-      ...(hasBody ? { "Content-Type": "application/json" } : {}),
-      ...params.headers,
+  const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
+  const currentFetch = globalThis.fetch;
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
+    init: {
+      method: params.method,
+      headers: {
+        "User-Agent": buildUserAgent(),
+        Authorization: `Bearer ${params.token}`,
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
+        ...params.headers,
+      },
+      body: hasBody ? JSON.stringify(params.body) : undefined,
     },
-    body: hasBody ? JSON.stringify(params.body) : undefined,
+    auditContext: "msteams.graph",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `${params.errorPrefix ?? "Graph"} ${params.path} failed (${res.status}): ${text || "unknown error"}`,
-    );
+  try {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `${params.errorPrefix ?? "Graph"} ${params.path} failed (${response.status}): ${text || "unknown error"}`,
+      );
+    }
+    const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    });
+  } finally {
+    await release();
   }
-  return res;
 }
 
 async function readOptionalGraphJson<T>(res: Response): Promise<T> {

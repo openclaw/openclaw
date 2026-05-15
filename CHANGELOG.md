@@ -89,6 +89,12 @@ Docs: https://docs.openclaw.ai
 - Microsoft Teams: report malformed Graph and delegated OAuth JSON with channel-owned errors instead of leaking raw parser failures.
 - Google Chat: report malformed Chat API and certificate JSON with channel-owned errors instead of leaking raw parser failures.
 - Firecrawl: report malformed search and scrape API JSON with provider-owned errors instead of leaking raw parser failures.
+- Tavily: report malformed search and extract API JSON with provider-owned errors instead of leaking raw parser failures.
+- Perplexity: report malformed Search API and chat completion JSON with provider-owned errors instead of leaking raw parser failures.
+- Exa: report malformed search API JSON with a provider-owned error instead of leaking raw parser failures.
+- Memory host SDK: report malformed remote JSON with caller-scoped errors for POST and batch file upload responses instead of leaking raw parser failures.
+- Media providers: report malformed operation-poll and audio-transcription JSON with provider-owned errors instead of leaking raw parser failures.
+- MiniMax, Gemini, Kimi, and Ollama web search: report malformed API JSON with provider-owned errors instead of leaking raw parser failures.
 - Twilio voice-call: report malformed successful API JSON responses with provider-owned errors instead of leaking raw parser failures.
 - Voice-call provider APIs: report malformed successful guarded JSON responses with provider-prefixed errors instead of leaking raw parser failures.
 - Realtime transcription: report malformed provider websocket JSON frames with owned parser errors instead of leaking raw `SyntaxError` objects.
