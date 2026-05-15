@@ -417,6 +417,44 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("format a short status message");
   });
 
+  it.each([
+    {
+      command: "(rm -rf /tmp/x)",
+      id: "plugin-command-subshell-group",
+    },
+    {
+      command: 'case "$target" in *) rm -rf /tmp/x ;; esac',
+      id: "plugin-command-case-compound",
+    },
+    {
+      command: "cleanup() { rm -rf /tmp/x; }",
+      id: "plugin-command-function-compound",
+    },
+  ])("fails closed on unsupported shell compound syntax: $command", ({ command, id }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run shell compound syntax");
+    expect(payload.text).toContain(`Command preview\n${command}`);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "This command uses shell syntax I cannot fully summarize, so review it before approving.",
+    );
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("summarizes stdin-upload pipeline stages before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

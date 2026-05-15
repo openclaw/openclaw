@@ -727,6 +727,17 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     };
   }
 
+  if (hasUnsupportedShellCompoundSyntax(segment)) {
+    return {
+      text: "run shell compound syntax",
+      risk: "high",
+      kind: "unknown",
+      reason:
+        "This command uses shell syntax I cannot fully summarize, so review it before approving.",
+      showCommandPreview: true,
+    };
+  }
+
   const resolved = resolveCommandWords(segment);
   const sudoPrefix = resolved.usedSudo
     ? {
@@ -1206,6 +1217,18 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         sudoPrefix,
       );
   }
+}
+
+function hasUnsupportedShellCompoundSyntax(segment: string): boolean {
+  const trimmed = segment.trim();
+  return (
+    /^\(/.test(trimmed) ||
+    /^\{/.test(trimmed) ||
+    /^case\b/i.test(trimmed) ||
+    /^(?:for|select)\b/i.test(trimmed) ||
+    /^function\b/i.test(trimmed) ||
+    /^[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/.test(trimmed)
+  );
 }
 
 function summarizePackageManagerCommand(
