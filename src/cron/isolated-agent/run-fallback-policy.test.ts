@@ -100,7 +100,7 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
   });
 
-  it("keeps default subagent fallbacks ahead of the agent primary fallback policy", () => {
+  it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
     expect(
       resolveCronFallbacksOverride({
         cfg: {
@@ -130,7 +130,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toEqual(["openai-codex/gpt-5.2"]);
+    ).toStrictEqual([]);
   });
 
   it("keeps explicit empty subagent fallbacks as a fallback override", () => {
