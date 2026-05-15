@@ -686,9 +686,6 @@ export const ar: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "اطّلع على أين تذهب الرموز، ومتى ترتفع الجلسات، وما الذي يحدد التكلفة.",
-    },
     common: {
       emptyValue: "—",
       unknown: "غير معروف",

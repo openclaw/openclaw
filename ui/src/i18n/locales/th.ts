@@ -683,9 +683,6 @@ export const th: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "ดูว่าโทเค็นถูกใช้ไปที่ไหน เซสชันพุ่งขึ้นเมื่อใด และอะไรเป็นตัวขับเคลื่อนค่าใช้จ่าย",
-    },
     common: {
       emptyValue: "—",
       unknown: "ไม่ทราบ",

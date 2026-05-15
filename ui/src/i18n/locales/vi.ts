@@ -691,9 +691,6 @@ export const vi: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Xem token đi đâu, khi nào phiên tăng đột biến và điều gì thúc đẩy chi phí.",
-    },
     common: {
       emptyValue: "—",
       unknown: "không rõ",

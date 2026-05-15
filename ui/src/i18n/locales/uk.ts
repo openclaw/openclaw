@@ -697,10 +697,6 @@ export const uk: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Переглядайте, куди йдуть токени, коли зростає кількість сеансів і що формує вартість.",
-    },
     common: {
       emptyValue: "—",
       unknown: "невідомо",
