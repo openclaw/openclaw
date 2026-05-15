@@ -2448,10 +2448,16 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
     delete record.reasoning_details;
   }
 
-  if ("reasoning" in record && typeof record.reasoning !== "string") {
+  // Strip non-string AND empty-string reasoning fields — empty strings are
+  // response artifacts that upstream providers (OpenRouter, DeepSeek) reject
+  // with HTTP 500 when replayed on follow-up turns.
+  if ("reasoning" in record && (typeof record.reasoning !== "string" || record.reasoning === "")) {
     delete record.reasoning;
   }
-  if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
+  if (
+    "reasoning_content" in record &&
+    (typeof record.reasoning_content !== "string" || record.reasoning_content === "")
+  ) {
     delete record.reasoning_content;
   }
 
