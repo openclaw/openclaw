@@ -120,6 +120,7 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+  drainFormattedSystemEventBlock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -129,7 +130,7 @@ vi.mock("./typing-mode.js", () => ({
 let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
 let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
+let drainFormattedSystemEventBlock: typeof import("./session-system-events.js").drainFormattedSystemEventBlock;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
@@ -274,7 +275,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ drainFormattedSystemEventBlock } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
@@ -1245,9 +1246,15 @@ describe("runPreparedReply media-only handling", () => {
   it("re-drains system events after waiting behind an active run", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(drainFormattedSystemEvents)
-      .mockResolvedValueOnce("System: [t] Initial event.")
-      .mockResolvedValueOnce("System: [t] Post-compaction context.");
+    vi.mocked(drainFormattedSystemEventBlock)
+      .mockResolvedValueOnce({
+        text: "System: [t] Initial event.",
+        forceSenderIsOwnerFalse: false,
+      })
+      .mockResolvedValueOnce({
+        text: "System: [t] Post-compaction context.",
+        forceSenderIsOwnerFalse: false,
+      });
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -1621,7 +1628,10 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Model switched.",
+      forceSenderIsOwnerFalse: false,
+    });
 
     await runPreparedReply(baseParams());
 
@@ -1630,10 +1640,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
-  it("downgrades sender ownership when drained system events include untrusted lines", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System (untrusted): [t] External webhook payload.",
-    );
+  it("downgrades sender ownership when drained system events request owner downgrade", async () => {
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] External webhook payload.",
+      forceSenderIsOwnerFalse: true,
+    });
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -1642,8 +1653,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(false);
   });
 
-  it("keeps sender ownership when drained system events are trusted", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
+  it("keeps sender ownership when drained system events do not request owner downgrade", async () => {
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Trusted event.",
+      forceSenderIsOwnerFalse: false,
+    });
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -1653,9 +1667,10 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("does not downgrade sender ownership when trusted event text contains the untrusted marker", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
-    );
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+      forceSenderIsOwnerFalse: false,
+    });
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -1665,10 +1680,13 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEvents returns just the events block; the caller prepends it.
+    // drainFormattedSystemEventBlock returns the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"
     // does not shadow the low|medium|high shorthand.
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Node connected.",
+      forceSenderIsOwnerFalse: false,
+    });
 
     await runPreparedReply(
       baseParams({
@@ -1689,9 +1707,12 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it to
+    // drainFormattedSystemEventBlock returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
+      text: "System: [t] Node connected.",
+      forceSenderIsOwnerFalse: false,
+    });
 
     await runPreparedReply(baseParams());
 
@@ -1702,7 +1723,7 @@ describe("runPreparedReply media-only handling", () => {
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
     // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
+    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce(undefined);
 
     await runPreparedReply(
       baseParams({

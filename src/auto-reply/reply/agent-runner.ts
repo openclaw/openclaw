@@ -405,11 +405,16 @@ function mergeExecutionTrace(params: {
   if (!winnerProvider && !winnerModel && attempts.length === 0) {
     return undefined;
   }
+  const fallbackAttemptCount = params.fallbackAttempts?.length ?? 0;
+  const traceFallbackUsed = params.executionTrace?.fallbackUsed;
   return {
     winnerProvider,
     winnerModel,
     attempts: attempts.length > 0 ? attempts : undefined,
-    fallbackUsed: params.executionTrace?.fallbackUsed ?? attempts.length > 1,
+    fallbackUsed:
+      traceFallbackUsed === true ||
+      fallbackAttemptCount > 0 ||
+      (traceFallbackUsed === undefined && attempts.length > 1),
     runner: params.executionTrace?.runner ?? params.runner,
   };
 }
@@ -2156,6 +2161,7 @@ export async function runReplyAgent(params: {
       err: error,
       sessionCtx,
       resolvedVerboseLevel,
+      cfg,
     });
     if (knownFailurePayload) {
       replyOperation.fail("run_failed", error);
