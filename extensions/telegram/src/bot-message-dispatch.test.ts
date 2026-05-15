@@ -1485,12 +1485,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
         agents: {
           defaults: {
             silentReply: {
-              direct: "disallow",
               group: "allow",
               internal: "allow",
-            },
-            silentReplyRewrite: {
-              direct: true,
             },
           },
         },
@@ -1854,7 +1850,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("emits a silent-reply fallback for no-response group turns", async () => {
+  it("does not emit a silent-reply fallback for no-response group turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
@@ -1882,12 +1878,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
         agents: {
           defaults: {
             silentReply: {
-              direct: "disallow",
               group: "disallow",
               internal: "allow",
-            },
-            silentReplyRewrite: {
-              group: true,
             },
           },
         },
@@ -1895,13 +1887,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "off",
     });
 
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    const replies = expectDeliverRepliesParams({}).replies as Array<{ text?: string }> | undefined;
-    const replyText = replies?.[0]?.text?.trim();
-    if (!replyText) {
-      throw new Error("expected non-empty Telegram reply text");
-    }
-    expect(replies?.[0]?.text).not.toBe("NO_REPLY");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   describe("non-streaming media dedup", () => {

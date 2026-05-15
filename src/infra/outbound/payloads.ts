@@ -17,10 +17,7 @@ import {
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
-import {
-  resolveSilentReplyRewriteText,
-  type SilentReplyConversationType,
-} from "../../shared/silent-reply-policy.js";
+import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
 
 export type NormalizedOutboundPayload = {
@@ -61,11 +58,10 @@ type OutboundPayloadPlanContext = {
   surface?: string;
   conversationType?: SilentReplyConversationType;
   /**
-   * When true, bare silent payloads are dropped instead of being rewritten to
-   * visible fallback text. Set by callers that know the parent session has at
-   * least one pending spawned child whose completion will deliver the real
-   * reply. If omitted, the outbound plan consults the registered runtime query
-   * (see `pending-spawn-query.ts`).
+   * Set by callers that know the parent session has at least one pending
+   * spawned child whose completion will deliver the real reply. If omitted, the
+   * outbound plan consults the registered runtime query (see
+   * `pending-spawn-query.ts`).
    */
   hasPendingSpawnedChildren?: boolean;
   extractMarkdownImages?: boolean;
@@ -233,48 +229,12 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    if (
-      hasVisibleNonSilentContent ||
-      resolvedSilentReplySettings.policy === "allow" ||
-      hasPendingSpawnedChildren
-    ) {
+    if (hasVisibleNonSilentContent || resolvedSilentReplySettings.policy === "allow") {
       continue;
     }
-    if (!resolvedSilentReplySettings.rewrite) {
-      const visibleSilentPayload: ReplyPayload = {
-        ...entry.payload,
-        text: entry.payload.text?.trim() || "NO_REPLY",
-      };
-      if (!isRenderablePayload(visibleSilentPayload)) {
-        continue;
-      }
-      plan.push({
-        sourceIndex: entry.sourceIndex,
-        payload: visibleSilentPayload,
-        parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
-        hasPresentation: entry.hasPresentation,
-        hasInteractive: entry.hasInteractive,
-        hasChannelData: entry.hasChannelData,
-      });
+    if (hasPendingSpawnedChildren) {
       continue;
     }
-    const visibleSilentPayload: ReplyPayload = {
-      ...entry.payload,
-      text: resolveSilentReplyRewriteText({
-        seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
-      }),
-    };
-    if (!isRenderablePayload(visibleSilentPayload)) {
-      continue;
-    }
-    plan.push({
-      sourceIndex: entry.sourceIndex,
-      payload: visibleSilentPayload,
-      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
-      hasPresentation: entry.hasPresentation,
-      hasInteractive: entry.hasInteractive,
-      hasChannelData: entry.hasChannelData,
-    });
   }
   return plan;
 }

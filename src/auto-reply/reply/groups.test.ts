@@ -67,39 +67,26 @@ describe("group runtime loading", () => {
     expect(
       groups.buildDirectChatContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
-        silentReplyPolicy: "disallow",
-        silentReplyRewrite: false,
-        silentToken: "NO_REPLY",
       }),
     ).toBe(
-      'You are in a Telegram direct conversation. Your replies are automatically sent to this conversation. Do not use "NO_REPLY" as your final answer in this conversation.',
+      "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation.",
     );
 
     expect(
       groups.buildDirectChatContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
-        silentReplyPolicy: "disallow",
-        silentReplyRewrite: true,
-        silentToken: "NO_REPLY",
       }),
-    ).toBe(
-      'You are in a Telegram direct conversation. Your replies are automatically sent to this conversation. Do not use "NO_REPLY" as your final answer in this conversation.',
-    );
+    ).not.toContain("NO_REPLY");
 
     expect(
       groups.buildDirectChatContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
-        silentReplyPolicy: "allow",
-        silentToken: "NO_REPLY",
       }),
-    ).toContain('reply with exactly "NO_REPLY"');
+    ).not.toContain("NO_REPLY");
 
     const toolOnlyContext = groups.buildDirectChatContext({
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
-      silentReplyPolicy: "allow",
-      silentReplyRewrite: true,
-      silentToken: "NO_REPLY",
     });
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
@@ -126,20 +113,9 @@ describe("group runtime loading", () => {
       sessionCtx: { Provider: "whatsapp" },
       silentToken: "NO_REPLY",
       silentReplyPolicy: "disallow",
-      silentReplyRewrite: false,
     });
     expect(disallowed).not.toContain("NO_REPLY");
     expect(disallowed).not.toContain("Never say that you are staying quiet");
-
-    const rewritten = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "disallow",
-      silentReplyRewrite: true,
-    });
-    expect(rewritten).toContain('reply with exactly "NO_REPLY"');
-    expect(rewritten).toContain("short fallback reply");
-    expect(rewritten).not.toContain("Be extremely selective");
   });
 
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {
@@ -169,7 +145,6 @@ describe("group runtime loading", () => {
       groups.resolveGroupSilentReplyBehavior({
         defaultActivation: "always",
         silentReplyPolicy: "disallow",
-        silentReplyRewrite: true,
       }).allowEmptyAssistantReplyAsSilent,
     ).toBe(false);
   });

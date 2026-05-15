@@ -82,11 +82,9 @@ vi.mock("./groups.js", () => ({
       sessionEntry?: SessionEntry;
       defaultActivation: "always" | "mention";
       silentReplyPolicy?: "allow" | "disallow";
-      silentReplyRewrite?: boolean;
     }) => {
       const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
-      const canUseSilentReply =
-        params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+      const canUseSilentReply = params.silentReplyPolicy !== "disallow";
       return {
         activation,
         canUseSilentReply,
@@ -418,7 +416,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it.each(["direct", "dm"] as const)(
-    "propagates empty-assistant silence for %s runs with explicit direct silent replies",
+    "does not propagate empty-assistant silence for %s runs",
     async (chatType) => {
       await runPreparedReply(
         baseParams({
@@ -444,19 +442,13 @@ describe("runPreparedReply media-only handling", () => {
           cfg: {
             session: {},
             channels: {},
-            agents: {
-              defaults: {
-                silentReply: {
-                  direct: "allow",
-                },
-              },
-            },
+            agents: {},
           },
         }),
       );
 
       const call = requireLastRunReplyAgentCall();
-      expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+      expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
     },
   );
 
