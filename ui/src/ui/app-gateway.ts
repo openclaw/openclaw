@@ -725,8 +725,13 @@ function isEventForDifferentActiveRun(
 }
 
 function chatMessagesLength(host: GatewayHost): number {
-  const messages = (host as unknown as { chatMessages?: unknown }).chatMessages;
+  const messages = (host as GatewayHost & { chatMessages?: unknown }).chatMessages;
   return Array.isArray(messages) ? messages.length : 0;
+}
+
+function chatStreamText(host: GatewayHost): string | null {
+  const stream = (host as GatewayHost & { chatStream?: unknown }).chatStream;
+  return typeof stream === "string" ? stream : null;
 }
 
 function resolveChatEventSessionListAgentId(
@@ -763,7 +768,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   const activeRunIdBeforeEvent = host.chatRunId;
   const visibleStateBeforeEvent = {
     chatMessagesLength: chatMessagesLength(host),
-    chatStream: host.chatStream,
+    chatStream: chatStreamText(host),
   };
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const terminalEventIsForDifferentActiveRun = isEventForDifferentActiveRun(
