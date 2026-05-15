@@ -20,6 +20,29 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips self-closing and attributed final tags", () => {
+    expect(sanitizeUserFacingText("<final/>Hello")).toBe("Hello");
+    expect(sanitizeUserFacingText("<final data-model='gemini'>Hello</final>")).toBe("Hello");
+    expect(sanitizeUserFacingText('<final reason="gemma">Hello</final>')).toBe("Hello");
+    expect(sanitizeUserFacingText("<final data-model=openrouter/google/gemini>Hello</final>")).toBe(
+      "Hello",
+    );
+  });
+
+  it("does not strip custom or malformed final-like tags", () => {
+    expect(sanitizeUserFacingText("<final-result>Hello</final-result>")).toBe(
+      "<final-result>Hello</final-result>",
+    );
+    expect(sanitizeUserFacingText('<final reason="a>b">Hello')).toBe('<final reason="a>b">Hello');
+    expect(sanitizeUserFacingText("<final / nottag>Hello")).toBe("<final / nottag>Hello");
+    expect(sanitizeUserFacingText(`<final ${" ".repeat(10_000)}`)).toBe(
+      `<final ${" ".repeat(10_000)}`,
+    );
+    expect(sanitizeUserFacingText(`<final ${" ".repeat(10_000)}= >Hello`)).toBe(
+      `<final ${" ".repeat(10_000)}= >Hello`,
+    );
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
