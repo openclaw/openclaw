@@ -31,12 +31,14 @@ export function projectContextEngineAssemblyForCodex(params: {
   prompt: string;
   systemPromptAddition?: string;
   maxRenderedContextChars?: number;
+  toolPayloadMode?: "elide" | "preserve";
 }): CodexContextProjection {
   const prompt = params.prompt.trim();
   const contextMessages = dropDuplicateTrailingPrompt(params.assembledMessages, prompt);
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
   const renderedContext = renderMessagesForCodexContext(contextMessages, {
     maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+    toolPayloadMode: params.toolPayloadMode ?? "elide",
   });
   const promptText = renderedContext
     ? [
@@ -145,7 +147,7 @@ function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): 
 
 function renderMessagesForCodexContext(
   messages: AgentMessage[],
-  options: { maxTextPartChars: number },
+  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
 ): string {
   return messages
     .map((message) => {
@@ -156,7 +158,10 @@ function renderMessagesForCodexContext(
     .join("\n\n");
 }
 
-function renderMessageBody(message: AgentMessage, options: { maxTextPartChars: number }): string {
+function renderMessageBody(
+  message: AgentMessage,
+  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
+): string {
   if (!hasMessageContent(message)) {
     return "";
   }
@@ -173,7 +178,10 @@ function renderMessageBody(message: AgentMessage, options: { maxTextPartChars: n
     .trim();
 }
 
-function renderMessagePart(part: unknown, options: { maxTextPartChars: number }): string {
+function renderMessagePart(
+  part: unknown,
+  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
+): string {
   if (!part || typeof part !== "object") {
     return "";
   }
@@ -188,14 +196,31 @@ function renderMessagePart(part: unknown, options: { maxTextPartChars: number })
     return "[image omitted]";
   }
   if (type === "toolCall" || type === "tool_use") {
+    if (options.toolPayloadMode === "preserve") {
+      return truncateText(
+        `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}\n${stableJson(record)}`,
+        options.maxTextPartChars,
+      );
+    }
     return `tool call${typeof record.name === "string" ? `: ${record.name}` : ""} [input omitted]`;
   }
   if (type === "toolResult" || type === "tool_result") {
     const label =
       typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
+    if (options.toolPayloadMode === "preserve") {
+      return truncateText(`${label}\n${stableJson(record)}`, options.maxTextPartChars);
+    }
     return `${label} [content omitted]`;
   }
   return `[${type ?? "non-text"} content omitted]`;
+}
+
+function stableJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return "[unserializable payload omitted]";
+  }
 }
 
 function extractMessageText(message: AgentMessage): string {

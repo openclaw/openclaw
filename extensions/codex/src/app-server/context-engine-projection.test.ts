@@ -95,6 +95,33 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("cat .env");
   });
 
+  it("can preserve tool payloads for context-engine thread bootstrap projections", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "exec", input: { token: "sk-secret", cmd: "cat .env" } },
+          ],
+          timestamp: 1,
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult",
+          content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+      ],
+      originalHistoryMessages: [],
+      prompt: "continue",
+      toolPayloadMode: "preserve",
+    });
+
+    expect(result.promptText).toContain("tool call: exec");
+    expect(result.promptText).toContain('"cmd": "cat .env"');
+    expect(result.promptText).toContain("tool result: call-1");
+    expect(result.promptText).toContain("API_KEY=sk-secret");
+  });
+
   it("bounds oversized text context", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("assistant", "x".repeat(30_000))],

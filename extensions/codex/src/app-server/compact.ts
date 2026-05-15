@@ -14,7 +14,7 @@ import {
 import type { CodexAppServerClient, CodexServerNotificationHandler } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
-import { readCodexAppServerBinding } from "./session-binding.js";
+import { clearCodexAppServerBinding, readCodexAppServerBinding } from "./session-binding.js";
 type CodexNativeCompactionCompletion = {
   signal: "thread/compacted" | "item/completed";
   turnId?: string;
@@ -36,6 +36,9 @@ export async function maybeCompactCodexAppServerSession(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
+  if (activeContextEngine?.info.ownsCompaction) {
+    return await compactOwningContextEngine(params, activeContextEngine);
+  }
   warnIfIgnoringOpenClawCompactionOverrides(params);
   const nativeResult = await compactCodexNativeThread(params, options);
   if (activeContextEngine && nativeResult?.ok && nativeResult.compacted) {
@@ -58,6 +61,114 @@ export async function maybeCompactCodexAppServerSession(
     }
   }
   return nativeResult;
+}
+
+async function compactOwningContextEngine(
+  params: CompactEmbeddedPiSessionParams,
+  contextEngine: NonNullable<CompactEmbeddedPiSessionParams["contextEngine"]>,
+): Promise<EmbeddedPiCompactResult> {
+  embeddedAgentLog.info("starting context-engine-owned Codex app-server compaction", {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    engineId: contextEngine.info.id,
+    tokenBudget: params.contextTokenBudget,
+    currentTokenCount: params.currentTokenCount,
+    trigger: params.trigger,
+    compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+    force: params.trigger === "manual",
+  });
+  let result: Awaited<ReturnType<typeof contextEngine.compact>>;
+  try {
+    result = await contextEngine.compact({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      tokenBudget: params.contextTokenBudget,
+      currentTokenCount: params.currentTokenCount,
+      compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+      customInstructions: params.customInstructions,
+      force: params.trigger === "manual",
+      runtimeContext: params.contextEngineRuntimeContext,
+    });
+  } catch (error) {
+    embeddedAgentLog.warn("context-engine-owned Codex app-server compaction failed", {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      engineId: contextEngine.info.id,
+      error: formatErrorMessage(error),
+    });
+    return {
+      ok: false,
+      compacted: false,
+      reason: `context engine compaction failed: ${formatErrorMessage(error)}`,
+    };
+  }
+
+  if (result.ok && result.compacted) {
+    try {
+      await runHarnessContextEngineMaintenance({
+        contextEngine,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        reason: "compaction",
+        runtimeContext: params.contextEngineRuntimeContext,
+        config: params.config,
+      });
+    } catch (error) {
+      embeddedAgentLog.warn("context engine compaction maintenance failed", {
+        sessionId: params.sessionId,
+        engineId: contextEngine.info.id,
+        error: formatErrorMessage(error),
+      });
+    }
+    await clearCodexAppServerBinding(params.sessionFile);
+  }
+
+  embeddedAgentLog.info("completed context-engine-owned Codex app-server compaction", {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    engineId: contextEngine.info.id,
+    ok: result.ok,
+    compacted: result.compacted,
+    reason: result.reason,
+    codexThreadBindingInvalidated: result.ok && result.compacted,
+  });
+  return {
+    ok: result.ok,
+    compacted: result.compacted,
+    reason: result.reason,
+    result: result.result
+      ? {
+          ...result.result,
+          summary: result.result.summary ?? "",
+          firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+          details: mergeContextEngineCompactionDetails(result.result.details, {
+            codexThreadBindingInvalidated: result.ok && result.compacted,
+          }),
+        }
+      : result.ok && result.compacted
+        ? {
+            summary: "",
+            firstKeptEntryId: "",
+            tokensBefore: params.currentTokenCount ?? 0,
+            details: { codexThreadBindingInvalidated: true },
+          }
+        : undefined,
+  };
+}
+
+function mergeContextEngineCompactionDetails(
+  details: unknown,
+  extra: Record<string, unknown>,
+): unknown {
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    return {
+      ...(details as Record<string, unknown>),
+      ...extra,
+    };
+  }
+  return extra;
 }
 
 function warnIfIgnoringOpenClawCompactionOverrides(params: CompactEmbeddedPiSessionParams): void {
