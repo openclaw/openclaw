@@ -19,7 +19,10 @@ import { refreshChutesTokens } from "../chutes-oauth.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import {
+  readExternalCliFallbackCredential,
+  readManagedExternalCliCredential,
+} from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -133,6 +136,7 @@ type ResolveApiKeyForProfileParams = {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  forceRefresh?: boolean;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -183,6 +187,14 @@ const oauthManager = createOAuthManager({
       profileId,
       credential,
     }),
+  readFallbackCredential: ({ profileId, credential }) =>
+    credential.provider === "openai-codex"
+      ? readExternalCliFallbackCredential({
+          profileId,
+          credential,
+          allowKeychainPrompt: false,
+        })
+      : null,
   isRefreshTokenReusedError,
 });
 
@@ -215,6 +227,7 @@ async function tryResolveOAuthProfile(
     credential: cred,
     agentDir: params.agentDir,
     cfg,
+    forceRefresh: params.forceRefresh,
   });
   if (!resolved) {
     return null;
@@ -354,6 +367,7 @@ export async function resolveApiKeyForProfile(
       profileId,
       credential: cred,
       cfg,
+      forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
       return null;
@@ -387,6 +401,7 @@ export async function resolveApiKeyForProfile(
           store: refreshedStore,
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
+          forceRefresh: params.forceRefresh,
         });
         if (fallbackResolved) {
           return fallbackResolved;
