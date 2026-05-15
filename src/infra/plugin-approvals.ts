@@ -40,6 +40,8 @@ export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
 const SIMPLE_COMMAND_PREVIEW_MAX_LENGTH = 180;
 const SHELL_OUTPUT_REDIRECTION_RE =
   /(?:^|\s)(?:\d?>>?|&>>?|>>?)\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
+const SHELL_INPUT_REDIRECTION_RE =
+  /(?:^|\s)(?:\d?<)(?![<&])\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
 export const DEFAULT_PLUGIN_APPROVAL_LANGUAGE =
   "original" as const satisfies PluginApprovalLanguage;
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
@@ -883,7 +885,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       );
     case "curl":
     case "wget":
-      return withSudo(summarizeNetworkCommand(command, args), sudoPrefix);
+      return withSudo(summarizeNetworkCommand(command, args, segment), sudoPrefix);
     case "npm":
     case "pnpm":
     case "yarn":
@@ -1515,6 +1517,26 @@ function getShellOutputRedirectionTargets(segment: string): string[] {
   return targets;
 }
 
+function getShellInputRedirection(segment: string): {
+  targets: string[];
+  hasInputRedirection: boolean;
+} {
+  const targets: string[] = [];
+  let hasInputRedirection = false;
+  for (const match of segment.matchAll(SHELL_INPUT_REDIRECTION_RE)) {
+    hasInputRedirection = true;
+    const target = match[1]?.trim();
+    if (!target) {
+      continue;
+    }
+    const file = stripShellWordQuotes(target);
+    if (file && file !== "-" && !file.startsWith("&") && !file.startsWith("(")) {
+      targets.push(file);
+    }
+  }
+  return { targets, hasInputRedirection };
+}
+
 function summarizeRedirectedWrite(
   redirectionTargets: readonly string[],
   sudoPrefix: { risk: "high"; reason: string } | null,
@@ -1536,14 +1558,21 @@ function summarizeRedirectedWrite(
   );
 }
 
-function summarizeNetworkCommand(command: string, args: readonly string[]): CommandActionSummary {
-  const transfer = collectNetworkTransferOperands(command, args);
+function summarizeNetworkCommand(
+  command: string,
+  args: readonly string[],
+  segment: string,
+): CommandActionSummary {
+  const transfer = collectNetworkTransferOperands(command, args, segment);
   const uploadFiles = uniqueStrings(transfer.uploadFiles);
   const outputFiles = uniqueStrings(transfer.outputFiles);
-  if (uploadFiles.length > 0 || outputFiles.length > 0) {
+  if (uploadFiles.length > 0 || outputFiles.length > 0 || transfer.usesAmbiguousStdinUpload) {
     const actions: string[] = [];
     if (uploadFiles.length > 0) {
       actions.push(`upload local files${formatTargets(uploadFiles)}`);
+    }
+    if (transfer.usesAmbiguousStdinUpload) {
+      actions.push("upload data from standard input");
     }
     if (outputFiles.length > 0) {
       actions.push(`write network output to local files${formatTargets(outputFiles)}`);
@@ -1555,7 +1584,11 @@ function summarizeNetworkCommand(command: string, args: readonly string[]): Comm
       text: actions.join("; "),
       risk: "high",
       kind: "network",
-      reason: buildNetworkTransferRiskReason(uploadFiles, outputFiles),
+      reason: buildNetworkTransferRiskReason(
+        uploadFiles,
+        outputFiles,
+        transfer.usesAmbiguousStdinUpload,
+      ),
       showCommandPreview: true,
     };
   }
@@ -1570,10 +1603,25 @@ function summarizeNetworkCommand(command: string, args: readonly string[]): Comm
 function collectNetworkTransferOperands(
   command: string,
   args: readonly string[],
-): { uploadFiles: string[]; outputFiles: string[]; urls: string[] } {
+  segment: string,
+): {
+  uploadFiles: string[];
+  outputFiles: string[];
+  urls: string[];
+  usesAmbiguousStdinUpload: boolean;
+} {
   const uploadFiles: string[] = [];
   const outputFiles: string[] = [];
   const urls: string[] = [];
+  const inputRedirection = getShellInputRedirection(segment);
+  let usesAmbiguousStdinUpload = false;
+  const recordStdinUpload = () => {
+    if (inputRedirection.targets.length > 0) {
+      uploadFiles.push(...inputRedirection.targets);
+      return;
+    }
+    usesAmbiguousStdinUpload = true;
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (/^https?:\/\//i.test(arg)) {
@@ -1586,6 +1634,9 @@ function collectNetworkTransferOperands(
         : takeFlagValue(args, index, WGET_UPLOAD_FILE_FLAGS);
     if (uploadValue) {
       uploadFiles.push(...extractPlainLocalFileOperands(uploadValue.value));
+      if (isNetworkStdinOperand(uploadValue.value)) {
+        recordStdinUpload();
+      }
       index = Math.max(index, uploadValue.nextIndex);
       continue;
     }
@@ -1594,6 +1645,9 @@ function collectNetworkTransferOperands(
       command === "curl" ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"]) : null;
     if (bodyValue) {
       uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
+      if (isCurlBodyStdinOperand(bodyValue.value)) {
+        recordStdinUpload();
+      }
       index = Math.max(index, bodyValue.nextIndex);
       continue;
     }
@@ -1607,7 +1661,7 @@ function collectNetworkTransferOperands(
       index = Math.max(index, outputValue.nextIndex);
     }
   }
-  return { uploadFiles, outputFiles, urls: uniqueStrings(urls) };
+  return { uploadFiles, outputFiles, urls: uniqueStrings(urls), usesAmbiguousStdinUpload };
 }
 
 function takeFlagValue(
@@ -1638,6 +1692,10 @@ function extractPlainLocalFileOperands(value: string): string[] {
   return file && file !== "-" ? [file] : [];
 }
 
+function isNetworkStdinOperand(value: string): boolean {
+  return stripNetworkFileOperandPrefix(value.trim()) === "-";
+}
+
 function extractCurlBodyFileOperands(value: string): string[] {
   const trimmed = value.trim();
   if (trimmed.startsWith("@")) {
@@ -1658,6 +1716,17 @@ function extractCurlBodyFileOperands(value: string): string[] {
   return files;
 }
 
+function isCurlBodyStdinOperand(value: string): boolean {
+  const trimmed = stripShellWordQuotes(value.trim());
+  if (trimmed === "@-" || trimmed === "<-") {
+    return true;
+  }
+  if (/^[^=]+[@<]-$/.test(trimmed)) {
+    return true;
+  }
+  return /(?:^|=)[@<]-(?:;|$)/.test(trimmed);
+}
+
 function stripNetworkFileOperandPrefix(value: string): string {
   return stripShellWordQuotes(value).replace(/^@/, "");
 }
@@ -1665,12 +1734,16 @@ function stripNetworkFileOperandPrefix(value: string): string {
 function buildNetworkTransferRiskReason(
   uploadFiles: readonly string[],
   outputFiles: readonly string[],
+  usesAmbiguousStdinUpload = false,
 ): string {
   if (uploadFiles.some(isSensitivePath)) {
     return "This network command can send local sensitive files outside this machine.";
   }
   if (outputFiles.some((file) => isSensitivePath(file) || isSystemPath(file))) {
     return "This network command can overwrite sensitive or system paths.";
+  }
+  if (usesAmbiguousStdinUpload) {
+    return "This network command can send piped or redirected input outside this machine.";
   }
   if (uploadFiles.length > 0) {
     return "This network command can send local files outside this machine.";
