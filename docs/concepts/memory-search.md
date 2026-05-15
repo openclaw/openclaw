@@ -135,7 +135,17 @@ setup.
 
 You can optionally index session transcripts so `memory_search` can recall
 earlier conversations. This is opt-in via
-`memorySearch.experimental.sessionMemory`. See the
+`memorySearch.experimental.sessionMemory` and `sources: ["sessions"]`; the default
+source list is memory-only. The experimental flag enables session transcript
+indexing, while `sources` controls whether session chunks are searched.
+
+Session hits obey `tools.sessions.visibility`: the default `tree` setting only
+exposes the current session and sessions it spawned. To recall an unrelated
+same-agent gateway-dispatched session from a separate DM session, intentionally
+widen visibility to `agent`.
+
+When using QMD, also set `memory.qmd.sessions.enabled: true` so transcripts are
+exported into a QMD collection. See the
 [configuration reference](/reference/memory-config) for details.
 
 ## Troubleshooting
