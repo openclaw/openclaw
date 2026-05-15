@@ -995,7 +995,13 @@ describe("buildCodexMigrationProvider", () => {
           if (targetPluginListCalls === 1) {
             return pluginList([]);
           }
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+          return pluginList([
+            pluginSummary("openai-curated/google-calendar", {
+              name: "Google Calendar",
+              installed: true,
+              enabled: true,
+            }),
+          ]);
         }
         if (method === "plugin/install") {
           targetPluginListCallsAtInstall = targetPluginListCalls;

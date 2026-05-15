@@ -37,6 +37,7 @@ import {
   type CodexPluginActivationResult,
 } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
+import { findOpenAiCuratedPluginSummary } from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
@@ -310,29 +311,18 @@ async function requestTargetCodexAppServerJson(params: {
 }
 
 function hasRequestedOpenAiCuratedPlugin(response: unknown, pluginName: string): boolean {
-  if (!response || typeof response !== "object" || !("marketplaces" in response)) {
+  if (!isCodexPluginListResponse(response)) {
     return false;
   }
-  const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
-  if (!Array.isArray(marketplaces)) {
-    return false;
-  }
-  const marketplace = marketplaces.find(
-    (entry) =>
-      entry &&
-      typeof entry === "object" &&
-      (entry as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
-  if (!marketplace || typeof marketplace !== "object") {
-    return false;
-  }
-  const plugins = (marketplace as { plugins?: unknown }).plugins;
+  return findOpenAiCuratedPluginSummary(response, pluginName) !== undefined;
+}
+
+function isCodexPluginListResponse(response: unknown): response is v2.PluginListResponse {
   return (
-    Array.isArray(plugins) &&
-    plugins.some(
-      (plugin) =>
-        plugin && typeof plugin === "object" && (plugin as { name?: unknown }).name === pluginName,
-    )
+    !!response &&
+    typeof response === "object" &&
+    "marketplaces" in response &&
+    Array.isArray((response as { marketplaces?: unknown }).marketplaces)
   );
 }
 
