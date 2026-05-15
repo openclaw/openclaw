@@ -743,6 +743,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
 > = {
   delivery: {
     finalTrim: "both",
+    stripFunctionCallsXmlPayloads: true,
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",

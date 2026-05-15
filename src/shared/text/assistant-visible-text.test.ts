@@ -787,6 +787,17 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("strips adjacent plural function-call XML on the delivery path", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
   it("strips relevant-memories blocks on the canonical user-visible path", () => {
     const input = [
       "<relevant-memories>",
