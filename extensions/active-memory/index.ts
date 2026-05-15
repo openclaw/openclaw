@@ -44,6 +44,10 @@ const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
 const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
+// Slot ids whose memory plugin exposes the LanceDB recall contract
+// (memory_recall) rather than the OpenAI-memories defaults
+// (memory_search/memory_get). Keep in sync with new LanceDB-family plugins.
+const LANCEDB_MEMORY_SLOTS = new Set(["memory-lancedb", "memory-lancedb-pro"]);
 const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
 const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "*",
@@ -467,7 +471,8 @@ function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
 }
 
 function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
-  return cfg?.plugins?.slots?.memory === "memory-lancedb"
+  const slot = cfg?.plugins?.slots?.memory;
+  return typeof slot === "string" && LANCEDB_MEMORY_SLOTS.has(slot)
     ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
     : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
 }

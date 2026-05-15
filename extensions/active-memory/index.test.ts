@@ -1459,6 +1459,27 @@ describe("active-memory plugin", () => {
     expect(runParams.prompt).toContain("Configured memory tools: memory_recall.");
   });
 
+  it("uses memory_recall by default when the memory slot selects memory-lancedb-pro", async () => {
+    setMemorySlot("memory-lancedb-pro");
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = lastEmbeddedRunParams();
+    expect(runParams.toolsAllow).toEqual(["memory_recall"]);
+    expect(runParams.prompt).toContain("Configured memory tools: memory_recall.");
+  });
+
   it("keeps explicit custom memory tools authoritative when the memory slot selects LanceDB", async () => {
     setMemorySlot("memory-lancedb");
     api.pluginConfig = {
