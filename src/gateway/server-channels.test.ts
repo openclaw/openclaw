@@ -704,8 +704,8 @@ describe("server-channels auto restart", () => {
 
     expect(summary).toMatchObject({
       channelsAttempted: 2,
-      channelsStarted: 2,
-      channelsFailed: 0,
+      channelsStarted: 1,
+      channelsFailed: 1,
       channelsTimedOut: 0,
     });
     expect(summary.channelResults.map((result) => result.id)).toEqual(["discord", "slack"]);
@@ -1033,7 +1033,7 @@ describe("server-channels auto restart", () => {
     expect(summary.channelResults).toMatchObject([{ id: "discord", status: "started" }]);
   });
 
-  it("summarizes channel startup failures without throwing", async () => {
+  it("summarizes immediate channel startup rejections as failures", async () => {
     installTestRegistry(
       createTestPlugin({
         startAccount: vi.fn(() => new Promise<void>(() => {})),

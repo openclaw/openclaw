@@ -760,6 +760,29 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       : DEFAULT_CHANNEL_STARTUP_TIMEOUT_MS;
   };
 
+  const flushImmediateChannelFailure = async () => {
+    for (let i = 0; i < 4; i += 1) {
+      await Promise.resolve();
+    }
+  };
+
+  const getImmediateChannelFailure = (channelId: ChannelId): string | null => {
+    const accounts = getRuntimeSnapshot().channelAccounts[channelId];
+    if (!accounts) {
+      return null;
+    }
+    for (const account of Object.values(accounts)) {
+      if (account.running || account.restartPending || !account.lastError) {
+        continue;
+      }
+      if (account.lastError === "channel exited without an error") {
+        continue;
+      }
+      return account.lastError;
+    }
+    return null;
+  };
+
   const startChannelWithStartupTimeout = async (
     channelId: ChannelId,
   ): Promise<ChannelStartupResult> => {
@@ -776,6 +799,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           timer.unref?.();
         }),
       ]);
+      await flushImmediateChannelFailure();
+      const immediateFailure = getImmediateChannelFailure(channelId);
+      if (immediateFailure) {
+        ensureChannelLog(channelId).error?.(
+          `[${channelId}] channel startup failed: ${immediateFailure}`,
+        );
+        return {
+          id: channelId,
+          status: "failed",
+          durationMs: Date.now() - startedAt,
+          error: immediateFailure,
+        };
+      }
       return { id: channelId, status: "started", durationMs: Date.now() - startedAt };
     } catch (err) {
       const message = formatErrorMessage(err);

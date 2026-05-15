@@ -13,8 +13,11 @@ import {
   type DiagnosticStabilitySnapshot,
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
-import { resolveGatewayPort } from "../../config/paths.js";
-import { readGatewayStartupRuntimeState, resolveGatewayStartupRuntimeStatePath } from "../../gateway/startup-runtime-state.js";
+import {
+  readGatewayStartupRuntimeState,
+  resolveGatewayStartupReadiness,
+  resolveGatewayStartupRuntimeStatePath,
+} from "../../gateway/startup-runtime-state.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -402,15 +405,13 @@ function isProcessAlive(pid: number | null | undefined): boolean {
 }
 
 async function runGatewayStartupDoctor(opts: { json?: boolean }) {
-  const [{ readSourceConfigBestEffort }] = await Promise.all([loadConfigModule()]);
-  const cfg = await readSourceConfigBestEffort();
-  const port = resolveGatewayPort(cfg);
   const runtime = readGatewayStartupRuntimeState();
+  const port = runtime?.port ?? Number(process.env.OPENCLAW_GATEWAY_PORT ?? 18789);
   const runtimePidAlive = isProcessAlive(runtime?.pid);
-  const runtimeDetected = Boolean(runtime && runtime.port === port && runtimePidAlive);
-  const portListening = await probeTcpListening("127.0.0.1", port);
-  const httpHealthy = await probeHttpHealthy(port);
-  const controlUiHealthy = await probeControlUiHealthy(port);
+  const runtimeDetected = Boolean(runtime && runtimePidAlive);
+  const portListening = Number.isFinite(port) ? await probeTcpListening("127.0.0.1", port) : false;
+  const httpHealthy = Number.isFinite(port) ? await probeHttpHealthy(port) : false;
+  const controlUiHealthy = Number.isFinite(port) ? await probeControlUiHealthy(port) : false;
   const configuredSafeMode = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_SAFE_MODE);
   const notes: string[] = [];
   if (!runtimeDetected) {
@@ -418,12 +419,10 @@ async function runGatewayStartupDoctor(opts: { json?: boolean }) {
       "No running gateway runtime state detected; showing configured/default CLI-process state only.",
     );
   }
-  if (runtime && runtime.port !== port) {
-    notes.push(`Runtime state port ${String(runtime.port)} does not match configured port ${port}.`);
-  }
   if (runtime && !runtimePidAlive) {
     notes.push(`Runtime state pid ${runtime.pid} is not running.`);
   }
+  const readiness = resolveGatewayStartupReadiness(runtimeDetected ? runtime : null);
   const summary = {
     configuredSafeMode,
     effectiveSafeMode: runtimeDetected ? runtime?.safeMode === true : configuredSafeMode,
@@ -434,6 +433,7 @@ async function runGatewayStartupDoctor(opts: { json?: boolean }) {
     httpHealthy,
     controlUiHealthy,
     safeMode: runtimeDetected ? runtime?.safeMode === true : configuredSafeMode,
+    readiness,
     startupPhase: runtimeDetected ? runtime?.startupPhase ?? null : null,
     pluginsLoaded: runtimeDetected ? runtime?.pluginsLoaded ?? null : null,
     providersSkipped: runtimeDetected
@@ -453,7 +453,7 @@ async function runGatewayStartupDoctor(opts: { json?: boolean }) {
         : null,
     bonjourDisabled: runtimeDetected
       ? runtime?.bonjourDisabled ?? null
-      : isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) || cfg.discovery?.mdns?.mode === "off",
+      : isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR),
     modelPricingStartupFetchEnabled:
       runtimeDetected && typeof runtime?.modelPricingStartupDisabled === "boolean"
         ? !runtime.modelPricingStartupDisabled

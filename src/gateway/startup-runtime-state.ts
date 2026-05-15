@@ -9,6 +9,14 @@ export type GatewayStartupChannelResult = {
   error?: string;
 };
 
+export type GatewayStartupReadiness = {
+  httpReady: boolean;
+  sidecarsReady: boolean;
+  fullyReady: boolean;
+  phase: string;
+  message: string;
+};
+
 export type GatewayStartupRuntimeState = {
   pid: number;
   port?: number;
@@ -71,18 +79,64 @@ export function createGatewayStartupRuntimeState(params: {
   };
 }
 
+const REDACTED = "[REDACTED]";
+const MAX_STARTUP_STATE_STRING_LENGTH = 500;
+
+export function redactStartupRuntimeText(value: string): string {
+  return value
+    .replace(/\b(authorization\s*:\s*bearer)\s+[^\s,;"'}\]]+/gi, `$1 ${REDACTED}`)
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, `Bearer ${REDACTED}`)
+    .replace(/\b(token|access_token|refresh_token|api_key|apikey|secret|password|passwd)\s*=\s*[^\s,;"'}\]]+/gi, `$1=${REDACTED}`)
+    .replace(/\b(password|pwd)\s*[:=]\s*[^\s,;"'}\]]+/gi, `$1=${REDACTED}`)
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+):([^\s/@]+)@/gi, `$1${REDACTED}:${REDACTED}@`)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
+    .replace(/\b(openclaw\.json|OPENCLAW_[A-Z0-9_]*|gateway\.auth|secrets?\.[A-Za-z0-9_.-]+)\b[^\n\r]{0,120}/gi, `$1 ${REDACTED}`);
+}
+
+function sanitizeStartupRuntimeText(value: string): string {
+  return redactStartupRuntimeText(value).slice(0, MAX_STARTUP_STATE_STRING_LENGTH);
+}
+
+export function resolveGatewayStartupReadiness(
+  state: GatewayStartupRuntimeState | null,
+): GatewayStartupReadiness {
+  if (!state) {
+    return {
+      httpReady: false,
+      sidecarsReady: false,
+      fullyReady: false,
+      phase: "unknown",
+      message: "No running gateway runtime state detected.",
+    };
+  }
+  const phase = state.startupPhase ?? "unknown";
+  const httpReady = phase === "http-ready" || phase === "sidecars-ready" || phase === "ready";
+  const sidecarsReady = phase === "sidecars-ready" || phase === "ready" || state.channelsSkipped;
+  const fullyReady = httpReady && sidecarsReady && state.channelsTimedOut === 0 && state.errors.length === 0;
+  const problemCount = state.channelsFailed + state.channelsTimedOut + state.errors.length;
+  const mode = state.safeMode ? "safe mode" : "normal mode";
+  const message = fullyReady
+    ? `Gateway ${mode} startup is ready.`
+    : phase === "http-ready"
+      ? "Gateway HTTP is ready; sidecars/channels are still starting."
+      : problemCount > 0
+        ? `Gateway startup has ${problemCount} warning/error condition(s).`
+        : `Gateway startup phase is ${phase}.`;
+  return { httpReady, sidecarsReady, fullyReady, phase, message };
+}
+
 function sanitizeRuntimeState(state: GatewayStartupRuntimeState): GatewayStartupRuntimeState {
-  const sanitizeText = (value: string): string => value.slice(0, 500);
   return {
     ...state,
+    startupPhase: state.startupPhase ? sanitizeStartupRuntimeText(state.startupPhase) : undefined,
     channelResults: state.channelResults.map((result) => ({
-      id: sanitizeText(result.id),
+      id: sanitizeStartupRuntimeText(result.id),
       status: result.status,
       ...(typeof result.durationMs === "number" ? { durationMs: result.durationMs } : {}),
-      ...(result.error ? { error: sanitizeText(result.error) } : {}),
+      ...(result.error ? { error: sanitizeStartupRuntimeText(result.error) } : {}),
     })),
-    warnings: state.warnings.map(sanitizeText).slice(0, 50),
-    errors: state.errors.map(sanitizeText).slice(0, 50),
+    warnings: state.warnings.map(sanitizeStartupRuntimeText).slice(0, 50),
+    errors: state.errors.map(sanitizeStartupRuntimeText).slice(0, 50),
     updatedAt: new Date().toISOString(),
   };
 }
