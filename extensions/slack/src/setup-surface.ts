@@ -3,7 +3,7 @@ import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   resolveEntriesWithOptionalToken,
-  t,
+  createSetupTranslator,
   type OpenClawConfig,
   parseMentionOrPrefixedId,
   promptLegacyChannelAllowFromForAccount,
@@ -24,6 +24,8 @@ import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { createSlackSetupWizardBase } from "./setup-core.js";
 import { SLACK_CHANNEL as channel } from "./shared.js";
+
+const t = createSetupTranslator();
 
 async function resolveSlackAllowFromEntries(params: {
   token?: string;

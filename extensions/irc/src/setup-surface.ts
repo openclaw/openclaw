@@ -7,11 +7,11 @@ import type {
 import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
+  createSetupTranslator,
   createStandardChannelSetupStatus,
   formatDocsLink,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
-import { t } from "openclaw/plugin-sdk/setup-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -32,6 +32,8 @@ import {
   updateIrcAccountConfig,
 } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "irc" as const;
 const USE_ENV_FLAG = "__ircUseEnv";

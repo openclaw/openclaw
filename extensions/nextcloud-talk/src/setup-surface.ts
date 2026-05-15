@@ -4,7 +4,7 @@ import {
   createStandardChannelSetupStatus,
   formatDocsLink,
   setSetupChannelEnabled,
-  t,
+  createSetupTranslator,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,6 +17,8 @@ import {
   validateNextcloudTalkBaseUrl,
 } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "nextcloud-talk" as const;
 const CONFIGURE_API_FLAG = "__nextcloudTalkConfigureApiCredentials";

@@ -14,7 +14,7 @@ import {
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
-  t,
+  createSetupTranslator,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -22,6 +22,8 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultIMessageAccountId, resolveIMessageAccount } from "./accounts.js";
 import { normalizeIMessageHandle } from "./targets.js";
+
+const t = createSetupTranslator();
 
 const channel = "imessage" as const;
 

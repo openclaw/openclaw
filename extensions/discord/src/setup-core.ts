@@ -1,7 +1,10 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
-import { createStandardChannelSetupStatus, t } from "openclaw/plugin-sdk/setup-runtime";
+import {
+  createSetupTranslator,
+  createStandardChannelSetupStatus,
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -17,8 +20,9 @@ import {
   setSetupChannelEnabled,
 } from "./setup-runtime-helpers.js";
 
-const channel = "discord" as const;
+const t = createSetupTranslator();
 
+const channel = "discord" as const;
 const DISCORD_TOKEN_HELP_LINES = [
   t("wizard.discord.tokenHelpCreateApplication"),
   t("wizard.discord.tokenHelpCopyToken"),

@@ -4,7 +4,7 @@ import {
   createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
   splitSetupEntries,
-  t,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
@@ -19,6 +19,8 @@ import {
 } from "./resolve-allowlist.js";
 import { createMSTeamsSetupWizardBase } from "./setup-core.js";
 import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
+
+const t = createSetupTranslator();
 
 const channel = "msteams" as const;
 const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({

@@ -10,6 +10,8 @@ import type {
 
 export type { WizardI18nParams, WizardLocale, WizardTranslationMap };
 
+export type SetupTranslator = (key: string, params?: WizardI18nParams) => string;
+
 const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
   en,
   "zh-CN": zh_CN,
@@ -79,6 +81,20 @@ export function wizardT(
 }
 
 export const t = wizardT;
+
+export function createSetupTranslator(options?: {
+  locale?: WizardLocale;
+  keyPrefix?: string;
+}): SetupTranslator {
+  const normalizedPrefix = options?.keyPrefix?.replace(/\.$/, "");
+  return (key, params) => {
+    const resolvedKey =
+      normalizedPrefix && !key.startsWith("common.") && !key.startsWith("wizard.")
+        ? `${normalizedPrefix}.${key}`
+        : key;
+    return wizardT(resolvedKey, params, { locale: options?.locale });
+  };
+}
 
 function collectLeafKeys(tree: WizardTranslationTree, prefix = "", out: string[] = []): string[] {
   for (const [key, value] of Object.entries(tree)) {

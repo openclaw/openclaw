@@ -1,9 +1,9 @@
 import {
+  createSetupTranslator,
   createDetectedBinaryStatus,
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { t } from "openclaw/plugin-sdk/setup-runtime";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
@@ -14,8 +14,9 @@ import {
   signalNumberTextInput,
 } from "./setup-core.js";
 
-const channel = "signal" as const;
+const t = createSetupTranslator();
 
+const channel = "signal" as const;
 export const signalSetupWizard: ChannelSetupWizard = {
   channel,
   status: createDetectedBinaryStatus({

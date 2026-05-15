@@ -4,7 +4,7 @@ import {
   applySetupAccountConfigPatch,
   createStandardChannelSetupStatus,
   formatDocsLink,
-  t,
+  createSetupTranslator,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import {
@@ -14,6 +14,8 @@ import {
 } from "./setup-core.js";
 import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
 import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
+
+const t = createSetupTranslator();
 
 const channel = "mattermost" as const;
 export { mattermostSetupAdapter } from "./setup-core.js";

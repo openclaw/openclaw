@@ -1,5 +1,5 @@
 import {
-  t,
+  createSetupTranslator,
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
@@ -18,6 +18,8 @@ import {
   resolveEntriesWithOptionalToken,
 } from "./setup-runtime-helpers.js";
 import { resolveDiscordToken } from "./token.js";
+
+const t = createSetupTranslator();
 
 const channel = "discord" as const;
 

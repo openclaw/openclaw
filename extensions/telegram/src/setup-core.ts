@@ -4,13 +4,15 @@ import {
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
-  t,
+  createSetupTranslator,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramSenderUserId } from "./allow-from.js";
+
+const t = createSetupTranslator();
 
 const channel = "telegram" as const;
 

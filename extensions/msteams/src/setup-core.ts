@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
-  t,
+  createSetupTranslator,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
@@ -10,6 +10,8 @@ import {
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
+
+const t = createSetupTranslator();
 
 export const msteamsSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: () => DEFAULT_ACCOUNT_ID,

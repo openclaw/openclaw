@@ -5,12 +5,14 @@ import {
   createDelegatedSetupWizardProxy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
-  t,
+  createSetupTranslator,
   type ChannelSetupAdapter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
+
+const t = createSetupTranslator();
 
 const channel = "nostr" as const;
 

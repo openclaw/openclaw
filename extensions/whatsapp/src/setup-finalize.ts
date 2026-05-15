@@ -3,7 +3,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   pathExists,
   splitSetupEntries,
-  t,
+  createSetupTranslator,
   type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
@@ -19,6 +19,8 @@ import {
   normalizeWhatsAppAllowFromEntry,
 } from "./normalize-target.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
+
+const t = createSetupTranslator();
 
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["runtime"];

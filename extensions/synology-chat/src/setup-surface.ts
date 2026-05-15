@@ -1,5 +1,6 @@
 import {
   createAllowFromSection,
+  createSetupTranslator,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -11,10 +12,11 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { t } from "openclaw/plugin-sdk/setup-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "synology-chat" as const;
 const DEFAULT_WEBHOOK_PATH = "/webhook/synology";

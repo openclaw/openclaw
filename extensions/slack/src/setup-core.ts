@@ -10,7 +10,7 @@ import {
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
-  t,
+  createSetupTranslator,
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
@@ -30,6 +30,8 @@ import {
   SLACK_CHANNEL as channel,
   setSlackChannelAllowlist,
 } from "./setup-shared.js";
+
+const t = createSetupTranslator();
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchChannelConfigForAccount({

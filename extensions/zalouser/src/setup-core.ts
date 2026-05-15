@@ -1,9 +1,11 @@
 import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
-  t,
+  createSetupTranslator,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
+
+const t = createSetupTranslator();
 
 const channel = "zalouser" as const;
 

@@ -6,7 +6,7 @@ import {
   patchTopLevelChannelConfigSection,
   promptSingleChannelSecretInput,
   splitSetupEntries,
-  t,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type DmPolicy,
@@ -16,6 +16,8 @@ import {
 import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import type { AppRegistrationResult } from "./app-registration.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "feishu" as const;
 const SCAN_TO_CREATE_TP = "ob_cli_app";

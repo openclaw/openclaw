@@ -8,11 +8,13 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
   type SecretInput,
-  t,
+  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
 import { resolveZaloAccount } from "./accounts.js";
 import { noteZaloTokenHelp, promptZaloAllowFrom } from "./setup-allow-from.js";
 import { zaloDmPolicy } from "./setup-core.js";
+
+const t = createSetupTranslator();
 
 const channel = "zalo" as const;
 

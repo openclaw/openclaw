@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WIZARD_SUPPORTED_LOCALES,
+  createSetupTranslator,
   listWizardI18nKeys,
   resolveWizardLocale,
   resolveWizardLocaleFromEnv,
@@ -39,6 +40,15 @@ describe("wizard i18n", () => {
         { locale: "en" },
       ),
     ).toBe('Endpoint ID "custom" already exists for a different base URL. Using "custom-2".');
+  });
+
+  it("creates scoped setup translators without exporting a generic SDK t helper", () => {
+    const telegramT = createSetupTranslator({
+      keyPrefix: "wizard.telegram",
+      locale: "zh-CN",
+    });
+    expect(telegramT("botToken")).toBe("Telegram bot token");
+    expect(telegramT("wizard.gateway.port")).toBe("Gateway 端口");
   });
 
   it("keeps shipped locale keys aligned with English", () => {

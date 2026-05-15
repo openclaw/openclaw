@@ -5,12 +5,14 @@ import {
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-  t,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 import { promptZaloAllowFrom } from "./setup-allow-from.js";
+
+const t = createSetupTranslator();
 
 const channel = "zalo" as const;
 

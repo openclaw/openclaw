@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
 import {
+  createSetupTranslator,
   createStandardChannelSetupStatus,
   createTopLevelChannelDmPolicy,
   createTopLevelChannelParsedAllowFromPrompt,
@@ -15,13 +16,13 @@ import {
   patchTopLevelChannelConfigSection,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import { t } from "openclaw/plugin-sdk/setup-runtime";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
-const channel = "nostr" as const;
+const t = createSetupTranslator();
 
+const channel = "nostr" as const;
 const NOSTR_SETUP_HELP_LINES = [
   t("wizard.nostr.helpPrivateKeyFormat"),
   t("wizard.nostr.helpRelaysOptional"),

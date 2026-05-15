@@ -7,7 +7,7 @@ import {
   mergeAllowFromEntries,
   normalizeAccountId,
   patchScopedAccountConfig,
-  t,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type DmPolicy,
@@ -27,6 +27,8 @@ import {
   startZaloQrLogin,
   waitForZaloQrLogin,
 } from "./zalo-js.js";
+
+const t = createSetupTranslator();
 
 const channel = "zalouser" as const;
 const ZALOUSER_ALLOW_FROM_PLACEHOLDER = t("wizard.zalouser.allowFromPlaceholder");

@@ -1,4 +1,4 @@
-import { t } from "openclaw/plugin-sdk/setup-runtime";
+import { createSetupTranslator } from "openclaw/plugin-sdk/setup-runtime";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
@@ -8,6 +8,8 @@ import {
 import { normalizeShip } from "./targets.js";
 import { resolveTlonAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
+
+const t = createSetupTranslator();
 
 function parseList(value: string): string[] {
   return value

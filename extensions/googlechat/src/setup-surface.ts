@@ -8,7 +8,7 @@ import {
   mergeAllowFromEntries,
   migrateBaseNameToDefaultAccount,
   splitSetupEntries,
-  t,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
@@ -17,6 +17,8 @@ import {
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultGoogleChatAccountId, resolveGoogleChatAccount } from "./accounts.js";
+
+const t = createSetupTranslator();
 
 const channel = "googlechat" as const;
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";

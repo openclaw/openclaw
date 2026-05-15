@@ -2,7 +2,7 @@ import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
   mergeAllowFromEntries,
-  t,
+  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultLineAccountId } from "./accounts.js";
@@ -21,6 +21,8 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "./setup-runtime-api.js";
+
+const t = createSetupTranslator();
 
 const channel = "line" as const;
 

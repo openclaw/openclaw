@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runSearchSetupFlow } from "./search-setup.js";
 
 const mockGrokProvider = vi.hoisted(() => ({
@@ -250,8 +251,15 @@ describe("runSearchSetupFlow", () => {
       select: select as never,
     });
 
-    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter, {
-      secretInputMode: "ref",
+    await withEnvAsync({ XAI_API_KEY: undefined }, async () => {
+      await runSearchSetupFlow(
+        { plugins: { allow: ["xai"] } },
+        createNonExitingRuntime(),
+        prompter,
+        {
+          secretInputMode: "ref",
+        },
+      );
     });
 
     expect(note).toHaveBeenNthCalledWith(

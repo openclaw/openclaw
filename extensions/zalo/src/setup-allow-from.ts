@@ -1,13 +1,15 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  createSetupTranslator,
   formatDocsLink,
   mergeAllowFromEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { t } from "openclaw/plugin-sdk/setup-runtime";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
+
+const t = createSetupTranslator();
 
 type ZaloAccountSetupConfig = {
   enabled?: boolean;

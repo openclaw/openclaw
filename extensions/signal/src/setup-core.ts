@@ -15,7 +15,7 @@ import {
   type ChannelSetupWizard,
   type ChannelSetupWizardTextInput,
   type OpenClawConfig,
-  t,
+  createSetupTranslator,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
@@ -25,6 +25,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
+
+const t = createSetupTranslator();
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;

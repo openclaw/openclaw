@@ -10,7 +10,7 @@ import {
   mergeAllowFromEntries,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
-  t,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -18,6 +18,8 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "nextcloud-talk" as const;
 

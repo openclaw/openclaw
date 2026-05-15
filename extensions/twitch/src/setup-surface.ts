@@ -12,7 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
   normalizeAccountId,
-  t,
+  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -25,6 +25,7 @@ import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 const channel = "twitch" as const;
+const t = createSetupTranslator();
 const INVALID_ACCOUNT_ID_MESSAGE = "Invalid Twitch account id";
 
 function normalizeRequestedSetupAccountId(accountId: string): string {

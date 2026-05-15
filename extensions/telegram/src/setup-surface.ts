@@ -6,7 +6,7 @@ import {
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
-  t,
+  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -23,6 +23,8 @@ import {
   shouldShowTelegramDmAccessWarning,
   telegramSetupDmPolicy,
 } from "./setup-surface.helpers.js";
+
+const t = createSetupTranslator();
 
 const channel = "telegram" as const;
 

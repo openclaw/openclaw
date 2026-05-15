@@ -4,13 +4,13 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
+  createSetupTranslator,
   createSetupInputPresenceValidator,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { t } from "openclaw/plugin-sdk/setup-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -19,6 +19,8 @@ import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-f
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
+
+const t = createSetupTranslator();
 
 function tlonChannelId() {
   return "tlon" as const;
