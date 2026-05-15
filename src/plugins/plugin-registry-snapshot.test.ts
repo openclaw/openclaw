@@ -162,6 +162,29 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
+  it("keeps vanished recovered install records on the persisted fast path", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const goneDir = path.join(tempRoot, "gone");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    writePersistedInstalledPluginIndexSync(
+      {
+        ...loadInstalledPluginIndex({ config: {}, env, stateDir, installRecords: {} }),
+        installRecords: { gone: { source: "npm", spec: "gone@1.0.0", installPath: goneDir } },
+      },
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+  });
+
   it("keeps persisted manifestless Claude bundles on the fast path", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");

@@ -80,6 +80,21 @@ describe("formatMigrationPreview", () => {
     expect(output).not.toContain("Config:");
     expect(output).not.toContain("codex-plugins-root");
   });
+
+  it("renders migration warnings with a warning glyph", () => {
+    const output = formatMigrationPreview({
+      ...plan([skillItem(1)]),
+      warnings: [
+        "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
+      ],
+    })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain(
+      "⚠️  Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
+    );
+  });
 });
 
 describe("formatMigrationResult", () => {
@@ -101,6 +116,43 @@ describe("formatMigrationResult", () => {
 
     expect(output).toContain("❌");
     expect(output).toContain("Plugin not found in the Codex marketplace");
+  });
+
+  it("renders warning plugin items under the plugin section", () => {
+    const output = formatMigrationResult(
+      plan([
+        {
+          ...pluginItem("google-calendar"),
+          status: "warning",
+          reason: "marketplace_missing",
+          message: 'Codex plugin "google-calendar" could not be migrated automatically',
+        },
+      ]),
+    )
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain("Plugins:");
+    expect(output).not.toContain("Manual review:");
+    expect(output).toContain("⚠️");
+    expect(output).toContain(
+      'google-calendar (Codex plugin "google-calendar" could not be migrated automatically)',
+    );
+  });
+
+  it("renders warning-backed next steps with a warning glyph", () => {
+    const warning =
+      "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.";
+    const output = formatMigrationResult({
+      ...plan([{ ...pluginItem("google-calendar"), status: "warning" }]),
+      warnings: [warning],
+      nextSteps: [warning, "Run openclaw doctor after applying the migration."],
+    })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain(`⚠️  ${warning}`);
+    expect(output).toContain("• Run openclaw doctor after applying the migration.");
   });
 
   it("says (Skipped) for user-deselected skill/plugin items", () => {

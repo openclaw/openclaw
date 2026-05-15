@@ -67,6 +67,7 @@ Skills own workflows; root owns hard policy and routing.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
 - One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
+- Pre-land/pre-commit code changes: use `$codex-review` until no accepted/actionable findings remain, unless equivalent manual review already done, trivial/docs-only, or user opts out.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
@@ -85,13 +86,14 @@ Skills own workflows; root owns hard policy and routing.
 - PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
 - Issue fixed on `main` with proof: comment proof + commit/PR, then close.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
+- After landing/ship final: include 2-5 sentence recap of what landed: behavior change, key files/surface, proof run, issue/PR state. Do not answer with only status/links.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
 - Real behavior proof section is parsed. Use exact `field: value` labels: `Behavior addressed`, `Real environment tested`, `Exact steps or command run after this patch`, `Evidence after fix`, `Observed result after fix`, `What was not tested`.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
-- Maintainers: ignore `Real behavior proof` failures that only say PR body lacks real after-fix evidence.
+- Maintainers: may skip/ignore `Real behavior proof` when local tests or Crabbox verified behavior; record proof in PR verification.
 - `/landpr`: use `~/.codex/prompts/landpr.md`; do not idle on `auto-response` or `check-docs`.
 
 ## Code

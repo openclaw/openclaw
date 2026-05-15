@@ -15,6 +15,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
@@ -400,11 +401,11 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? buildInboundHistoryFromMap({
+          historyMap: groupHistories,
+          historyKey,
+          limit: historyLimit,
+        })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
@@ -414,6 +415,7 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const commandSource = options?.commandSource;
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -465,6 +467,20 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
+    command:
+      commandSource === "native"
+        ? {
+            kind: "native",
+            authorized: commandAuthorized,
+            body: commandBody,
+          }
+        : commandSource === "text"
+          ? {
+              kind: "text-slash",
+              authorized: commandAuthorized,
+              body: commandBody,
+            }
+          : undefined,
     media: contextMedia.map((media, index) => ({
       path: media.path,
       url: media.path,
@@ -523,7 +539,6 @@ export async function buildTelegramInboundContextPayload(params: {
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
       ...locationContext,
-      CommandSource: options?.commandSource,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },

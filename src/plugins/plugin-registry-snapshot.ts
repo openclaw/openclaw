@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
@@ -205,12 +206,23 @@ function loadSnapshotInstallRecords(params: LoadPluginRegistryParams, env: NodeJ
 function hasRecoveredInstallRecordsMissingFromPersistedIndex(
   index: InstalledPluginIndex,
   installRecords: ReturnType<typeof loadInstalledPluginIndexInstallRecordsSync>,
+  env: NodeJS.ProcessEnv,
 ): boolean {
   const persistedRecords = extractPluginInstallRecordsFromInstalledPluginIndex(index);
   const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
-  return Object.keys(installRecords).some(
-    (pluginId) => !persistedRecords[pluginId] || !persistedPluginIds.has(pluginId),
-  );
+  return Object.entries(installRecords).some(([pluginId, record]) => {
+    if (persistedRecords[pluginId] && persistedPluginIds.has(pluginId)) {
+      return false;
+    }
+    const installPaths = [record.installPath, record.sourcePath].filter(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && candidate.trim().length > 0,
+    );
+    if (installPaths.length === 0) {
+      return true;
+    }
+    return installPaths.some((installPath) => fs.existsSync(resolveUserPath(installPath, env)));
+  });
 }
 
 export function loadPluginRegistrySnapshotWithMetadata(
@@ -276,6 +288,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
         hasRecoveredInstallRecordsMissingFromPersistedIndex(
           persistedIndex,
           loadSnapshotInstallRecords(params, env),
+          env,
         )
       ) {
         diagnostics.push({

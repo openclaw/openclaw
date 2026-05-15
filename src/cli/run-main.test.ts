@@ -114,6 +114,10 @@ describe("shouldEnsureCliPath", () => {
   it("skips path bootstrap for read-only fast paths", () => {
     expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "approvals"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "channels"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "cron"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "devices"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "plugins"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "mcp"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "status"])).toBe(false);
@@ -176,6 +180,7 @@ describe("shouldStartProxyForCli", () => {
   it("skips managed proxy routing for bare parent default help", () => {
     expect(shouldStartProxyForCli(["node", "openclaw", "plugins"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "channels"])).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "cron"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "devices"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "mcp"])).toBe(false);
   });
