@@ -3,6 +3,7 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
+import type { CommandTurnContext } from "openclaw/plugin-sdk/channel-inbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -417,16 +418,16 @@ export async function processMessage(params: {
         policy: inboundPolicy,
       })
     : undefined;
-  const commandTurn = isTextCommand
+  const commandTurn: CommandTurnContext = isTextCommand
     ? {
-        kind: "text-slash" as const,
-        source: "text" as const,
+        kind: "text-slash",
+        source: "text",
         authorized: Boolean(commandAuthorized),
         body: params.msg.body,
       }
     : {
-        kind: "normal" as const,
-        source: "message" as const,
+        kind: "normal",
+        source: "message",
         authorized: false,
         body: params.msg.body,
       };

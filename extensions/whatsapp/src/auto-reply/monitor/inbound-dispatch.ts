@@ -308,15 +308,29 @@ function normalizeCommandTurnFromContext(value: unknown): CommandTurnContext | u
   const record = value as Partial<CommandTurnContext>;
   const kind = record.kind;
   const source = record.source;
-  if (
-    (kind === "native" || kind === "text-slash" || kind === "normal") &&
-    (source === "native" || source === "text" || source === "message") &&
-    typeof record.authorized === "boolean"
-  ) {
+  if (kind === "native" && source === "native" && typeof record.authorized === "boolean") {
     return {
-      kind,
-      source,
+      kind: "native",
+      source: "native",
       authorized: record.authorized,
+      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
+      body: typeof record.body === "string" ? record.body : undefined,
+    };
+  }
+  if (kind === "text-slash" && source === "text" && typeof record.authorized === "boolean") {
+    return {
+      kind: "text-slash",
+      source: "text",
+      authorized: record.authorized,
+      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
+      body: typeof record.body === "string" ? record.body : undefined,
+    };
+  }
+  if (kind === "normal" && source === "message") {
+    return {
+      kind: "normal",
+      source: "message",
+      authorized: false,
       commandName: typeof record.commandName === "string" ? record.commandName : undefined,
       body: typeof record.body === "string" ? record.body : undefined,
     };

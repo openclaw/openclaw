@@ -1,7 +1,6 @@
 import {
   type BuildChannelTurnContextParams,
   type BuiltChannelTurnContext,
-  type CommandTurnContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   toLocationContext,
@@ -467,14 +466,22 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
-    commandTurn: commandSource
-      ? ({
-          kind: commandSource === "native" ? "native" : "text-slash",
-          source: commandSource,
-          authorized: commandAuthorized,
-          body: commandBody,
-        } satisfies CommandTurnContext)
-      : undefined,
+    commandTurn:
+      commandSource === "native"
+        ? {
+            kind: "native",
+            source: "native",
+            authorized: commandAuthorized,
+            body: commandBody,
+          }
+        : commandSource === "text"
+          ? {
+              kind: "text-slash",
+              source: "text",
+              authorized: commandAuthorized,
+              body: commandBody,
+            }
+          : undefined,
     media: contextMedia.map((media, index) => ({
       path: media.path,
       url: media.path,
