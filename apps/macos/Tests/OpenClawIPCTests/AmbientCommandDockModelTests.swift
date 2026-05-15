@@ -56,4 +56,18 @@ struct AmbientCommandDockModelTests {
         model.inputText = "/canvas"
         #expect(!model.shouldAcceptSuggestionOnReturn)
     }
+
+    @Test func `clear command clears composer without leaving result text`() async {
+        let model = AmbientCommandDockModel(
+            registry: .default,
+            actions: AmbientCommandDockActionExecutor(environment: .testing()))
+        model.result = .info("Older result")
+        model.inputText = "/clear"
+
+        await model.submit()
+
+        #expect(model.inputText == "")
+        #expect(model.result == .none)
+        #expect(model.thomasState == .ready)
+    }
 }

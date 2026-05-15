@@ -102,6 +102,11 @@ final class AmbientCommandDockModel {
     }
 
     private func submitCommand(name: String, arguments: String) async {
+        if self.registry.command(named: name)?.name == "clear" {
+            self.clear()
+            return
+        }
+
         self.isSubmitting = true
         self.thomasState = .sending
         let outcome = await self.actions.execute(name: name, arguments: arguments)
