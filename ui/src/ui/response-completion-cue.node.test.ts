@@ -2,12 +2,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isSilentAssistantCompletion,
+  resetResponseCompletionCueDedupeForTests,
   shouldSignalResponseCompletion,
   signalResponseCompletion,
 } from "./response-completion-cue.ts";
 
 describe("response completion cue", () => {
   afterEach(() => {
+    resetResponseCompletionCueDedupeForTests();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -26,6 +29,24 @@ describe("response completion cue", () => {
       shouldSignalResponseCompletion(
         { responseCompletionSound: true },
         { message: { role: "assistant", text: "NO_REPLY" } },
+      ),
+    ).toBe(false);
+  });
+
+  it("skips finals without visible output", () => {
+    expect(
+      shouldSignalResponseCompletion(
+        { responseCompletionSound: true, responseCompletionOnlyWhenHidden: false },
+        { visibleOutput: false },
+      ),
+    ).toBe(false);
+  });
+
+  it("skips silent stream-only finals", () => {
+    expect(
+      shouldSignalResponseCompletion(
+        { responseCompletionSound: true, responseCompletionOnlyWhenHidden: false },
+        { streamText: "NO_REPLY", visibleOutput: true },
       ),
     ).toBe(false);
   });
@@ -56,6 +77,49 @@ describe("response completion cue", () => {
         responseCompletionOnlyWhenHidden: true,
       }),
     ).toBe(true);
+  });
+
+  it("deduplicates repeated cues for the same run", () => {
+    const playCount = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.stubGlobal("AudioContext", class {
+      state = "running";
+      currentTime = 0;
+      destination = {};
+      createGain() {
+        return {
+          gain: {
+            setValueAtTime() {},
+            exponentialRampToValueAtTime() {},
+          },
+          connect() {},
+        };
+      }
+      createOscillator() {
+        return {
+          type: "sine",
+          frequency: { setValueAtTime() {} },
+          connect() {},
+          start: playCount,
+          stop() {},
+        };
+      }
+      close() {
+        return Promise.resolve();
+      }
+    });
+    vi.stubGlobal("window", { setTimeout: vi.fn() });
+
+    signalResponseCompletion(
+      { responseCompletionSound: true, responseCompletionOnlyWhenHidden: false },
+      { runId: "run-1", visibleOutput: true, streamText: "Done" },
+    );
+    signalResponseCompletion(
+      { responseCompletionSound: true, responseCompletionOnlyWhenHidden: false },
+      { runId: "run-1", visibleOutput: true, streamText: "Done" },
+    );
+
+    expect(playCount).toHaveBeenCalledTimes(2);
   });
 
   it("does not use browser notifications for response completion cues", () => {

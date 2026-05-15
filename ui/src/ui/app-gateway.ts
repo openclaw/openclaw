@@ -563,6 +563,7 @@ function handleTerminalChatEvent(
   payload: ChatEventPayload | undefined,
   state: ReturnType<typeof handleChatEvent>,
   activeRunIdBeforeEvent: string | null,
+  visibleStateBeforeEvent: { chatMessagesLength: number; chatStream: string | null },
 ): boolean {
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return false;
@@ -584,6 +585,11 @@ function handleTerminalChatEvent(
     signalResponseCompletion(host.settings, {
       message: payload?.message,
       assistantName: host.assistantName,
+      runId,
+      streamText: visibleStateBeforeEvent.chatStream,
+      visibleOutput:
+        host.chatMessages.length > visibleStateBeforeEvent.chatMessagesLength ||
+        Boolean(visibleStateBeforeEvent.chatStream?.trim()),
     });
   }
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
@@ -636,12 +642,22 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     return;
   }
   const activeRunIdBeforeEvent = host.chatRunId;
+  const visibleStateBeforeEvent = {
+    chatMessagesLength: host.chatMessages.length,
+    chatStream: host.chatStream,
+  };
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const terminalEventIsForDifferentActiveRun = isEventForDifferentActiveRun(
     payload,
     activeRunIdBeforeEvent,
   );
-  const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent);
+  const historyReloaded = handleTerminalChatEvent(
+    host,
+    payload,
+    state,
+    activeRunIdBeforeEvent,
+    visibleStateBeforeEvent,
+  );
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
