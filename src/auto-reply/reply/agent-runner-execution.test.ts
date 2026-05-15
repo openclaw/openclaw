@@ -3112,6 +3112,80 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it.each(["group", "channel"] as const)(
+    "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
+    async (chatType) => {
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+      );
+
+      const followupRun = createFollowupRun();
+      followupRun.run.config = {
+        agents: {
+          defaults: {
+            silentReply: { group: "disallow" },
+          },
+        },
+      };
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      }
+    },
+  );
+
+  it.each(["group", "channel"] as const)(
+    "keeps default silent behavior in Discord %s chats when silentReply policy is unset",
+    async (chatType) => {
+      // Sanity check: explicit `{}` config (no silentReply) must still resolve
+      // to the documented default `group: "allow"` and produce a silent payload
+      // — the new policy hookup must not regress the default behavior.
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+      );
+
+      const followupRun = createFollowupRun();
+      followupRun.run.config = {};
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      }
+    },
+  );
+
   it("uses compact generic copy for raw runner failures in normal Discord direct chats", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
