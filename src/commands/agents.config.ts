@@ -155,7 +155,30 @@ export function pruneAgentConfig(
 } {
   const id = normalizeAgentId(agentId);
   const agents = listAgentEntries(cfg);
-  const nextAgentsList = agents.filter((entry) => normalizeAgentId(entry.id) !== id);
+  const nextAgentsList: typeof agents = [];
+  for (const entry of agents) {
+    if (normalizeAgentId(entry.id) === id) {
+      continue;
+    }
+    const perAgentAllow = entry.tools?.agentToAgent?.allow;
+    if (!Array.isArray(perAgentAllow)) {
+      nextAgentsList.push(entry);
+      continue;
+    }
+    const filteredPerAgentAllow = perAgentAllow.filter(
+      (allowEntry) => normalizeAgentId(allowEntry) !== id,
+    );
+    nextAgentsList.push({
+      ...entry,
+      tools: {
+        ...entry.tools,
+        agentToAgent: {
+          ...entry.tools?.agentToAgent,
+          allow: filteredPerAgentAllow,
+        },
+      },
+    });
+  }
   const nextAgents = nextAgentsList.length > 0 ? nextAgentsList : undefined;
 
   const bindings = cfg.bindings ?? [];
