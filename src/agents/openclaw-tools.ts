@@ -322,8 +322,7 @@ export function createOpenClawTools(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
-  const includeMessageTool =
-    Boolean(messageTool) && (!embedded || options?.sourceReplyDeliveryMode === "message_tool_only");
+  const includeMessageTool = !embedded || options?.sourceReplyDeliveryMode === "message_tool_only";
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
@@ -358,7 +357,7 @@ export function createOpenClawTools(
               : {}),
           }),
         ]),
-    ...(includeMessageTool ? [messageTool] : []),
+    ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,
