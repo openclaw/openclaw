@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
@@ -7,7 +8,9 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
-async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git" | "unknown"> {
+export async function detectOpenClawGitCheckout(
+  root: string,
+): Promise<"git" | "not-git" | "unknown"> {
   const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: 5000,
   }).catch(() => null);
@@ -22,7 +25,12 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     }
     return "unknown";
   }
-  return res.stdout.trim() === root ? "git" : "not-git";
+  const gitTop = res.stdout.trim();
+  try {
+    return fs.realpathSync(gitTop) === fs.realpathSync(root) ? "git" : "not-git";
+  } catch {
+    return gitTop === root ? "git" : "not-git";
+  }
 }
 
 export async function maybeOfferUpdateBeforeDoctor(params: {
