@@ -21,6 +21,7 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
+import { DEFAULT_IDENTITY_LINE } from "./identity-line.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
@@ -715,6 +716,8 @@ export function buildAgentSystemPrompt(params: {
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
+  /** Resolved identity line: string to emit, or null to suppress. Defaults to the standard line. */
+  identityLine?: string | null;
 }) {
   const acpEnabled = params.acpEnabled === true;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -929,11 +932,12 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
+  const resolvedIdentityLine =
+    params.identityLine === null ? undefined : (params.identityLine ?? DEFAULT_IDENTITY_LINE);
+
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
-      .filter(Boolean)
-      .join("\n");
+    return [resolvedIdentityLine, modelIdentityLine].filter(Boolean).join("\n");
   }
 
   const contextFiles = params.contextFiles ?? [];
@@ -950,6 +954,7 @@ export function buildAgentSystemPrompt(params: {
     includeProjectContext: false,
   });
   const stablePrefixCacheKey = hashStablePromptInput({
+    identityLine: resolvedIdentityLine,
     workspaceDir: params.workspaceDir,
     promptMode,
     toolLines,
@@ -989,8 +994,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
-      "You are a personal assistant running inside OpenClaw.",
-      "",
+      ...(resolvedIdentityLine ? [resolvedIdentityLine, ""] : []),
       "## Tooling",
       "Available tools are policy-filtered. Names are case-sensitive; call exactly as listed.",
       toolLines.length > 0

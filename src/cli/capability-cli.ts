@@ -11,6 +11,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_IDENTITY_LINE } from "../agents/identity-line.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
@@ -93,7 +94,7 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
-const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = DEFAULT_IDENTITY_LINE;
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {

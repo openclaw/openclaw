@@ -239,6 +239,10 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
   systemPromptOverride?: string;
+  /** Overrides the default opening identity line in the system prompt. Only used when identityMode is "custom". */
+  identityLine?: string;
+  /** Controls whether the opening identity line is emitted: "default" (standard line), "custom" (use identityLine), "none" (suppress). */
+  identityMode?: "default" | "none" | "custom";
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
