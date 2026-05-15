@@ -25,12 +25,15 @@ export type CommandCarrierHit = {
 
 export const SHELL_STATE_MUTATING_BUILTINS = new Set([
   "cd",
+  "declare",
   "export",
-  "unset",
-  "set",
   "hash",
-  "ulimit",
+  "readonly",
+  "set",
+  "typeset",
   "umask",
+  "ulimit",
+  "unset",
   "trap",
 ]);
 
