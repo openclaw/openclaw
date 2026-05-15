@@ -351,6 +351,7 @@ function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): s
     pushUniqueMediaUrl(urls, seen, attachment.path);
     pushUniqueMediaUrl(urls, seen, attachment.filePath);
     pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.url);
   };
 
   pushUniqueMediaUrl(urls, seen, record.media);

@@ -427,7 +427,7 @@ function collectMediaUrls(record: Record<string, unknown>): string[] {
       return;
     }
     const attachment = value as Record<string, unknown>;
-    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"]) {
+    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
       pushMediaUrl(attachment[key]);
     }
   };
