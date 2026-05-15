@@ -51,20 +51,18 @@ export function buildDiscordUntrustedContext(params: {
   if (!params.isGuild) {
     return undefined;
   }
-  const entries = [
-    typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0
-      ? {
-          label: "Discord channel metadata",
-          source: "discord",
-          type: "channel_metadata",
-          payload: {
-            topic: params.channelTopic.trim(),
-          },
-        }
-      : undefined,
-  ].filter((entry): entry is NonNullable<MsgContext["UntrustedStructuredContext"]>[number] =>
-    Boolean(entry),
-  );
+  const entries: NonNullable<MsgContext["UntrustedStructuredContext"]> = [];
+  const channelTopic = typeof params.channelTopic === "string" ? params.channelTopic.trim() : "";
+  if (channelTopic.length > 0) {
+    entries.push({
+      label: "Discord channel metadata",
+      source: "discord",
+      type: "channel_metadata",
+      payload: {
+        topic: channelTopic,
+      },
+    });
+  }
   return entries.length > 0 ? entries : undefined;
 }
 

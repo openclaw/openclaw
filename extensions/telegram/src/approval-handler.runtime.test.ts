@@ -7,6 +7,108 @@ type TelegramPayload = {
 };
 
 describe("telegramApprovalNativeRuntime", () => {
+  it("uses Telegram plugin actions in simple fallback approval text", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {
+        approvals: {
+          plugin: {
+            language: "simple",
+          },
+        },
+      } as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: echo hi",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        approvalId: "plugin:req-1",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve plugin:req-1 allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:req-1 deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain(
+      "If buttons are unavailable, reply: /approve plugin:req-1 allow-once|deny",
+    );
+    expect(payload.text).not.toContain("allow-once|allow-always|deny");
+    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+  });
+
+  it("uses Telegram plugin actions in simple-technical fallback approval text", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {
+        approvals: {
+          plugin: {
+            language: "simple-technical",
+          },
+        },
+      } as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: echo hi",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        approvalId: "plugin:req-1",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve plugin:req-1 allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:req-1 deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(payload.text).not.toContain("allow-once|allow-always|deny");
+    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+  });
+
   it("renders only the allowed pending buttons", async () => {
     const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,

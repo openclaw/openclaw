@@ -71,6 +71,7 @@ function buildPendingPayload(params: {
       ? buildPluginApprovalPendingReplyPayload({
           request: params.request as PluginApprovalRequest,
           nowMs: params.nowMs,
+          allowedDecisions: params.view.actions.map((action) => action.decision),
           language: params.cfg.approvals?.plugin?.language,
         })
       : buildExecApprovalPendingReplyPayload({
