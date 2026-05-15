@@ -3151,7 +3151,34 @@ describe("openai transport stream", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
-  it("always includes stream_options.include_usage for known local backends like llama-cpp", () => {
+  it("omits streaming usage options for Volcengine CodingPlan by default", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "ark-code-latest",
+        name: "Ark Coding Plan",
+        api: "openai-completions",
+        provider: "volcengine-plan",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: unknown;
+    };
+
+    expect(params).not.toHaveProperty("stream_options");
+  });
+
+  it("includes stream_options.include_usage for known local backends like llama-cpp", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "llama-3",
@@ -3277,7 +3304,7 @@ describe("openai transport stream", () => {
 
     expect(params.messages?.[0]?.role).toBe("system");
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params.stream_options).toEqual({ include_usage: true });
+    expect(params).not.toHaveProperty("stream_options");
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });

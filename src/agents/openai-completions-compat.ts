@@ -72,6 +72,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     (isDefaultRoute &&
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
+  const isLocalEndpoint = endpointClass === "local";
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
@@ -88,7 +89,8 @@ export function resolveOpenAICompletionsCompatDefaults(
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
-      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
+      (!isNonStandard &&
+        (isLocalEndpoint || !usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat:
       isDeepSeek || isXiaomi
