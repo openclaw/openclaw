@@ -540,6 +540,12 @@ describe("sendMessageTelegram", () => {
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
+        name: "default outbound timeout floor",
+        cfg: { channels: { telegram: {} } },
+        opts: { cfg: TELEGRAM_TEST_CFG, token: "tok" },
+        expectedTimeout: 60,
+      },
+      {
         name: "global telegram timeout",
         cfg: { channels: { telegram: { timeoutSeconds: 60 } } },
         opts: { cfg: TELEGRAM_TEST_CFG, token: "tok" },

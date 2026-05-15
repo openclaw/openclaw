@@ -38,7 +38,10 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
-import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
+import {
+  resolveTelegramOutboundClientTimeoutSeconds,
+  resolveTelegramRequestTimeoutMs,
+} from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -167,11 +170,6 @@ function resolveTelegramClientTimeoutMinimumSeconds(values: readonly (number | u
     minimum = minimum === undefined ? normalized : Math.max(minimum, normalized);
   }
   return minimum;
-}
-
-function resolveTelegramOutboundClientTimeoutFloorSeconds(timeoutSeconds: unknown) {
-  const timeoutMs = resolveTelegramRequestTimeoutMs("sendmessage", timeoutSeconds);
-  return timeoutMs === undefined ? undefined : timeoutMs / 1000;
 }
 
 export function createTelegramBotCore(
@@ -336,7 +334,7 @@ export function createTelegramBotCore(
     value: telegramCfg?.timeoutSeconds,
     minimum: resolveTelegramClientTimeoutMinimumSeconds([
       opts.minimumClientTimeoutSeconds,
-      resolveTelegramOutboundClientTimeoutFloorSeconds(telegramCfg?.timeoutSeconds),
+      resolveTelegramOutboundClientTimeoutSeconds(telegramCfg?.timeoutSeconds),
     ]),
   });
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);

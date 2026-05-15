@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveTelegramOutboundClientTimeoutSeconds,
   resolveTelegramRequestTimeoutMs,
   resolveTelegramStartupProbeTimeoutMs,
 } from "./request-timeouts.js";
@@ -54,5 +55,19 @@ describe("resolveTelegramStartupProbeTimeoutMs", () => {
 
   it("honors higher configured timeoutSeconds", () => {
     expect(resolveTelegramStartupProbeTimeoutMs(60)).toBe(60_000);
+  });
+});
+
+describe("resolveTelegramOutboundClientTimeoutSeconds", () => {
+  it("uses the outbound sendMessage guard by default", () => {
+    expect(resolveTelegramOutboundClientTimeoutSeconds(undefined)).toBe(60);
+  });
+
+  it("does not let low timeoutSeconds shorten the outbound floor", () => {
+    expect(resolveTelegramOutboundClientTimeoutSeconds(10)).toBe(60);
+  });
+
+  it("honors higher configured timeoutSeconds", () => {
+    expect(resolveTelegramOutboundClientTimeoutSeconds(90)).toBe(90);
   });
 });

@@ -91,7 +91,9 @@ describe("telegram proxy client", () => {
   }) => {
     expect(makeProxyFetch).toHaveBeenCalledWith(proxyUrl);
     expect(resolveTelegramFetch).toHaveBeenCalledWith(params.proxyFetch, { network: undefined });
-    expect(botCtorSpy).toHaveBeenCalledWith("tok", { client: { fetch: params.fetchImpl } });
+    expect(botCtorSpy).toHaveBeenCalledWith("tok", {
+      client: { fetch: params.fetchImpl, timeoutSeconds: 60 },
+    });
   };
 
   beforeAll(async () => {
@@ -136,8 +138,12 @@ describe("telegram proxy client", () => {
     expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
     expect(botCtorSpy).toHaveBeenCalledTimes(2);
     expect(resolveTelegramFetch).toHaveBeenCalledWith(proxyFetch, { network: undefined });
-    expect(botCtorSpy).toHaveBeenNthCalledWith(1, "tok", { client: { fetch: fetchImpl } });
-    expect(botCtorSpy).toHaveBeenNthCalledWith(2, "tok", { client: { fetch: fetchImpl } });
+    expect(botCtorSpy).toHaveBeenNthCalledWith(1, "tok", {
+      client: { fetch: fetchImpl, timeoutSeconds: 60 },
+    });
+    expect(botCtorSpy).toHaveBeenNthCalledWith(2, "tok", {
+      client: { fetch: fetchImpl, timeoutSeconds: 60 },
+    });
   });
 
   it.each([

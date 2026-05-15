@@ -50,6 +50,13 @@ export function resolveTelegramRequestTimeoutMs(
   return Math.max(baseTimeoutMs, resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 0);
 }
 
+export function resolveTelegramOutboundClientTimeoutSeconds(
+  timeoutSeconds: unknown,
+): number | undefined {
+  const timeoutMs = resolveTelegramRequestTimeoutMs("sendmessage", timeoutSeconds);
+  return timeoutMs === undefined ? undefined : timeoutMs / 1000;
+}
+
 export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): number {
   const getMeTimeoutMs = resolveTelegramRequestTimeoutMs("getme") ?? 15_000;
   if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {

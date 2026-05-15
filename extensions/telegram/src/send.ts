@@ -30,6 +30,7 @@ import {
   buildTelegramThreadReplyParams,
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
+import { resolveTelegramOutboundClientTimeoutSeconds } from "./request-timeouts.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -248,11 +249,7 @@ function setCachedTelegramClientOptions(
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ApiClientOptions | undefined {
-  const timeoutSeconds =
-    typeof account.config.timeoutSeconds === "number" &&
-    Number.isFinite(account.config.timeoutSeconds)
-      ? Math.max(1, Math.floor(account.config.timeoutSeconds))
-      : undefined;
+  const timeoutSeconds = resolveTelegramOutboundClientTimeoutSeconds(account.config.timeoutSeconds);
 
   const cacheEnabled = shouldUseTelegramClientOptionsCache();
   const cacheKey = cacheEnabled
