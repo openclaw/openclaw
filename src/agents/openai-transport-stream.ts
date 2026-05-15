@@ -2125,12 +2125,14 @@ async function processOpenAICompletionsStream(
         arguments: Record<string, unknown>;
         partialArgs: string;
         thoughtSignature?: string;
+        partialArgsBytes?: number;
       }
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
-  let currentToolCallArgumentBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
+  const toolCallBlocksByIndex = new Map<number, NonNullable<typeof currentBlock>>();
+  const toolCallBlocksById = new Map<string, NonNullable<typeof currentBlock>>();
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
@@ -2143,7 +2145,25 @@ async function processOpenAICompletionsStream(
         ...currentBlock,
         arguments: parseStreamingJson(currentBlock.partialArgs),
       };
-      output.content[blockIndex()] = completed;
+      const idx = output.content.indexOf(currentBlock);
+      if (idx !== -1) {
+        output.content[idx] = completed;
+      }
+    }
+  };
+  const finishAllToolCallBlocks = () => {
+    for (const block of output.content) {
+      if (block.type === "toolCall") {
+        block.arguments = parseStreamingJson(block.partialArgs);
+        const completed = {
+          ...block,
+          arguments: parseStreamingJson(block.partialArgs),
+        };
+        const idx = output.content.indexOf(block);
+        if (idx !== -1) {
+          output.content[idx] = completed;
+        }
+      }
     }
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
@@ -2321,11 +2341,12 @@ async function processOpenAICompletionsStream(
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
       for (const toolCall of choiceDelta.tool_calls) {
-        if (
-          !currentBlock ||
-          currentBlock.type !== "toolCall" ||
-          (toolCall.id && currentBlock.id !== toolCall.id)
-        ) {
+        const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+        let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
+        if (!block && toolCall.id) {
+          block = toolCallBlocksById.get(toolCall.id);
+        }
+        if (!block) {
           const switchingToolCall = currentBlock?.type === "toolCall";
           finishCurrentBlock();
           if (switchingToolCall) {
@@ -2333,45 +2354,49 @@ async function processOpenAICompletionsStream(
             flushPendingPostToolCallDeltas();
           }
           const initialSig = extractGoogleThoughtSignature(toolCall);
-          currentBlock = {
+          block = {
             type: "toolCall",
             id: toolCall.id || "",
             name: toolCall.function?.name || "",
             arguments: {},
             partialArgs: "",
+            partialArgsBytes: 0,
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
-          currentToolCallArgumentBytes = 0;
-          output.content.push(currentBlock);
-          stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+          output.content.push(block);
+          stream.push({
+            type: "toolcall_start",
+            contentIndex: output.content.indexOf(block),
+            partial: output,
+          });
         }
-        if (currentBlock.type !== "toolCall") {
-          continue;
+        if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
+          toolCallBlocksByIndex.set(streamIndex, block);
         }
         if (toolCall.id) {
-          currentBlock.id = toolCall.id;
+          block.id = toolCall.id;
+          toolCallBlocksById.set(toolCall.id, block);
         }
+        currentBlock = block;
         if (toolCall.function?.name) {
-          currentBlock.name = toolCall.function.name;
+          block.name = toolCall.function.name;
         }
         const deltaSig = extractGoogleThoughtSignature(toolCall);
         if (deltaSig) {
-          currentBlock.thoughtSignature = deltaSig;
+          block.thoughtSignature = deltaSig;
         }
         if (toolCall.function?.arguments) {
           const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
-          if (
-            currentToolCallArgumentBytes + nextArgumentBytes >
-            MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES
-          ) {
+          const currentBlockArgBytes = block.partialArgsBytes ?? 0;
+          if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
             throw new Error("Exceeded tool-call argument buffer limit");
           }
-          currentToolCallArgumentBytes += nextArgumentBytes;
-          currentBlock.partialArgs += toolCall.function.arguments;
-          currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+          block.partialArgsBytes = currentBlockArgBytes + nextArgumentBytes;
+          block.partialArgs += toolCall.function.arguments;
+          block.arguments = parseStreamingJson(block.partialArgs);
           stream.push({
             type: "toolcall_delta",
-            contentIndex: blockIndex(),
+            contentIndex: output.content.indexOf(block),
             delta: toolCall.function.arguments,
             partial: output,
           });
@@ -2382,10 +2407,8 @@ async function processOpenAICompletionsStream(
     await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
-  finishCurrentBlock();
-  if (currentBlock?.type === "toolCall") {
-    currentBlock = null;
-  }
+  finishAllToolCallBlocks();
+  currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
