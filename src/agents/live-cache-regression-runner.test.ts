@@ -84,20 +84,6 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
-  it("classifies Anthropic account drift as non-cache provider state", () => {
-    expect(
-      __testing.isAnthropicAccountDrift(
-        new Error("Your credit balance is too low to access the Anthropic API."),
-      ),
-    ).toBe(true);
-    expect(
-      __testing.isAnthropicAccountDrift(
-        '401 {"error":{"message":"The API key you provided is invalid."}}',
-      ),
-    ).toBe(true);
-    expect(__testing.isAnthropicAccountDrift("anthropic:image cacheRead=0 < min=4500")).toBe(false);
-  });
-
   it("retries a cache probe twice when provider text misses the sentinel", () => {
     expect(
       __testing.shouldRetryCacheProbeText({

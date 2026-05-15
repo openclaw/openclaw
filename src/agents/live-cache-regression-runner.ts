@@ -15,12 +15,10 @@ import {
   extractAssistantText,
   type LiveResolvedModel,
   logLiveCache,
-  resolveLiveDirectModel,
+  resolveLiveDirectModelPool,
+  withLiveDirectModelApiKey,
 } from "./live-cache-test-support.js";
-import {
-  isAuthErrorMessage,
-  isBillingErrorMessage,
-} from "./pi-embedded-helpers/failover-matches.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
@@ -599,30 +597,29 @@ function appendBaselineFindings(target: BaselineFindings, source: BaselineFindin
   target.warnings.push(...source.warnings);
 }
 
-function isAnthropicAccountDrift(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return isBillingErrorMessage(message) || isAuthErrorMessage(message);
-}
-
 function isAnthropicEmptyCacheProbe(error: unknown): boolean {
   return error instanceof CacheProbeTextMismatchError && error.text.trim().length === 0;
 }
 
-function cloneFixtureWithKey(fixture: LiveResolvedModel, apiKey: string): LiveResolvedModel {
-  return { ...fixture, apiKey };
+function shouldSkipAnthropicCacheProviderDrift(error: unknown): boolean {
+  return Boolean(
+    shouldSkipLiveProviderDrift({
+      error,
+      allowAuth: true,
+      allowBilling: true,
+    }),
+  );
 }
 
 async function runAnthropicCacheLane(params: {
+  apiKeys: readonly string[];
   fixture: LiveResolvedModel;
   lane: CacheLane;
   pngBase64: string;
   runToken: string;
   warnings: string[];
 }): Promise<{ attempt?: Awaited<ReturnType<typeof runRepeatedLaneWithBaselineRetry>> }> {
-  const keys =
-    params.fixture.apiKeys && params.fixture.apiKeys.length > 0
-      ? params.fixture.apiKeys
-      : [params.fixture.apiKey];
+  const keys = params.apiKeys.length > 0 ? params.apiKeys : [params.fixture.apiKey];
   let lastError: unknown;
   for (const [index, apiKey] of keys.entries()) {
     try {
@@ -630,14 +627,14 @@ async function runAnthropicCacheLane(params: {
         attempt: await runRepeatedLaneWithBaselineRetry({
           lane: params.lane,
           providerTag: "anthropic",
-          fixture: cloneFixtureWithKey(params.fixture, apiKey),
+          fixture: withLiveDirectModelApiKey(params.fixture, apiKey),
           runToken: params.runToken,
           pngBase64: params.pngBase64,
         }),
       };
     } catch (error) {
       lastError = error;
-      if (isAnthropicAccountDrift(error) && index + 1 < keys.length) {
+      if (shouldSkipAnthropicCacheProviderDrift(error) && index + 1 < keys.length) {
         logLiveCache(`anthropic ${params.lane} account drift; retrying with next key`);
         continue;
       }
@@ -645,7 +642,7 @@ async function runAnthropicCacheLane(params: {
     }
   }
 
-  if (isAnthropicAccountDrift(lastError) || isAnthropicEmptyCacheProbe(lastError)) {
+  if (shouldSkipAnthropicCacheProviderDrift(lastError) || isAnthropicEmptyCacheProbe(lastError)) {
     const reason = isAnthropicEmptyCacheProbe(lastError) ? "empty response" : "account drift";
     const warning = `anthropic ${params.lane} skipped: ${reason}`;
     params.warnings.push(warning);
@@ -667,7 +664,7 @@ async function runAnthropicDisabledCacheLane(params: {
       sessionId: `live-cache-regression-${params.runToken}-anthropic-disabled`,
     });
   } catch (error) {
-    if (isAnthropicAccountDrift(error) || isAnthropicEmptyCacheProbe(error)) {
+    if (shouldSkipAnthropicCacheProviderDrift(error) || isAnthropicEmptyCacheProbe(error)) {
       const warning = "anthropic disabled skipped: account drift";
       params.warnings.push(warning);
       logLiveCache(warning);
@@ -680,7 +677,6 @@ async function runAnthropicDisabledCacheLane(params: {
 export const __testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
-  isAnthropicAccountDrift,
   resolveCacheProbeMaxTokens,
   shouldAcceptEmptyOpenAICacheProbe,
   shouldRetryCacheProbeText,
@@ -690,13 +686,13 @@ export const __testing = {
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
   const runToken = randomUUID().slice(0, 13);
-  const openai = await resolveLiveDirectModel({
+  const openai = await resolveLiveDirectModelPool({
     provider: "openai",
     api: "openai-responses",
     envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
     preferredModelIds: ["gpt-4.1", "gpt-5.2", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"],
   });
-  const anthropic = await resolveLiveDirectModel({
+  const anthropic = await resolveLiveDirectModelPool({
     provider: "anthropic",
     api: "anthropic-messages",
     envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
@@ -714,7 +710,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     const openaiAttempt = await runRepeatedLaneWithBaselineRetry({
       lane,
       providerTag: "openai",
-      fixture: openai,
+      fixture: openai.fixture,
       runToken,
       pngBase64,
     });
@@ -734,8 +730,9 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     appendBaselineFindings({ regressions, warnings }, openaiAttempt.findings);
 
     const { attempt: anthropicAttempt } = await runAnthropicCacheLane({
+      apiKeys: anthropic.apiKeys,
       lane,
-      fixture: anthropic,
+      fixture: anthropic.fixture,
       runToken,
       pngBase64,
       warnings,
@@ -761,7 +758,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   }
 
   const disabled = await runAnthropicDisabledCacheLane({
-    fixture: anthropic,
+    fixture: anthropic.fixture,
     runToken,
     warnings,
   });
