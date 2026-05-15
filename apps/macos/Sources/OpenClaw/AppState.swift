@@ -231,6 +231,38 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
+    var ambientOverlayEnabled: Bool {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(
+                self.ambientOverlayEnabled,
+                forKey: ambientOverlayEnabledKey) }
+        }
+    }
+
+    var ambientOverlayDisplayScope: AmbientOverlayDisplayScope {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(
+                self.ambientOverlayDisplayScope.rawValue,
+                forKey: ambientOverlayDisplayScopeKey) }
+        }
+    }
+
+    var ambientOverlayIntensity: Double {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(
+                self.ambientOverlayIntensity,
+                forKey: ambientOverlayIntensityKey) }
+        }
+    }
+
+    var ambientOverlayTimeoutSeconds: Double {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(
+                self.ambientOverlayTimeoutSeconds,
+                forKey: ambientOverlayTimeoutSecondsKey) }
+        }
+    }
+
     var execApprovalMode: ExecApprovalQuickMode {
         didSet {
             self.ifNotPreview {
@@ -384,6 +416,25 @@ final class AppState {
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
+        self.ambientOverlayEnabled = UserDefaults.standard
+            .object(forKey: ambientOverlayEnabledKey) as? Bool ?? AmbientOverlaySettings.defaults.isEnabled
+        if let rawScope = UserDefaults.standard.string(forKey: ambientOverlayDisplayScopeKey),
+           let scope = AmbientOverlayDisplayScope(rawValue: rawScope)
+        {
+            self.ambientOverlayDisplayScope = scope
+        } else {
+            self.ambientOverlayDisplayScope = AmbientOverlaySettings.defaults.displayScope
+        }
+        if let storedIntensity = UserDefaults.standard.object(forKey: ambientOverlayIntensityKey) as? Double {
+            self.ambientOverlayIntensity = storedIntensity
+        } else {
+            self.ambientOverlayIntensity = AmbientOverlaySettings.defaultIntensity
+        }
+        if let storedTimeout = UserDefaults.standard.object(forKey: ambientOverlayTimeoutSecondsKey) as? Double {
+            self.ambientOverlayTimeoutSeconds = storedTimeout
+        } else {
+            self.ambientOverlayTimeoutSeconds = AmbientOverlaySettings.defaultTimeoutSeconds
+        }
         let execDefaults = ExecApprovalsStore.resolveDefaults()
         self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
         self.peekabooBridgeEnabled = UserDefaults.standard
@@ -843,6 +894,10 @@ extension AppState {
         state.connectionMode = .local
         state.remoteTransport = .ssh
         state.canvasEnabled = true
+        state.ambientOverlayEnabled = AmbientOverlaySettings.defaults.isEnabled
+        state.ambientOverlayDisplayScope = AmbientOverlaySettings.defaults.displayScope
+        state.ambientOverlayIntensity = AmbientOverlaySettings.defaultIntensity
+        state.ambientOverlayTimeoutSeconds = AmbientOverlaySettings.defaultTimeoutSeconds
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteToken = "example-token"
