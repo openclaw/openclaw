@@ -61,10 +61,16 @@ export async function resolveAgentTurnAttachments(params: {
         : attachment,
     );
   const recentHistoryImages = resolveRecentInboundHistoryImages({ ctx: params.ctx });
+  const firstHistoryAttachmentIndex =
+    currentAttachments.reduce(
+      (maxIndex, attachment) =>
+        Number.isFinite(attachment.index) ? Math.max(maxIndex, attachment.index) : maxIndex,
+      -1,
+    ) + 1;
   const historyAttachments: MediaAttachment[] = recentHistoryImages.map((image, index) => ({
     path: image.path,
     mime: image.contentType,
-    index: currentAttachments.length + index,
+    index: firstHistoryAttachmentIndex + index,
   }));
   const historyAttachmentByIndex = new Map(
     historyAttachments.map((attachment, index) => [attachment.index, recentHistoryImages[index]]),
