@@ -14,11 +14,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -374,8 +370,8 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   let combinedBody = body;
   if (isGroup && historyKey && historyLimit > 0) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: groupHistories,
+    const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
+    combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -401,8 +397,7 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? buildInboundHistoryFromMap({
-          historyMap: groupHistories,
+      ? createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
           historyKey,
           limit: historyLimit,
         })
