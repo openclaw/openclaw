@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
-  store: {} as Record<string, SessionEntry>,
+  stores: new Map<string, Record<string, SessionEntry>>(),
+  resolveStorePathCalls: [] as Array<{ store?: string; opts?: { agentId?: string } }>,
 }));
 
 vi.mock("../io.js", () => ({
@@ -10,11 +11,14 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
+  resolveStorePath: (store?: string, opts?: { agentId?: string }) => {
+    storeState.resolveStorePathCalls.push({ store, opts });
+    return `/tmp/${opts?.agentId ?? "main"}-sessions.json`;
+  },
 }));
 
 vi.mock("./store.js", () => ({
-  loadSessionStore: () => storeState.store,
+  loadSessionStore: (storePath: string) => storeState.stores.get(storePath) ?? {},
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
@@ -27,15 +31,27 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
   deliveryContext,
 });
 
+const getStore = (agentId = "main"): Record<string, SessionEntry> => {
+  const storePath = `/tmp/${agentId}-sessions.json`;
+  let store = storeState.stores.get(storePath);
+  if (!store) {
+    store = {};
+    storeState.stores.set(storePath, store);
+  }
+  return store;
+};
+
 beforeEach(async () => {
   vi.resetModules();
-  storeState.store = {};
+  storeState.stores.clear();
+  storeState.resolveStorePathCalls = [];
   ({ extractDeliveryInfo, parseSessionThreadInfo, resolveSessionThreadIdForRouting } =
     await import("./delivery-info.js"));
 });
 
 beforeEach(() => {
-  storeState.store = {};
+  storeState.stores.clear();
+  storeState.resolveStorePathCalls = [];
 });
 
 describe("extractDeliveryInfo", () => {
@@ -76,7 +92,7 @@ describe("extractDeliveryInfo", () => {
 
   it("returns deliveryContext for direct session keys", () => {
     const sessionKey = "agent:main:webchat:dm:user-123";
-    storeState.store[sessionKey] = buildEntry({
+    getStore()[sessionKey] = buildEntry({
       channel: "webchat",
       to: "webchat:user-123",
       accountId: "default",
@@ -97,7 +113,7 @@ describe("extractDeliveryInfo", () => {
   it("falls back to base sessions for :thread: keys", () => {
     const baseKey = "agent:main:slack:channel:C0123ABC";
     const threadKey = `${baseKey}:thread:1234567890.123456`;
-    storeState.store[baseKey] = buildEntry({
+    getStore()[baseKey] = buildEntry({
       channel: "slack",
       to: "slack:C0123ABC",
       accountId: "workspace-1",
@@ -118,7 +134,7 @@ describe("extractDeliveryInfo", () => {
   it("falls back to base sessions for :topic: keys", () => {
     const baseKey = "agent:main:telegram:group:98765";
     const topicKey = `${baseKey}:topic:55`;
-    storeState.store[baseKey] = buildEntry({
+    getStore()[baseKey] = buildEntry({
       channel: "telegram",
       to: "group:98765",
       accountId: "main",
@@ -133,6 +149,36 @@ describe("extractDeliveryInfo", () => {
         accountId: "main",
       },
       threadId: "55",
+    });
+  });
+
+  it("loads thread delivery info from the named agent session store", () => {
+    const baseKey = "agent:susan:slack:channel:C0123ABC";
+    const threadKey = `${baseKey}:thread:1234567890.123456`;
+    getStore("main")[baseKey] = buildEntry({
+      channel: "slack",
+      to: "slack:WRONG",
+      accountId: "wrong-workspace",
+    });
+    getStore("susan")[baseKey] = buildEntry({
+      channel: "slack",
+      to: "slack:C0123ABC",
+      accountId: "workspace-1",
+    });
+
+    const result = extractDeliveryInfo(threadKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "slack",
+        to: "slack:C0123ABC",
+        accountId: "workspace-1",
+      },
+      threadId: "1234567890.123456",
+    });
+    expect(storeState.resolveStorePathCalls.at(-1)).toEqual({
+      store: undefined,
+      opts: { agentId: "susan" },
     });
   });
 

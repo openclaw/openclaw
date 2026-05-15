@@ -1,3 +1,5 @@
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { deliveryContextFromSession, type DeliveryContext } from "../../utils/delivery-context.js";
 import { loadConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
@@ -38,7 +40,7 @@ export function resolveSessionThreadIdForRouting(
 }
 
 export function extractDeliveryInfo(sessionKey: string | undefined): {
-  deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  deliveryContext: DeliveryContext | undefined;
   threadId: string | undefined;
 } {
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
@@ -46,20 +48,26 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     return { deliveryContext: undefined, threadId };
   }
 
-  let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  let deliveryContext: DeliveryContext | undefined;
   try {
     const cfg = loadConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
     const store = loadSessionStore(storePath);
     let entry = store[sessionKey];
-    if (!entry?.deliveryContext && baseSessionKey !== sessionKey) {
+    let storedDeliveryContext = deliveryContextFromSession(entry);
+    if (!storedDeliveryContext?.to && baseSessionKey !== sessionKey) {
       entry = store[baseSessionKey];
+      storedDeliveryContext = deliveryContextFromSession(entry);
     }
-    if (entry?.deliveryContext) {
+    if (storedDeliveryContext) {
       deliveryContext = {
-        channel: entry.deliveryContext.channel,
-        to: entry.deliveryContext.to,
-        accountId: entry.deliveryContext.accountId,
+        channel: storedDeliveryContext.channel,
+        to: storedDeliveryContext.to,
+        accountId: storedDeliveryContext.accountId,
+        ...(storedDeliveryContext.threadId != null
+          ? { threadId: storedDeliveryContext.threadId }
+          : {}),
       };
     }
   } catch {

@@ -146,6 +146,12 @@ type PreparedAcpThreadBinding = {
   accountId: string;
   placement: "current" | "child";
   conversationId: string;
+  parentConversationId?: string;
+};
+
+type ResolvedThreadBindingConversation = {
+  conversationId: string;
+  parentConversationId?: string;
 };
 
 type AcpSpawnInitializedSession = Awaited<
@@ -376,7 +382,7 @@ function resolveConversationIdForThreadBinding(params: {
   to?: string;
   threadId?: string | number;
   groupId?: string;
-}): string | undefined {
+}): ResolvedThreadBindingConversation | undefined {
   const channel = params.channel?.trim().toLowerCase();
   const normalizedThreadId =
     params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
@@ -401,17 +407,26 @@ function resolveConversationIdForThreadBinding(params: {
     const topicMatch = /^(.*?):topic:(\d+)$/i.exec(chatId);
     if (topicMatch?.[1] && /^-?\d+$/.test(topicMatch[1].trim())) {
       const topicId = normalizedThreadId ?? topicMatch[2];
-      return `${topicMatch[1].trim()}:topic:${topicId}`;
+      return { conversationId: `${topicMatch[1].trim()}:topic:${topicId}` };
     }
     const shorthandTopicMatch = /^(.*?):(\d+)$/i.exec(chatId);
     if (shorthandTopicMatch?.[1] && /^-?\d+$/.test(shorthandTopicMatch[1].trim())) {
       const topicId = normalizedThreadId ?? shorthandTopicMatch[2];
-      return `${shorthandTopicMatch[1].trim()}:topic:${topicId}`;
+      return { conversationId: `${shorthandTopicMatch[1].trim()}:topic:${topicId}` };
     }
     if (/^-?\d+$/.test(chatId)) {
-      return normalizedThreadId ? `${chatId}:topic:${normalizedThreadId}` : chatId;
+      return {
+        conversationId: normalizedThreadId ? `${chatId}:topic:${normalizedThreadId}` : chatId,
+      };
     }
     return undefined;
+  }
+
+  if (channel === "feishu" || channel === "lark") {
+    return resolveFeishuConversationForThreadBinding({
+      to: params.to,
+      threadId: normalizedThreadId,
+    });
   }
 
   const genericConversationId = resolveConversationIdFromTargets({
@@ -419,20 +434,86 @@ function resolveConversationIdForThreadBinding(params: {
     targets: [params.to],
   });
   if (genericConversationId) {
-    return genericConversationId;
+    return { conversationId: genericConversationId };
   }
   const target = params.to?.trim() || "";
   if (channel === "line") {
     const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
     if (prefixed) {
-      return prefixed;
+      return { conversationId: prefixed };
     }
     if (/^[UCR][a-f0-9]{32}$/i.test(target)) {
-      return target;
+      return { conversationId: target };
     }
   }
 
   return undefined;
+}
+
+function resolveFeishuConversationForThreadBinding(params: {
+  to?: string;
+  threadId?: string;
+}): ResolvedThreadBindingConversation | undefined {
+  const target = normalizeFeishuConversationTarget(params.to);
+  if (!target) {
+    return undefined;
+  }
+
+  const topicMatch = /^(.+):topic:([^:]+)(?::sender:[^:]+)?$/i.exec(target.id);
+  if (topicMatch?.[1]) {
+    const parentConversationId = topicMatch[1].trim();
+    const topicId = params.threadId ?? topicMatch[2]?.trim();
+    if (!parentConversationId || !topicId) {
+      return undefined;
+    }
+    return {
+      conversationId: `${parentConversationId}:topic:${topicId}`,
+      parentConversationId,
+    };
+  }
+
+  if (params.threadId) {
+    return {
+      conversationId: `${target.id}:topic:${params.threadId}`,
+      parentConversationId: target.id,
+    };
+  }
+
+  if (target.kind === "direct") {
+    return { conversationId: target.id };
+  }
+
+  return undefined;
+}
+
+function normalizeFeishuConversationTarget(
+  raw: string | undefined,
+): { id: string; kind: "direct" | "group" | "unknown" } | undefined {
+  let target = raw?.trim();
+  if (!target) {
+    return undefined;
+  }
+  target = target.replace(/^(feishu|lark):/i, "").trim();
+  if (!target) {
+    return undefined;
+  }
+  const lowered = target.toLowerCase();
+  for (const prefix of ["chat:", "group:", "channel:", "user:", "dm:", "open_id:"]) {
+    if (lowered.startsWith(prefix)) {
+      const id = target.slice(prefix.length).trim();
+      if (!id) {
+        return undefined;
+      }
+      const kind =
+        prefix === "user:" || prefix === "dm:" || prefix === "open_id:" ? "direct" : "group";
+      return { id, kind };
+    }
+  }
+
+  return {
+    id: target,
+    kind: target.startsWith("ou_") ? "direct" : target.startsWith("oc_") ? "group" : "unknown",
+  };
 }
 
 function prepareAcpThreadBinding(params: {
@@ -496,13 +577,13 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const conversationIdRaw = resolveConversationIdForThreadBinding({
+  const conversation = resolveConversationIdForThreadBinding({
     channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
     groupId: params.groupId,
   });
-  if (!conversationIdRaw) {
+  if (!conversation) {
     return {
       ok: false,
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
@@ -515,7 +596,10 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       placement,
-      conversationId: conversationIdRaw,
+      conversationId: conversation.conversationId,
+      ...(conversation.parentConversationId
+        ? { parentConversationId: conversation.parentConversationId }
+        : {}),
     },
   };
 }
@@ -665,6 +749,9 @@ async function bindPreparedAcpThread(params: {
       channel: params.preparedBinding.channel,
       accountId: params.preparedBinding.accountId,
       conversationId: params.preparedBinding.conversationId,
+      ...(params.preparedBinding.parentConversationId
+        ? { parentConversationId: params.preparedBinding.parentConversationId }
+        : {}),
     },
     placement: params.preparedBinding.placement,
     metadata: {
@@ -749,7 +836,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     params.binding?.conversation.channel === params.requester.origin.channel &&
     params.binding?.conversation.accountId === (params.requester.origin.accountId ?? "default") &&
     requesterConversationId &&
-    params.binding?.conversation.conversationId === requesterConversationId,
+    params.binding?.conversation.conversationId === requesterConversationId.conversationId,
   );
   const boundDeliveryTarget = resolveConversationDeliveryTarget({
     channel: params.requester.origin?.channel ?? params.binding?.conversation.channel,

@@ -1237,6 +1237,27 @@ describe("spawnAcpDirect", () => {
       resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
       unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
     });
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: {
+          channel: string;
+          accountId: string;
+          conversationId: string;
+          parentConversationId?: string;
+        };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: input.conversation,
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+          },
+        }),
+    );
 
     const result = await spawnAcpDirect(
       {
@@ -1260,10 +1281,17 @@ describe("spawnAcpDirect", () => {
         conversation: expect.objectContaining({
           channel: "feishu",
           accountId: "default",
-          conversationId: "om_x100abc123",
+          conversationId: "oc_chat_123:topic:om_x100abc123",
+          parentConversationId: "oc_chat_123",
         }),
       }),
     );
+    expectAgentGatewayCall({
+      deliver: true,
+      channel: "feishu",
+      to: "chat:oc_chat_123",
+      threadId: "om_x100abc123",
+    });
   });
 
   it("does not implicitly stream for thread-bound subagent requester sessions", async () => {
