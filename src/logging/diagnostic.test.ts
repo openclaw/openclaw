@@ -519,6 +519,8 @@ describe("stuck session diagnostics threshold", () => {
   it("aborts and drains embedded runs after an extended no-progress stall", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = resolveStuckSessionAbortMs(undefined, stuckSessionWarnMs);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -527,7 +529,7 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
+            stuckSessionWarnMs,
           },
         },
         { recoverStuckSession },
@@ -535,10 +537,10 @@ describe("stuck session diagnostics threshold", () => {
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
-      vi.advanceTimersByTime(9 * 60_000);
+      vi.advanceTimersByTime(stuckSessionAbortMs - 30_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(2 * 60_000);
+      vi.advanceTimersByTime(30_000);
     } finally {
       unsubscribe();
     }
