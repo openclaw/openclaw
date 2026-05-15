@@ -285,7 +285,11 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
    * Default-deny: missing/undefined becomes false.
    */
   CommandAuthorized: boolean;
-  CommandTurn: CommandTurnContext;
+  /**
+   * Populated by finalizeInboundContext(); optional for public SDK
+   * compatibility with existing plugin-constructed finalized contexts.
+   */
+  CommandTurn?: CommandTurnContext;
 };
 
 export type TemplateContext = MsgContext & {
