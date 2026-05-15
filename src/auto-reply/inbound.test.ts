@@ -150,7 +150,7 @@ describe("finalizeInboundContext", () => {
     expect(out.CommandAuthorized).toBe(true);
   });
 
-  it("clears stale legacy command source when structured context says normal message", () => {
+  it("clears stale legacy command source without dropping normal-turn command auth", () => {
     const out = finalizeInboundContext({
       Body: "hello",
       CommandSource: "native",
@@ -168,7 +168,29 @@ describe("finalizeInboundContext", () => {
       authorized: false,
     });
     expect(out.CommandSource).toBeUndefined();
-    expect(out.CommandAuthorized).toBe(false);
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps normal command authorization stable across repeated finalization", () => {
+    const out = finalizeInboundContext({
+      Body: "please inspect `/tmp/foo`",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    const refinalized = finalizeInboundContext(out);
+
+    expect(refinalized.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(refinalized.CommandSource).toBeUndefined();
+    expect(refinalized.CommandAuthorized).toBe(true);
   });
 
   it("sanitizes spoofed system markers in user-controlled text fields", () => {

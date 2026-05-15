@@ -95,17 +95,12 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;
-  const hasStructuredCommandTurn =
-    normalized.CommandTurn != null && typeof normalized.CommandTurn === "object";
   normalized.CommandTurn = resolveCommandTurnContext(normalized);
   if (normalized.CommandTurn.source === "native" || normalized.CommandTurn.source === "text") {
     normalized.CommandSource = normalized.CommandTurn.source;
     normalized.CommandAuthorized = normalized.CommandTurn.authorized;
   } else {
     normalized.CommandSource = undefined;
-    if (hasStructuredCommandTurn) {
-      normalized.CommandAuthorized = false;
-    }
   }
 
   // MediaType/MediaTypes alignment:
