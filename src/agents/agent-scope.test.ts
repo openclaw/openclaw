@@ -565,6 +565,14 @@ describe("resolveAgentConfig", () => {
             },
           },
           {
+            id: "fallback-only-subagent-model",
+            subagents: {
+              model: {
+                fallbacks: [],
+              },
+            },
+          },
+          {
             id: "default-subagent",
           },
           {
@@ -591,6 +599,9 @@ describe("resolveAgentConfig", () => {
       "openai-codex/gpt-5.4",
       "zai/glm-5",
     ]);
+    expect(
+      resolveSubagentModelFallbacksOverride(cfg, "fallback-only-subagent-model"),
+    ).toStrictEqual([]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
       "openai-codex/gpt-5.4",
       "zai/glm-5",

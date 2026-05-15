@@ -10,7 +10,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-  resolveSubagentModelConfigSelection,
+  resolveSubagentModelConfigSelectionResult,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -83,21 +83,14 @@ export async function resolveCronModelSelection(
     return catalog;
   };
 
-  const subagentModelConfigSelection = resolveSubagentModelConfigSelection({
+  const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
     cfg: params.cfg,
     agentId: params.agentId,
     agentConfigOverride: params.agentConfigOverride,
   });
-  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection);
-  const agentSubagentModel = normalizeModelSelection(params.agentConfigOverride?.subagents?.model);
-  const agentModel = normalizeModelSelection(params.agentConfigOverride?.model);
+  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection?.raw);
   const subagentModelSource: CronModelSelectionSource =
-    subagentModelRaw !== undefined &&
-    agentModel !== undefined &&
-    (agentSubagentModel === undefined || subagentModelRaw !== agentSubagentModel) &&
-    subagentModelRaw === agentModel
-      ? "agent"
-      : "subagent";
+    subagentModelConfigSelection?.source === "agent" ? "agent" : "subagent";
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,

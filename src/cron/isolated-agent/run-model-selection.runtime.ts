@@ -1,5 +1,5 @@
 export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-export { resolveSubagentModelConfigSelection } from "../../agents/agent-scope.js";
+export { resolveSubagentModelConfigSelectionResult } from "../../agents/agent-scope.js";
 export { loadModelCatalog } from "../../agents/model-catalog.js";
 export {
   getModelRefStatus,

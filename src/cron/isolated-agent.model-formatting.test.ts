@@ -39,20 +39,20 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
-  resolveSubagentModelConfigSelection: ({
+  resolveSubagentModelConfigSelectionResult: ({
     cfg,
     agentConfigOverride,
   }: {
     cfg?: { agents?: { defaults?: { subagents?: { model?: unknown } } } };
     agentConfigOverride?: { model?: unknown; subagents?: { model?: unknown } };
   }) => {
-    for (const raw of [
-      agentConfigOverride?.subagents?.model,
-      agentConfigOverride?.model,
-      cfg?.agents?.defaults?.subagents?.model,
+    for (const candidate of [
+      { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
+      { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
     ]) {
-      if (normalizeModelSelectionMock(raw)) {
-        return raw;
+      if (normalizeModelSelectionMock(candidate.raw)) {
+        return candidate;
       }
     }
     return undefined;

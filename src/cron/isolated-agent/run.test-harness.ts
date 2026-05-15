@@ -164,20 +164,20 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
-  resolveSubagentModelConfigSelection: ({
+  resolveSubagentModelConfigSelectionResult: ({
     cfg,
     agentConfigOverride,
   }: {
     cfg?: { agents?: { defaults?: { subagents?: { model?: unknown } } } };
     agentConfigOverride?: { model?: unknown; subagents?: { model?: unknown } };
   }) => {
-    for (const raw of [
-      agentConfigOverride?.subagents?.model,
-      agentConfigOverride?.model,
-      cfg?.agents?.defaults?.subagents?.model,
+    for (const candidate of [
+      { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
+      { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
     ]) {
-      if (normalizeModelSelectionForTest(raw)) {
-        return raw;
+      if (normalizeModelSelectionForTest(candidate.raw)) {
+        return candidate;
       }
     }
     return undefined;
@@ -361,6 +361,10 @@ function resetRunConfigMocks(): void {
         ? fallbacks.filter((entry) => typeof entry === "string")
         : undefined;
     };
+    const subagentFallbacks = resolveOverride(agentConfig?.subagents?.model);
+    if (subagentFallbacks !== undefined) {
+      return subagentFallbacks;
+    }
     const selectedConfig = [
       agentConfig?.subagents?.model,
       agentConfig?.model,
