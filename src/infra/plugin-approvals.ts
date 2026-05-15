@@ -412,8 +412,8 @@ function redactSensitiveCommandText(command: string): string {
       /(--(?:cert|key|proxy-cert|proxy-key|certificate|private-key)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
     )
-    .replace(/(^|\s)(-E)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
-    .replace(/(^|\s)(-E)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
+    .replace(/(^|\s)(-E)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/g, "$1$2$3[redacted]")
+    .replace(/(^|\s)(-E)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/g, "$1$2[redacted]")
     .replace(/(^|\s)(-u|-U)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
     .replace(/(^|\s)(-u|-U)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
     .replace(/(^|\s)(-b)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
