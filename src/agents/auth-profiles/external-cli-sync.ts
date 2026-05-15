@@ -178,10 +178,13 @@ export function readExternalCliFallbackCredential(params: {
   credential: OAuthCredential;
   allowKeychainPrompt?: boolean;
 }): OAuthCredential | null {
-  return readExternalCliBootstrapCredential({
-    ...params,
-    allowInlineOAuthTokenMaterial: true,
-  });
+  const provider =
+    resolveExternalCliSyncProvider(params) ??
+    EXTERNAL_CLI_SYNC_PROVIDERS.find((entry) => entry.provider === params.credential.provider);
+  if (!provider) {
+    return null;
+  }
+  return provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt });
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {

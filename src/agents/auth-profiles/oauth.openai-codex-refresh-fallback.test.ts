@@ -522,6 +522,60 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(JSON.stringify(persisted)).not.toContain("codex-cli-refresh-token");
   });
 
+  it("uses same-account Codex CLI credentials for named Codex profiles after forced local refresh fails", async () => {
+    const profileId = "openai-codex:user@example.com";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "local-access-token",
+            refresh: "local-refresh-token",
+            expires: Date.now() + 86_400_000,
+            accountId: "acct-shared",
+            email: "user@example.com",
+          },
+        },
+      },
+      agentDir,
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "codex-cli-access-token",
+      refresh: "codex-cli-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-shared",
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
+      );
+    });
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toEqual({
+      apiKey: "codex-cli-access-token",
+      provider: "openai-codex",
+      email: "user@example.com",
+    });
+
+    const persisted = await readPersistedStore(agentDir);
+    const persistedProfile = requireOAuthProfile(persisted, profileId);
+    expect(persistedProfile.accountId).toBe("acct-shared");
+    expect(persistedProfile.email).toBe("user@example.com");
+    expect(JSON.stringify(persisted)).not.toContain("codex-cli-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("codex-cli-refresh-token");
+  });
+
   it("rejects mismatched Codex CLI fallback after forced local refresh fails", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
