@@ -1,6 +1,6 @@
 ---
 name: 1password
-description: Set up and use 1Password CLI for sign-in, desktop integration, and reading or injecting secrets.
+description: Use 1Password CLI for service-account token auth, interactive sign-in fallback, and reading, writing, injecting, or running secrets with op.
 homepage: https://developer.1password.com/docs/cli/get-started/
 metadata:
   {
@@ -24,7 +24,7 @@ metadata:
 
 # 1Password CLI
 
-Follow the official CLI get-started steps. Don't guess install commands.
+Prefer non-interactive service-account token auth when an `OP_SERVICE_ACCOUNT_TOKEN` or token file is available. Use desktop app integration and `op signin` only for explicit interactive setups.
 
 ## References
 
@@ -35,36 +35,60 @@ Follow the official CLI get-started steps. Don't guess install commands.
 
 1. Check OS + shell.
 2. Verify CLI present: `op --version`.
-3. Confirm desktop app integration is enabled (per get-started) and the app is unlocked.
-4. REQUIRED: create a fresh tmux session for all `op` commands (no direct `op` calls outside tmux).
-5. Sign in / authorize inside tmux: `op signin` (expect app prompt).
-6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
-7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
-
-## REQUIRED tmux session (T-Max)
-
-The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
-
-Example (see `tmux` skill for socket conventions, do not reuse old session names):
+3. If service-account auth is available, set `OP_SERVICE_ACCOUNT_TOKEN` for the command and verify with `op whoami`.
+4. If no service-account token is available and the user wants interactive auth, follow the desktop app integration/sign-in flow in `references/get-started.md`.
+5. Verify access before secret reads: `op whoami`; use `op vault list --format json` when vault access needs checking.
+6. Wrap networked `op` calls with a timeout (`gtimeout 15` on macOS when available, otherwise `timeout 15`) and retry once on timeout.
+7. Use `op item get`, `op read`, `op item create`, `op item edit`, `op run`, or `op inject`.
 
 ```bash
-SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
-mkdir -p "$SOCKET_DIR"
-SOCKET="$SOCKET_DIR/openclaw-op.sock"
-SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
-
-tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account my.1password.com" Enter
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
-tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
-tmux -S "$SOCKET" kill-session -t "$SESSION"
+TOKEN_FILE="${OP_SERVICE_ACCOUNT_TOKEN_FILE:-$HOME/.op-service-token}"
+if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+  op whoami
+elif [[ -f "$TOKEN_FILE" ]]; then
+  OP_SERVICE_ACCOUNT_TOKEN="$(cat "$TOKEN_FILE")" op whoami
+else
+  op signin
+fi
 ```
+
+## Service Account Examples
+
+```bash
+TOKEN_FILE="${OP_SERVICE_ACCOUNT_TOKEN_FILE:-$HOME/.op-service-token}"
+OP_SERVICE_ACCOUNT_TOKEN="$(cat "$TOKEN_FILE")" \
+  op vault list --format json
+```
+
+```bash
+TOKEN_FILE="${OP_SERVICE_ACCOUNT_TOKEN_FILE:-$HOME/.op-service-token}"
+OP_SERVICE_ACCOUNT_TOKEN="$(cat "$TOKEN_FILE")" \
+  op item get "Item Name" --vault "Vault Name" --fields credential --reveal
+```
+
+## Interactive Auth Fallback
+
+Use this only when service-account auth is unavailable and the user expects an interactive/manual setup.
+
+```bash
+op signin
+op whoami
+op vault list
+```
+
+If a fresh TTY is required, run `op signin` in a dedicated terminal or tmux session, then run dependent `op` commands in the same authenticated shell.
+
+## Troubleshooting
+
+- If `op` hangs, inspect stale CLI state before declaring a token bad: check for stuck `op`/`op daemon` processes and remove `~/.config/op/op-daemon.sock` when safe.
+- Validate token auth with the canonical CLI path: `OP_SERVICE_ACCOUNT_TOKEN=... op whoami`.
+- Do not infer token validity from arbitrary 1Password HTTP endpoints; some return 401/403/HTML for valid setups.
+- If the token file is missing, ask where the service-account token is stored rather than guessing or copying secrets.
 
 ## Guardrails
 
 - Never paste secrets into logs, chat, or code.
+- Never print `OP_SERVICE_ACCOUNT_TOKEN`; redact command output if it may contain it.
 - Prefer `op run` / `op inject` over writing secrets to disk.
-- If sign-in without app integration is needed, use `op account add`.
-- If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.
-- Do not run `op` outside tmux; stop and ask if tmux is unavailable.
+- Store new credentials in the intended vault before use whenever possible.
+- Do not use `op account add` or desktop auth unless the user requested interactive account setup.
