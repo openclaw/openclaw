@@ -9,6 +9,7 @@ import {
   canFinalizeMattermostPreviewInPlace,
   deliverMattermostReplyWithDraftPreview,
   evaluateMattermostMentionGate,
+  formatMattermostFinalDeliveryOutcomeLog,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
@@ -100,6 +101,23 @@ function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRoot
   return { account, resolver, decision };
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${index}`);
+  }
+  return call;
+}
+
+function mockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+  label: string,
+): unknown {
+  return mockCall(mock, index, label)[0];
+}
+
 describe("mattermost mention gating", () => {
   it("accepts unmentioned root channel posts in onmessage mode", () => {
     const cfg: OpenClawConfig = {
@@ -114,7 +132,7 @@ describe("mattermost mention gating", () => {
     expect(decision.dropReason).toBeNull();
     expect(decision.shouldRequireMention).toBe(false);
     expect(resolver).toHaveBeenCalledTimes(1);
-    const [resolverCall] = resolver.mock.calls[0] ?? [];
+    const resolverCall = mockCallArg(resolver, 0, "resolveRequireMention");
     expect(resolverCall).toStrictEqual({
       cfg,
       channel: "mattermost",
@@ -139,9 +157,11 @@ describe("mattermost mention gating", () => {
     });
     expect(decision.dropReason).toBeNull();
     expect(decision.shouldRequireMention).toBe(false);
-    const resolverCall = resolver.mock.calls.at(-1)?.[0];
-    expect(resolverCall?.groupId).toBe("chan-1");
-    expect(resolverCall?.groupId).not.toBe("thread-root-1");
+    const resolverCall = mockCallArg(resolver, -1, "resolveRequireMention") as {
+      groupId?: string;
+    };
+    expect(resolverCall.groupId).toBe("chan-1");
+    expect(resolverCall.groupId).not.toBe("thread-root-1");
   });
 
   it("rejects unmentioned channel posts in oncall mode", () => {
@@ -493,7 +513,11 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
-    const [updateClient, updatePostId, updateParams] = updateMattermostPostSpy.mock.calls[0] ?? [];
+    const [updateClient, updatePostId, updateParams] = mockCall(
+      updateMattermostPostSpy,
+      0,
+      "updateMattermostPost",
+    );
     expect(updateClient).toBe(client);
     expect(updatePostId).toBe("preview-post-1");
     expect(updateParams).toStrictEqual({ message: "Final answer" });
@@ -529,6 +553,74 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatMattermostFinalDeliveryOutcomeLog", () => {
+  it("logs delivered only for visible text and media outcomes", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "text",
+        payload: { text: "hello" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBe("delivered reply to channel:town-square");
+
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "media",
+        payload: { mediaUrl: "https://example.com/a.png" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBe("delivered reply to channel:town-square");
+  });
+
+  it("does not log delivered for empty no-send outcomes without diagnostic violations", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "empty",
+        payload: { text: "  \n\t " } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("logs a diagnostic for substantive empty outcomes", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "empty",
+        payload: { text: "work result" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBe(
+      "mattermost no-visible-reply: no-visible-reply-after-final-delivery" +
+        " to=channel:town-square" +
+        " accountId=default" +
+        " agentId=agent-1" +
+        " outcome=empty" +
+        " finalTextLength=11" +
+        " mediaUrlCount=0",
+    );
+  });
+
+  it("does not log reasoning-suppressed outcomes", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "reasoning_skipped",
+        payload: { text: "Reasoning: hidden" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBeUndefined();
   });
 });
 

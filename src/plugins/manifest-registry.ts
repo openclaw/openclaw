@@ -610,7 +610,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
     level: "warn",
     pluginId: sanitizeForLog(params.record.id),
     source: sanitizeForLog(params.record.manifestPath),
-    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads`,
+    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads. Channels without channelConfigs still appear in channel listings, but setup UI may be limited.`,
   });
 }
 
@@ -651,10 +651,14 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const candidateSource = resolveUserPath(params.candidate.source, params.env);
+  const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
+  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => resolveUserPath(entry, params.env));
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
   if (trackedPaths.length === 0) {
     return false;
   }

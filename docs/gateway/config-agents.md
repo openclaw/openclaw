@@ -461,8 +461,8 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   agents: {
     defaults: {
       cliBackends: {
-        "codex-cli": {
-          command: "/opt/homebrew/bin/codex",
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude",
         },
         "my-cli": {
           command: "my-cli",
@@ -542,7 +542,7 @@ Periodic heartbeat runs.
         includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-        skipWhenBusy: false, // default: false; true also waits for subagent/nested lanes
+        skipWhenBusy: false, // default: false; true also waits for this agent's subagent/nested lanes
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -564,7 +564,7 @@ Periodic heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
-- `skipWhenBusy`: when true, heartbeat runs defer on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
+- `skipWhenBusy`: when true, heartbeat runs defer on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -615,6 +615,36 @@ Periodic heartbeat runs.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
+
+### `agents.defaults.runRetries`
+
+Outer run loop retry iteration boundaries for the embedded Pi runner to prevent infinite execution loops during failure recovery. Note that this setting currently only applies to the embedded agent runtime, not ACP or CLI runtimes.
+
+```json5
+{
+  agents: {
+    defaults: {
+      runRetries: {
+        base: 24,
+        perProfile: 8,
+        min: 32,
+        max: 160,
+      },
+    },
+    list: [
+      {
+        id: "main",
+        runRetries: { max: 50 }, // optional per-agent overrides
+      },
+    ],
+  },
+}
+```
+
+- `base`: base number of run retry iterations for the outer run loop. Default: `24`.
+- `perProfile`: additional run retry iterations granted per fallback profile candidate. Default: `8`.
+- `min`: minimum absolute limit for run retry iterations. Default: `32`.
+- `max`: maximum absolute limit for run retry iterations to prevent runaway execution. Default: `160`.
 
 ### `agents.defaults.contextPruning`
 
@@ -1250,13 +1280,13 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all
     removeAckAfterReply: false,
     queue: {
-      mode: "steer", // steer | queue (legacy one-at-a-time) | followup | collect | steer-backlog | steer+backlog | interrupt
+      mode: "followup", // steer | followup | collect | interrupt
       debounceMs: 500,
       cap: 20,
       drop: "summarize", // old | new | summarize
       byChannel: {
-        whatsapp: "steer",
-        telegram: "steer",
+        whatsapp: "followup",
+        telegram: "followup",
       },
     },
     inbound: {
@@ -1295,9 +1325,14 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
 - `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Telegram, WhatsApp, and iMessage.
-- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Telegram, and WhatsApp.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
-  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
+  On Telegram and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
+- `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
+  `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
+  `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.
+  Telegram only allows a fixed reaction set, so unsupported configured emoji fall back
+  to the nearest supported status variant for that chat.
 
 ### Inbound debounce
 

@@ -68,6 +68,27 @@ vi.mock("../../config/config.js", async () => {
     writeConfigFile: mocks.writeConfigFile,
     replaceConfigFile: async (params: { nextConfig: unknown }) =>
       await mocks.writeConfigFile(params.nextConfig),
+    mutateConfigFileWithRetry: async (params: {
+      mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
+    }) => {
+      const draft = structuredClone(mocks.loadConfigReturn);
+      const result = await params.mutate(draft, {
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        previousHash: "test-hash",
+        attempt: 0,
+      });
+      await mocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw/config.json",
+        previousHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
   };
 });
 
@@ -284,6 +305,10 @@ function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: s
   return error;
 }
 
+function firstRespondResult(respond: ReturnType<typeof vi.fn>): unknown {
+  return mockCallArg(respond, 0, 1);
+}
+
 function expectStringContaining(value: unknown, text: string) {
   expect(typeof value).toBe("string");
   expect(value as string).toContain(text);
@@ -444,7 +469,7 @@ async function listAgentFileNames(agentId = "main") {
   const { respond, promise } = makeCall("agents.files.list", { agentId });
   await promise;
 
-  const [, result] = respond.mock.calls[0] ?? [];
+  const result = firstRespondResult(respond);
   const files = (result as { files: Array<{ name: string }> }).files;
   return files.map((file) => file.name);
 }
@@ -550,6 +575,23 @@ describe("agents.create", () => {
 
     const { respond, promise } = makeCall("agents.create", {
       name: "Existing",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expectRespondErrorContaining(respond, "already exists");
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("returns an invalid request when a concurrent create wins the config race", async () => {
+    let findCallCount = 0;
+    mocks.findAgentEntryIndex.mockImplementation(() => {
+      findCallCount += 1;
+      return findCallCount >= 2 ? 0 : -1;
+    });
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Race Agent",
       workspace: "/tmp/ws",
     });
     await promise;
@@ -739,6 +781,22 @@ describe("agents.update", () => {
 
     const { respond, promise } = makeCall("agents.update", {
       agentId: "nonexistent",
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+  });
+
+  it("returns not found when a concurrent delete wins the update race", async () => {
+    let findCallCount = 0;
+    mocks.findAgentEntryIndex.mockImplementation(() => {
+      findCallCount += 1;
+      return findCallCount >= 2 ? -1 : 0;
+    });
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      model: "gpt-5.5",
     });
     await promise;
 
@@ -1107,6 +1165,22 @@ describe("agents.delete", () => {
     expectNotFoundResponseAndNoWrite(respond);
   });
 
+  it("returns not found when a concurrent delete wins the delete race", async () => {
+    let findCallCount = 0;
+    mocks.findAgentEntryIndex.mockImplementation(() => {
+      findCallCount += 1;
+      return findCallCount >= 2 ? -1 : 0;
+    });
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid params (missing agentId)", async () => {
     const { respond, promise } = makeCall("agents.delete", {});
     await promise;
@@ -1170,7 +1244,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls[0] ?? [];
+    const result = firstRespondResult(respond);
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");
@@ -1197,7 +1271,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls[0] ?? [];
+    const result = firstRespondResult(respond);
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");

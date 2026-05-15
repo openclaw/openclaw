@@ -58,7 +58,7 @@ async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawCo
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
     commit: async (nextConfig, writeOptions) => {
-      await replaceConfigFile({
+      return await replaceConfigFile({
         nextConfig,
         writeOptions: { ...writeOptions, allowConfigSizeDrop: true },
         afterWrite: { mode: "auto" },
@@ -655,7 +655,7 @@ export async function runSetupWizard(
       runtime,
       setDefaultModel: true,
       opts: {
-        tokenProvider: opts.tokenProvider,
+        ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
       },
     });
@@ -780,9 +780,11 @@ export async function runSetupWizard(
     });
   }
 
-  // Setup hooks (session memory on /new)
-  const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
-  nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+  if (!opts.skipHooks) {
+    // Setup hooks (session memory on /new)
+    const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
+    nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+  }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await writeWizardConfigFile(nextConfig);
