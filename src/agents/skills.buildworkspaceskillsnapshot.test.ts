@@ -108,6 +108,43 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.skills).toStrictEqual([]);
   });
 
+  it("exposes shared x-post-analysis to HQ agent workspaces through skills.load.extraDirs", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("HQ Agents/tom");
+    const sharedSkillsDir = await fixtureSuite.createCaseDir("shared-skills");
+
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "xurl"),
+      name: "xurl",
+      description: "Generic X API access",
+    });
+    await writeSkill({
+      dir: path.join(sharedSkillsDir, "x-post-analysis"),
+      name: "x-post-analysis",
+      description: "Deterministic X post analysis workflow",
+    });
+
+    const withoutShared = buildSnapshot(workspaceDir);
+    expectSnapshotNamesAndPrompt(withoutShared, {
+      contains: ["xurl"],
+      omits: ["x-post-analysis"],
+    });
+
+    const withShared = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            extraDirs: [sharedSkillsDir],
+          },
+        },
+      },
+    });
+
+    expectSnapshotNamesAndPrompt(withShared, {
+      contains: ["x-post-analysis", "xurl"],
+    });
+    expect(withShared.configFingerprint).toEqual(expect.any(String));
+  });
+
   it("omits disable-model-invocation skills from the prompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import { fingerprintSkillSnapshotConfig } from "./skills/snapshot-fingerprint.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -1088,6 +1089,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       prompt: "persisted prompt",
       skills: [{ name: "cli-skill" }],
       skillFilter: ["cli-skill"],
+      configFingerprint: fingerprintSkillSnapshotConfig(state.defaultRuntimeConfig),
       version: 0,
     };
     const rebuiltSkills = [

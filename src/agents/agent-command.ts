@@ -79,6 +79,7 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { fingerprintSkillSnapshotConfig } from "./skills/snapshot-fingerprint.js";
 import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -642,11 +643,13 @@ async function agentCommandInternal(
       await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const configFingerprint = fingerprintSkillSnapshotConfig(cfg);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
     const shouldRefreshSkillsSnapshot =
       !currentSkillsSnapshot ||
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
-      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
+      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter) ||
+      currentSkillsSnapshot.configFingerprint !== configFingerprint;
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
     const buildSkillsSnapshot = async () => {
       const [

@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -10,8 +9,8 @@ import {
   shouldRefreshSnapshotForVersion,
 } from "../../agents/skills/refresh-state.js";
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
+import { fingerprintSkillSnapshotConfig } from "../../agents/skills/snapshot-fingerprint.js";
 import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -40,71 +39,6 @@ const RESOLVED_SKILLS_CACHE_MAX = 10;
 
 export function __testing_resetResolvedSkillsCache(): void {
   resolvedSkillsCache.clear();
-}
-
-function isSensitiveConfigKey(key: string): boolean {
-  const normalized = key.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
-  return (
-    normalized.endsWith("apikey") ||
-    normalized.endsWith("token") ||
-    normalized.endsWith("secret") ||
-    normalized.endsWith("password") ||
-    normalized.endsWith("privatekey") ||
-    normalized.endsWith("clientsecret")
-  );
-}
-
-function redactSensitiveConfigValue(value: unknown): unknown {
-  if (value === undefined || value === null || value === false || value === "") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return value.trim() ? "[redacted:string]" : "";
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) && value !== 0 ? "[redacted:number]" : value;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.length === 0 ? [] : "[redacted:array]";
-  }
-  return "[redacted:object]";
-}
-
-function redactConfigForSkillSnapshotCache(value: unknown, stack = new WeakSet<object>()): unknown {
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  if (stack.has(value)) {
-    return "[Circular]";
-  }
-  stack.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return value.map((entry) => redactConfigForSkillSnapshotCache(entry, stack));
-    }
-    const redacted: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).toSorted()) {
-      const field = (value as Record<string, unknown>)[key];
-      redacted[key] = isSensitiveConfigKey(key)
-        ? redactSensitiveConfigValue(field)
-        : redactConfigForSkillSnapshotCache(field, stack);
-    }
-    return redacted;
-  } finally {
-    stack.delete(value);
-  }
-}
-
-// Skill frontmatter `requires.config` reads the full OpenClaw config, so cache
-// reuse must follow the same boundary without putting raw secrets in Map keys.
-function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
-  return crypto
-    .createHash("sha256")
-    .update(stableStringify(redactConfigForSkillSnapshotCache(config)))
-    .digest("hex");
 }
 
 function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
@@ -261,9 +195,11 @@ export async function ensureSkillSnapshot(params: {
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const configFingerprint = fingerprintSkillSnapshotConfig(cfg);
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
-    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
+    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter) ||
+    existingSnapshot?.configFingerprint !== configFingerprint;
   const buildSnapshot = () => {
     return buildWorkspaceSkillSnapshot(workspaceDir, {
       config: cfg,
@@ -274,7 +210,6 @@ export async function ensureSkillSnapshot(params: {
     });
   };
 
-  const configFingerprint = fingerprintSkillSnapshotConfig(cfg);
   const snapshotCacheKey = JSON.stringify([
     workspaceDir,
     snapshotVersion,

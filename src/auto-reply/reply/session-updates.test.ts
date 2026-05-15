@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fingerprintSkillSnapshotConfig } from "../../agents/skills/snapshot-fingerprint.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
 type TestSkillSnapshot = NonNullable<SessionEntry["skillsSnapshot"]>;
 
-function strippedSnapshot(skillName = "test"): TestSkillSnapshot {
+function strippedSnapshot(skillName = "test", config: OpenClawConfig = {}): TestSkillSnapshot {
   return {
     prompt: "skills prompt",
     skills: [{ name: skillName }],
+    configFingerprint: fingerprintSkillSnapshotConfig(config),
     version: 0,
   };
 }
@@ -236,6 +239,42 @@ describe("ensureSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes a stale persisted snapshot after config-driven shared skill exposure changes", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    buildWorkspaceSkillSnapshotMock.mockImplementation((_workspaceDir, opts) => {
+      const config = (opts as { config?: OpenClawConfig }).config;
+      return {
+        prompt: "x-post-analysis prompt",
+        skills: [{ name: "x-post-analysis" }, { name: "xurl" }],
+        configFingerprint: fingerprintSkillSnapshotConfig(config),
+        resolvedSkills: [{ name: "x-post-analysis" }, { name: "xurl" }],
+        version: 0,
+      };
+    });
+
+    const staleSnapshot: TestSkillSnapshot = {
+      prompt: "old xurl-only prompt",
+      skills: [{ name: "xurl" }],
+      version: 0,
+    };
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry: testSessionEntry("sess-1", staleSnapshot),
+      sessionStore: {},
+      sessionKey: "agent:tom:telegram:direct:123",
+      isFirstTurnInSession: false,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: { skills: { load: { extraDirs: ["/root/clawd/skills"] } } },
+    });
+
+    expect(result.skillsSnapshot?.skills.map((skill) => skill.name)).toEqual([
+      "x-post-analysis",
+      "xurl",
+    ]);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
   it("redacts secret values in the cache key while preserving eligibility presence", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
 
@@ -245,7 +284,8 @@ describe("ensureSkillSnapshot", () => {
       resolvedSkills: [{ name: "discord" }],
     });
 
-    const snapshot = strippedSnapshot("discord");
+    const firstConfig = { channels: { discord: { token: "first-secret" } } };
+    const snapshot = strippedSnapshot("discord", firstConfig);
 
     await ensureSkillSnapshot({
       sessionEntry: testSessionEntry("sess-1", snapshot),
@@ -253,7 +293,7 @@ describe("ensureSkillSnapshot", () => {
       sessionKey: "main",
       isFirstTurnInSession: true,
       workspaceDir: TEST_WORKSPACE_DIR,
-      cfg: { channels: { discord: { token: "first-secret" } } },
+      cfg: firstConfig,
     });
 
     await ensureSkillSnapshot({

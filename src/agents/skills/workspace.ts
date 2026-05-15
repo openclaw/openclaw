@@ -21,6 +21,7 @@ import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { fingerprintSkillSnapshotConfig } from "./snapshot-fingerprint.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -1053,6 +1054,7 @@ export function buildWorkspaceSkillSnapshot(
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    configFingerprint: fingerprintSkillSnapshotConfig(opts?.config),
     resolvedSkills,
     version: opts?.snapshotVersion,
   };
