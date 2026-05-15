@@ -75,7 +75,7 @@ const AZURE_HOSTNAME_SUFFIXES = [
   ".cognitiveservices.azure.com",
 ] as const;
 
-const DEFAULT_AZURE_OPENAI_API_VERSION = "2025-04-01-preview";
+const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 
 function sanitizeLogValue(value: unknown): string {
   const raw =
