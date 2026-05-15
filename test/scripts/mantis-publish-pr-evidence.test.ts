@@ -137,14 +137,15 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(published).toEqual({
       artifactRoot: "mantis/discord/pr-1/run-1",
       rawBase: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
-      treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
+      treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/index.json",
     });
-    expect(requests.map((request) => request.method)).toEqual(["PUT", "PUT", "PUT", "PUT"]);
+    expect(requests.map((request) => request.method)).toEqual(["PUT", "PUT", "PUT", "PUT", "PUT"]);
     expect(requests.map((request) => request.url)).toEqual([
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png",
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/candidate.png",
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/baseline-change.mp4",
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/mantis-evidence.json",
+      "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/index.json",
     ]);
     expect(requests[0]?.headers).toMatchObject({
       "content-type": "image/png",
@@ -152,6 +153,9 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     });
     expect(String((requests[0]?.headers as Record<string, string>).authorization)).toContain(
       "Credential=access/",
+    );
+    expect(String(requests[4]?.body)).toContain(
+      '"url": "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png"',
     );
   });
 

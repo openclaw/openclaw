@@ -407,6 +407,7 @@ export async function publishArtifactFiles({
   storageConfig = objectStorageConfig(),
 }) {
   const safeArtifactRoot = normalizeTargetPath(artifactRoot);
+  const publicRoot = `${storageConfig.publicBaseUrl}/${encodePathForUrl(safeArtifactRoot)}`;
   for (const artifact of manifest.artifacts) {
     const key = normalizeTargetPath(`${safeArtifactRoot}/${artifact.targetPath}`);
     const request = signedPutRequest({
@@ -427,11 +428,50 @@ export async function publishArtifactFiles({
       );
     }
   }
-  const publicRoot = `${storageConfig.publicBaseUrl}/${encodePathForUrl(safeArtifactRoot)}`;
+  const indexArtifact = {
+    targetPath: "index.json",
+  };
+  const indexRequest = signedPutRequest({
+    artifact: indexArtifact,
+    body: Buffer.from(
+      `${JSON.stringify(
+        {
+          artifacts: manifest.artifacts.map((artifact) => ({
+            kind: artifact.kind,
+            label: artifact.label,
+            lane: artifact.lane,
+            targetPath: artifact.targetPath,
+            url: artifactUrl(publicRoot, artifact),
+          })),
+          comparison: manifest.comparison,
+          id: manifest.id,
+          rawBase: publicRoot,
+          scenario: manifest.scenario,
+          summary: manifest.summary,
+          title: manifest.title,
+        },
+        null,
+        2,
+      )}\n`,
+    ),
+    config: storageConfig,
+    key: normalizeTargetPath(`${safeArtifactRoot}/${indexArtifact.targetPath}`),
+  });
+  const indexResponse = await fetchImpl(indexRequest.url, {
+    body: indexRequest.body,
+    headers: indexRequest.headers,
+    method: indexRequest.method,
+  });
+  if (!indexResponse.ok) {
+    const responseText = await indexResponse.text();
+    throw new Error(
+      `Failed to upload Mantis artifact ${indexArtifact.targetPath}: ${indexResponse.status} ${indexResponse.statusText}\n${responseText}`,
+    );
+  }
   return {
     artifactRoot: safeArtifactRoot,
     rawBase: publicRoot,
-    treeUrl: publicRoot,
+    treeUrl: artifactUrl(publicRoot, indexArtifact),
   };
 }
 
