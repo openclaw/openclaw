@@ -1835,7 +1835,8 @@
     "follow-redirects": "1.16.0",
     "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    "uuid": "14.0.0"
+    "uuid": "14.0.0",
+    "hosted-git-info": "10.1.0"
   },
   "engines": {
     "node": ">=22.16.0"
