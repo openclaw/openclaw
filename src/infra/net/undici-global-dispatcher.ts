@@ -2,6 +2,7 @@ import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from 
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
+  withTemporaryUndiciAutoSelectFamily,
 } from "./undici-family-policy.js";
 import {
   loadUndiciGlobalDispatcherDeps,
@@ -33,6 +34,7 @@ type CurrentDispatcherInfo = {
   dispatcher: UndiciDispatcher;
 };
 type TimedProxylineManagedDispatcherState = {
+  autoSelectFamily: boolean | undefined;
   timeoutMs: number;
   dispatch: UndiciDispatcher["dispatch"];
 };
@@ -68,23 +70,29 @@ function withDefaultDispatchTimeout(
 function createTimedProxylineManagedDispatcher(
   dispatcher: UndiciDispatcher,
   timeoutMs: number,
+  autoSelectFamily: boolean | undefined,
 ): UndiciDispatcher {
   const existingState = timedProxylineManagedDispatchers.get(dispatcher);
   if (existingState) {
+    existingState.autoSelectFamily = autoSelectFamily;
     existingState.timeoutMs = timeoutMs;
     return dispatcher;
   }
 
   const state: TimedProxylineManagedDispatcherState = {
+    autoSelectFamily,
     timeoutMs,
     dispatch(options: UndiciDispatchOptions, handler: UndiciDispatchHandler): boolean {
-      return dispatcher.dispatch(
-        {
-          ...options,
-          bodyTimeout: withDefaultDispatchTimeout(options.bodyTimeout, state.timeoutMs),
-          headersTimeout: withDefaultDispatchTimeout(options.headersTimeout, state.timeoutMs),
-        },
-        handler,
+      return withTemporaryUndiciAutoSelectFamily(state.autoSelectFamily, () =>
+        dispatcher.dispatch(
+          {
+            ...options,
+            bodyTimeout: withDefaultDispatchTimeout(options.bodyTimeout, state.timeoutMs),
+            headersTimeout: withDefaultDispatchTimeout(options.headersTimeout, state.timeoutMs),
+            ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+          },
+          handler,
+        ),
       );
     },
   };
@@ -249,7 +257,9 @@ function applyGlobalDispatcherStreamTimeouts(params: {
   const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
     if (kind === "proxyline-managed") {
-      runtime.setGlobalDispatcher(createTimedProxylineManagedDispatcher(dispatcher, timeoutMs));
+      runtime.setGlobalDispatcher(
+        createTimedProxylineManagedDispatcher(dispatcher, timeoutMs, autoSelectFamily),
+      );
     } else if (kind === "env-proxy") {
       const proxyOptions = {
         ...resolveEnvHttpProxyAgentOptions(),
