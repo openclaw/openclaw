@@ -299,6 +299,41 @@ describe("chat abort transcript persistence", () => {
     });
   });
 
+  it("plain stop aborts runs tracked under the canonical session key", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-canonical-");
+    const respond = vi.fn();
+    const active = createActiveRun("main", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-canonical", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey: "main",
+        clientRunId: "run-stop-canonical",
+      }),
+      dedupe: {
+        get: vi.fn(),
+      },
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "alias-main",
+        message: "stop",
+        idempotencyKey: "idem-stop-canonical",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-stop-canonical"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-stop-canonical")).toBe(false);
+  });
+
   it("skips run-scoped transcript persistence when partial text is blank", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-abort-run-blank-",

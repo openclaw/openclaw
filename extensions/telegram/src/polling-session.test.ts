@@ -756,6 +756,9 @@ describe("TelegramPollingSession", () => {
       if (update.update_id === 43) {
         events.push("status");
       }
+      if (update.update_id === 44) {
+        events.push("stop");
+      }
     });
     const bot = {
       api: {
@@ -771,7 +774,12 @@ describe("TelegramPollingSession", () => {
       spoolDir: tempDir,
       update: {
         update_id: 42,
-        message: { text: "summarize this", chat: { id: -100, type: "supergroup" } },
+        message: {
+          text: "summarize this",
+          chat: { id: -100, type: "supergroup", is_forum: true },
+          is_topic_message: true,
+          message_thread_id: 5907,
+        },
       },
     });
     let stopWorker: (() => void) | undefined;
@@ -805,11 +813,28 @@ describe("TelegramPollingSession", () => {
         spoolDir: tempDir,
         update: {
           update_id: 43,
-          message: { text: "/status", chat: { id: -100, type: "supergroup" } },
+          message: {
+            text: "/status",
+            chat: { id: -100, type: "supergroup", is_forum: true },
+            is_topic_message: true,
+            message_thread_id: 5907,
+          },
+        },
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir: tempDir,
+        update: {
+          update_id: 44,
+          message: {
+            text: "/stop@vacs_tars_bot",
+            chat: { id: -100, type: "supergroup", is_forum: true },
+            is_topic_message: true,
+            message_thread_id: 5907,
+          },
         },
       });
 
-      await vi.waitFor(() => expect(events).toEqual(["regular:start", "status"]));
+      await vi.waitFor(() => expect(events).toEqual(["regular:start", "status", "stop"]));
       expect(
         (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map((update) => update.updateId),
       ).toEqual([42]);
