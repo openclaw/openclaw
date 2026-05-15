@@ -250,6 +250,46 @@ describe("plugin-sdk/approval-renderers", () => {
     });
   });
 
+  it("uses effective plugin decisions in simple-technical manual fallback text", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-approval-123",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: echo hi",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+      allowedDecisions: ["allow-once", "deny"],
+      language: "simple-technical",
+    });
+
+    expect(payload.text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(payload.text).not.toContain("allow-once|allow-always|deny");
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve plugin-approval-123 allow-once",
+              style: "success",
+            },
+            {
+              label: "Deny",
+              value: "/approve plugin-approval-123 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("renders Codex command approvals in concise plain English", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

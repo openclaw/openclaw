@@ -329,6 +329,36 @@ describe("matrixApprovalNativeRuntime", () => {
     expect(pendingPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
+  it("uses Matrix plugin actions in simple-technical fallback approval text", async () => {
+    const view = buildPluginApprovalView({
+      actions: [
+        {
+          decision: "allow-once",
+          label: "Allow Once",
+          style: "success",
+          command: "/approve plugin:req-1 allow-once",
+        },
+        {
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:req-1 deny",
+        },
+      ],
+    });
+    const pendingPayload = await buildPendingPayload(view, {
+      approvals: {
+        plugin: {
+          language: "simple-technical",
+        },
+      },
+    } as never);
+
+    expect(pendingPayload.text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(pendingPayload.text).not.toContain("allow-once|allow-always|deny");
+    expect(pendingPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
+  });
+
   it("binds Matrix approval reactions before publishing option reactions", async () => {
     const sendSingleTextMessage = vi.fn().mockResolvedValue({
       messageId: "$approval",

@@ -2882,11 +2882,13 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
-  lines.push(
-    `Reply with: /approve <id> ${resolvePluginApprovalRequestAllowedDecisions(request.request).join(
-      "|",
-    )}`,
-  );
+  const replyDecisions =
+    options?.allowedDecisions != null
+      ? normalizePluginApprovalAllowedDecisions(options.allowedDecisions)
+      : resolvePluginApprovalRequestAllowedDecisions(request.request);
+  if (replyDecisions.length > 0) {
+    lines.push(`Reply with: /approve <id> ${replyDecisions.join("|")}`);
+  }
   return lines.join("\n");
 }
 
