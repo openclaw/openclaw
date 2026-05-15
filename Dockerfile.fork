@@ -80,6 +80,20 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 USER node
 ENV CLOUDSDK_PYTHON=/usr/bin/python3
+ENV OPENCLAW_EXTENSIONS="discord feishu voice-call"
+
+# Install npm dependencies required by the selected extensions.
+# The upstream slim image may not include these packages, so we add them here.
+USER root
+RUN cd /app && npm install --no-audit --no-fund --omit=dev \
+    @discordjs/voice@^0.19.2 \
+    discord-api-types@^0.38.47 \
+    opusscript@^0.1.1 \
+    @larksuiteoapi/node-sdk@^1.62.1 \
+    commander@^14.0.3 \
+    ws@^8.20.0 && \
+    npm cache clean --force
+USER node
 
 # Bring over /usr/local entirely — gh, lark-cli, the full node_modules tree
 # (top-level + any flat-installed peer deps), corepack home, share/. Source
