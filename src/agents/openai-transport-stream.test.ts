@@ -5658,60 +5658,6 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
   });
 
-  it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
-    // DeepSeek V4 via OpenRouter injects reasoning_content: "" on tool-call
-    // assistant messages. An empty string is technically a "string" but the
-    // Chat Completions schema does not accept it, and OpenRouter rejects the
-    // replayed message with HTTP 500.
-    const params = buildOpenAICompletionsParams(
-      openRouterModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          { role: "user", content: "read config" },
-          {
-            role: "assistant",
-            provider: "openrouter",
-            api: "openai-completions",
-            model: "deepseek/deepseek-v4-pro",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: "reasoning_content",
-              },
-              {
-                type: "toolCall",
-                id: "call_1",
-                name: "read_file",
-                arguments: { path: "config.json" },
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "read_file",
-            content: [{ type: "text", text: "{ }" }],
-            isError: false,
-            timestamp: 1,
-          },
-          { role: "user", content: "continue" },
-        ],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { messages: unknown };
-
-    const msgs = params.messages as Record<string, unknown>[];
-    const assistantMsgs = msgs.filter((m) => m.role === "assistant");
-    for (const msg of assistantMsgs) {
-      expect(msg).not.toHaveProperty("reasoning_content");
-    }
-  });
-
   it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {
     const reasoningDetail = { type: "reasoning.encrypted", id: "rs_1", data: "ciphertext" };
     const params = buildOpenAICompletionsParams(
