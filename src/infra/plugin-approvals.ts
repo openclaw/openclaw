@@ -39,9 +39,9 @@ export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
 const SIMPLE_COMMAND_PREVIEW_MAX_LENGTH = 180;
 const SHELL_OUTPUT_REDIRECTION_RE =
-  /(?:^|\s)(?:\d?>>?|&>>?|>>?)\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
+  /(?<![<>])(?:&>>?|\d*>>?)\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
 const SHELL_INPUT_REDIRECTION_RE =
-  /(?:^|\s)(?:\d?<)(?![<&])\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
+  /(?<![<>])(?:\d*)<(?![<&])\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
 export const DEFAULT_PLUGIN_APPROVAL_LANGUAGE =
   "original" as const satisfies PluginApprovalLanguage;
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
