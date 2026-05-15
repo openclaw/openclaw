@@ -1907,7 +1907,7 @@ export async function runReplyAgent(params: {
         })
           .then((contextContent) => {
             if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey, trusted: true });
+              enqueueSystemEvent(contextContent, { sessionKey });
             }
           })
           .catch(() => {

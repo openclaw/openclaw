@@ -258,7 +258,6 @@ const sessionUpdatesRuntimeLoader = createLazyImportLoader(
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
 );
-const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
   return piEmbeddedRuntimeLoader.load();
@@ -688,7 +687,6 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  let forceSenderIsOwnerFalseFromSystemEvents = false;
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -704,9 +702,6 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
-        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
-          forceSenderIsOwnerFalseFromSystemEvents = true;
-        }
       }
     }
     return buildReplyPromptEnvelope({
@@ -1003,10 +998,9 @@ export async function runPreparedReply(
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-      senderIsOwner: forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner,
+      senderIsOwner: command.senderIsOwner,
       traceAuthorized:
-        (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
-        (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+        command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       config: cfg,

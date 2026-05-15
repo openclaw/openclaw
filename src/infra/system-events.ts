@@ -19,7 +19,6 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -37,7 +36,6 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -91,16 +89,15 @@ function findDuplicateInQueue(
   text: string,
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
-  trusted: boolean,
 ): SystemEvent | undefined {
   if (contextKey === null) {
     const last = queue[queue.length - 1];
-    return last && isDuplicateSystemEvent(last, { text, contextKey, deliveryContext, trusted })
+    return last && isDuplicateSystemEvent(last, { text, contextKey, deliveryContext })
       ? last
       : undefined;
   }
   for (const event of queue) {
-    if (isDuplicateSystemEvent(event, { text, contextKey, deliveryContext, trusted })) {
+    if (isDuplicateSystemEvent(event, { text, contextKey, deliveryContext })) {
       return event;
     }
   }
@@ -122,16 +119,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
-  const trusted = options.trusted !== false;
-  if (
-    findDuplicateInQueue(
-      entry.queue,
-      cleaned,
-      normalizedContextKey,
-      normalizedDeliveryContext,
-      trusted,
-    )
-  ) {
+  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
     return false;
   }
   applyContextKeyPolicy(entry, normalizedContextKey);
@@ -140,7 +128,6 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    trusted,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -173,12 +160,11 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext" | "trusted">,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
-    (existing.trusted ?? true) === (incoming.trusted ?? true) &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -188,7 +174,6 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    (left.trusted ?? true) === (right.trusted ?? true) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

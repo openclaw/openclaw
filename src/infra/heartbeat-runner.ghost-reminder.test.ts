@@ -247,7 +247,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       enqueue: (sessionKey) => {
         enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
           sessionKey,
-          trusted: false,
         });
       },
     });
@@ -404,7 +403,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       reason: "exec-event",
       target: "none",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
       },
     });
 
@@ -421,7 +420,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       replyText: "Deploy succeeded",
       reason: "exec-event",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
       },
     });
 
@@ -491,23 +490,23 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   it("forces owner downgrade for untrusted hook:wake system events", async () => {
     await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-untrusted-",
+      tmpPrefix: "openclaw-hook-event-",
       reason: "hook:wake",
-      forceSenderIsOwnerFalse: true,
+      forceSenderIsOwnerFalse: false,
     });
   });
 
   it("forces owner downgrade for untrusted interval events", async () => {
     await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-untrusted-",
+      tmpPrefix: "openclaw-interval-event-",
       reason: "interval",
-      forceSenderIsOwnerFalse: true,
+      forceSenderIsOwnerFalse: false,
     });
   });
 
   it("does not force owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
     await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-untrusted-isolated-",
+      tmpPrefix: "openclaw-hook-event-isolated-",
       reason: "hook:wake",
       isolatedSession: true,
       forceSenderIsOwnerFalse: false,
@@ -516,7 +515,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   it("does not force owner downgrade for isolated interval runs with only base-session untrusted events", async () => {
     await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-untrusted-isolated-",
+      tmpPrefix: "openclaw-interval-event-isolated-",
       reason: "interval",
       isolatedSession: true,
       forceSenderIsOwnerFalse: false,
@@ -662,7 +661,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
       enqueueSystemEvent("Exec completed (review-run, code 0) :: review-worker spawn finished", {
         sessionKey,
-        trusted: false,
         deliveryContext: {
           channel: "telegram",
           to: "telegram:-1003774691294:topic:47",
@@ -725,7 +723,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
       enqueueSystemEvent("Exec completed (review-run, code 0)", {
         sessionKey,
-        trusted: false,
         deliveryContext: {
           channel: "telegram",
           to: "telegram:-1003774691294:topic:47",

@@ -161,19 +161,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
         contextKey: "acp-spawn:run-1:start",
         sessionKey: "agent:main:main",
         deliveryContext,
-        trusted: false,
       },
       {
         contextKey: "acp-spawn:run-1:progress",
         sessionKey: "agent:main:main",
         deliveryContext,
-        trusted: false,
       },
       {
         contextKey: "acp-spawn:run-1:done",
         sessionKey: "agent:main:main",
         deliveryContext,
-        trusted: false,
       },
     ]);
     const heartbeatCalls = requestHeartbeatMock.mock.calls as Array<

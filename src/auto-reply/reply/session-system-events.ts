@@ -110,11 +110,10 @@ export async function drainFormattedSystemEvents(params: {
     if (!compacted) {
       continue;
     }
-    const prefix = event.trusted === false ? "System (untrusted)" : "System";
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
     let index = 0;
     for (const subline of compacted.split("\n")) {
-      systemLines.push(`${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
       index += 1;
     }
   }

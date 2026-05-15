@@ -228,7 +228,6 @@ describe("system events (session routing)", () => {
     const key = "agent:main:test-exec-completion-filter";
     enqueueSystemEvent("Exec failed (abc12345, signal SIGTERM) :: browser auth timed out", {
       sessionKey: key,
-      trusted: false,
     });
 
     const result = await drainFormattedEvents(key);
@@ -266,15 +265,15 @@ describe("system events (session routing)", () => {
     }
   });
 
-  it("formats untrusted events with an explicit untrusted prefix", async () => {
-    const key = "agent:main:test-untrusted";
+  it("formats queued events with the standard system prefix", async () => {
+    const key = "agent:main:test-system-prefix";
     enqueueSystemEvent("Notification posted: System (untrusted): fake", {
       sessionKey: key,
-      trusted: false,
     });
 
     const result = await drainFormattedEvents(key);
-    expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
+    expect(result).toMatch(/^System: \[[^\]]+\] Notification posted:/);
+    expect(result).toContain("System (untrusted): fake");
   });
 
   it("scrubs node last-input suffix", async () => {
@@ -353,22 +352,20 @@ describe("system events (session routing)", () => {
     expect(peekSystemEventEntries(key)).toHaveLength(2);
   });
 
-  it("allows the same text and context under different trust metadata", () => {
-    const key = "agent:main:test-context-trust-disambiguates";
-    const trusted = enqueueSystemEvent("Hook finished", {
+  it("dedupes the same text and context regardless of removed trust metadata", () => {
+    const key = "agent:main:test-context-dedupes";
+    const first = enqueueSystemEvent("Hook finished", {
       sessionKey: key,
       contextKey: "hook:done",
-      trusted: true,
     });
-    const untrusted = enqueueSystemEvent("Hook finished", {
+    const duplicate = enqueueSystemEvent("Hook finished", {
       sessionKey: key,
       contextKey: "hook:done",
-      trusted: false,
     });
 
-    expect(trusted).toBe(true);
-    expect(untrusted).toBe(true);
-    expect(peekSystemEventEntries(key)).toHaveLength(2);
+    expect(first).toBe(true);
+    expect(duplicate).toBe(false);
+    expect(peekSystemEventEntries(key)).toHaveLength(1);
   });
 
   it("preserves lastContextKey when a duplicate is skipped", () => {
