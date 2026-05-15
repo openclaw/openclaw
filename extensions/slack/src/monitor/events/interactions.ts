@@ -3,9 +3,9 @@ import type { SlackMonitorContext } from "../context.js";
 import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";
 import {
   registerModalLifecycleHandler,
-  type ModalInputSummary,
   type RegisterSlackModalHandler,
 } from "./interactions.modal.js";
+import type { ModalInputSummary } from "./modal-input-summary.js";
 
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
 const REDACTED_INTERACTION_VALUE = "[redacted]";

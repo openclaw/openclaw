@@ -6,7 +6,7 @@ import {
   type PluginConversationBindingRequestResult,
   type PluginInteractiveRegistration,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import type { ModalInputSummary } from "./monitor/events/interactions.modal.js";
+import type { ModalInputSummary } from "./monitor/events/modal-input-summary.js";
 
 export type SlackInteractiveHandlerResult = {
   handled?: boolean;
