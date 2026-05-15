@@ -1,4 +1,5 @@
 import { EnvHttpProxyAgent, type Dispatcher } from "undici";
+import { sanitizeUrlInput } from "../../agents/tools/sanitize-url.js";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
@@ -170,7 +171,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   };
 
   const visited = new Set<string>();
-  let currentUrl = params.url;
+  let currentUrl = sanitizeUrlInput(params.url);
   let currentInit = params.init ? { ...params.init } : undefined;
   let redirectCount = 0;
 

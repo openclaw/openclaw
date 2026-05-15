@@ -9,6 +9,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { sanitizeUrlInput } from "./sanitize-url.js";
 import {
   extractReadableContent,
   htmlToMarkdown,
@@ -506,6 +507,7 @@ async function maybeFetchFirecrawlWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  params.url = sanitizeUrlInput(params.url);
   const cacheKey = normalizeCacheKey(
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
   );
