@@ -46,6 +46,7 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
 } as const;
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
+const EXEC_APPROVAL_COMMAND_ANALYSIS_MAX_WAIT_MS = 1_000;
 
 type ExecApprovalIosPushDelivery = {
   handleRequested?: (
@@ -57,6 +58,37 @@ type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
   handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
 };
+
+type ExecApprovalCommandAnalysis = Awaited<
+  ReturnType<typeof resolveCommandAnalysisSummaryForDisplay>
+>;
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const unref = (timer as { unref?: () => void }).unref;
+  if (typeof unref === "function") {
+    unref.call(timer);
+  }
+}
+
+function resolveCommandAnalysisBeforeApprovalRequest(
+  commandAnalysisPromise: Promise<ExecApprovalCommandAnalysis>,
+  timeoutMs: number,
+): Promise<ExecApprovalCommandAnalysis> {
+  const deadlineMs = Math.max(1, Math.min(timeoutMs, EXEC_APPROVAL_COMMAND_ANALYSIS_MAX_WAIT_MS));
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<ExecApprovalCommandAnalysis>((resolve) => {
+    timer = setTimeout(() => resolve(null), deadlineMs);
+    unrefTimer(timer);
+  });
+  return Promise.race([
+    commandAnalysisPromise.finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }),
+    timeoutPromise,
+  ]);
+}
 
 function normalizeCommandSpans(
   spans: { startIndex: number; endIndex: number }[] | undefined,
@@ -91,6 +123,9 @@ export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
+  const pendingExplicitApprovalIds = new Set<string>();
+  const pendingAnalysisApprovalIds = new Set<string>();
+
   return {
     "exec.approval.get": async ({ params, respond, client }) => {
       if (!validateExecApprovalGetParams(params)) {
@@ -117,6 +152,10 @@ export function createExecApprovalHandlers(
         respondPendingApprovalLookupError({ respond, response: resolved.response });
         return;
       }
+      if (pendingAnalysisApprovalIds.has(resolved.approvalId)) {
+        respondPendingApprovalLookupError({ respond, response: "missing" });
+        return;
+      }
       const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(
         resolved.snapshot.request,
       );
@@ -141,6 +180,7 @@ export function createExecApprovalHandlers(
         manager
           .listPendingRecords()
           .filter((record) => isApprovalRecordVisibleToClient({ record, client }))
+          .filter((record) => !pendingAnalysisApprovalIds.has(record.id))
           .map((record) => ({
             id: record.id,
             request: record.request,
@@ -275,12 +315,15 @@ export function createExecApprovalHandlers(
         return;
       }
       const sanitizedCommandText = sanitizedCommandDisplay.text;
-      const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
+      const commandAnalysisPromise = resolveCommandAnalysisSummaryForDisplay({
         host,
         commandText: effectiveCommandText,
         commandArgv: effectiveCommandArgv,
         cwd: effectiveCwd,
         sanitizeText: sanitizeExecApprovalWarningText,
+      }).catch((err) => {
+        context.logGateway?.error?.(`exec approvals: command analysis failed: ${String(err)}`);
+        return null;
       });
       const commandSpans =
         commandHighlighting && sanitizedCommandText === effectiveCommandText
@@ -296,13 +339,19 @@ export function createExecApprovalHandlers(
               env: p.env,
             })
           : null;
-      if (explicitId && manager.getSnapshot(explicitId)) {
+      if (
+        explicitId &&
+        (pendingExplicitApprovalIds.has(explicitId) || manager.getSnapshot(explicitId))
+      ) {
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "approval id already pending"),
         );
         return;
+      }
+      if (explicitId) {
+        pendingExplicitApprovalIds.add(explicitId);
       }
       const request = {
         command: sanitizedCommandText,
@@ -320,7 +369,7 @@ export function createExecApprovalHandlers(
         security: p.security ?? null,
         ask: p.ask ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
-        commandAnalysis,
+        commandAnalysis: null,
         commandSpans,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
@@ -336,18 +385,54 @@ export function createExecApprovalHandlers(
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;
       record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
-      // Use register() to synchronously add to pending map before sending any response.
-      // This ensures the approval ID is valid immediately after the "accepted" response.
-      let decisionPromise: Promise<
-        import("../../infra/exec-approvals.js").ExecApprovalDecision | null
-      >;
+      let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {
-        decisionPromise = manager.register(record, timeoutMs);
+        decisionPromise = manager.register(record, timeoutMs, { startTimer: false });
       } catch (err) {
+        if (explicitId) {
+          pendingExplicitApprovalIds.delete(explicitId);
+        }
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
+        );
+        return;
+      }
+      if (explicitId) {
+        pendingExplicitApprovalIds.delete(explicitId);
+      }
+      pendingAnalysisApprovalIds.add(record.id);
+      try {
+        record.request.commandAnalysis = await resolveCommandAnalysisBeforeApprovalRequest(
+          commandAnalysisPromise,
+          timeoutMs,
+        );
+      } catch (err) {
+        pendingAnalysisApprovalIds.delete(record.id);
+        if (explicitId) {
+          pendingExplicitApprovalIds.delete(explicitId);
+        }
+        manager.expire(record.id, "command-analysis-failed");
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `command analysis failed: ${String(err)}`),
+        );
+        return;
+      }
+      pendingAnalysisApprovalIds.delete(record.id);
+      if (!manager.startTimeout(record.id, timeoutMs)) {
+        const decision = await decisionPromise;
+        respond(
+          true,
+          {
+            id: record.id,
+            decision,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
         );
         return;
       }

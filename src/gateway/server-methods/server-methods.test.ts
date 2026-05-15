@@ -32,6 +32,32 @@ vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+type ResolveCommandAnalysisSummaryForDisplay =
+  typeof import("../../infra/command-analysis/explain.js").resolveCommandAnalysisSummaryForDisplay;
+
+const commandAnalysisMocks = vi.hoisted(() => ({
+  resolveOverride: undefined as ResolveCommandAnalysisSummaryForDisplay | undefined,
+}));
+
+vi.mock("../../infra/command-analysis/explain.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/command-analysis/explain.js")>(
+    "../../infra/command-analysis/explain.js",
+  );
+  return {
+    ...actual,
+    resolveCommandAnalysisSummaryForDisplay: (
+      params: Parameters<ResolveCommandAnalysisSummaryForDisplay>[0],
+    ) =>
+      commandAnalysisMocks.resolveOverride
+        ? commandAnalysisMocks.resolveOverride(params)
+        : actual.resolveCommandAnalysisSummaryForDisplay(params),
+  };
+});
+
+afterEach(() => {
+  commandAnalysisMocks.resolveOverride = undefined;
+});
+
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
   for (const item of items) {
@@ -883,6 +909,21 @@ describe("exec approval handlers", () => {
     return { manager, handlers, broadcasts, respond, context };
   }
 
+  class CommandAnalysisTimeoutProbeManager extends ExecApprovalManager {
+    sawCommandAnalysisAtTimeoutStart = false;
+
+    override startTimeout(
+      recordId: string,
+      timeoutMs: number,
+    ): ReturnType<ExecApprovalManager["startTimeout"]> {
+      const snapshot = this.getSnapshot(recordId);
+      this.sawCommandAnalysisAtTimeoutStart =
+        snapshot?.request.commandAnalysis !== null &&
+        snapshot?.request.commandAnalysis !== undefined;
+      return super.startTimeout(recordId, timeoutMs);
+    }
+  }
+
   function getRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
   ): { id: string; request: Record<string, unknown> } {
@@ -898,6 +939,19 @@ describe("exec approval handlers", () => {
       id: payload.id,
       request: payload.request ?? {},
     };
+  }
+
+  async function waitForRequestedExecApprovalPayload(
+    broadcasts: Array<{ event: string; payload: unknown }>,
+  ): Promise<{ id: string; request: Record<string, unknown> }> {
+    let payload: { id: string; request: Record<string, unknown> } | undefined;
+    await vi.waitFor(() => {
+      payload = getRequestedExecApprovalPayload(broadcasts);
+    });
+    if (!payload) {
+      throw new Error("exec approval requested broadcast missing");
+    }
+    return payload;
   }
 
   function createForwardingExecApprovalFixture(opts?: {
@@ -1051,9 +1105,7 @@ describe("exec approval handlers", () => {
       },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
-    expect(id).not.toBe("");
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const getRespond = vi.fn();
     await getExecApproval({ handlers, id, respond: getRespond });
@@ -1082,6 +1134,9 @@ describe("exec approval handlers", () => {
 
   it("attaches shared command analysis to gateway exec approval requests", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    context.broadcast = (event: string, payload: unknown) => {
+      broadcasts.push({ event, payload: structuredClone(payload) });
+    };
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -1097,9 +1152,23 @@ describe("exec approval handlers", () => {
       },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
-    const commandAnalysis = request.request?.commandAnalysis as Record<string, unknown>;
+    let request: { id?: string; request?: { commandAnalysis?: unknown } } | undefined;
+    await vi.waitFor(() => {
+      const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+      request = requested?.payload as
+        | { id?: string; request?: { commandAnalysis?: unknown } }
+        | undefined;
+      expect(request?.request?.commandAnalysis).toMatchObject({
+        commandCount: 1,
+        riskKinds: ["inline-eval"],
+        warningLines: ["Contains inline-eval: python3 -c"],
+      });
+    });
+    const requestedEvent = request;
+    if (!requestedEvent) {
+      throw new Error("exec approval requested broadcast missing");
+    }
+    const commandAnalysis = requestedEvent.request?.commandAnalysis as Record<string, unknown>;
     expect(commandAnalysis.commandCount).toBe(1);
     expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
     expect(commandAnalysis.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
@@ -1107,15 +1176,217 @@ describe("exec approval handlers", () => {
     const resolveRespond = vi.fn();
     await resolveExecApproval({
       handlers,
-      id: request.id ?? "",
+      id: requestedEvent.id ?? "",
       respond: resolveRespond,
       context,
     });
     await requestPromise;
   });
 
+  it("attaches command analysis before arming timed approval requests", async () => {
+    const manager = new CommandAnalysisTimeoutProbeManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const respond = vi.fn();
+    const context = {
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+      hasExecApprovalClients: () => true,
+    };
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+        timeoutMs: 10,
+      },
+    });
+
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+    expect(manager.sawCommandAnalysisAtTimeoutStart).toBe(true);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
+  it("broadcasts approval requests with null analysis when command analysis stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      commandAnalysisMocks.resolveOverride = () => new Promise(() => {});
+      const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          twoPhase: true,
+          host: "gateway",
+          command: "python3 -c 'print(1)'",
+          commandArgv: ["python3", "script.py"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+          timeoutMs: 10,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      const { id, request } = getRequestedExecApprovalPayload(broadcasts);
+      expect(request.commandAnalysis).toBeNull();
+      expect(manager.getSnapshot(id)?.resolvedAtMs).toBeUndefined();
+
+      const resolveRespond = vi.fn();
+      await resolveExecApproval({
+        handlers,
+        id,
+        respond: resolveRespond,
+        context,
+      });
+      await requestPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not expose exec approvals until command analysis is attached", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    let resolveAnalysis:
+      | ((value: Awaited<ReturnType<ResolveCommandAnalysisSummaryForDisplay>>) => void)
+      | undefined;
+    const analysisPromise = new Promise<
+      Awaited<ReturnType<ResolveCommandAnalysisSummaryForDisplay>>
+    >((resolve) => {
+      resolveAnalysis = resolve;
+    });
+    commandAnalysisMocks.resolveOverride = () => analysisPromise;
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-analysis-race",
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond });
+    expect(mockCallArg(listRespond)).toBe(true);
+    expect(mockCallArg(listRespond, 0, 1)).toEqual([]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({ handlers, id: "approval-analysis-race", respond: getRespond });
+    expect(mockCallArg(getRespond)).toBe(false);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-analysis-race",
+      respond: resolveRespond,
+      context,
+    });
+    expect(mockCallArg(resolveRespond)).toBe(true);
+
+    if (!resolveAnalysis) {
+      throw new Error("command analysis resolver was not installed");
+    }
+    resolveAnalysis(null);
+    await requestPromise;
+
+    expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+  });
+
+  it("rejects duplicate explicit approval ids while command analysis is pending", async () => {
+    let resolveAnalysis:
+      | ((value: Awaited<ReturnType<ResolveCommandAnalysisSummaryForDisplay>>) => void)
+      | undefined;
+    const analysisPromise = new Promise<
+      Awaited<ReturnType<ResolveCommandAnalysisSummaryForDisplay>>
+    >((resolve) => {
+      resolveAnalysis = resolve;
+    });
+    commandAnalysisMocks.resolveOverride = () => analysisPromise;
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const firstRequestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-analysis-duplicate",
+        twoPhase: true,
+        host: "gateway",
+        command: "echo first",
+        commandArgv: ["echo", "first"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    const duplicateRespond = vi.fn();
+
+    await requestExecApproval({
+      handlers,
+      respond: duplicateRespond,
+      context,
+      params: {
+        id: "approval-analysis-duplicate",
+        twoPhase: true,
+        host: "gateway",
+        command: "echo second",
+        commandArgv: ["echo", "second"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    expect(mockCallArg(duplicateRespond)).toBe(false);
+    expect(mockCallArg(duplicateRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(duplicateRespond, 0, 2), {
+      message: "approval id already pending",
+    });
+    expect(broadcasts).toEqual([]);
+
+    if (!resolveAnalysis) {
+      throw new Error("command analysis resolver was not installed");
+    }
+    resolveAnalysis(null);
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+    expect(id).toBe("approval-analysis-duplicate");
+    expect(request.command).toBe("echo first");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: resolveRespond,
+      context,
+    });
+    await firstRequestPromise;
+  });
+
   it("lists pending exec approvals", async () => {
-    const { handlers, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     const requestPromise = requestExecApproval({
       handlers,
       respond,
@@ -1128,6 +1399,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
+    await waitForRequestedExecApprovalPayload(broadcasts);
 
     const listRespond = vi.fn();
     await listExecApprovals({ handlers, respond: listRespond });
@@ -1235,8 +1507,11 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
     });
-    const acceptedId = respond.mock.calls.find((call) => call[1]?.status === "accepted")?.[1]?.id;
-    expect(typeof acceptedId).toBe("string");
+    let acceptedId: unknown;
+    await vi.waitFor(() => {
+      acceptedId = respond.mock.calls.find((call) => call[1]?.status === "accepted")?.[1]?.id;
+      expect(typeof acceptedId).toBe("string");
+    });
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1267,7 +1542,7 @@ describe("exec approval handlers", () => {
       params: { twoPhase: true },
     });
 
-    const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
@@ -1299,6 +1574,7 @@ describe("exec approval handlers", () => {
       context,
       params: { id: "approval-repeat-1", twoPhase: true },
     });
+    await waitForRequestedExecApprovalPayload(broadcasts);
 
     const firstResolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1353,7 +1629,7 @@ describe("exec approval handlers", () => {
       params: { twoPhase: true, ask: "always" },
     });
 
-    const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1727,8 +2003,7 @@ describe("exec approval handlers", () => {
       params: { id: "approval-123", host: "gateway" },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
     expect(id).toBe("approval-123");
 
     const resolveRespond = vi.fn();
@@ -1863,7 +2138,14 @@ describe("exec approval handlers", () => {
       params: { id: "approval-two", host: "gateway", timeoutMs: 60_000 },
     });
 
-    await drainApprovalRequestTicks();
+    await vi.waitFor(() => {
+      const snapshotOne = manager.getSnapshot("approval-one");
+      const snapshotTwo = manager.getSnapshot("approval-two");
+      expect(snapshotOne).not.toBeNull();
+      expect(snapshotTwo).not.toBeNull();
+      expect(snapshotOne?.resolvedAtMs).toBeUndefined();
+      expect(snapshotTwo?.resolvedAtMs).toBeUndefined();
+    });
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1959,7 +2241,7 @@ describe("exec approval handlers", () => {
         turnSourceThreadId: "thread-456",
       },
     });
-    await drainApprovalRequestTicks();
+    await waitForRequestedExecApprovalPayload(broadcasts);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -2121,7 +2403,9 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
     });
-    await drainApprovalRequestTicks();
+    await vi.waitFor(() => {
+      expect(iosPushDelivery.handleRequested).toHaveBeenCalled();
+    });
 
     await resolveExecApproval({
       handlers,
@@ -2229,9 +2513,10 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
     });
-    await drainApprovalRequestTicks();
 
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    });
     expect(expireSpy).not.toHaveBeenCalled();
 
     await resolveExecApproval({

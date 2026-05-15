@@ -42,7 +42,7 @@ type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
   promise: Promise<ExecApprovalDecision | null>;
 };
 
@@ -74,6 +74,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   register(
     record: ExecApprovalRecord<TPayload>,
     timeoutMs: number,
+    opts?: { startTimer?: boolean },
   ): Promise<ExecApprovalDecision | null> {
     const existing = this.pending.get(record.id);
     if (existing) {
@@ -95,14 +96,29 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       record,
       resolve: resolvePromise!,
       reject: rejectPromise!,
-      timer: null as unknown as ReturnType<typeof setTimeout>,
+      timer: null,
       promise,
     };
-    entry.timer = setTimeout(() => {
-      this.expire(record.id);
-    }, timeoutMs);
     this.pending.set(record.id, entry);
+    if (opts?.startTimer !== false) {
+      this.startTimeout(record.id, timeoutMs);
+    }
     return promise;
+  }
+
+  startTimeout(recordId: string, timeoutMs: number): boolean {
+    const entry = this.pending.get(recordId);
+    if (!entry || entry.record.resolvedAtMs !== undefined) {
+      return false;
+    }
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    entry.record.expiresAtMs = Date.now() + timeoutMs;
+    entry.timer = setTimeout(() => {
+      this.expire(recordId);
+    }, timeoutMs);
+    return true;
   }
 
   /**
@@ -124,7 +140,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (pending.record.resolvedAtMs !== undefined) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = decision;
     pending.record.resolvedBy = resolvedBy ?? null;
@@ -148,7 +166,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (pending.record.resolvedAtMs !== undefined) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = undefined;
     pending.record.resolvedBy = resolvedBy ?? null;

@@ -1,11 +1,15 @@
 import {
+  renderAuthorizationShellCommand,
+  type CommandAuthorizationPlan,
+} from "../infra/command-authorization/index.js";
+import {
   analyzeArgvCommand,
-  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   resolvePlannedSegmentArgv,
   resolveExecApprovals,
   type ExecAllowlistEntry,
+  type ExecAllowlistPinnedArgvToken,
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
@@ -31,10 +35,12 @@ type SystemRunAllowlistAnalysis = {
   allowlistSatisfied: boolean;
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  segmentPinnedArgvTokens: Array<ExecAllowlistPinnedArgvToken | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  authorizationPlan?: CommandAuthorizationPlan;
 };
 
-export function evaluateSystemRunAllowlist(params: {
+export async function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
   approvals: ReturnType<typeof resolveExecApprovals>;
@@ -46,9 +52,9 @@ export function evaluateSystemRunAllowlist(params: {
   env: Record<string, string> | undefined;
   skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
-}): SystemRunAllowlistAnalysis {
+}): Promise<SystemRunAllowlistAnalysis> {
   if (params.shellCommand) {
-    const allowlistEval = evaluateShellAllowlist({
+    const allowlistEval = await evaluateShellAllowlist({
       command: params.shellCommand,
       allowlist: params.approvals.allowlist,
       safeBins: params.safeBins,
@@ -69,7 +75,9 @@ export function evaluateSystemRunAllowlist(params: {
           : false,
       segments: allowlistEval.segments,
       segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+      segmentPinnedArgvTokens: allowlistEval.segmentPinnedArgvTokens,
       segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+      authorizationPlan: allowlistEval.authorizationPlan,
     };
   }
 
@@ -80,6 +88,8 @@ export function evaluateSystemRunAllowlist(params: {
     safeBins: params.safeBins,
     safeBinProfiles: params.safeBinProfiles,
     cwd: params.cwd,
+    env: params.env,
+    platform: process.platform,
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
@@ -91,6 +101,7 @@ export function evaluateSystemRunAllowlist(params: {
       params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
     segments: analysis.segments,
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+    segmentPinnedArgvTokens: allowlistEval.segmentPinnedArgvTokens,
     segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
   };
 }
@@ -131,11 +142,31 @@ export function resolveSystemRunExecArgv(params: {
   };
   shellCommand: string | null;
   segments: ExecCommandSegment[];
+  segmentPinnedArgvTokens: Array<ExecAllowlistPinnedArgvToken | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  authorizationPlan?: CommandAuthorizationPlan;
   cwd: string | undefined;
   env: Record<string, string> | undefined;
 }): string[] | null {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  if (
+    params.security === "allowlist" &&
+    !params.isWindows &&
+    !params.policy.approvedByAsk &&
+    !params.shellCommand &&
+    params.policy.analysisOk &&
+    params.policy.allowlistSatisfied
+  ) {
+    const pinnedExecArgv = applyPinnedArgvTokens({
+      execArgv,
+      sourceArgv: params.argv,
+      pinnedArgvTokens: params.segmentPinnedArgvTokens,
+    });
+    if (!pinnedExecArgv) {
+      return null;
+    }
+    execArgv = pinnedExecArgv;
+  }
   if (
     params.security === "allowlist" &&
     params.isWindows &&
@@ -155,16 +186,21 @@ export function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
-    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain") &&
+    params.segmentSatisfiedBy.some(
+      (entry) => entry === "allowlist" || entry === "safeBins" || entry === "inlineChain",
+    ) &&
     isPosixShellInlineCommandTransport(params.argv)
   ) {
-    const rebuilt = buildSafeBinsShellCommand({
-      command: params.shellCommand,
+    if (!params.authorizationPlan) {
+      return null;
+    }
+    const rebuilt = renderAuthorizationShellCommand({
+      plan: params.authorizationPlan,
       segments: params.segments,
+      segmentPinnedArgvTokens: params.segmentPinnedArgvTokens,
       segmentSatisfiedBy: params.segmentSatisfiedBy,
-      cwd: params.cwd,
-      env: params.env,
       platform: process.platform,
+      mode: "safe-bins",
     });
     if (!rebuilt.ok || !rebuilt.command) {
       return null;
@@ -180,6 +216,53 @@ export function resolveSystemRunExecArgv(params: {
     execArgv = rewrittenArgv;
   }
   return execArgv;
+}
+
+function applyPinnedArgvTokens(params: {
+  execArgv: string[];
+  sourceArgv: readonly string[];
+  pinnedArgvTokens: readonly (ExecAllowlistPinnedArgvToken | null)[];
+}): string[] | null {
+  let rewritten: string[] | null = null;
+  for (const pinned of params.pinnedArgvTokens) {
+    if (!pinned) {
+      continue;
+    }
+    const tokenIndex = resolvePinnedArgvTokenExecIndex({
+      execArgv: params.execArgv,
+      sourceArgv: params.sourceArgv,
+      pinned,
+    });
+    if (tokenIndex === null) {
+      return null;
+    }
+    rewritten ??= [...params.execArgv];
+    rewritten[tokenIndex] = pinned.replacement;
+  }
+  return rewritten ?? params.execArgv;
+}
+
+function resolvePinnedArgvTokenExecIndex(params: {
+  execArgv: readonly string[];
+  sourceArgv: readonly string[];
+  pinned: ExecAllowlistPinnedArgvToken;
+}): number | null {
+  const sourceToken = params.sourceArgv[params.pinned.tokenIndex];
+  if (sourceToken === undefined) {
+    return null;
+  }
+  const directExecToken = params.execArgv[params.pinned.tokenIndex];
+  if (directExecToken === sourceToken) {
+    return params.pinned.tokenIndex;
+  }
+
+  const unwrappedOffset = params.sourceArgv.length - params.execArgv.length;
+  const shiftedIndex = params.pinned.tokenIndex - unwrappedOffset;
+  const shiftedExecToken = params.execArgv[shiftedIndex];
+  if (shiftedExecToken === sourceToken) {
+    return shiftedIndex;
+  }
+  return null;
 }
 
 function isPosixShellInlineCommandTransport(argv: string[]): boolean {

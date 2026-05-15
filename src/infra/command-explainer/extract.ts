@@ -6,6 +6,7 @@ import {
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
+  SHELL_STATE_MUTATING_BUILTINS,
   SOURCE_EXECUTABLES,
 } from "../command-analysis/risks.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
@@ -723,9 +724,37 @@ function argvFromTestCommand(node: TreeSitterNode, state: WalkState): CommandArg
   return { argv, arguments: argumentsList, dynamicArguments };
 }
 
+function argvFromNamedBuiltinCommand(node: TreeSitterNode, state: WalkState): CommandArgv | null {
+  const executable = firstShellToken(node.text);
+  if (!executable) {
+    return null;
+  }
+  const argv = [executable];
+  const argumentsList: CommandArgument[] = [];
+  const dynamicArguments: DynamicArgument[] = [];
+  for (const child of namedChildren(node)) {
+    const value = shellWordValue(child);
+    const argument = argumentFromNode(argv.length, child, value, state.spanBase);
+    argumentsList.push(argument);
+    if (value.kind === "dynamic") {
+      dynamicArguments.push({
+        index: argument.index,
+        text: argument.text,
+        value: argument.value,
+        span: argument.span,
+      });
+    }
+    argv.push(value.value);
+  }
+  return { argv, arguments: argumentsList, dynamicArguments };
+}
+
 function isCommandLikeNode(node: TreeSitterNode): boolean {
   return (
-    node.type === "command" || node.type === "declaration_command" || node.type === "test_command"
+    node.type === "command" ||
+    node.type === "declaration_command" ||
+    node.type === "test_command" ||
+    node.type === "unset_command"
   );
 }
 
@@ -741,6 +770,12 @@ function recordShape(node: TreeSitterNode, output: MutableExplanation): void {
   }
   if (node.type === "pipeline") {
     output.shapes.add("pipeline");
+    if (hasDirectChildType(node, "|&")) {
+      output.shapes.add("stderr-pipeline");
+    }
+  }
+  if (node.type === "negated_command") {
+    output.shapes.add("negation");
   }
   if (node.type === "list") {
     if (hasDirectChildType(node, "&&")) {
@@ -939,11 +974,6 @@ function recordCommandRisks(
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
   recordDynamicArgumentRisks(normalizedExecutable, dynamicArguments, output);
-  const inlineEval = detectInlineEvalArgv(argv) ?? detectSharedCarrierInlineEvalArgv(argv);
-  if (inlineEval) {
-    recordInlineEvalRisk(inlineEval, text, span, output);
-  }
-
   const shellWrapper = extractShellWrapperCommand(argv);
   const shellWrapperPayload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
   if (shellWrapper.isWrapper && shellWrapperPayload) {
@@ -968,6 +998,10 @@ function recordCommandRisks(
       });
     }
   }
+  const inlineEval = detectInlineEvalArgv(argv) ?? detectSharedCarrierInlineEvalArgv(argv);
+  if (inlineEval) {
+    recordInlineEvalRisk(inlineEval, text, span, output);
+  }
 
   for (const carrier of detectCommandCarrierArgv(argv)) {
     output.risks.push({
@@ -987,6 +1021,9 @@ function recordCommandRisks(
   if (normalizedExecutable === "alias") {
     output.risks.push({ kind: "alias", text, span });
   }
+  if (SHELL_STATE_MUTATING_BUILTINS.has(normalizedExecutable)) {
+    output.risks.push({ kind: "shell-state-mutation", command: normalizedExecutable, text, span });
+  }
   const carrierShellWrapper = !shellWrapper.isWrapper
     ? detectShellWrapperThroughCarrierArgv(argv, shellCommandFlag)
     : null;
@@ -1005,6 +1042,13 @@ function recordCommandRisks(
   } else if (carriedShellBuiltin?.kind === "source") {
     output.risks.push({
       kind: "source",
+      command: carriedShellBuiltin.command,
+      text,
+      span,
+    });
+  } else if (carriedShellBuiltin?.kind === "shell-state-mutation") {
+    output.risks.push({
+      kind: "shell-state-mutation",
       command: carriedShellBuiltin.command,
       text,
       span,
@@ -1047,6 +1091,15 @@ async function walk(
     output.risks.push({ kind: "here-string", text: node.text, span });
   } else if (node.type === "file_redirect") {
     output.risks.push({ kind: "redirect", text: node.text, span });
+  } else if (node.type === "variable_assignment") {
+    output.risks.push({
+      kind: "shell-state-mutation",
+      command: "assignment",
+      text: node.text,
+      span,
+    });
+  } else if (node.type === "comment") {
+    output.risks.push({ kind: "comment", text: node.text, span });
   } else if (node.type === "ERROR") {
     output.risks.push({ kind: "syntax-error", text: node.text, span });
   }
@@ -1054,7 +1107,8 @@ async function walk(
   if (
     node.type === "command" ||
     node.type === "declaration_command" ||
-    node.type === "test_command"
+    node.type === "test_command" ||
+    node.type === "unset_command"
   ) {
     const nameNode = node.type === "command" ? commandNameNode(node) : null;
     const parsed =
@@ -1064,7 +1118,9 @@ async function walk(
           : null
         : node.type === "declaration_command"
           ? argvFromDeclarationCommand(node, state)
-          : argvFromTestCommand(node, state);
+          : node.type === "test_command"
+            ? argvFromTestCommand(node, state)
+            : argvFromNamedBuiltinCommand(node, state);
     if (node.type === "command" && nameNode && !parsed) {
       output.risks.push({
         kind: "dynamic-executable",
@@ -1072,16 +1128,23 @@ async function walk(
         span: spanFromNode(nameNode, state.spanBase),
       });
     } else if (parsed) {
+      const executableSpan =
+        nameNode !== null
+          ? spanFromNode(nameNode, state.spanBase)
+          : (parsed.arguments[0]?.span ?? span);
       const step: CommandStep = {
         context,
         executable: parsed.argv[0] ?? "",
         argv: parsed.argv,
         text: node.text,
         span,
-        executableSpan:
-          nameNode !== null
-            ? spanFromNode(nameNode, state.spanBase)
-            : (parsed.arguments[0]?.span ?? span),
+        executableSpan,
+        argvSpans: [
+          executableSpan,
+          ...parsed.arguments
+            .toSorted((left, right) => left.index - right.index)
+            .map((arg) => arg.span),
+        ],
       };
       if (step.executable) {
         output.commands.push(step);
@@ -1091,28 +1154,36 @@ async function walk(
           parsed.arguments,
           parsed.dynamicArguments,
         );
-        if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
-          const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
-          const wrapperSpanBase = spanBaseForParserSource(
-            wrapperPayload.command,
-            wrapperTree.rootNode,
-            wrapperPayload.spanBase,
-          );
-          try {
-            if (wrapperTree.rootNode.hasError) {
-              output.hasParseError = true;
-              output.risks.push({
-                kind: "syntax-error",
-                text: wrapperPayload.command,
-                span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
+        if (wrapperPayload) {
+          if (state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
+            const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
+            const wrapperSpanBase = spanBaseForParserSource(
+              wrapperPayload.command,
+              wrapperTree.rootNode,
+              wrapperPayload.spanBase,
+            );
+            try {
+              if (wrapperTree.rootNode.hasError) {
+                output.hasParseError = true;
+                output.risks.push({
+                  kind: "syntax-error",
+                  text: wrapperPayload.command,
+                  span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
+                });
+              }
+              await walk(wrapperTree.rootNode, output, "wrapper-payload", {
+                wrapperPayloadDepth: state.wrapperPayloadDepth + 1,
+                spanBase: wrapperSpanBase,
               });
+            } finally {
+              wrapperTree.delete();
             }
-            await walk(wrapperTree.rootNode, output, "wrapper-payload", {
-              wrapperPayloadDepth: state.wrapperPayloadDepth + 1,
-              spanBase: wrapperSpanBase,
+          } else {
+            output.risks.push({
+              kind: "wrapper-payload-depth",
+              text: wrapperPayload.command,
+              span,
             });
-          } finally {
-            wrapperTree.delete();
           }
         }
       }

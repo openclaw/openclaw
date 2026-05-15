@@ -23,7 +23,27 @@ export type CommandCarrierHit = {
   flag?: string;
 };
 
-export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
+export const SHELL_STATE_MUTATING_BUILTINS = new Set([
+  "cd",
+  "declare",
+  "export",
+  "hash",
+  "readonly",
+  "read",
+  "set",
+  "shift",
+  "typeset",
+  "umask",
+  "ulimit",
+  "unalias",
+  "unset",
+  "trap",
+]);
+
+export type CarriedShellBuiltinHit =
+  | { kind: "eval" }
+  | { kind: "source"; command: string }
+  | { kind: "shell-state-mutation"; command: string };
 
 function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
@@ -205,6 +225,27 @@ function detectShellPositionalCarrierInlineEvalArgvInternal(
   return detectInlineEvalArgvInternal(carriedArgv, seenArgv);
 }
 
+function detectShellWrapperInlineEvalArgvInternal(
+  argv: string[],
+  seenArgv: Set<string>,
+): InterpreterInlineEvalHit | null {
+  const executableArgv = stripLeadingEnvAssignments(argv);
+  const key = `shell-wrapper\0${commandArgvKey(executableArgv)}`;
+  if (seenArgv.has(key)) {
+    return null;
+  }
+  seenArgv.add(key);
+  const payload = extractShellWrapperInlineCommand(executableArgv);
+  if (!payload) {
+    return null;
+  }
+  const payloadArgv = splitShellArgs(payload);
+  if (!payloadArgv) {
+    return null;
+  }
+  return detectInlineEvalArgvInternal(payloadArgv, seenArgv);
+}
+
 function detectCarrierInlineEvalArgvInternal(
   argv: string[],
   seenArgv: Set<string>,
@@ -245,6 +286,7 @@ function detectInlineEvalArgvInternal(
   }
   return (
     detectInterpreterInlineEvalArgv(argv) ??
+    detectShellWrapperInlineEvalArgvInternal(argv, seenArgv) ??
     detectShellPositionalCarrierInlineEvalArgvInternal(argv, seenArgv) ??
     detectCarrierInlineEvalArgvInternal(argv, seenArgv)
   );
@@ -365,6 +407,9 @@ export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuilt
   }
   if (normalizedCarriedCommand && SOURCE_EXECUTABLES.has(normalizedCarriedCommand)) {
     return { kind: "source", command: normalizedCarriedCommand };
+  }
+  if (normalizedCarriedCommand && SHELL_STATE_MUTATING_BUILTINS.has(normalizedCarriedCommand)) {
+    return { kind: "shell-state-mutation", command: normalizedCarriedCommand };
   }
   return null;
 }

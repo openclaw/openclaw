@@ -366,7 +366,10 @@ export function matchAllowlist(
       continue;
     }
     const patternMatches = hasPathSelector(pattern)
-      ? matchesExecAllowlistPattern(pattern, resolvedPath)
+      ? matchesExecAllowlistPattern(pattern, resolvedPath) ||
+        (resolution.resolvedRealPath
+          ? matchesExecAllowlistPattern(pattern, resolution.resolvedRealPath)
+          : false)
       : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
     if (!patternMatches) {
       continue;

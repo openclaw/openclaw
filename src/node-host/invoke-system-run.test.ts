@@ -20,11 +20,19 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
+  analyzeArgvCommand,
+  evaluateExecAllowlist,
   loadExecApprovals,
+  resolveExecApprovalsFromFile,
   resolveExecApprovalsPath,
   saveExecApprovals,
 } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import {
+  evaluateSystemRunAllowlist,
+  resolveSystemRunExecArgv,
+} from "./invoke-system-run-allowlist.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -1420,6 +1428,18 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         command: ["python3", "-c", "print('hi')"],
         expected: "python3 -c requires explicit approval in strictInlineEval mode",
       },
+      {
+        command: ["/bin/sh", "-c", "python3 -c 'print(1)' > out.txt"],
+        expected: "python3 -c requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["/bin/sh", "-c", "echo ok; python3 -c 'print(1)'"],
+        expected: "python3 -c requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["/bin/sh", "-c", `sh -c "sh -c 'python3 -c \\"print(1)\\"'"`],
+        expected: "python3 -c requires explicit approval in strictInlineEval mode",
+      },
     ] as const;
     setRuntimeConfigSnapshot({
       tools: {
@@ -1513,6 +1533,33 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("does not persist exact-command allow-always approvals for planner-rejected shell", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals(),
+      run: async () => {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["/bin/sh", "-lc", "printf x > out.txt"],
+          rawCommand: "printf x > out.txt",
+          cwd: createFixtureDir("openclaw-exact-fallback-reject-"),
+          security: "allowlist",
+          ask: "on-miss",
+          approvalDecision: "allow-always",
+          approved: true,
+          runCommand: vi.fn(async () => createLocalRunResult("allow-always-ok")),
+        });
+
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(sendInvokeResult, { payloadContains: "allow-always-ok" });
+        expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
+      },
+    });
+  });
+
   it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {
     setRuntimeConfigSnapshot({
       tools: {
@@ -1565,6 +1612,46 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "persists direct argv allow-always patterns without shell reparsing metacharacters",
+    async () => {
+      const tempDir = createFixtureDir("openclaw-direct-argv-metachar-");
+      const shellParsedPrefix = createTempExecutable({ dir: tempDir, name: "tool" });
+      const approvedExecutable = createTempExecutable({ dir: tempDir, name: "tool;evil" });
+
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals(),
+        run: async () => {
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: [approvedExecutable, "--version"],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            approvalDecision: "allow-always",
+            approved: true,
+            runCommand: vi.fn(async () => createLocalRunResult("metachar-ok")),
+          });
+
+          expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "metachar-ok" });
+          const allowlist = loadExecApprovals().agents?.main?.allowlist ?? [];
+          expect(allowlist).toEqual([
+            expect.objectContaining({
+              pattern: approvedExecutable,
+              source: "allow-always",
+            }),
+          ]);
+          expect(allowlist).not.toEqual([
+            expect.objectContaining({
+              pattern: shellParsedPrefix,
+            }),
+          ]);
+        },
+      });
+    },
+  );
 
   it("does not persist allow-always approvals for strict inline-eval make carriers", async () => {
     setRuntimeConfigSnapshot({
@@ -1647,11 +1734,368 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           });
 
           expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+          const payload = requireFirstRunCommandArgs(invoke.runCommand)[2] ?? "";
+          expect(payload).toContain(scriptPath);
+          expect(payload).not.toContain("./scripts/check_mail.sh");
           expectInvokeOk(invoke.sendInvokeResult, {
             payloadContains: "shell-wrapper-inner-ok",
           });
         },
       });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves allowlisted shell payload argument semantics while pinning the executable",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const echoPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/echo") ? "/usr/bin/echo" : "/bin/echo",
+        );
+        await withTempApprovalsHome({
+          approvals: createAllowlistOnMissApprovals({
+            agents: {
+              main: {
+                allowlist: [{ pattern: echoPath }],
+              },
+            },
+          }),
+          run: async () => {
+            const invoke = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: ["/bin/sh", "-lc", 'echo "$HOME"'],
+              rawCommand: '/bin/sh -lc "echo \\"$HOME\\""',
+              security: "allowlist",
+              ask: "on-miss",
+              runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-arg-ok")),
+            });
+
+            const payload = requireFirstRunCommandArgs(invoke.runCommand)[2] ?? "";
+            expect(payload).toContain(echoPath);
+            expect(payload).toContain('"$HOME"');
+            expect(payload).not.toContain("'$HOME'");
+            expectInvokeOk(invoke.sendInvokeResult, {
+              payloadContains: "shell-wrapper-arg-ok",
+            });
+          },
+        });
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "auto-runs allowlisted commands through dispatch-wrapped shell payloads",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const printfPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/printf") ? "/usr/bin/printf" : "/bin/printf",
+        );
+        await withTempApprovalsHome({
+          approvals: createAllowlistOnMissApprovals({
+            agents: {
+              main: {
+                allowlist: [{ pattern: printfPath }],
+              },
+            },
+          }),
+          run: async () => {
+            const invoke = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: ["/bin/sh", "-lc", "nice printf hi"],
+              rawCommand: '/bin/sh -lc "nice printf hi"',
+              security: "allowlist",
+              ask: "on-miss",
+              runCommand: vi.fn(async () => createLocalRunResult("dispatch-wrapper-ok")),
+            });
+
+            const payload = requireFirstRunCommandArgs(invoke.runCommand)[2] ?? "";
+            expect(payload).not.toContain("nice");
+            expect(payload).toContain(printfPath);
+            expectInvokeOk(invoke.sendInvokeResult, {
+              payloadContains: "dispatch-wrapper-ok",
+            });
+          },
+        });
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not drop semantic dispatch wrappers from allowlisted shell payloads",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const sleepPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep",
+        );
+        await withTempApprovalsHome({
+          approvals: createAllowlistOnMissApprovals({
+            agents: {
+              main: {
+                allowlist: [{ pattern: sleepPath }],
+              },
+            },
+          }),
+          run: async () => {
+            const invoke = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: ["/bin/sh", "-lc", "timeout 1 sleep 100"],
+              rawCommand: '/bin/sh -lc "timeout 1 sleep 100"',
+              security: "allowlist",
+              ask: "on-miss",
+              runCommand: vi.fn(async () => createLocalRunResult("timeout-dropped")),
+            });
+
+            expect(invoke.runCommand).not.toHaveBeenCalled();
+            expectInvokeErrorMessage(invoke.sendInvokeResult, {
+              message: "execution plan mismatch",
+            });
+          },
+        });
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "pins positional-carrier executables for direct argv allowlist execution",
+    () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const printfPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/printf") ? "/usr/bin/printf" : "/bin/printf",
+        );
+        const argv = ["sh", "-c", '$0 "$@"', "printf", "hi"];
+        const analysis = analyzeArgvCommand({ argv });
+        const evaluation = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: printfPath }],
+          safeBins: new Set(),
+        });
+        const execArgv = resolveSystemRunExecArgv({
+          plannedAllowlistArgv: ["/bin/sh", "-c", '$0 "$@"', "printf", "hi"],
+          argv,
+          security: "allowlist",
+          isWindows: false,
+          policy: {
+            approvedByAsk: false,
+            analysisOk: analysis.ok,
+            allowlistSatisfied: evaluation.allowlistSatisfied,
+          },
+          shellCommand: null,
+          segments: analysis.segments,
+          segmentPinnedArgvTokens: evaluation.segmentPinnedArgvTokens,
+          segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
+          cwd: undefined,
+          env: undefined,
+        });
+
+        expect(execArgv?.[3]).toBe(printfPath);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "pins direct argv positional-carrier symlink executables to canonical paths",
+    () => {
+      const tempDir = createFixtureDir("openclaw-direct-carrier-symlink-");
+      const binDir = path.join(tempDir, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const targetPath = path.join(tempDir, "target-tool");
+      fs.writeFileSync(targetPath, "#!/bin/sh\necho target-tool\n");
+      fs.chmodSync(targetPath, 0o755);
+      const targetRealPath = fs.realpathSync(targetPath);
+      const linkPath = path.join(binDir, "tool");
+      fs.symlinkSync(targetPath, linkPath);
+      const env = { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` };
+      const argv = ["sh", "-c", '$0 "$@"', "tool", "hi"];
+      const analysis = analyzeArgvCommand({ argv, cwd: tempDir, env });
+      const evaluation = evaluateExecAllowlist({
+        analysis,
+        allowlist: [{ pattern: linkPath }],
+        safeBins: new Set(),
+        cwd: tempDir,
+        env,
+      });
+
+      expect(evaluation.allowlistSatisfied).toBe(true);
+      expect(evaluation.segmentPinnedArgvTokens[0]?.replacement).toBe(targetRealPath);
+      const execArgv = resolveSystemRunExecArgv({
+        plannedAllowlistArgv: ["sh", "-c", '$0 "$@"', "tool", "hi"],
+        argv,
+        security: "allowlist",
+        isWindows: false,
+        policy: {
+          approvedByAsk: false,
+          analysisOk: analysis.ok,
+          allowlistSatisfied: evaluation.allowlistSatisfied,
+        },
+        shellCommand: null,
+        segments: analysis.segments,
+        segmentPinnedArgvTokens: evaluation.segmentPinnedArgvTokens,
+        segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
+        cwd: tempDir,
+        env,
+      });
+
+      expect(execArgv?.[3]).toBe(targetRealPath);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects direct argv positional carriers through untrusted shell wrappers",
+    () => {
+      const tempDir = createFixtureDir("openclaw-direct-carrier-untrusted-shell-");
+      const binDir = path.join(tempDir, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const toolPath = path.join(tempDir, "tool");
+      fs.writeFileSync(toolPath, "#!/bin/sh\necho tool\n");
+      fs.chmodSync(toolPath, 0o755);
+      const fakeShell = path.join(binDir, "sh");
+      fs.writeFileSync(fakeShell, "#!/bin/sh\necho fake-shell\n");
+      fs.chmodSync(fakeShell, 0o755);
+      const env = { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` };
+
+      for (const argv of [
+        [fakeShell, "-c", '$0 "$@"', toolPath, "hi"],
+        ["sh", "-c", '$0 "$@"', toolPath, "hi"],
+      ]) {
+        const analysis = analyzeArgvCommand({ argv, cwd: tempDir, env });
+        const evaluation = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: toolPath }],
+          safeBins: new Set(),
+          cwd: tempDir,
+          env,
+        });
+
+        expect(evaluation.allowlistSatisfied, argv.join(" ")).toBe(false);
+        expect(evaluation.segmentPinnedArgvTokens[0], argv.join(" ")).toBeNull();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "resolves direct argv positional carriers with the request environment",
+    async () => {
+      const tempDir = createFixtureDir("openclaw-direct-carrier-env-");
+      const binDir = path.join(tempDir, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const toolPath = path.join(binDir, "tool");
+      fs.writeFileSync(toolPath, "#!/bin/sh\necho env-tool\n");
+      fs.chmodSync(toolPath, 0o755);
+      const toolRealPath = fs.realpathSync(toolPath);
+
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals({
+          agents: {
+            main: {
+              allowlist: [{ pattern: toolPath }],
+            },
+          },
+        }),
+        run: async () => {
+          const approvals = resolveExecApprovalsFromFile({
+            file: loadExecApprovals(),
+            agentId: "main",
+            overrides: { security: "allowlist", ask: "on-miss" },
+            path: "",
+            socketPath: "",
+            token: "",
+          });
+          const analysis = await evaluateSystemRunAllowlist({
+            shellCommand: null,
+            argv: ["sh", "-c", '$0 "$@"', "tool", "hi"],
+            approvals,
+            security: "allowlist",
+            safeBins: new Set(),
+            safeBinProfiles: {},
+            trustedSafeBinDirs: getTrustedSafeBinDirs(),
+            cwd: tempDir,
+            env: { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` },
+            skillBins: [],
+            autoAllowSkills: false,
+          });
+
+          expect(analysis.allowlistSatisfied).toBe(true);
+          expect(analysis.segmentPinnedArgvTokens[0]?.replacement).toBe(toolRealPath);
+        },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "pins positional-carrier executables after transparent direct argv dispatch wrappers",
+    () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const printfPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/printf") ? "/usr/bin/printf" : "/bin/printf",
+        );
+        const argv = ["env", "sh", "-c", '$0 "$@"', "printf", "hi"];
+        const analysis = analyzeArgvCommand({ argv });
+        const evaluation = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: printfPath }],
+          safeBins: new Set(),
+        });
+        const execArgv = resolveSystemRunExecArgv({
+          plannedAllowlistArgv: ["/bin/sh", "-c", '$0 "$@"', "printf", "hi"],
+          argv,
+          security: "allowlist",
+          isWindows: false,
+          policy: {
+            approvedByAsk: false,
+            analysisOk: analysis.ok,
+            allowlistSatisfied: evaluation.allowlistSatisfied,
+          },
+          shellCommand: null,
+          segments: analysis.segments,
+          segmentPinnedArgvTokens: evaluation.segmentPinnedArgvTokens,
+          segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
+          cwd: undefined,
+          env: undefined,
+        });
+
+        expect(execArgv?.[3]).toBe(printfPath);
+        expect(execArgv?.[4]).toBe("hi");
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
     },
   );
 
@@ -1712,7 +2156,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  it("reuses exact-command durable trust for shell-wrapper reruns", async () => {
+  it("keeps prompt-only shell-wrapper reruns approval-gated despite exact-command durable trust", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1758,8 +2202,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-reused")),
         });
 
-        expect(rerun.runCommand).toHaveBeenCalledTimes(1);
-        expectInvokeOk(rerun.sendInvokeResult, { payloadContains: "shell-wrapper-reused" });
+        expect(rerun.runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({
+          sendNodeEvent: rerun.sendNodeEvent,
+          sendInvokeResult: rerun.sendInvokeResult,
+        });
       },
     });
   });

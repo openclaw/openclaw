@@ -8,3 +8,8 @@ export type ExecAllowlistEntry = {
   lastUsedCommand?: string;
   lastResolvedPath?: string;
 };
+
+export type ExecAllowlistPinnedArgvToken = {
+  tokenIndex: number;
+  replacement: string;
+};

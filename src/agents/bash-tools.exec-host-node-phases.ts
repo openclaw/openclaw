@@ -6,6 +6,7 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
+  canPersistExactCommandAllowAlways,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -299,7 +300,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
 }): Promise<NodeApprovalAnalysis> {
-  const baseAllowlistEval = evaluateShellAllowlist({
+  const baseAllowlistEval = await evaluateShellAllowlist({
     command: params.request.command,
     allowlist: [],
     safeBins: new Set(),
@@ -340,7 +341,7 @@ export async function analyzeNodeApprovalRequirement(params: {
           overrides: { security: "full" },
         });
         // Allowlist-only precheck; safe bins are node-local and may diverge.
-        const allowlistEval = evaluateShellAllowlist({
+        const allowlistEval = await evaluateShellAllowlist({
           command: params.request.command,
           allowlist: resolved.allowlist,
           safeBins: new Set(),
@@ -349,11 +350,19 @@ export async function analyzeNodeApprovalRequirement(params: {
           platform: params.target.platform,
           trustedSafeBinDirs: params.request.trustedSafeBinDirs,
         });
+        const exactCommandDurableApprovalAllowed = await canPersistExactCommandAllowAlways({
+          analysisOk: allowlistEval.analysisOk,
+          commandText: params.prepared.rawCommand,
+          cwd: params.request.workdir,
+          env: params.request.env,
+          platform: params.target.platform,
+        });
         durableApprovalSatisfied = hasDurableExecApproval({
           analysisOk: allowlistEval.analysisOk,
           segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
           allowlist: resolved.allowlist,
           commandText: params.prepared.rawCommand,
+          exactCommandDurableApprovalAllowed,
         });
         allowlistSatisfied = allowlistEval.allowlistSatisfied;
         analysisOk = allowlistEval.analysisOk;

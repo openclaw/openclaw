@@ -2,6 +2,14 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- Exec approvals: route allow-always matching through the command authorization planner so chained and inline shell payload approvals persist only for the parsed executable units. (#80922) Thanks @jesse-merhi.
+
 ## 2026.5.14
 
 ### Changes

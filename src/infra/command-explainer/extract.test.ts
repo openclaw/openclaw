@@ -467,6 +467,14 @@ describe("command explainer tree-sitter runtime", () => {
     }
   });
 
+  it("detects unsupported pipeline modifiers", async () => {
+    const stderrPipeline = await explainShellCommand("grep needle missing-file |& cat");
+    expect(stderrPipeline.shapes).toContain("stderr-pipeline");
+
+    const negated = await explainShellCommand("! grep needle file && echo missing");
+    expect(negated.shapes).toContain("negation");
+  });
+
   it("maps decoded shell-wrapper payload spans back to original source escapes", async () => {
     const explanation = await explainShellCommand('bash -lc "printf \\"hi\\" | wc -c"');
 

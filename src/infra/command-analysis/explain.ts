@@ -22,6 +22,8 @@ function riskLabel(risk: CommandRisk): string {
       return `${risk.command} dynamic argument`;
     case "source":
       return risk.command;
+    case "shell-state-mutation":
+      return risk.command;
     case "function-definition":
       return risk.name;
     default:
@@ -80,27 +82,38 @@ export function summarizeCommandSegmentsForDisplay(
   };
 }
 
-export function resolveCommandAnalysisSummaryForDisplay(params: {
+export async function resolveCommandAnalysisSummaryForDisplay(params: {
   host?: string | null;
   commandText: string;
   commandArgv?: string[];
   cwd?: string | null;
   sanitizeText?: (value: string) => string;
-}): CommandExplanationSummary | null {
+}): Promise<CommandExplanationSummary | null> {
+  if (params.host !== "node") {
+    const rich = await explainCommandForDisplay(params.commandText);
+    if (!rich) {
+      return null;
+    }
+    const sanitizeText = params.sanitizeText;
+    if (!sanitizeText) {
+      return rich.summary;
+    }
+    return {
+      commandCount: rich.summary.commandCount,
+      nestedCommandCount: rich.summary.nestedCommandCount,
+      riskKinds: rich.summary.riskKinds.map((kind) => sanitizeText(kind)),
+      warningLines: rich.summary.warningLines.map((line) => sanitizeText(line)),
+    };
+  }
+
   const analysis =
-    params.host === "node"
-      ? Array.isArray(params.commandArgv) && params.commandArgv.length > 0
-        ? analyzeCommandForPolicy({
-            source: "argv",
-            argv: params.commandArgv,
-            cwd: params.cwd ?? undefined,
-          })
-        : null
-      : analyzeCommandForPolicy({
-          source: "shell",
-          command: params.commandText,
+    Array.isArray(params.commandArgv) && params.commandArgv.length > 0
+      ? await analyzeCommandForPolicy({
+          source: "argv",
+          argv: params.commandArgv,
           cwd: params.cwd ?? undefined,
-        });
+        })
+      : null;
   if (!analysis?.ok) {
     return null;
   }

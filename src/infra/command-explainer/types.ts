@@ -7,6 +7,8 @@ export type CommandContext =
 
 export type CommandShape =
   | "pipeline"
+  | "stderr-pipeline"
+  | "negation"
   | "and"
   | "or"
   | "sequence"
@@ -32,6 +34,7 @@ export type CommandStep = {
   text: string;
   span: SourceSpan;
   executableSpan: SourceSpan;
+  argvSpans?: SourceSpan[];
 };
 
 export type CommandRisk =
@@ -49,6 +52,7 @@ export type CommandRisk =
   | { kind: "command-substitution"; text: string; span: SourceSpan }
   | { kind: "process-substitution"; text: string; span: SourceSpan }
   | { kind: "dynamic-executable"; text: string; span: SourceSpan }
+  | { kind: "comment"; text: string; span: SourceSpan }
   | {
       kind: "dynamic-argument";
       command: string;
@@ -59,11 +63,13 @@ export type CommandRisk =
   | { kind: "eval"; text: string; span: SourceSpan }
   | { kind: "source"; command: string; text: string; span: SourceSpan }
   | { kind: "alias"; text: string; span: SourceSpan }
+  | { kind: "shell-state-mutation"; command: string; text: string; span: SourceSpan }
   | { kind: "function-definition"; name: string; text: string; span: SourceSpan }
   | { kind: "line-continuation"; text: string; span: SourceSpan }
   | { kind: "heredoc"; text: string; span: SourceSpan }
   | { kind: "here-string"; text: string; span: SourceSpan }
   | { kind: "redirect"; text: string; span: SourceSpan }
+  | { kind: "wrapper-payload-depth"; text: string; span: SourceSpan }
   | { kind: "syntax-error"; text: string; span: SourceSpan };
 
 export type CommandExplanation = {

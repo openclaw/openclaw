@@ -1,6 +1,7 @@
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
+  isWindowsPlatform,
   type ExecCommandAnalysis,
   type ExecCommandSegment,
 } from "../exec-approvals-analysis.js";
@@ -21,7 +22,7 @@ export type CommandPolicyAnalysis =
       segments: [];
     };
 
-export function analyzeCommandForPolicy(
+export async function analyzeCommandForPolicy(
   params:
     | {
         source: "shell";
@@ -36,15 +37,10 @@ export function analyzeCommandForPolicy(
         cwd?: string;
         env?: NodeJS.ProcessEnv;
       },
-): CommandPolicyAnalysis {
+): Promise<CommandPolicyAnalysis> {
   const analysis =
     params.source === "shell"
-      ? analyzeShellCommand({
-          command: params.command,
-          cwd: params.cwd,
-          env: params.env,
-          platform: params.platform,
-        })
+      ? await analyzeShellCommandForPolicy(params)
       : analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
   if (!analysis.ok) {
     return {
@@ -61,6 +57,38 @@ export function analyzeCommandForPolicy(
     analysis,
     segments: analysis.segments,
   };
+}
+
+async function analyzeShellCommandForPolicy(params: {
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): Promise<ExecCommandAnalysis> {
+  if (isWindowsPlatform(params.platform)) {
+    return analyzeShellCommand({
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+    });
+  }
+  const { createExecCommandAnalysisFromAuthorizationPlan, planCommandForAuthorization } =
+    await import("../command-authorization/index.js");
+  const plan = await planCommandForAuthorization(
+    { dialect: "posix-shell", command: params.command },
+    {
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+    },
+  );
+  const analysis = createExecCommandAnalysisFromAuthorizationPlan({
+    plan,
+    cwd: params.cwd,
+    env: params.env,
+  });
+  return analysis ?? { ok: false, reason: "unable to parse shell command", segments: [] };
 }
 
 export function detectPolicyInlineEval(segments: readonly ExecCommandSegment[]) {

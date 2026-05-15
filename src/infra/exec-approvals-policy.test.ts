@@ -200,6 +200,23 @@ describe("exec approvals policy helpers", () => {
     ).toBe(true);
   });
 
+  it("ignores exact-command durable trust when planner gating rejects it", () => {
+    expect(
+      hasDurableExecApproval({
+        analysisOk: false,
+        segmentAllowlistEntries: [],
+        allowlist: [
+          {
+            pattern: "=command:613b5a60181648fd",
+            source: "allow-always",
+          },
+        ],
+        commandText: 'powershell -NoProfile -Command "Write-Output hi"',
+        exactCommandDurableApprovalAllowed: false,
+      }),
+    ).toBe(false);
+  });
+
   it("treats fully allow-always-matched segments as durable trust", () => {
     expect(
       hasDurableExecApproval({

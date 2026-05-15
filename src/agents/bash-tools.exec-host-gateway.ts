@@ -1,8 +1,10 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { renderAuthorizationShellCommand } from "../infra/command-authorization/index.js";
 import {
   addDurableCommandApproval,
+  canPersistExactCommandAllowAlways,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
@@ -272,7 +274,7 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
-  const allowlistEval = evaluateShellAllowlist({
+  const allowlistEval = await evaluateShellAllowlist({
     command: params.command,
     allowlist: approvals.allowlist,
     safeBins: params.safeBins,
@@ -286,11 +288,19 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  const exactCommandDurableApprovalAllowed = await canPersistExactCommandAllowAlways({
+    analysisOk,
+    commandText: params.command,
+    cwd: params.workdir,
+    env: params.env,
+    platform: process.platform,
+  });
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
     allowlist: approvals.allowlist,
     commandText: params.command,
+    exactCommandDurableApprovalAllowed,
   });
   const inlineEvalHit =
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
@@ -304,11 +314,19 @@ export async function processGatewayAllowlist(
   let enforcedCommand: string | undefined;
   let allowlistPlanUnavailableReason: string | null = null;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
-    const enforced = buildEnforcedShellCommand({
-      command: params.command,
-      segments: allowlistEval.segments,
-      platform: process.platform,
-    });
+    const enforced = allowlistEval.authorizationPlan
+      ? renderAuthorizationShellCommand({
+          plan: allowlistEval.authorizationPlan,
+          segments: allowlistEval.segments,
+          segmentPinnedArgvTokens: allowlistEval.segmentPinnedArgvTokens,
+          platform: process.platform,
+          mode: "enforced",
+        })
+      : buildEnforcedShellCommand({
+          command: params.command,
+          segments: allowlistEval.segments,
+          platform: process.platform,
+        });
     if (!enforced.ok || !enforced.command) {
       allowlistPlanUnavailableReason = enforced.reason ?? "unsupported platform";
     } else {
@@ -493,16 +511,28 @@ export async function processGatewayAllowlist(
       } else if (decision === "allow-always") {
         approvedByAsk = true;
         if (!requiresInlineEvalApproval) {
-          const patterns = persistAllowAlwaysPatterns({
+          const patterns = await persistAllowAlwaysPatterns({
             approvals: approvals.file,
             agentId: params.agentId,
+            analysisOk,
+            commandText: params.command,
             segments: allowlistEval.segments,
+            segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
             cwd: params.workdir,
             env: params.env,
             platform: process.platform,
             strictInlineEval: params.strictInlineEval === true,
           });
-          if (patterns.length === 0) {
+          if (
+            patterns.length === 0 &&
+            (await canPersistExactCommandAllowAlways({
+              analysisOk,
+              commandText: params.command,
+              cwd: params.workdir,
+              env: params.env,
+              platform: process.platform,
+            }))
+          ) {
             addDurableCommandApproval(approvals.file, params.agentId, params.command);
           }
         }

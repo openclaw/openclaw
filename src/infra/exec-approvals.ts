@@ -9,7 +9,13 @@ import {
   readStringValue,
 } from "../shared/string-coerce.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
-import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
+import { planCommandForAuthorization } from "./command-authorization/index.js";
+import {
+  countAllowAlwaysApprovedSegments,
+  resolveAllowAlwaysPatternEntries,
+  resolveAllowAlwaysPatternEntriesFromPlanAsync,
+} from "./exec-approvals-allowlist.js";
+import type { ExecSegmentSatisfiedBy } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
@@ -17,7 +23,7 @@ import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
-export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+export type { ExecAllowlistEntry, ExecAllowlistPinnedArgvToken } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -1019,12 +1025,14 @@ export function hasDurableExecApproval(params: {
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
+  exactCommandDurableApprovalAllowed?: boolean;
 }): boolean {
   return (
-    hasExactCommandDurableExecApproval({
-      allowlist: params.allowlist,
-      commandText: params.commandText,
-    }) ||
+    (params.exactCommandDurableApprovalAllowed !== false &&
+      hasExactCommandDurableExecApproval({
+        allowlist: params.allowlist,
+        commandText: params.commandText,
+      })) ||
     hasSegmentDurableExecApproval({
       analysisOk: params.analysisOk,
       segmentAllowlistEntries: params.segmentAllowlistEntries,
@@ -1193,22 +1201,70 @@ export function addDurableCommandApproval(
   });
 }
 
-export function persistAllowAlwaysPatterns(params: {
+export async function canPersistExactCommandAllowAlways(params: {
+  analysisOk?: boolean;
+  commandText?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): Promise<boolean> {
+  const commandText = params.commandText?.trim();
+  if (!commandText || params.analysisOk === false) {
+    return false;
+  }
+  if (params.platform === "win32") {
+    return true;
+  }
+  // POSIX exact command hashes do not bind the resolved executable identity. Use
+  // planner-backed path entries instead so PATH changes cannot inherit trust.
+  return false;
+}
+
+export async function persistAllowAlwaysPatterns(params: {
   approvals: ExecApprovalsFile;
   agentId: string | undefined;
+  analysisOk?: boolean;
+  commandText?: string;
   segments: ExecCommandSegment[];
+  segmentSatisfiedBy?: ExecSegmentSatisfiedBy[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
   strictInlineEval?: boolean;
-}): ReturnType<typeof resolveAllowAlwaysPatternEntries> {
-  const patterns = resolveAllowAlwaysPatternEntries({
-    segments: params.segments,
-    cwd: params.cwd,
-    env: params.env,
-    platform: params.platform,
-    strictInlineEval: params.strictInlineEval,
-  });
+}): Promise<ReturnType<typeof resolveAllowAlwaysPatternEntries>> {
+  const commandText = params.commandText?.trim();
+  const usePlanner =
+    params.analysisOk !== false && Boolean(commandText) && params.platform !== "win32";
+  const plan = usePlanner
+    ? await planCommandForAuthorization(
+        { dialect: "posix-shell", command: commandText ?? "" },
+        {
+          cwd: params.cwd,
+          env: params.env,
+          platform: params.platform,
+        },
+      )
+    : null;
+  const patterns = plan
+    ? await resolveAllowAlwaysPatternEntriesFromPlanAsync({
+        plan,
+        approvedSegments: params.segments.length > 0 ? params.segments : undefined,
+        approvedSegmentCount: countAllowAlwaysApprovedSegments({
+          plan,
+          segmentSatisfiedBy: params.segmentSatisfiedBy,
+        }),
+        cwd: params.cwd,
+        env: params.env,
+        platform: params.platform,
+        strictInlineEval: params.strictInlineEval,
+      })
+    : resolveAllowAlwaysPatternEntries({
+        segments: params.segments,
+        cwd: params.cwd,
+        env: params.env,
+        platform: params.platform,
+        strictInlineEval: params.strictInlineEval,
+      });
   for (const pattern of patterns) {
     if (!pattern.pattern) {
       continue;

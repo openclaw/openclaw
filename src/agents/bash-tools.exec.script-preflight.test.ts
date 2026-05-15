@@ -108,6 +108,24 @@ describe("exec interactive OpenClaw channel login guard", () => {
         command: "env -S 'openclaw channels' login --channel whatsapp",
       }),
     ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-substitution-channel-login", {
+        command: 'echo "$(openclaw channels login --channel whatsapp)"',
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+  });
+
+  it.each([
+    'echo "$(/approve abc123 allow-once)"',
+    "printf '%s\\n' \"$(env -i /approve abc123 deny)\"",
+  ])("blocks approval commands hidden in command substitution: %s", async (command) => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-substitution-approve", {
+        command,
+      }),
+    ).rejects.toThrow(/exec cannot run \/approve commands/);
   });
 });
 

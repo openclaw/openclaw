@@ -35,6 +35,7 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
     }),
   ),
 );
+const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const evaluateShellAllowlistMock = vi.hoisted(() =>
   vi.fn(() => ({
     allowlistMatches: [],
@@ -45,6 +46,9 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
   })),
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
+const persistAllowAlwaysPatternsMock = vi.hoisted(() => vi.fn(async () => []));
+const canPersistExactCommandAllowAlwaysMock = vi.hoisted(() => vi.fn(async () => false));
+const addDurableCommandApprovalMock = vi.hoisted(() => vi.fn());
 const buildEnforcedShellCommandMock = vi.hoisted(() =>
   vi.fn((): { ok: boolean; reason?: string; command?: string } => ({
     ok: false,
@@ -87,15 +91,17 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
+  persistAllowAlwaysPatterns: persistAllowAlwaysPatternsMock,
+  canPersistExactCommandAllowAlways: canPersistExactCommandAllowAlwaysMock,
   buildEnforcedShellCommand: buildEnforcedShellCommandMock,
-  requiresExecApproval: vi.fn(() => false),
+  requiresExecApproval: requiresExecApprovalMock,
   recordAllowlistUse: vi.fn(),
   recordAllowlistMatchesUse: recordAllowlistMatchesUseMock,
   resolveApprovalAuditCandidatePath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
   resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
   addAllowlistEntry: vi.fn(),
-  addDurableCommandApproval: vi.fn(),
+  addDurableCommandApproval: addDurableCommandApprovalMock,
 }));
 
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
@@ -190,6 +196,8 @@ describe("processGatewayAllowlist", () => {
       approvedByAsk: false,
       deniedReason: "approval-required",
     });
+    requiresExecApprovalMock.mockReset();
+    requiresExecApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistMock.mockReset();
     evaluateShellAllowlistMock.mockReturnValue({
       allowlistMatches: [],
@@ -200,6 +208,11 @@ describe("processGatewayAllowlist", () => {
     });
     hasDurableExecApprovalMock.mockReset();
     hasDurableExecApprovalMock.mockReturnValue(true);
+    persistAllowAlwaysPatternsMock.mockReset();
+    persistAllowAlwaysPatternsMock.mockResolvedValue([]);
+    canPersistExactCommandAllowAlwaysMock.mockReset();
+    canPersistExactCommandAllowAlwaysMock.mockResolvedValue(false);
+    addDurableCommandApprovalMock.mockReset();
     buildEnforcedShellCommandMock.mockReset();
     buildEnforcedShellCommandMock.mockReturnValue({
       ok: false,
@@ -340,6 +353,57 @@ describe("processGatewayAllowlist", () => {
         command: "node --version",
       }),
     ).rejects.toThrow("exec denied: allowlist miss");
+  });
+
+  it("does not persist exact allow-always trust when planner fallback is denied", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: false,
+      allowlistSatisfied: false,
+      segments: [],
+      segmentAllowlistEntries: [],
+    });
+    hasDurableExecApprovalMock.mockReturnValue(false);
+    requiresExecApprovalMock.mockReturnValue(true);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    persistAllowAlwaysPatternsMock.mockResolvedValue([]);
+    canPersistExactCommandAllowAlwaysMock.mockResolvedValue(false);
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "session-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        timedOut: false,
+        aggregated: "",
+      }),
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "printf x > out.txt",
+      ask: "on-miss",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await expect
+      .poll(() => canPersistExactCommandAllowAlwaysMock.mock.calls.length, {
+        timeout: 2000,
+        interval: 1,
+      })
+      .toBeGreaterThanOrEqual(2);
+    expect(addDurableCommandApprovalMock).not.toHaveBeenCalled();
   });
 
   it("uses sessionKey for followups when notifySessionKey is absent", async () => {
