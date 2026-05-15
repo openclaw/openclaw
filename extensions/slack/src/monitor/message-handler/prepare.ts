@@ -1242,6 +1242,15 @@ export async function prepareSlackMessage(params: {
           );
         },
       },
+      history:
+        isRoomish && shouldRequireMention
+          ? {
+              isGroup: true,
+              historyKey,
+              historyMap: ctx.channelHistories,
+              limit: ctx.historyLimit,
+            }
+          : undefined,
     },
     replyToMode,
     requireMention: shouldRequireMention,

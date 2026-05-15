@@ -420,6 +420,7 @@ async function runPreparedChannelTurnCore<
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
+    clearPendingHistoryAfterTurn(params.history);
     return botLoopDrop;
   }
   emit({

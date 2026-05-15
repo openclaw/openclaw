@@ -597,6 +597,9 @@ describe("channel turn kernel", () => {
   it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
     const events: string[] = [];
     const log = vi.fn();
+    const historyMap = new Map<string, HistoryEntry[]>([
+      ["room", [{ sender: "User", body: "queued before suppression" }]],
+    ]);
     const recordInboundSession = createRecordInboundSession(events);
     const runDispatch = vi.fn(async () => {
       events.push("dispatch");
@@ -633,6 +636,12 @@ describe("channel turn kernel", () => {
       log,
       messageId: "msg-loop",
       botLoopProtection: { ...botLoopProtection, nowMs: 1_001 },
+      history: {
+        isGroup: true,
+        historyKey: "room",
+        historyMap,
+        limit: 50,
+      },
     });
 
     expect(first.dispatched).toBe(true);
@@ -644,6 +653,7 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "dispatch"]);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(runDispatch).toHaveBeenCalledTimes(1);
+    expect(historyMap.get("room")).toStrictEqual([]);
     expect(loggedEvents(log)).toEqual([
       { stage: "authorize", event: "drop", messageId: "msg-loop" },
     ]);
