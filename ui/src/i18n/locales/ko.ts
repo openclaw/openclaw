@@ -347,6 +347,12 @@ export const ko: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -1031,10 +1037,10 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "자동 스크롤 모드",
+    autoScrollAlways: "항상",
+    autoScrollNearBottom: "하단 근처",
+    autoScrollOff: "끔",
     focusToggle: "집중 모드 전환(사이드바 + 페이지 헤더 숨기기)",
     hideCronSessions: "Cron 세션 숨기기",
     showCronSessions: "Cron 세션 표시",
