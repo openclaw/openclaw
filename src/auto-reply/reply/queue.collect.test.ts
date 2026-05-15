@@ -1081,7 +1081,7 @@ describe("followup queue collect routing", () => {
   // quote id, the quoted body, and the quoting author — otherwise the agent
   // loses the conversational thread the user was responding to. See
   // openclaw#36630 (fix(signal): complete bidirectional quote-reply support).
-  it("preserves Signal quote markers when wrapping queued messages while the agent is busy", async () => {
+  it("preserves Signal quote markers and structured context when wrapping queued messages", async () => {
     const key = `test-collect-signal-quote-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
@@ -1105,6 +1105,33 @@ describe("followup queue collect routing", () => {
     const quotedId = "1700000000000";
     const quotedBody = "the meeting is at 3pm";
     const quoteMarker = `[Quoting ${quotedAuthor} id:${quotedId}]\n"${quotedBody}"\n[/Quoting]`;
+    const replyContext = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      JSON.stringify(
+        {
+          chat_id: signalRoute.originatingTo,
+          message_id: "1700000000006",
+          reply_to_id: quotedId,
+          has_reply_context: true,
+        },
+        null,
+        2,
+      ),
+      "```",
+      "Reply target of current user message (untrusted, for context):",
+      "```json",
+      JSON.stringify(
+        {
+          sender_label: quotedAuthor,
+          is_quote: true,
+          body: quotedBody,
+        },
+        null,
+        2,
+      ),
+      "```",
+    ].join("\n");
 
     enqueueFollowupRun(
       key,
@@ -1117,11 +1144,14 @@ describe("followup queue collect routing", () => {
     );
     enqueueFollowupRun(
       key,
-      createRun({
-        prompt: `yes please send it\n\n${quoteMarker}`,
-        messageId: "1700000000006",
-        ...signalRoute,
-      }),
+      {
+        ...createRun({
+          prompt: `yes please send it\n\n${quoteMarker}`,
+          messageId: "1700000000006",
+          ...signalRoute,
+        }),
+        currentTurnContext: { text: replyContext },
+      },
       settings,
     );
 
@@ -1135,6 +1165,15 @@ describe("followup queue collect routing", () => {
     expect(merged).toContain(`[Quoting ${quotedAuthor} id:${quotedId}]`);
     expect(merged).toContain(quotedBody);
     expect(merged).toContain("[/Quoting]");
+    expect(calls[0]?.currentTurnContext?.text).toContain("Queued #2 current-turn context:");
+    expect(calls[0]?.currentTurnContext?.text).toContain('"reply_to_id": "1700000000000"');
+    expect(calls[0]?.currentTurnContext?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(calls[0]?.currentTurnContext?.text).toContain(`"sender_label": "${quotedAuthor}"`);
+    expect(calls[0]?.currentTurnContext?.text).toContain('"is_quote": true');
+    expect(calls[0]?.currentTurnContext?.text).toContain(`"body": "${quotedBody}"`);
+    expect(calls[0]?.currentTurnContext?.promptJoiner).toBe("\n\n");
     expect(calls[0]?.originatingChannel).toBe("signal");
     expect(calls[0]?.originatingTo).toBe("signal:+15550001111");
   });

@@ -154,6 +154,22 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
   };
 }
 
+function collectCurrentTurnContext(items: FollowupRun[]): Pick<FollowupRun, "currentTurnContext"> {
+  const contexts: string[] = [];
+  for (const [index, item] of items.entries()) {
+    const text = item.currentTurnContext?.text.trim();
+    if (!text) {
+      continue;
+    }
+    contexts.push(
+      items.length === 1 ? text : `Queued #${index + 1} current-turn context:\n${text}`,
+    );
+  }
+  return contexts.length > 0
+    ? { currentTurnContext: { text: contexts.join("\n\n"), promptJoiner: "\n\n" } }
+    : {};
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -255,6 +271,7 @@ export function scheduleFollowupDrain(
               enqueuedAt: Date.now(),
               ...routing,
               ...collectQueuedImages(groupItems),
+              ...collectCurrentTurnContext(groupItems),
             });
             queue.items.splice(0, groupItems.length);
             if (pendingSummary) {
