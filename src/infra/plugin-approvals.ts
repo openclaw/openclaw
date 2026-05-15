@@ -201,6 +201,7 @@ const CURL_AUTH_VALUE_FLAGS = new Set([
 const CURL_COOKIE_FLAGS = new Set(["-b", "--cookie"]);
 const CURL_COOKIE_JAR_FLAGS = new Set(["-c", "--cookie-jar"]);
 const CURL_HEADER_FLAGS = new Set(["-H", "--header", "--proxy-header"]);
+const CURL_URL_QUERY_FLAGS = new Set(["--url-query"]);
 const CURL_OUTPUT_FLAGS = new Set([
   "-D",
   "-o",
@@ -397,8 +398,33 @@ function redactQuotedCookieHeaderValues(command: string): string {
   );
 }
 
+function redactCurlUrlQueryCommandValues(command: string): string {
+  return command.replace(
+    /(--url-query(?:=|\s+))(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
+    (_match: string, prefix: string, doubleQuoted: string, singleQuoted: string, bare: string) => {
+      const value = doubleQuoted ?? singleQuoted ?? bare ?? "";
+      const redacted = redactSensitiveCurlUrlQueryValue(value);
+      if (doubleQuoted !== undefined) {
+        return `${prefix}"${redacted}"`;
+      }
+      if (singleQuoted !== undefined) {
+        return `${prefix}'${redacted}'`;
+      }
+      return `${prefix}${redacted}`;
+    },
+  );
+}
+
+function redactSensitiveCurlUrlQueryValue(value: string): string {
+  return value.replace(/(^|[?&=])([^=\s&#]+)=([^&\s#]*)/gi, (match, prefix, key) =>
+    isSensitiveUrlQueryKey(String(key)) ? `${prefix}${key}=[redacted]` : match,
+  );
+}
+
 function redactSensitiveCommandText(command: string): string {
-  return redactSensitiveUrlQueryValues(redactQuotedCookieHeaderValues(command))
+  return redactCurlUrlQueryCommandValues(
+    redactSensitiveUrlQueryValues(redactQuotedCookieHeaderValues(command)),
+  )
     .replace(
       /(authorization:\s*(?:(?:bearer|basic|token)\s+)?)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
@@ -2258,6 +2284,36 @@ function collectNetworkTransferOperands(
       continue;
     }
 
+    const urlQueryValue =
+      command === "curl" ? takeFlagValue(args, index, CURL_URL_QUERY_FLAGS) : null;
+    if (urlQueryValue) {
+      const querySource = analyzeCurlUrlQueryValue(urlQueryValue.value);
+      if (querySource.files.length > 0) {
+        credentialFiles.push(...querySource.files);
+        usesUrlCredentialSource = true;
+      }
+      if (querySource.usesStdin) {
+        if (inputRedirection.targets.length > 0) {
+          credentialFiles.push(...inputRedirection.targets);
+        } else {
+          usesAmbiguousCredentialSource = true;
+        }
+        usesUrlCredentialSource = true;
+      }
+      if (querySource.hasSensitiveQueryKey) {
+        usesUrlCredentialSource = true;
+      }
+      if (querySource.ambiguous) {
+        usesAmbiguousCredentialSource = true;
+      }
+      index = Math.max(index, urlQueryValue.nextIndex);
+      continue;
+    }
+    if (command === "curl" && CURL_URL_QUERY_FLAGS.has(arg)) {
+      usesAmbiguousCredentialSource = true;
+      continue;
+    }
+
     const uploadValue =
       command === "curl"
         ? takeFlagValue(args, index, CURL_UPLOAD_FILE_FLAGS, ["-T"])
@@ -2373,6 +2429,60 @@ function extractCurlCookieFiles(value: string): string[] {
     return [];
   }
   return extractPlainLocalFileOperands(trimmed);
+}
+
+function analyzeCurlUrlQueryValue(value: string): {
+  files: string[];
+  usesStdin: boolean;
+  hasSensitiveQueryKey: boolean;
+  ambiguous: boolean;
+} {
+  const trimmed = stripShellWordQuotes(value.trim());
+  if (!trimmed) {
+    return { files: [], usesStdin: false, hasSensitiveQueryKey: false, ambiguous: true };
+  }
+  const normalized = trimmed.startsWith("+") ? trimmed.slice(1) : trimmed;
+  const fileOperand = extractCurlUrlQueryFileOperand(normalized);
+  if (fileOperand === "") {
+    return { files: [], usesStdin: false, hasSensitiveQueryKey: false, ambiguous: true };
+  }
+  if (fileOperand === "-") {
+    return { files: [], usesStdin: true, hasSensitiveQueryKey: false, ambiguous: false };
+  }
+  if (fileOperand) {
+    return {
+      files: extractPlainLocalFileOperands(fileOperand),
+      usesStdin: false,
+      hasSensitiveQueryKey: true,
+      ambiguous: false,
+    };
+  }
+  return {
+    files: [],
+    usesStdin: false,
+    hasSensitiveQueryKey: hasSensitiveCurlUrlQueryValue(normalized),
+    ambiguous: false,
+  };
+}
+
+function extractCurlUrlQueryFileOperand(value: string): string | null {
+  if (value.startsWith("@")) {
+    return stripNetworkFileOperandPrefix(value);
+  }
+  const namedFile = /^[^=]+@(.+)$/.exec(value);
+  if (!namedFile) {
+    return null;
+  }
+  return stripNetworkFileOperandPrefix(namedFile[1] ?? "");
+}
+
+function hasSensitiveCurlUrlQueryValue(value: string): boolean {
+  for (const match of value.matchAll(/(?:^|[?&=])([^=\s&#]+)=/gi)) {
+    if (isSensitiveUrlQueryKey(match[1] ?? "")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function extractCurlBodyFileOperands(value: string): string[] {
