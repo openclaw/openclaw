@@ -15,6 +15,7 @@ import {
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
   sanitizeHostExecEnvWithDiagnostics,
 } from "../infra/host-env-security.js";
 import {
@@ -1526,9 +1527,10 @@ export function createExecTool(
       }
 
       // Let plugins contribute channel-specific env vars. Filter out keys that
-      // the host env security policy marks as dangerous overrides (e.g. LD_PRELOAD,
-      // proxy/TLS pivots) so plugin hooks cannot silently bypass the sanitizer.
-      // PATH overrides are intentionally allowed — plugins may prepend custom tool dirs.
+      // the host env security policy marks as dangerous (LD_*, BASH_ENV,
+      // NODE_OPTIONS, proxy/TLS pivots, and blocked-everywhere keys) so plugin
+      // hooks cannot silently bypass the sanitizer. PATH overrides are
+      // intentionally allowed — plugins may prepend custom tool dirs.
       let pluginEnv: Record<string, string> | undefined;
       const hookRunner = getGlobalHookRunner();
       if (hookRunner?.hasHooks("resolve_exec_env")) {
@@ -1547,7 +1549,7 @@ export function createExecTool(
         );
         pluginEnv = {};
         for (const [key, value] of Object.entries(rawPluginEnv)) {
-          if (!isDangerousHostEnvOverrideVarName(key)) {
+          if (!isDangerousHostEnvVarName(key) && !isDangerousHostEnvOverrideVarName(key)) {
             pluginEnv[key] = value;
           }
         }

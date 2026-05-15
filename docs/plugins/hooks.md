@@ -122,6 +122,7 @@ observation-only.
 - `after_tool_call` - observe tool results, errors, and duration
 - **`tool_result_persist`** - rewrite the assistant message produced from a tool result
 - **`before_message_write`** - inspect or block an in-progress message write (rare)
+- `resolve_exec_env` - contribute channel-specific environment variables to exec tool invocations
 
 **Messages and delivery**
 
@@ -229,6 +230,28 @@ not prompt content:
   persistence cap. Hooks should still keep returned `details` small and avoid
   placing prompt-relevant text only in `details`; put model-visible tool output
   in `content`.
+
+### Exec environment injection
+
+`resolve_exec_env` lets plugins contribute channel-specific environment
+variables to exec tool invocations. The hook fires after the host environment
+is sanitized and receives:
+
+- `event.sessionKey`, `event.toolName`, `event.host` (`"gateway"`,
+  `"sandbox"`, or `"node"`)
+- `ctx.agentId`, `ctx.sessionKey`, `ctx.messageProvider`, `ctx.channelId`
+
+Return a `Record<string, string>` of environment variables to merge. Multiple
+plugins can contribute; later plugins override earlier ones for the same key.
+
+Hook output is filtered through the host env security policy: keys matching
+`isDangerousHostEnvVarName` or `isDangerousHostEnvOverrideVarName` (e.g.
+`LD_PRELOAD`, `BASH_ENV`, `NODE_OPTIONS`, proxy/TLS overrides) are silently
+dropped. `PATH` overrides are intentionally allowed so plugins can prepend
+custom tool directories.
+
+For `host=node` executions, filtered hook env is forwarded to the node
+execution payload alongside the original request env.
 
 ## Prompt and model hooks
 
