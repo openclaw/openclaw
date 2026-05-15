@@ -22,7 +22,6 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
-  hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
   resolveAgentDir,
   resolveSessionAgentIds,
@@ -120,6 +119,7 @@ import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-poli
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
+import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
@@ -479,10 +479,11 @@ export async function runEmbeddedPiAgent(
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
-      const fallbackConfigured = hasConfiguredModelFallbacks({
+      const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
         cfg: params.config,
         agentId: params.agentId,
         sessionKey: normalizedSessionKey,
+        modelFallbacksOverride: params.modelFallbacksOverride,
       });
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
