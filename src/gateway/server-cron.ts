@@ -295,6 +295,7 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
+        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
       });
     },
     requestHeartbeat: (opts) => {

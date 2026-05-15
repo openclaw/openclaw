@@ -1080,6 +1080,7 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
+    forceSenderIsOwnerFalse: true,
   });
   requestHeartbeat({
     source: "background-task",
@@ -1104,6 +1105,7 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
+    forceSenderIsOwnerFalse: true,
   });
   requestHeartbeat({
     source: "background-task-blocked",

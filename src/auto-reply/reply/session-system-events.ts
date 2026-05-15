@@ -27,13 +27,18 @@ const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[
   return selected;
 };
 
-/** Drain queued system events, format as `System:` lines, return the block (or undefined). */
-export async function drainFormattedSystemEvents(params: {
+export type FormattedSystemEventBlock = {
+  text: string;
+  forceSenderIsOwnerFalse: boolean;
+};
+
+/** Drain queued system events, format as `System:` lines, return the block with authority metadata. */
+export async function drainFormattedSystemEventBlock(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-}): Promise<string | undefined> {
+}): Promise<FormattedSystemEventBlock | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -99,6 +104,7 @@ export async function drainFormattedSystemEvents(params: {
 
   const summaryLines: string[] = [];
   const systemLines: string[] = [];
+  let forceSenderIsOwnerFalse = false;
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
@@ -109,6 +115,9 @@ export async function drainFormattedSystemEvents(params: {
     const compacted = compactSystemEvent(event.text);
     if (!compacted) {
       continue;
+    }
+    if (event.forceSenderIsOwnerFalse === true) {
+      forceSenderIsOwnerFalse = true;
     }
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
     let index = 0;
@@ -133,7 +142,21 @@ export async function drainFormattedSystemEvents(params: {
 
   // Each sub-line gets its own prefix so continuation lines can't be mistaken
   // for regular user content.
-  return summaryLines.length > 0
-    ? [...summaryLines, ...systemLines].join("\n")
-    : systemLines.join("\n");
+  return {
+    text:
+      summaryLines.length > 0
+        ? [...summaryLines, ...systemLines].join("\n")
+        : systemLines.join("\n"),
+    forceSenderIsOwnerFalse,
+  };
+}
+
+/** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
+export async function drainFormattedSystemEvents(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  isMainSession: boolean;
+  isNewSession: boolean;
+}): Promise<string | undefined> {
+  return (await drainFormattedSystemEventBlock(params))?.text;
 }

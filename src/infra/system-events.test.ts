@@ -352,20 +352,44 @@ describe("system events (session routing)", () => {
     expect(peekSystemEventEntries(key)).toHaveLength(2);
   });
 
-  it("dedupes the same text and context regardless of removed trust metadata", () => {
-    const key = "agent:main:test-context-dedupes";
-    const first = enqueueSystemEvent("Hook finished", {
+  it("allows the same text and context under different owner-downgrade metadata", () => {
+    const key = "agent:main:test-context-owner-downgrade-disambiguates";
+    const inheritedAuthority = enqueueSystemEvent("Hook finished", {
       sessionKey: key,
       contextKey: "hook:done",
     });
-    const duplicate = enqueueSystemEvent("Hook finished", {
+    const downgradedAuthority = enqueueSystemEvent("Hook finished", {
       sessionKey: key,
       contextKey: "hook:done",
+      forceSenderIsOwnerFalse: true,
     });
 
-    expect(first).toBe(true);
-    expect(duplicate).toBe(false);
-    expect(peekSystemEventEntries(key)).toHaveLength(1);
+    expect(inheritedAuthority).toBe(true);
+    expect(downgradedAuthority).toBe(true);
+    expect(peekSystemEventEntries(key).map((event) => event.forceSenderIsOwnerFalse)).toEqual([
+      false,
+      true,
+    ]);
+    expect(peekSystemEventEntries(key).map((event) => event.trusted)).toEqual([true, false]);
+  });
+
+  it("keeps trusted false as a deprecated owner-downgrade alias", () => {
+    const key = "agent:main:test-legacy-trusted-false";
+
+    enqueueSystemEvent("Legacy webhook", {
+      sessionKey: key,
+      trusted: false,
+    });
+    enqueueSystemEvent("Legacy internal", {
+      sessionKey: key,
+      trusted: true,
+    });
+
+    expect(peekSystemEventEntries(key).map((event) => event.forceSenderIsOwnerFalse)).toEqual([
+      true,
+      false,
+    ]);
+    expect(peekSystemEventEntries(key).map((event) => event.trusted)).toEqual([false, true]);
   });
 
   it("preserves lastContextKey when a duplicate is skipped", () => {

@@ -761,7 +761,7 @@ describe("registerSlackInteractionEvents", () => {
           to: "channel:C1",
         },
         sessionKey: "agent:ops:slack:channel:C1",
-        trusted: false,
+        forceSenderIsOwnerFalse: true,
       },
     );
     expect(resolveSessionKey).toHaveBeenCalledWith({

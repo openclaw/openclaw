@@ -1543,6 +1543,18 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
   }
+  const activeSessionPendingEventEntries =
+    runSessionKey === sessionKey
+      ? preflight.pendingEventEntries
+      : peekSystemEventEntries(runSessionKey);
+  const hasInspectedOwnerDowngradeEvents =
+    preflight.shouldInspectPendingEvents &&
+    preflight.pendingEventEntries.some((event) => event.forceSenderIsOwnerFalse === true);
+  const hasActiveSessionOwnerDowngradeEvents = activeSessionPendingEventEntries.some(
+    (event) => event.forceSenderIsOwnerFalse === true,
+  );
+  const hasOwnerDowngradeSystemEvents =
+    hasInspectedOwnerDowngradeEvents || hasActiveSessionOwnerDowngradeEvents;
 
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -1593,7 +1605,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion,
+    ForceSenderIsOwnerFalse: hasExecCompletion || hasOwnerDowngradeSystemEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({

@@ -413,7 +413,7 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("queues direct and mapped wake payloads as untrusted system events", async () => {
+  test("queues direct and mapped wake payloads with owner-downgrade metadata", async () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
@@ -433,6 +433,7 @@ describe("gateway server hooks", () => {
       const directEvents = peekSystemEventEntries(resolveMainKey());
       expect(directEvents).toHaveLength(1);
       expect(directEvents[0]?.text).toBe("Direct wake");
+      expect(directEvents[0]?.forceSenderIsOwnerFalse).toBe(true);
       drainSystemEvents(resolveMainKey());
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
@@ -441,6 +442,7 @@ describe("gateway server hooks", () => {
       const mappedEvents = peekSystemEventEntries(resolveMainKey());
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
+      expect(mappedEvents[0]?.forceSenderIsOwnerFalse).toBe(true);
       drainSystemEvents(resolveMainKey());
     });
   });

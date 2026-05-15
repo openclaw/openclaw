@@ -46,7 +46,7 @@ export function registerSlackChannelEvents(params: {
     enqueueSystemEvent(`Slack channel ${params.kind}: ${label}.`, {
       sessionKey,
       contextKey: `slack:channel:${params.kind}:${params.channelId ?? params.channelName ?? "unknown"}`,
-      trusted: false,
+      forceSenderIsOwnerFalse: true,
     });
   };
 

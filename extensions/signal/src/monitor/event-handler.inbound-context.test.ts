@@ -468,7 +468,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("reaction added", {
       sessionKey: "agent:main:signal:group:g1",
       contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
-      trusted: false,
+      forceSenderIsOwnerFalse: true,
     });
   });
 

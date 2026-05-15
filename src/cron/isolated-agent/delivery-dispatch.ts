@@ -406,6 +406,7 @@ async function queueCronAwarenessSystemEvent(params: {
         agentId: params.agentId,
       }),
       contextKey: params.deliveryIdempotencyKey,
+      forceSenderIsOwnerFalse: true,
     });
   } catch (err) {
     await logCronDeliveryWarn(

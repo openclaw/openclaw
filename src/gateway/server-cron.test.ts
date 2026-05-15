@@ -847,7 +847,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("forwards cron system events without trust metadata", () => {
+  it("forwards cron system events with owner-downgrade metadata", () => {
     const cfg = createCronConfig("server-cron-system-event");
     loadConfigMock.mockReturnValue(cfg);
 
@@ -867,6 +867,7 @@ describe("buildGatewayCronService", () => {
                   agentId?: string;
                   sessionKey?: string;
                   contextKey?: string;
+                  forceSenderIsOwnerFalse?: boolean;
                 },
               ) => void;
             };
@@ -877,11 +878,13 @@ describe("buildGatewayCronService", () => {
       cronDeps?.enqueueSystemEvent?.("hello", {
         sessionKey: "discord:channel:ops",
         contextKey: "cron:test",
+        forceSenderIsOwnerFalse: true,
       });
 
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("hello", {
         sessionKey: "agent:main:discord:channel:ops",
         contextKey: "cron:test",
+        forceSenderIsOwnerFalse: true,
       });
     } finally {
       state.cron.stop();

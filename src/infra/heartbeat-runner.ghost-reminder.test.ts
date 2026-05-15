@@ -247,6 +247,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       enqueue: (sessionKey) => {
         enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
           sessionKey,
+          forceSenderIsOwnerFalse: true,
         });
       },
     });
@@ -488,23 +489,23 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
-  it("forces owner downgrade for untrusted hook:wake system events", async () => {
+  it("forces owner downgrade for hook:wake system events with downgrade metadata", async () => {
     await expectUntrustedEventOwnership({
       tmpPrefix: "openclaw-hook-event-",
       reason: "hook:wake",
-      forceSenderIsOwnerFalse: false,
+      forceSenderIsOwnerFalse: true,
     });
   });
 
-  it("forces owner downgrade for untrusted interval events", async () => {
+  it("forces owner downgrade for interval events with downgrade metadata", async () => {
     await expectUntrustedEventOwnership({
       tmpPrefix: "openclaw-interval-event-",
       reason: "interval",
-      forceSenderIsOwnerFalse: false,
+      forceSenderIsOwnerFalse: true,
     });
   });
 
-  it("does not force owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
+  it("does not force owner downgrade for base-session hook:wake events with isolated sessions", async () => {
     await expectUntrustedEventOwnership({
       tmpPrefix: "openclaw-hook-event-isolated-",
       reason: "hook:wake",
@@ -513,7 +514,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
-  it("does not force owner downgrade for isolated interval runs with only base-session untrusted events", async () => {
+  it("does not force owner downgrade for isolated interval runs with only base-session downgrade events", async () => {
     await expectUntrustedEventOwnership({
       tmpPrefix: "openclaw-interval-event-isolated-",
       reason: "interval",
