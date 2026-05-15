@@ -347,6 +347,12 @@ export const ar: TranslationMap = {
     eventLogSubtitle: "أحدث أحداث Gateway.",
     noEvents: "لا توجد أحداث بعد.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "تنتهي خلال {time}",
     expired: "منتهية الصلاحية",
@@ -1023,10 +1029,10 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "وضع التمرير التلقائي",
+    autoScrollAlways: "دائمًا",
+    autoScrollNearBottom: "قرب الأسفل",
+    autoScrollOff: "إيقاف",
     focusToggle: "تبديل وضع التركيز (إخفاء الشريط الجانبي + رأس الصفحة)",
     hideCronSessions: "إخفاء جلسات cron",
     showCronSessions: "إظهار جلسات cron",
