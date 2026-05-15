@@ -5,6 +5,7 @@ const MIMO_REASONING_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
 ]);
 
 export function isMiMoReasoningModelId(modelId: string): boolean {

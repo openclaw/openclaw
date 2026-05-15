@@ -551,11 +551,13 @@ describe("plugin-sdk subpath exports", () => {
       "buildInboundHistoryFromMap",
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "recordPendingHistoryEntryIfEnabled",
     ]);
     expectSourceMentions("mattermost", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "formatPairingApproveHint",
       "recordPendingHistoryEntryIfEnabled",
       "resolveControlCommandGate",

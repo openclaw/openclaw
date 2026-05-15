@@ -19,6 +19,9 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
+import type { InboundTurnKind } from "./kind.js";
+
+export type { InboundTurnKind } from "./kind.js";
 
 export type ChannelTurnAdmission =
   | { kind: "dispatch"; reason?: string }
@@ -175,6 +178,7 @@ export type AccessFacts = {
 };
 
 export type MessageFacts = {
+  inboundTurnKind?: InboundTurnKind;
   body?: string;
   rawBody: string;
   bodyForAgent?: string;

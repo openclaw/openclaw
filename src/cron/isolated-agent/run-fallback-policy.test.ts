@@ -71,6 +71,125 @@ describe("resolveCronFallbacksOverride", () => {
     ).toStrictEqual([]);
   });
 
+  it("uses subagent model fallbacks when cron selects the configured subagent model", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["openai/gpt-5.4"],
+              },
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                },
+              },
+            },
+          },
+        },
+        agentId: "main",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
+  });
+
+  it("keeps default subagent fallbacks ahead of the agent primary fallback policy", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: ["openai-codex/gpt-5.2"],
+                },
+              },
+            },
+            list: [
+              {
+                id: "research",
+                model: {
+                  primary: "anthropic/claude-opus-4-6",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "research",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual(["openai-codex/gpt-5.2"]);
+  });
+
+  it("keeps explicit empty subagent fallbacks as a fallback override", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["openai/gpt-5.4"],
+              },
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: [],
+                },
+              },
+            },
+          },
+        },
+        agentId: "main",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("ignores subagent fallbacks when cron did not select the subagent model", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+              },
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: ["openai-codex/gpt-5.2"],
+                },
+              },
+            },
+          },
+        },
+        agentId: "main",
+        useSubagentFallbacks: false,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toBeUndefined();
+  });
+
   it("leaves the default model path to the fallback runner when no payload model is set", () => {
     expect(
       resolveCronFallbacksOverride({

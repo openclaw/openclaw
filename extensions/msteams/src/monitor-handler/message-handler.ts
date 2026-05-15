@@ -15,10 +15,8 @@ import {
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -538,8 +536,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
-        recordPendingHistoryEntryIfEnabled({
-          historyMap: conversationHistories,
+        createChannelHistoryWindow({ historyMap: conversationHistories }).record({
           historyKey: conversationId,
           limit: historyLimit,
           entry: {
@@ -712,8 +709,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
     if (isRoomish && historyKey) {
-      combinedBody = buildPendingHistoryContextFromMap({
-        historyMap: conversationHistories,
+      const channelHistory = createChannelHistoryWindow({ historyMap: conversationHistories });
+      combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: historyLimit,
         currentMessage: combinedBody,
@@ -730,8 +727,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const inboundHistory =
       isRoomish && historyKey && historyLimit > 0
-        ? buildInboundHistoryFromMap({
-            historyMap: conversationHistories,
+        ? createChannelHistoryWindow({ historyMap: conversationHistories }).buildInboundHistory({
             historyKey,
             limit: historyLimit,
           })
