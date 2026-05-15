@@ -27,6 +27,7 @@ function queueActiveRunMessageForTest(
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
@@ -39,7 +40,10 @@ import {
 } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
-import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
+import {
+  runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
+  __testing,
+} from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
@@ -50,6 +54,30 @@ import {
 } from "./thread-lifecycle.js";
 
 let tempDir: string;
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+
+type RunCodexAppServerAttemptOptions = NonNullable<
+  Parameters<typeof runCodexAppServerAttemptImpl>[1]
+>;
+
+function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+  codexAppServerClientFactoryForTest = factory;
+}
+
+function resetCodexAppServerClientFactoryForTest(): void {
+  codexAppServerClientFactoryForTest = undefined;
+}
+
+function runCodexAppServerAttempt(
+  params: EmbeddedRunAttemptParams,
+  options: RunCodexAppServerAttemptOptions = {},
+) {
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
+  return runCodexAppServerAttemptImpl(
+    params,
+    clientFactory ? { ...options, clientFactory } : options,
+  );
+}
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
@@ -212,22 +240,20 @@ function createAppServerHarness(
     return requestImpl(method, params);
   });
 
-  __testing.setCodexAppServerClientFactoryForTests(
-    async (_startOptions, authProfileId, agentDir) => {
-      options.onStart?.(authProfileId, agentDir);
-      return {
-        request,
-        addNotificationHandler: (handler: typeof notify) => {
-          notify = handler;
-          return () => undefined;
-        },
-        addRequestHandler: (handler: AppServerRequestHandler) => {
-          handleServerRequest = handler;
-          return () => undefined;
-        },
-      } as never;
-    },
-  );
+  setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
+    options.onStart?.(authProfileId, agentDir);
+    return {
+      request,
+      addNotificationHandler: (handler: typeof notify) => {
+        notify = handler;
+        return () => undefined;
+      },
+      addRequestHandler: (handler: AppServerRequestHandler) => {
+        handleServerRequest = handler;
+        return () => undefined;
+      },
+    } as never;
+  });
 
   const waitForServerRequestHandler = async () => {
     await vi.waitFor(() => expect(handleServerRequest).toBeTypeOf("function"), {
@@ -555,7 +581,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   afterEach(async () => {
-    __testing.resetCodexAppServerClientFactoryForTests();
+    resetCodexAppServerClientFactoryForTest();
     __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
@@ -1333,7 +1359,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1417,7 +1443,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1464,7 +1490,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1542,7 +1568,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1633,7 +1659,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1726,7 +1752,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1904,7 +1930,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -1979,7 +2005,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -2062,7 +2088,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -2153,7 +2179,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -2233,7 +2259,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -2297,7 +2323,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -3590,7 +3616,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -3968,7 +3994,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -4027,7 +4053,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -4208,7 +4234,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -4579,7 +4605,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("times out app-server startup before thread setup can hang forever", async () => {
-    __testing.setCodexAppServerClientFactoryForTests(() => new Promise<never>(() => undefined));
+    setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => undefined));
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -4636,7 +4662,7 @@ describe("runCodexAppServerAttempt", () => {
         return {};
       },
     );
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
@@ -5009,7 +5035,7 @@ describe("runCodexAppServerAttempt", () => {
     const requests: string[][] = [];
     let starts = 0;
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    __testing.setCodexAppServerClientFactoryForTests(async () => {
+    setCodexAppServerClientFactoryForTest(async () => {
       const startIndex = starts++;
       const methods: string[] = [];
       requests.push(methods);
@@ -5058,7 +5084,7 @@ describe("runCodexAppServerAttempt", () => {
     const requests: string[][] = [];
     let starts = 0;
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    __testing.setCodexAppServerClientFactoryForTests(async () => {
+    setCodexAppServerClientFactoryForTest(async () => {
       const startIndex = starts++;
       const methods: string[] = [];
       requests.push(methods);
