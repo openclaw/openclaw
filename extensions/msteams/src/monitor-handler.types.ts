@@ -1,4 +1,4 @@
-import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";

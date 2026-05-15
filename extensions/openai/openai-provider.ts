@@ -1,6 +1,6 @@
-import {
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  type CodexAppInventoryCache,
-  type CodexAppInventoryRequest,
+import type {
+  CodexAppInventoryCache,
+  CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
 import {

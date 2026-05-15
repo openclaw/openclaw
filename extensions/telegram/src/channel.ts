@@ -26,7 +26,7 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-send-deps";
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,

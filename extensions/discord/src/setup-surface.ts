@@ -1,7 +1,7 @@
-import {
-  type ChannelSetupWizard,
-  type OpenClawConfig,
-  type WizardPrompter,
+import type {
+  ChannelSetupWizard,
+  OpenClawConfig,
+  WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDiscordAccountAllowFrom } from "./accounts.js";

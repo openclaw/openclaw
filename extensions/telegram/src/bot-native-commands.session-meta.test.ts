@@ -11,7 +11,7 @@ import {
   createTelegramTopicCommandContext,
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
-import { type RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 

@@ -19,12 +19,12 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
-import {
-  type CodexDynamicToolCallOutputContentItem,
-  type CodexDynamicToolCallParams,
-  type CodexDynamicToolCallResponse,
-  type CodexDynamicToolSpec,
-  type JsonValue,
+import type {
+  CodexDynamicToolCallOutputContentItem,
+  CodexDynamicToolCallParams,
+  CodexDynamicToolCallResponse,
+  CodexDynamicToolSpec,
+  JsonValue,
 } from "./protocol.js";
 
 type CodexDynamicToolHookContext = {

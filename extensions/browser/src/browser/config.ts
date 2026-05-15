@@ -4,10 +4,10 @@ import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  type BrowserConfig,
-  type BrowserProfileConfig,
-  type OpenClawConfig,
+import type {
+  BrowserConfig,
+  BrowserProfileConfig,
+  OpenClawConfig,
 } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {

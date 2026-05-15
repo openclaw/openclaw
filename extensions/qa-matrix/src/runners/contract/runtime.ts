@@ -7,7 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaReportCheck } from "../../report.js";
 import { renderQaMarkdownReport } from "../../report.js";
-import { type QaProviderModeInput } from "../../run-config.js";
+import type { QaProviderModeInput } from "../../run-config.js";
 import {
   appendLiveLaneIssue,
   buildLiveLaneArtifactsError,

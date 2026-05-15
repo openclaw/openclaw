@@ -5,10 +5,10 @@ import {
 } from "../reaction-common.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
-import {
-  type MatrixActionClientOpts,
-  type MatrixRawEvent,
-  type MatrixReactionSummary,
+import type {
+  MatrixActionClientOpts,
+  MatrixRawEvent,
+  MatrixReactionSummary,
 } from "./types.js";
 
 type ActionClient = NonNullable<MatrixActionClientOpts["client"]>;

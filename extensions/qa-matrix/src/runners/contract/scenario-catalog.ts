@@ -3,7 +3,7 @@ import {
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
-import { type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaConfigOverrides } from "../../substrate/config.js";
 import {
   buildDefaultMatrixQaTopologySpec,
   findMatrixQaProvisionedRoom,

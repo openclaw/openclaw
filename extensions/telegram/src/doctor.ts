@@ -1,6 +1,6 @@
-import {
-  type ChannelDoctorAdapter,
-  type ChannelDoctorEmptyAllowlistAccountContext,
+import type {
+  ChannelDoctorAdapter,
+  ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveChannelStreamingBlockEnabled,

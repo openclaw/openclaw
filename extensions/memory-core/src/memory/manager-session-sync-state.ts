@@ -1,4 +1,4 @@
-import { type MemorySourceFileStateRow } from "./manager-source-state.js";
+import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export function resolveMemorySessionSyncPlan(params: {
   needsFullReindex: boolean;

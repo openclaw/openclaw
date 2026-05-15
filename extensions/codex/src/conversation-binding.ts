@@ -13,12 +13,12 @@ import {
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
-import {
-  type CodexServiceTier,
-  type CodexThreadResumeResponse,
-  type CodexThreadStartResponse,
-  type CodexTurnStartResponse,
-  type JsonValue,
+import type {
+  CodexServiceTier,
+  CodexThreadResumeResponse,
+  CodexThreadStartResponse,
+  CodexTurnStartResponse,
+  JsonValue,
 } from "./app-server/protocol.js";
 import {
   clearCodexAppServerBinding,
