@@ -387,7 +387,7 @@ describe("TelegramPollingSession", () => {
     expect(bot.api.getUpdates).not.toHaveBeenCalled();
   });
 
-  it("drains isolated ingress spool through the main-thread bot without offset watermark skipping", async () => {
+  it("initializes the main-thread bot before draining isolated ingress spool", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
     const handleUpdate = vi.fn(async () => undefined);
