@@ -817,6 +817,20 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         },
         sudoPrefix,
       );
+    case "builtin":
+    case "eval":
+    case "exec":
+      return withSudo(
+        {
+          text: "run a shell command execution builtin",
+          risk: "high",
+          kind: "unknown",
+          reason:
+            "Shell evaluator and executor builtins can run command text or dispatch another command.",
+          showCommandPreview: true,
+        },
+        sudoPrefix,
+      );
     case "pwd":
       return { text: "show the current folder", risk: "low", kind: "read" };
     case "sleep":

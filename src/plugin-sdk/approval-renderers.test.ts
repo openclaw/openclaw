@@ -968,6 +968,44 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Low");
   });
 
+  it.each([
+    {
+      command: 'eval "rm -rf /tmp/x"',
+      id: "plugin-command-eval-builtin",
+    },
+    {
+      command: "exec rm -rf /tmp/x",
+      id: "plugin-command-exec-builtin",
+    },
+    {
+      command: 'builtin eval "rm -rf /tmp/x"',
+      id: "plugin-command-builtin-eval",
+    },
+  ])("treats shell command execution builtins as high risk: $command", ({ command, id }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run a shell command execution builtin");
+    expect(payload.text).toContain(`Command preview\n${command}`);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "Shell evaluator and executor builtins can run command text or dispatch another command.",
+    );
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("shows curl upload file operands before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
