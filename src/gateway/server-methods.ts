@@ -143,11 +143,23 @@ function createRequestGatewayMethodRegistry(
 ): GatewayMethodRegistry {
   const activePluginRegistry = getPluginRegistryState()?.activeRegistry;
   const activePluginHandlers = activePluginRegistry?.gatewayHandlers ?? {};
+  const extraHandlerEntries = Object.entries(extraHandlers ?? {});
+  const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
+  const coreDescriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+  for (const descriptor of coreDescriptors) {
+    const extraHandler = extraHandlers?.[descriptor.name];
+    if (extraHandler && !pluginMethodNames.has(descriptor.name)) {
+      descriptor.handler = extraHandler;
+    }
+  }
+  const coreMethodNames = new Set(coreDescriptors.map((descriptor) => descriptor.name));
   const auxHandlers = Object.fromEntries(
-    Object.entries(extraHandlers ?? {}).filter(([method]) => !activePluginHandlers[method]),
+    extraHandlerEntries.filter(
+      ([method]) => !pluginMethodNames.has(method) && !coreMethodNames.has(method),
+    ),
   );
   return createGatewayMethodRegistry([
-    ...createCoreGatewayMethodDescriptors(coreGatewayHandlers),
+    ...coreDescriptors,
     ...(activePluginRegistry ? createPluginGatewayMethodDescriptors(activePluginRegistry) : []),
     ...createGatewayMethodDescriptorsFromHandlers({
       handlers: auxHandlers,

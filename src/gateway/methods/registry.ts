@@ -143,13 +143,12 @@ export function createPluginGatewayMethodDescriptor(params: {
 }
 
 export function createPluginGatewayMethodDescriptors(
-  registry: Pick<
-    PluginRegistry,
-    "gatewayHandlers" | "gatewayMethodDescriptors" | "gatewayMethodScopes"
-  >,
+  registry: Pick<PluginRegistry, "gatewayHandlers" | "gatewayMethodScopes"> &
+    Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
 ): GatewayMethodDescriptorInput[] {
-  if (registry.gatewayMethodDescriptors.length > 0) {
-    return [...registry.gatewayMethodDescriptors];
+  const descriptors = registry.gatewayMethodDescriptors ?? [];
+  if (descriptors.length > 0) {
+    return [...descriptors];
   }
   return createGatewayMethodDescriptorsFromHandlers({
     handlers: registry.gatewayHandlers,

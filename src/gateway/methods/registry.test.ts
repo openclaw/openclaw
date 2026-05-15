@@ -3,6 +3,7 @@ import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
 import {
   createGatewayMethodRegistry,
+  createPluginGatewayMethodDescriptors,
   createPluginGatewayMethodDescriptor,
   resolveLegacyGatewayMethodScope,
 } from "./registry.js";
@@ -68,6 +69,19 @@ describe("gateway method registry", () => {
 
     expect(registry.getScope("config.demo")).toBe(ADMIN_SCOPE);
     expect(registry.descriptors()[0]?.owner).toEqual({ kind: "plugin", pluginId: "demo" });
+  });
+
+  it("accepts legacy plugin registries without descriptor metadata", () => {
+    const descriptors = createPluginGatewayMethodDescriptors({
+      gatewayHandlers: { "legacy.ping": handler },
+      gatewayMethodScopes: { "legacy.ping": READ_SCOPE },
+    });
+
+    const registry = createGatewayMethodRegistry(descriptors);
+
+    expect(registry.listMethods()).toEqual(["legacy.ping"]);
+    expect(registry.getHandler("legacy.ping")).toBe(handler);
+    expect(registry.getScope("legacy.ping")).toBe(READ_SCOPE);
   });
 
   it("keeps legacy scope metadata available during migration", () => {
