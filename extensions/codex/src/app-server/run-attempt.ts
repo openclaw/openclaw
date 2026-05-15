@@ -2606,15 +2606,6 @@ function readContextEngineThreadBootstrapProjection(
   };
 }
 
-function shouldProjectContextEngineBootstrapForCodexTurn(params: {
-  startupBinding: CodexAppServerThreadBinding | undefined;
-  expectedBinding: ReturnType<typeof buildContextEngineBinding>;
-  projection: CodexContextEngineThreadBootstrapProjection;
-  dynamicToolsFingerprint: string;
-}): boolean {
-  return resolveContextEngineBootstrapProjectionDecision(params).project;
-}
-
 function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
