@@ -9,9 +9,12 @@ export function resolveHostIp(explicit = ""): string {
   if (explicit) {
     return explicit;
   }
-  const output = sh("ifconfig | awk '/inet 10\\.211\\./ { print $2; exit }'", {
-    quiet: true,
-  }).stdout.trim();
+  const output = sh(
+    "ifconfig | awk '/inet 10\\.211\\./ { print $2; found=1; exit } /inet 192\\.168\\.139\\./ { fallback=$2 } END { if (!found && fallback) print fallback }'",
+    {
+      quiet: true,
+    },
+  ).stdout.trim();
   if (!output) {
     die("failed to detect Parallels host IP; pass --host-ip");
   }

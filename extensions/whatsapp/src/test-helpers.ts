@@ -535,8 +535,8 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 }));
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
-  createChannelHistoryWindow: (params: { historyMap: Map<string, unknown[]> }) => ({
-    record: (recordParams: { historyKey: string; limit: number; entry: unknown }) => {
+  createChannelHistoryWindow: <T>(params: { historyMap: Map<string, T[]> }) => ({
+    record: (recordParams: { historyKey: string; limit: number; entry: T }) => {
       const current = params.historyMap.get(recordParams.historyKey) ?? [];
       const next = [...current, recordParams.entry].slice(-recordParams.limit);
       params.historyMap.set(recordParams.historyKey, next);
