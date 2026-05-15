@@ -693,16 +693,18 @@ export async function startGatewayServer(
   const channelRuntimeEnvs = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as unknown as Record<ChannelId, RuntimeEnv>;
+  const listStartupChannelGatewayMethods = () => {
+    const methods: string[] = [];
+    for (const plugin of listGatewayStartupChannelPlugins()) {
+      methods.push(...(plugin.gatewayMethods ?? []));
+      for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
+        methods.push(descriptor.name);
+      }
+    }
+    return methods;
+  };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
-    Array.from(
-      new Set([
-        ...nextBaseGatewayMethods,
-        ...listGatewayStartupChannelPlugins().flatMap((plugin) => [
-          ...(plugin.gatewayMethods ?? []),
-          ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
-        ]),
-      ]),
-    );
+    Array.from(new Set([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]));
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
     return resolveGatewayRuntimeConfig({
@@ -1108,10 +1110,7 @@ export async function startGatewayServer(
       Array.from(
         new Set([
           ...attachedGatewayMethodRegistry.listAdvertisedMethods(),
-          ...listGatewayStartupChannelPlugins().flatMap((plugin) => [
-            ...(plugin.gatewayMethods ?? []),
-            ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
-          ]),
+          ...listStartupChannelGatewayMethods(),
         ]),
       );
     runtimeState.gatewayMethods.splice(

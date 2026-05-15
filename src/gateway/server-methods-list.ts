@@ -18,15 +18,20 @@ export function listCoreGatewayMethods(): string[] {
   ).listAdvertisedMethods();
 }
 
+function listChannelGatewayMethods(): string[] {
+  const methods: string[] = [];
+  for (const plugin of listLoadedChannelPlugins() as GatewayMethodChannelPlugin[]) {
+    methods.push(...(plugin.gatewayMethods ?? []));
+    for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
+      methods.push(descriptor.name);
+    }
+  }
+  return methods;
+}
+
 export function listGatewayMethods(): string[] {
-  const channelMethods = (listLoadedChannelPlugins() as GatewayMethodChannelPlugin[]).flatMap(
-    (plugin) => [
-      ...(plugin.gatewayMethods ?? []),
-      ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
-    ],
-  );
   return Array.from(
-    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...channelMethods]),
+    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
   );
 }
 

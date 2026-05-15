@@ -107,19 +107,22 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
     if (!scope) {
       throw new Error(`gateway method is missing a scope: ${name}`);
     }
-    return {
+    const descriptor: GatewayMethodDescriptorInput = {
       name,
       handler,
       owner: params.owner,
       scope,
-      ...(params.startupUnavailableMethods?.has(name)
-        ? { startup: "unavailable-until-sidecars" as const }
-        : {}),
-      ...(CONTROL_PLANE_WRITE_METHODS.has(name) ? { controlPlaneWrite: true } : {}),
-      ...(params.owner.kind === "core" && !CORE_ADVERTISED_GATEWAY_METHODS.has(name)
-        ? { advertise: false }
-        : {}),
     };
+    if (params.startupUnavailableMethods?.has(name)) {
+      descriptor.startup = "unavailable-until-sidecars";
+    }
+    if (CONTROL_PLANE_WRITE_METHODS.has(name)) {
+      descriptor.controlPlaneWrite = true;
+    }
+    if (params.owner.kind === "core" && !CORE_ADVERTISED_GATEWAY_METHODS.has(name)) {
+      descriptor.advertise = false;
+    }
+    return descriptor;
   });
 }
 
