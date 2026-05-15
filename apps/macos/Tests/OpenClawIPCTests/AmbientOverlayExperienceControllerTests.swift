@@ -47,6 +47,20 @@ struct AmbientOverlayExperienceControllerTests {
         #expect(hideCount == 1)
     }
 
+    @Test func `arming shows ambient before workspace after armed`() {
+        let controller = AmbientOverlayExperienceController(enableUI: true)
+        var events: [String] = []
+        controller.showAmbient = { _ in events.append("ambient:\(controller.overlayState)") }
+        controller.showWorkspace = { _ in events.append("workspace:\(controller.overlayState)") }
+
+        controller.setEnabled(true)
+        events.removeAll()
+        controller.arm()
+
+        #expect(events == ["ambient:arming", "workspace:armed"])
+        #expect(controller.overlayState == .armed)
+    }
+
     @Test func `escape dismiss returns to idle`() {
         let controller = AmbientOverlayExperienceController(enableUI: false)
         var hideCount = 0

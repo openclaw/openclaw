@@ -77,10 +77,11 @@ final class AmbientOverlayExperienceController {
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
         self.overlayState = .arming
+        self.showAmbientIfNeeded()
+        self.overlayState = .armed
         self.showWorkspace? { [weak self] in
             self?.dismissInteractive(reason: .closeButton)
         }
-        self.overlayState = .armed
         self.scheduleTimeout()
     }
 
