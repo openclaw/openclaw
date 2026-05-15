@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { listAgentIds } from "../agents/agent-scope.js";
+import { ensureEmbeddedGatewayContextInstalledForProcess } from "../agents/embedded-gateway-context.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -248,6 +249,17 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
   protectJsonStdout(opts);
+  // Install a process-scoped fallback gateway context BEFORE any embedded
+  // agent path runs. Without this, in-process gateway dispatch -- routed
+  // there by #81383 (subagent announce handoff) -- throws "In-process
+  // gateway dispatch requires a gateway request scope..." (see #82140).
+  //
+  // Process-scoped (not try/finally wrapped) because subagent completion
+  // announce can fire ASYNCHRONOUSLY after the parent's `agentCommand`
+  // returns from a `sessions_yield` turn. A scoped wrapper would clean up
+  // before the announce dispatch runs. The CLI process exits when this
+  // function returns, so explicit cleanup is unnecessary.
+  ensureEmbeddedGatewayContextInstalledForProcess({ runtime, deps });
   const localOpts = {
     ...opts,
     agentId: opts.agent,
