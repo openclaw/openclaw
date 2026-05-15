@@ -1258,10 +1258,16 @@ export async function runCodexAppServerAttempt(
       turnAssistantCompletionIdleWatchArmed &&
       notification.method === "item/completed" &&
       activeTurnItemIds.size === 0;
-    const shouldKeepCompletionIdleWatchArmed =
+    const trackedDynamicToolCompletion = isTrackedOpenClawDynamicToolCompletionNotification(
+      notification,
+      activeOpenClawDynamicToolCallIds,
+    );
+    const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
-      activeTurnItemIds.size === 0;
+      activeTurnItemIds.size === 0 &&
+      !trackedDynamicToolCompletion &&
+      !isCompletedAssistantNotification(notification);
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
@@ -1275,14 +1281,10 @@ export async function runCodexAppServerAttempt(
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-    } else if (
-      isCurrentTurnNotification &&
-      notification.method === "item/completed" &&
-      activeTurnItemIds.size === 0
-    ) {
-      // If the bridge goes silent immediately after the last current-turn item
-      // completes, do not wait for the long terminal watchdog. Re-arm the short
-      // completion-idle guard so we fail promptly instead of wedging the session.
+    } else if (shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem) {
+      // If a non-assistant current-turn item is the last active item and the
+      // bridge then goes quiet, reset the short completion-idle guard from that
+      // final completion so the remaining silent-turn gap fails fast.
       armTurnCompletionIdleWatch();
     } else if (
       isCurrentTurnNotification &&
@@ -1295,11 +1297,8 @@ export async function runCodexAppServerAttempt(
       !turnCompletionIdleWatchPinnedByTerminalError &&
       notification.method !== "turn/completed" &&
       isCurrentTurnNotification &&
-      !isTrackedOpenClawDynamicToolCompletionNotification(
-        notification,
-        activeOpenClawDynamicToolCallIds,
-      ) &&
-      !shouldKeepCompletionIdleWatchArmed
+      !trackedDynamicToolCompletion &&
+      !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
       // accepts a turn or after OpenClaw hands a turn-scoped request result

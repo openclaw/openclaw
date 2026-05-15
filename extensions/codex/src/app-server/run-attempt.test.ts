@@ -2458,7 +2458,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("times out promptly when the last completed current-turn item is not followed by turn completion", async () => {
+  it("times out promptly when the last completed non-assistant current-turn item is not followed by turn completion", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2469,7 +2469,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    __testing.setCodexAppServerClientFactoryForTests(
+    setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           request,
