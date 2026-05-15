@@ -479,11 +479,14 @@ export async function runEmbeddedPiAgent(
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
-      const fallbackConfigured = hasConfiguredModelFallbacks({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: normalizedSessionKey,
-      });
+      const fallbackConfigured =
+        params.modelFallbacksOverride !== undefined
+          ? params.modelFallbacksOverride.length > 0
+          : hasConfiguredModelFallbacks({
+              cfg: params.config,
+              agentId: params.agentId,
+              sessionKey: normalizedSessionKey,
+            });
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {

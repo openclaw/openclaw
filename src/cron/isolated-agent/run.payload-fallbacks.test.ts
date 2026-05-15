@@ -9,7 +9,9 @@ import {
   loadRunCronIsolatedAgentTurn,
   resolveConfiguredModelRefMock,
   resolveAgentModelFallbacksOverrideMock,
+  resolveSubagentModelFallbacksOverrideMock,
   runCliAgentMock,
+  runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -29,6 +31,20 @@ function requireModelFallbackRequest(): {
     | undefined;
   if (!request) {
     throw new Error("Expected model fallback request");
+  }
+  return request;
+}
+
+function requireEmbeddedRunRequest(): {
+  modelFallbacksOverride?: string[];
+} {
+  const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    | {
+        modelFallbacksOverride?: string[];
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected embedded run request");
   }
   return request;
 }
@@ -123,5 +139,29 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       ["claude-cli", "claude-opus-4-6"],
       ["claude-cli", "claude-sonnet-4-6"],
     ]);
+  });
+
+  it("passes resolved subagent fallbacks into the embedded runner", async () => {
+    const subagentFallbacks = ["openai-codex/gpt-5.4", "zai/glm-5"];
+    resolveSubagentModelFallbacksOverrideMock.mockReturnValue(subagentFallbacks);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const result = await run(provider, model);
+      return { result, provider, model, attempts: [] };
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(requireModelFallbackRequest().fallbacksOverride).toEqual(subagentFallbacks);
+    expect(requireEmbeddedRunRequest().modelFallbacksOverride).toEqual(subagentFallbacks);
   });
 });

@@ -41,6 +41,7 @@ function normalizeModelSelectionForTest(value: unknown): string | undefined {
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
 export const resolveEffectiveModelFallbacksMock = createMock();
+export const resolveSubagentModelFallbacksOverrideMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
@@ -167,6 +168,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
 
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
+  resolveSubagentModelFallbacksOverride: resolveSubagentModelFallbacksOverrideMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
@@ -317,6 +319,8 @@ function resetRunConfigMocks(): void {
       return agentFallbacksOverride ?? defaultFallbacks;
     },
   );
+  resolveSubagentModelFallbacksOverrideMock.mockReset();
+  resolveSubagentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });

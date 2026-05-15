@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
-import { resolveEffectiveModelFallbacks } from "./run-execution.runtime.js";
+import {
+  resolveEffectiveModelFallbacks,
+  resolveSubagentModelFallbacksOverride,
+} from "./run-execution.runtime.js";
 
 export function resolveCronFallbacksOverride(params: {
   cfg: OpenClawConfig;
@@ -13,6 +16,9 @@ export function resolveCronFallbacksOverride(params: {
     typeof payload?.model === "string" && payload.model.trim().length > 0;
   return (
     payloadFallbacks ??
+    (!hasCronPayloadModelOverride
+      ? resolveSubagentModelFallbacksOverride(params.cfg, params.agentId)
+      : undefined) ??
     resolveEffectiveModelFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,

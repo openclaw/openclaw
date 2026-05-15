@@ -153,7 +153,12 @@ export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  return resolveSelectedModelFallbacksOverride(resolveAgentConfig(cfg, agentId)?.model);
+}
+
+function resolveSelectedModelFallbacksOverride(
+  raw: AgentModelConfig | undefined,
+): string[] | undefined {
   if (!raw) {
     return undefined;
   }
@@ -165,6 +170,18 @@ export function resolveAgentModelFallbacksOverride(
     return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
+}
+
+export function resolveSubagentModelFallbacksOverride(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string[] | undefined {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  return (
+    resolveSelectedModelFallbacksOverride(agentConfig?.subagents?.model) ??
+    resolveAgentModelFallbacksOverride(cfg, agentId) ??
+    resolveSelectedModelFallbacksOverride(cfg.agents?.defaults?.subagents?.model)
+  );
 }
 
 export function resolveFallbackAgentId(params: {

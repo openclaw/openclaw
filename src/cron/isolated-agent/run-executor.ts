@@ -246,6 +246,7 @@ export function createCronPromptExecutor(params: {
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
+          modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
