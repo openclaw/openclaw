@@ -1,4 +1,4 @@
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -64,6 +64,22 @@ function skillNotFound(message) {
   return err;
 }
 
+async function resolveRealSkillDirCandidate({ skillsDirReal, candidateDir }) {
+  let candidateDirReal;
+  try {
+    candidateDirReal = await realpath(candidateDir);
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+  if (!isPathInside(skillsDirReal, candidateDirReal)) {
+    throw new Error("skill directory escapes skills root");
+  }
+  return candidateDirReal;
+}
+
 async function resolveInstalledSkillDir({ workspaceDir, slug }) {
   const skillsDir = path.join(path.resolve(workspaceDir), "skills");
   const targetDir = path.resolve(skillsDir, slug);
@@ -71,19 +87,38 @@ async function resolveInstalledSkillDir({ workspaceDir, slug }) {
     throw new Error("invalid skill target path");
   }
   let skillsDirReal;
-  let targetDirReal;
   try {
-    [skillsDirReal, targetDirReal] = await Promise.all([realpath(skillsDir), realpath(targetDir)]);
+    skillsDirReal = await realpath(skillsDir);
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw skillNotFound(`skill "${slug}" not installed`);
     }
     throw error;
   }
-  if (!isPathInside(skillsDirReal, targetDirReal)) {
-    throw new Error("skill directory escapes skills root");
+
+  const directDir = await resolveRealSkillDirCandidate({ skillsDirReal, candidateDir: targetDir });
+  if (directDir) {
+    return directDir;
   }
-  return targetDirReal;
+
+  const groupEntries = await readdir(skillsDirReal, { withFileTypes: true });
+  for (const entry of groupEntries
+    .filter((candidate) => !candidate.name.startsWith(".") && candidate.name !== "node_modules")
+    .toSorted((left, right) => left.name.localeCompare(right.name, "en"))) {
+    const groupedTargetDir = path.resolve(skillsDirReal, entry.name, slug);
+    if (!isPathInside(skillsDirReal, groupedTargetDir)) {
+      throw new Error("invalid grouped skill target path");
+    }
+    const groupedDir = await resolveRealSkillDirCandidate({
+      skillsDirReal,
+      candidateDir: groupedTargetDir,
+    });
+    if (groupedDir) {
+      return groupedDir;
+    }
+  }
+
+  throw skillNotFound(`skill "${slug}" not installed`);
 }
 
 // #endregion
@@ -109,6 +144,55 @@ function normalizeScalar(raw) {
   }
   const commentIndex = value.indexOf(" #");
   return (commentIndex >= 0 ? value.slice(0, commentIndex) : value).trim();
+}
+
+function stripWrappingQuotes(raw) {
+  const value = raw.trim();
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
+}
+
+function readSetupScriptFromObject(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const openclaw = value.openclaw;
+  if (!isRecord(openclaw) || !isRecord(openclaw.setup)) {
+    return undefined;
+  }
+  return typeof openclaw.setup.script === "string" ? openclaw.setup.script.trim() : undefined;
+}
+
+function parseSetupScriptFromManifestText(raw) {
+  const value = stripWrappingQuotes(raw);
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    const script = readSetupScriptFromObject(parsed);
+    if (script) {
+      return script;
+    }
+  } catch {
+    // Existing skill metadata is JSON-shaped but historically parsed as JSON5.
+  }
+
+  const openclawMatch = /(?:^|[,{]\s*)["']?openclaw["']?\s*:/u.exec(value);
+  if (!openclawMatch) {
+    return undefined;
+  }
+  const openclawText = value.slice(openclawMatch.index);
+  const match =
+    /(?:^|[,{]\s*)["']?setup["']?\s*:\s*\{[\s\S]*?["']?script["']?\s*:\s*(?:"([^"]+)"|'([^']+)'|([^\s,}]+))/u.exec(
+      openclawText,
+    );
+  return match ? normalizeScalar(match[1] ?? match[2] ?? match[3] ?? "") : undefined;
 }
 
 function extractFrontmatterBlock(markdown) {
@@ -149,9 +233,42 @@ function parseIndentedSetupScript(frontmatter) {
   return undefined;
 }
 
+function isYamlBlockScalarIndicator(value) {
+  return /^[|>][+-]?(\d+)?[+-]?$/u.test(value.trim());
+}
+
+function parseMetadataValueSetupScript(frontmatter) {
+  const lines = frontmatter.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const match = /^metadata:(?:\s*(.*))?$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    const rawValue = match[1] ?? "";
+    if (rawValue.trim() && !isYamlBlockScalarIndicator(rawValue)) {
+      return parseSetupScriptFromManifestText(rawValue);
+    }
+
+    const valueLines = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const nextLine = lines[cursor] ?? "";
+      if (nextLine.trim() && !nextLine.startsWith(" ") && !nextLine.startsWith("\t")) {
+        break;
+      }
+      valueLines.push(nextLine.trim());
+    }
+    return parseSetupScriptFromManifestText(valueLines.join("\n"));
+  }
+  return undefined;
+}
+
 function parseSetupScriptFromSkillMarkdown(markdown) {
   const frontmatter = extractFrontmatterBlock(markdown);
-  return frontmatter ? parseIndentedSetupScript(frontmatter) : undefined;
+  if (!frontmatter) {
+    return undefined;
+  }
+  return parseIndentedSetupScript(frontmatter) ?? parseMetadataValueSetupScript(frontmatter);
 }
 
 // #endregion
