@@ -70,9 +70,7 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
 ): GatewayMethodRegistry {
-  const descriptors = inputs
-    .map(normalizeDescriptor)
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+  const descriptors = inputs.map(normalizeDescriptor);
   const byName = new Map<string, GatewayMethodDescriptor>();
   for (const descriptor of descriptors) {
     if (byName.has(descriptor.name)) {

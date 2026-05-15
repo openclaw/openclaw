@@ -57,6 +57,7 @@ import {
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
+import { CORE_ADVERTISED_GATEWAY_METHODS } from "./methods/legacy-metadata.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -1106,13 +1107,20 @@ export async function startGatewayServer(
         }),
       ]);
     let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRegistry);
-    const listAttachedGatewayMethods = () =>
-      Array.from(
-        new Set([
-          ...attachedGatewayMethodRegistry.listAdvertisedMethods(),
-          ...listStartupChannelGatewayMethods(),
-        ]),
+    const listAttachedGatewayMethods = () => {
+      const advertisedMethods = attachedGatewayMethodRegistry.listAdvertisedMethods();
+      const advertisedSet = new Set(advertisedMethods);
+      const methods = [...CORE_ADVERTISED_GATEWAY_METHODS].filter((method) =>
+        advertisedSet.has(method),
       );
+      for (const method of advertisedMethods) {
+        if (!CORE_ADVERTISED_GATEWAY_METHODS.has(method)) {
+          methods.push(method);
+        }
+      }
+      methods.push(...listStartupChannelGatewayMethods());
+      return Array.from(new Set(methods));
+    };
     runtimeState.gatewayMethods.splice(
       0,
       runtimeState.gatewayMethods.length,
