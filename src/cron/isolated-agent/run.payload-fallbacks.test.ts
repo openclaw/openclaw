@@ -35,6 +35,20 @@ function requireModelFallbackRequest(): {
   return request;
 }
 
+function requireEmbeddedRunRequest(): {
+  modelFallbacksOverride?: string[];
+} {
+  const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    | {
+        modelFallbacksOverride?: string[];
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected embedded run request");
+  }
+  return request;
+}
+
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
