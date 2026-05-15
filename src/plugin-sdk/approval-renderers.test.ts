@@ -479,6 +479,55 @@ describe("plugin-sdk/approval-renderers", () => {
     );
   });
 
+  it("flags destructive find predicates before hiding technical details", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-find-delete",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: find . -delete",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nDelete files or folders");
+    expect(payload.text).toContain("- delete files found by search: .");
+    expect(payload.text).toContain("Command preview\nfind . -delete");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("find -delete can permanently remove every matching file.");
+    expect(payload.text).not.toContain("- search/list files");
+    expect(payload.text).not.toContain("Risk: Low");
+  });
+
+  it("fails closed on find exec predicates", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-find-exec",
+        request: {
+          title: "Codex app-server command approval",
+          description: String.raw`Command: find . -exec rm -rf {} \;`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run commands for each file found: .");
+    expect(payload.text).toContain(`Command preview\n${String.raw`find . -exec rm -rf {} \;`}`);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "find -exec can run another command on every matched file, so review it before approving.",
+    );
+  });
+
   it("summarizes timeout and shell-wrapper command approvals by their inner actions", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

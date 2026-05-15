@@ -102,6 +102,7 @@ type CommandActionSummary = {
   kind: CommandActionKind;
   reason?: string;
   hideWhenGrouped?: boolean;
+  showCommandPreview?: boolean;
 };
 
 type ExpandedCommandSegment = {
@@ -149,6 +150,8 @@ const ENV_BOOLEAN_FLAGS = new Set([
   "--version",
 ]);
 const ENV_UNSAFE_SPLIT_FLAGS = new Set(["-S", "--split-string"]);
+const FIND_DELETE_PREDICATES = new Set(["-delete"]);
+const FIND_EXEC_PREDICATES = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
 function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): string[] {
   const command = extractApprovalCommand(payload);
@@ -276,7 +279,7 @@ function summarizeShellCommand(command: string): {
 }
 
 function shouldShowCommandPreview(summaries: readonly CommandActionSummary[]): boolean {
-  return summaries.some((summary) => summary.kind === "unknown");
+  return summaries.some((summary) => summary.kind === "unknown" || summary.showCommandPreview);
 }
 
 function buildCommandPreview(command: string): string {
@@ -633,7 +636,34 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         },
         sudoPrefix,
       );
-    case "find":
+    case "find": {
+      const findRoots = getFindSearchRoots(args);
+      const findTargetText = formatTargets(findRoots.length > 0 ? findRoots : nonOptionArgs);
+      if (hasFindDeletePredicate(args)) {
+        return withSudo(
+          {
+            text: `delete files found by search${findTargetText}`,
+            risk: "high",
+            kind: "delete",
+            reason: "find -delete can permanently remove every matching file.",
+            showCommandPreview: true,
+          },
+          sudoPrefix,
+        );
+      }
+      if (hasFindExecPredicate(args)) {
+        return withSudo(
+          {
+            text: `run commands for each file found${findTargetText}`,
+            risk: "high",
+            kind: "unknown",
+            reason:
+              "find -exec can run another command on every matched file, so review it before approving.",
+            showCommandPreview: true,
+          },
+          sudoPrefix,
+        );
+      }
       return withSudo(
         {
           text: `search/list files${targetText}`,
@@ -647,6 +677,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         },
         sudoPrefix,
       );
+    }
     case "rg":
     case "grep":
       return withSudo(
@@ -1339,6 +1370,28 @@ function getCommandTargetArgs(command: string, args: readonly string[]): string[
     targets.push(arg);
   }
   return targets;
+}
+
+function hasFindDeletePredicate(args: readonly string[]): boolean {
+  return args.some((arg) => FIND_DELETE_PREDICATES.has(arg));
+}
+
+function hasFindExecPredicate(args: readonly string[]): boolean {
+  return args.some((arg) => FIND_EXEC_PREDICATES.has(arg));
+}
+
+function getFindSearchRoots(args: readonly string[]): string[] {
+  const roots: string[] = [];
+  for (const arg of args) {
+    if (!arg || /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      continue;
+    }
+    if (arg === "!" || arg === "(" || arg === ")" || arg.startsWith("-")) {
+      break;
+    }
+    roots.push(arg);
+  }
+  return roots;
 }
 
 function getCommandOptionValueFlags(command: string): ReadonlySet<string> {
