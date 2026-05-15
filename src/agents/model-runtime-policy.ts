@@ -132,33 +132,20 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   modelId?: string;
   agentId?: string;
   sessionKey?: string;
+  models?: Record<string, AgentModelEntryConfig>;
   matchKind: "exact" | "provider-wildcard";
 }): ResolvedModelRuntimePolicy {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
   if (!params.config || !modelId) {
     return {};
   }
-  const { sessionAgentId } = resolveSessionAgentIds({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+  const policy = findRuntimePolicyInModelMap(params.models, {
+    provider: params.provider,
+    modelId,
+    matchKind: params.matchKind,
   });
-  const agentEntry = listAgentEntries(params.config).find(
-    (entry) => normalizeAgentId(entry.id) === sessionAgentId,
-  );
-  const modelMaps: Array<Record<string, AgentModelEntryConfig> | undefined> = [
-    agentEntry?.models,
-    params.config.agents?.defaults?.models,
-  ];
-  for (const models of modelMaps) {
-    const policy = findRuntimePolicyInModelMap(models, {
-      provider: params.provider,
-      modelId,
-      matchKind: params.matchKind,
-    });
-    if (policy) {
-      return { policy, source: "model" };
-    }
+  if (policy) {
+    return { policy, source: "model" };
   }
   return {};
 }
@@ -184,12 +171,37 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
-  const exactAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
+  const { sessionAgentId } = resolveSessionAgentIds({
+    config: params.config ?? {},
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const agentEntry = params.config
+    ? listAgentEntries(params.config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
+    : undefined;
+  const exactScopedAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    models: agentEntry?.models,
     matchKind: "exact",
   });
-  if (exactAgentModelPolicy.policy) {
-    return exactAgentModelPolicy;
+  if (exactScopedAgentModelPolicy.policy) {
+    return exactScopedAgentModelPolicy;
+  }
+  const wildcardScopedAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
+    ...params,
+    models: agentEntry?.models,
+    matchKind: "provider-wildcard",
+  });
+  if (wildcardScopedAgentModelPolicy.policy) {
+    return wildcardScopedAgentModelPolicy;
+  }
+  const exactDefaultAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
+    ...params,
+    models: params.config?.agents?.defaults?.models,
+    matchKind: "exact",
+  });
+  if (exactDefaultAgentModelPolicy.policy) {
+    return exactDefaultAgentModelPolicy;
   }
   const providerConfig = resolveProviderConfig(params.config, params.provider);
   const modelConfig = resolveModelConfig({
@@ -200,12 +212,13 @@ export function resolveModelRuntimePolicy(params: {
   if (hasRuntimePolicy(modelConfig?.agentRuntime)) {
     return { policy: modelConfig?.agentRuntime, source: "model" };
   }
-  const wildcardAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
+  const wildcardDefaultAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    models: params.config?.agents?.defaults?.models,
     matchKind: "provider-wildcard",
   });
-  if (wildcardAgentModelPolicy.policy) {
-    return wildcardAgentModelPolicy;
+  if (wildcardDefaultAgentModelPolicy.policy) {
+    return wildcardDefaultAgentModelPolicy;
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
     return { policy: providerConfig?.agentRuntime, source: "provider" };

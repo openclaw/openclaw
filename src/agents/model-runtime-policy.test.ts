@@ -79,4 +79,36 @@ describe("resolveModelRuntimePolicy", () => {
       source: "model",
     });
   });
+
+  it("prefers scoped agent provider wildcards over default exact model entries", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            models: {
+              "openai/*": { agentRuntime: { id: "pi" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        agentId: "research",
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toEqual({
+      policy: { id: "pi" },
+      source: "model",
+    });
+  });
 });
