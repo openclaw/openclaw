@@ -121,15 +121,17 @@ When a local managed Gateway service is installed and restart is enabled,
 package-manager updates stop the running service before replacing the package
 tree, then refresh the service metadata from the updated install, restart the
 service, and verify the restarted Gateway reports the expected version before
-reporting success. On macOS, the post-update check also verifies the LaunchAgent
-is loaded/running for the active profile and the configured loopback port is
-healthy. If the plist is installed but launchd is not supervising it, OpenClaw
-re-bootstraps the LaunchAgent automatically, then reruns the
-health/version/channel readiness checks. A fresh bootstrap loads the RunAtLoad
-job directly, so update recovery does not immediately `kickstart -k` the newly
-spawned Gateway. If the Gateway still does not become healthy, the command exits
-non-zero and prints the restart log path plus explicit restart, reinstall, and
-package rollback instructions. With `--no-restart`,
+reporting `Gateway: restarted and verified.`. On macOS, the post-update check
+also verifies the LaunchAgent is loaded/running for the active profile and the
+configured loopback port is healthy. If the plist is installed but launchd is
+not supervising it, OpenClaw re-bootstraps the LaunchAgent automatically, then
+reruns the health/version/channel readiness checks. A fresh bootstrap loads the
+RunAtLoad job directly, so update recovery does not immediately `kickstart -k`
+the newly spawned Gateway. If the Gateway still does not become healthy, the
+command exits non-zero and prints the restart log path plus explicit restart,
+reinstall, and package rollback instructions. If restart cannot run, the command
+prints `Gateway: restart skipped (...)` or `Gateway: restart failed: ...` with a
+manual `openclaw gateway restart` hint. With `--no-restart`,
 package replacement still runs but the managed service is not stopped or
 restarted, so the running Gateway may keep old code until you restart it
 manually.
@@ -158,7 +160,9 @@ health checks complete. During the handoff, the sentinel can carry
 `stats.reason: "restart-health-pending"` with no success continuation; the
 restarted Gateway keeps polling it and only fires the continuation after the CLI
 has verified service health and rewritten the sentinel with the final `ok`
-result. `update.status` returns the latest cached sentinel.
+result. `openclaw status` and `openclaw status --all` show an `Update restart`
+row while that sentinel is pending or failed, and `update.status` returns the
+latest cached sentinel.
 
 ## Git checkout flow
 
