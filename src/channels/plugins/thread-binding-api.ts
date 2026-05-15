@@ -2,6 +2,7 @@ import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type ThreadBindingPlacement = "current" | "child";
+type ThreadBindingAutomaticSpawnKind = "subagent" | "acp";
 
 type ThreadBindingInboundConversationParams = {
   from?: string;
@@ -18,6 +19,7 @@ type ThreadBindingConversationRef = {
 
 type ThreadBindingApi = {
   defaultTopLevelPlacement?: unknown;
+  supportsAutomaticThreadBindingSpawn?: unknown;
   resolveInboundConversation?: (
     params: ThreadBindingInboundConversationParams,
   ) => ThreadBindingConversationRef | null;
@@ -46,11 +48,48 @@ function normalizeThreadBindingPlacement(value: unknown): ThreadBindingPlacement
   return normalized === "current" || normalized === "child" ? normalized : undefined;
 }
 
+function normalizeBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function normalizeThreadBindingAutomaticSpawnSupport(
+  value: unknown,
+  kind?: ThreadBindingAutomaticSpawnKind,
+): boolean | undefined {
+  const booleanValue = normalizeBoolean(value);
+  if (booleanValue !== undefined) {
+    return booleanValue;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const support = value as Record<ThreadBindingAutomaticSpawnKind, unknown>;
+  if (kind) {
+    return normalizeBoolean(support[kind]) ?? false;
+  }
+  const subagent = normalizeBoolean(support.subagent);
+  const acp = normalizeBoolean(support.acp);
+  if (subagent === undefined && acp === undefined) {
+    return undefined;
+  }
+  return subagent === true || acp === true;
+}
+
 export function resolveBundledChannelThreadBindingDefaultPlacement(
   channelId: string,
 ): ThreadBindingPlacement | undefined {
   return normalizeThreadBindingPlacement(
     loadBundledChannelThreadBindingApi(channelId)?.defaultTopLevelPlacement,
+  );
+}
+
+export function resolveBundledChannelThreadBindingAutomaticSpawnSupport(
+  channelId: string,
+  kind?: ThreadBindingAutomaticSpawnKind,
+): boolean | undefined {
+  return normalizeThreadBindingAutomaticSpawnSupport(
+    loadBundledChannelThreadBindingApi(channelId)?.supportsAutomaticThreadBindingSpawn,
+    kind,
   );
 }
 

@@ -28,6 +28,34 @@ describe("thread binding spawn policy helpers", () => {
             conversationBindings: { defaultTopLevelPlacement: "current" },
           },
         },
+        {
+          pluginId: "current-spawn-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "current-spawn-chat",
+              label: "Current spawn chat",
+            }),
+            conversationBindings: {
+              defaultTopLevelPlacement: "current",
+              supportsAutomaticThreadBindingSpawn: { subagent: true, acp: false },
+            },
+          },
+        },
+        {
+          pluginId: "child-disabled-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "child-disabled-chat",
+              label: "Child disabled chat",
+            }),
+            conversationBindings: {
+              defaultTopLevelPlacement: "child",
+              supportsAutomaticThreadBindingSpawn: false,
+            },
+          },
+        },
       ]),
     );
   });
@@ -36,6 +64,17 @@ describe("thread binding spawn policy helpers", () => {
     expect(supportsAutomaticThreadBindingSpawn("child-chat")).toBe(true);
     expect(supportsAutomaticThreadBindingSpawn("current-chat")).toBe(false);
     expect(supportsAutomaticThreadBindingSpawn("unknown-chat")).toBe(false);
+  });
+
+  it("lets explicit automatic spawn support differ from top-level placement", () => {
+    expect(supportsAutomaticThreadBindingSpawn("current-spawn-chat")).toBe(true);
+    expect(supportsAutomaticThreadBindingSpawn("current-spawn-chat", "subagent")).toBe(true);
+    expect(supportsAutomaticThreadBindingSpawn("current-spawn-chat", "acp")).toBe(false);
+    expect(supportsAutomaticThreadBindingSpawn("child-disabled-chat")).toBe(false);
+    expect(requiresNativeThreadContextForThreadHere("current-spawn-chat")).toBe(false);
+    expect(resolveThreadBindingPlacementForCurrentContext({ channel: "current-spawn-chat" })).toBe(
+      "current",
+    );
   });
 
   it("allows thread-here on threadless conversation channels without a native thread id", () => {

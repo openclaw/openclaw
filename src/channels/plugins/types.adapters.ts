@@ -764,6 +764,15 @@ export type ChannelConfiguredBindingProvider = {
   ) => ChannelConfiguredBindingConversationRef | null;
 };
 
+export type ThreadBindingAutomaticSpawnKind = "subagent" | "acp";
+
+export type ThreadBindingAutomaticSpawnSupport =
+  | boolean
+  | {
+      subagent?: boolean;
+      acp?: boolean;
+    };
+
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
   /**
@@ -774,6 +783,13 @@ export type ChannelConversationBindingSupport = {
    * - `child`: create a child thread/conversation first
    */
   defaultTopLevelPlacement?: "current" | "child";
+  /**
+   * Whether explicit thread-bound session spawns can create or bind a child
+   * conversation even when normal top-level binding should remain `current`.
+   * Use a per-kind object when support differs between native subagents and
+   * ACP-backed sessions.
+   */
+  supportsAutomaticThreadBindingSpawn?: ThreadBindingAutomaticSpawnSupport;
   resolveConversationRef?: (params: {
     accountId?: string | null;
     conversationId: string;

@@ -1,4 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -38,6 +43,7 @@ describe("sessions_spawn tool", () => {
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
     acpRuntimeRegistry.__testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
@@ -66,6 +72,24 @@ describe("sessions_spawn tool", () => {
         close: vi.fn(async () => {}),
       },
     });
+  }
+
+  function registerTelegramAutomaticSubagentSpawnChannelForTest() {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            conversationBindings: {
+              defaultTopLevelPlacement: "current",
+              supportsAutomaticThreadBindingSpawn: { subagent: true, acp: false },
+            },
+          },
+        },
+      ]),
+    );
   }
 
   function requireSchemaProperty(
@@ -269,6 +293,68 @@ describe("sessions_spawn tool", () => {
     expect(thread.type).toBe("boolean");
     expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
     expect(tool.description).toContain("thread-bound");
+  });
+
+  it("shows thread-bound spawn fields for Telegram without changing top-level placement", () => {
+    registerTelegramAutomaticSubagentSpawnChannelForTest();
+    const tool = createSessionsSpawnTool({
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          telegram: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
+    const schema = tool.parameters as {
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
+    };
+
+    const thread = requireSchemaProperty(schema.properties, "thread");
+    expect(thread.type).toBe("boolean");
+    expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
+    expect(tool.description).toContain("thread-bound");
+  });
+
+  it("rejects Telegram ACP thread spawns when only subagent child topics are supported", async () => {
+    registerTelegramAutomaticSubagentSpawnChannelForTest();
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      agentTo: "-100200300",
+      config: {
+        channels: {
+          telegram: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool.execute("call-telegram-acp-thread", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+      thread: true,
+      mode: "session",
+    });
+
+    expectDetailFields(result.details, { status: "error", role: "codex" });
+    const details = requireRecord(result.details, "result details");
+    expect(details.error).toContain('thread=true is unavailable for runtime="acp"');
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("uses subagent runtime by default", async () => {

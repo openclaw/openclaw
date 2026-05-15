@@ -12,9 +12,22 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           }),
         };
       }
+      if (dirName === "telegram" && artifactBasename === "thread-binding-api.js") {
+        return {
+          defaultTopLevelPlacement: "current",
+          supportsAutomaticThreadBindingSpawn: { subagent: true, acp: false },
+        };
+      }
+      if (dirName === "child-disabled" && artifactBasename === "thread-binding-api.js") {
+        return {
+          defaultTopLevelPlacement: "child",
+          supportsAutomaticThreadBindingSpawn: false,
+        };
+      }
       if (dirName === "invalid" && artifactBasename === "thread-binding-api.js") {
         return {
           defaultTopLevelPlacement: "floating",
+          supportsAutomaticThreadBindingSpawn: "yes",
         };
       }
       if (dirName === "empty" && artifactBasename === "thread-binding-api.js") {
@@ -35,6 +48,7 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
 }));
 
 import {
+  resolveBundledChannelThreadBindingAutomaticSpawnSupport,
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
 } from "./thread-binding-api.js";
@@ -50,6 +64,16 @@ describe("bundled channel thread binding fast path", () => {
       dirName: "matrix",
       artifactBasename: "thread-binding-api.js",
     });
+  });
+
+  it("loads explicit automatic spawn support from the narrow thread binding artifact", () => {
+    expect(resolveBundledChannelThreadBindingDefaultPlacement("telegram")).toBe("current");
+    expect(resolveBundledChannelThreadBindingAutomaticSpawnSupport("telegram")).toBe(true);
+    expect(resolveBundledChannelThreadBindingAutomaticSpawnSupport("telegram", "subagent")).toBe(
+      true,
+    );
+    expect(resolveBundledChannelThreadBindingAutomaticSpawnSupport("telegram", "acp")).toBe(false);
+    expect(resolveBundledChannelThreadBindingAutomaticSpawnSupport("child-disabled")).toBe(false);
   });
 
   it("loads inbound conversation resolution from the narrow artifact", () => {
@@ -77,8 +101,9 @@ describe("bundled channel thread binding fast path", () => {
     ).toBeUndefined();
   });
 
-  it("ignores invalid placement values", () => {
+  it("ignores invalid placement and automatic spawn support values", () => {
     expect(resolveBundledChannelThreadBindingDefaultPlacement("invalid")).toBeUndefined();
+    expect(resolveBundledChannelThreadBindingAutomaticSpawnSupport("invalid")).toBeUndefined();
   });
 
   it("distinguishes a present artifact without an inbound resolver from a missing artifact", () => {

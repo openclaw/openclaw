@@ -40,11 +40,14 @@ export function collectRuntimeChannelCapabilities(params: {
     return undefined;
   }
   const threadSpawnCapabilities: string[] = [];
-  if (params.cfg && supportsAutomaticThreadBindingSpawn(params.channel)) {
+  if (params.cfg) {
     for (const [kind, capability] of [
       ["subagent", THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY],
       ["acp", THREAD_BOUND_ACP_SPAWN_CAPABILITY],
     ] as const) {
+      if (!supportsAutomaticThreadBindingSpawn(params.channel, kind)) {
+        continue;
+      }
       const policy = resolveThreadBindingSpawnPolicy({
         cfg: params.cfg,
         channel: params.channel,
