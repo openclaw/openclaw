@@ -97,6 +97,7 @@ type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
   pluginId?: string;
   toolName?: string;
   severity: MatrixPluginApprovalSeverity;
+  longDescription?: string;
 };
 type MatrixApprovalMetadata = MatrixExecApprovalMetadata | MatrixPluginApprovalMetadata;
 type MatrixApprovalExtraContent = {
@@ -273,6 +274,9 @@ function buildMatrixApprovalMetadata(params: {
       ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
       ...(params.view.pluginId != null ? { pluginId: params.view.pluginId } : {}),
       ...(params.view.toolName != null ? { toolName: params.view.toolName } : {}),
+      ...(params.view.longDescription != null
+        ? { longDescription: params.view.longDescription }
+        : {}),
     };
   }
 
@@ -304,6 +308,7 @@ function buildPendingApprovalContent(params: {
             request: {
               title: params.view.title,
               description: params.view.description ?? "",
+              longDescription: params.view.longDescription ?? undefined,
               severity: params.view.severity,
               toolName: params.view.toolName ?? undefined,
               pluginId: params.view.pluginId ?? undefined,
