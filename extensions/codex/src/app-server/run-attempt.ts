@@ -1283,10 +1283,11 @@ export async function runCodexAppServerAttempt(
         activeOpenClawDynamicToolCallIds,
       )
     ) {
-      // The short completion-idle watchdog only guards the blind gap after
-      // OpenClaw hands a turn-scoped request result back to Codex. Bookkeeping
-      // that closes the just-served OpenClaw dynamic tool item is still part of
-      // that handoff, so keep the short watchdog armed for that notification.
+      // The short completion-idle watchdog guards blind gaps after Codex
+      // accepts a turn or after OpenClaw hands a turn-scoped request result
+      // back to Codex. Bookkeeping that closes the just-served OpenClaw
+      // dynamic tool item is still part of that handoff, so keep the short
+      // watchdog armed for that notification.
       disarmTurnCompletionIdleWatch();
     }
     // Determine terminal-turn status before invoking the projector so a throw
@@ -1637,6 +1638,8 @@ export async function runCodexAppServerAttempt(
   });
   emitLifecycleStart();
   const activeProjector = projector;
+  turnTerminalIdleWatchArmed = true;
+  touchTurnCompletionActivity("turn:start", { arm: true });
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
@@ -1669,8 +1672,6 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-  turnTerminalIdleWatchArmed = true;
-  touchTurnCompletionActivity("turn:start");
 
   const timeout = setTimeout(
     () => {
