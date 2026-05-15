@@ -1,4 +1,5 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { detectSlackMissionId } from "./mission-threads.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "./types.js";
 
 type SlackThreadContext = {
@@ -19,10 +20,11 @@ export function resolveSlackThreadContext(params: {
   const hasThreadTs = typeof incomingThreadTs === "string" && incomingThreadTs.length > 0;
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
+  const isMissionBound = Boolean(detectSlackMissionId(params.message.text));
   const replyToId = incomingThreadTs ?? messageTs;
   const messageThreadId = isThreadReply
     ? incomingThreadTs
-    : params.replyToMode === "all"
+    : params.replyToMode === "all" || isMissionBound
       ? messageTs
       : undefined;
   return {
@@ -47,12 +49,8 @@ export function resolveSlackThreadTargets(params: {
   replyToMode: ReplyToMode;
 }) {
   const ctx = resolveSlackThreadContext(params);
-  const { incomingThreadTs, messageTs, isThreadReply } = ctx;
-  const replyThreadTs = isThreadReply
-    ? incomingThreadTs
-    : params.replyToMode === "all"
-      ? messageTs
-      : undefined;
+  const { isThreadReply } = ctx;
+  const replyThreadTs = ctx.messageThreadId;
   const statusThreadTs = replyThreadTs;
   return { replyThreadTs, statusThreadTs, isThreadReply };
 }

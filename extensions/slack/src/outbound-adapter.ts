@@ -25,7 +25,9 @@ import {
 } from "./blocks-render.js";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { detectSlackMissionId, resolveSlackMissionThread } from "./mission-threads.js";
 import type { SlackSendIdentity } from "./send.js";
+import { parseSlackTarget } from "./targets.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 const SLACK_MAX_BLOCKS = 50;
@@ -88,10 +90,25 @@ async function sendSlackOutboundMessage(params: {
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
   const slackIdentity = resolveSlackSendIdentity(params.identity);
-  const threadTs = resolveSlackThreadTsValue({
+  let threadTs = resolveSlackThreadTsValue({
     replyToId: params.replyToId,
     threadId: params.threadId,
   });
+  const missionId = detectSlackMissionId(params.text);
+  const targetChannelId = parseSlackTarget(params.to, { defaultKind: "channel" })?.id;
+  if (!threadTs && missionId) {
+    const missionThread = await resolveSlackMissionThread({
+      missionId,
+      accountId: params.accountId,
+      channelId: targetChannelId,
+    });
+    if (!missionThread?.threadTs) {
+      throw new Error(
+        "Refusing Slack top-level post: mission-bound message has no canonical thread",
+      );
+    }
+    threadTs = missionThread.threadTs;
+  }
   const result = await send(params.to, params.text, {
     cfg: params.cfg,
     threadTs,

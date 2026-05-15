@@ -1,7 +1,6 @@
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
-  type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelTurnContext,
@@ -35,6 +34,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
+import { detectSlackMissionId, persistSlackMissionThread } from "../../mission-threads.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -66,6 +66,8 @@ import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+type SlackAckReactionScope = "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
 const SLACK_ANY_MENTION_RE = /<@[^>]+>|<!subteam\^[^>]+>/;
@@ -637,6 +639,7 @@ export async function prepareSlackMessage(params: {
       return null;
     }
   }
+
   let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
   if (
     !isDirectMessage &&
@@ -687,7 +690,7 @@ export async function prepareSlackMessage(params: {
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
-  if (message._ambiguousThreadReply) {
+  if (message["_ambiguousThreadReply"]) {
     ctx.logger.info(
       {
         channel: message.channel,
@@ -885,7 +888,7 @@ export async function prepareSlackMessage(params: {
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
-        scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        scope: ctx.ackReactionScope as SlackAckReactionScope | undefined,
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
@@ -1176,6 +1179,22 @@ export async function prepareSlackMessage(params: {
   const replyTarget = isDirectMessage ? `channel:${message.channel}` : (ctxPayload.To ?? undefined);
   if (!replyTarget) {
     return null;
+  }
+
+  const missionId = detectSlackMissionId(messageText);
+  const missionThreadTs = missionId
+    ? (threadContext.messageThreadId ?? threadContext.replyToId)
+    : undefined;
+  if (missionId && missionThreadTs) {
+    await persistSlackMissionThread({
+      missionId,
+      accountId: account.accountId,
+      teamId: ctx.teamId || undefined,
+      channelId: message.channel,
+      threadTs: missionThreadTs,
+      ownerAgent: route.agentId ?? "melvin",
+      createdFromMessageTs: message.ts ?? missionThreadTs,
+    });
   }
 
   if (shouldLogVerbose()) {

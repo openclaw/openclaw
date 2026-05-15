@@ -61,6 +61,22 @@ describe("resolveSlackThreadTargets", () => {
     expect(statusThreadTs).toBeUndefined();
   });
 
+  it("threads mission-bound top-level replies even when reply threading is off", () => {
+    const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        text: "Mission: formalize-openclaw-thread-routing-pr-smoke",
+      },
+    });
+
+    expect(isThreadReply).toBe(false);
+    expect(replyThreadTs).toBe("123");
+    expect(statusThreadTs).toBe("123");
+  });
+
   it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {
     expectAutoCreatedTopLevelThreadTsBehavior("off");
   });
@@ -85,6 +101,38 @@ describe("resolveSlackThreadTargets", () => {
 
     expect(context.isThreadReply).toBe(false);
     expect(context.messageThreadId).toBe("123");
+    expect(context.replyToId).toBe("123");
+  });
+
+  it("sets messageThreadId for explicit mission-bound top-level messages", () => {
+    const context = resolveSlackThreadContext({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        text: "Mission: read-only-ui-verify",
+      },
+    });
+
+    expect(context.isThreadReply).toBe(false);
+    expect(context.messageThreadId).toBe("123");
+    expect(context.replyToId).toBe("123");
+  });
+
+  it("does not thread branch-like top-level messages without explicit mission identity", () => {
+    const context = resolveSlackThreadContext({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        text: "Continue feat/read-only-ui-verify",
+      },
+    });
+
+    expect(context.isThreadReply).toBe(false);
+    expect(context.messageThreadId).toBeUndefined();
     expect(context.replyToId).toBe("123");
   });
 
