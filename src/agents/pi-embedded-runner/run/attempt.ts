@@ -940,7 +940,7 @@ export async function runEmbeddedAttempt(
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     if (isRawModelRun && log.isEnabled("debug")) {
       log.debug(
@@ -1194,6 +1194,7 @@ export async function runEmbeddedAttempt(
             config: params.config,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
+            agentId: sessionAgentId,
             warn: bootstrapWarn,
             contextMode: params.bootstrapContextMode,
             runKind: params.bootstrapContextRunKind,
@@ -1202,6 +1203,7 @@ export async function runEmbeddedAttempt(
           bootstrapFiles,
           contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
             config: params.config,
+            agentId: sessionAgentId,
             warn: bootstrapWarn,
           }),
         };
@@ -1219,8 +1221,8 @@ export async function runEmbeddedAttempt(
     const bootstrapFilesForInjectionStats = bootstrapRouting.includeBootstrapInSystemContext
       ? hookAdjustedBootstrapFiles
       : hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
-    const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+    const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
+    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
     const bootstrapAnalysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles: bootstrapFilesForInjectionStats,
