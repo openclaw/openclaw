@@ -1,6 +1,7 @@
 import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/sandbox";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
@@ -27,28 +28,49 @@ const RESERVED_ENV_KEYS = new Set([
   "XDG_DATA_HOME",
 ]);
 
+type EnvMap = Record<string, string>;
+
+type SetupMetadata = {
+  script?: string;
+  skillKey?: string;
+};
+
+type SetupScriptResolution = {
+  scriptPath: string;
+  skillKey?: string;
+};
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === code,
+  );
+}
+
 // #region Basic request/config normalization
 
-function isRecord(value) {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeString(value) {
+function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeSlug(value) {
+function normalizeSlug(value: unknown): string {
   const slug = normalizeString(value);
   if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
     throw new Error("invalid skill slug");
   }
-  if (!VALID_SLUG_PATTERN.test(slug) || /[^\x00-\x7F]/.test(slug)) {
+  if (!VALID_SLUG_PATTERN.test(slug)) {
     throw new Error("invalid skill slug");
   }
   return slug;
 }
 
-function normalizeAgentId(value) {
+function normalizeAgentId(value: unknown): string {
   return normalizeString(value) || DEFAULT_AGENT_ID;
 }
 
@@ -58,18 +80,24 @@ function normalizeAgentId(value) {
 
 const ERR_SKILL_NOT_FOUND = "SKILL_NOT_FOUND";
 
-function skillNotFound(message) {
-  const err = new Error(message);
+function skillNotFound(message: string): Error & { code: typeof ERR_SKILL_NOT_FOUND } {
+  const err = new Error(message) as Error & { code: typeof ERR_SKILL_NOT_FOUND };
   err.code = ERR_SKILL_NOT_FOUND;
   return err;
 }
 
-async function resolveRealSkillDirCandidate({ skillsDirReal, candidateDir }) {
+async function resolveRealSkillDirCandidate({
+  skillsDirReal,
+  candidateDir,
+}: {
+  skillsDirReal: string;
+  candidateDir: string;
+}): Promise<string | undefined> {
   let candidateDirReal;
   try {
     candidateDirReal = await realpath(candidateDir);
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+    if (hasErrorCode(error, "ENOENT") || hasErrorCode(error, "ENOTDIR")) {
       return undefined;
     }
     throw error;
@@ -86,7 +114,7 @@ async function resolveRealSkillDirCandidate({ skillsDirReal, candidateDir }) {
       return undefined;
     }
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+    if (hasErrorCode(error, "ENOENT") || hasErrorCode(error, "ENOTDIR")) {
       return undefined;
     }
     throw error;
@@ -98,7 +126,13 @@ async function resolveRealSkillDirCandidate({ skillsDirReal, candidateDir }) {
   return candidateDirReal;
 }
 
-async function resolveInstalledSkillDir({ workspaceDir, slug }) {
+async function resolveInstalledSkillDir({
+  workspaceDir,
+  slug,
+}: {
+  workspaceDir: string;
+  slug: string;
+}): Promise<string> {
   const skillsDir = path.join(path.resolve(workspaceDir), "skills");
   const targetDir = path.resolve(skillsDir, slug);
   if (!isPathInside(skillsDir, targetDir)) {
@@ -108,7 +142,7 @@ async function resolveInstalledSkillDir({ workspaceDir, slug }) {
   try {
     skillsDirReal = await realpath(skillsDir);
   } catch (error) {
-    if (error?.code === "ENOENT") {
+    if (hasErrorCode(error, "ENOENT")) {
       throw skillNotFound(`skill "${slug}" not installed`);
     }
     throw error;
@@ -149,7 +183,7 @@ async function resolveInstalledSkillDir({ workspaceDir, slug }) {
 // or a narrower `resolveSkillSetupScript()` helper. That would replace
 // normalizeScalar(), extractFrontmatterBlock(), parseIndentedSetupScript(), and
 // parseSetupScriptFromSkillMarkdown().
-function normalizeScalar(raw) {
+function normalizeScalar(raw: string): string {
   const value = raw.trim();
   if (!value) {
     return "";
@@ -164,7 +198,7 @@ function normalizeScalar(raw) {
   return (commentIndex >= 0 ? value.slice(0, commentIndex) : value).trim();
 }
 
-function stripWrappingQuotes(raw) {
+function stripWrappingQuotes(raw: string): string {
   const value = raw.trim();
   if (
     (value.startsWith('"') && value.endsWith('"')) ||
@@ -175,8 +209,8 @@ function stripWrappingQuotes(raw) {
   return value;
 }
 
-function mergeSetupMetadata(...items) {
-  const merged = {};
+function mergeSetupMetadata(...items: Array<Partial<SetupMetadata> | undefined>): SetupMetadata | undefined {
+  const merged: SetupMetadata = {};
   for (const item of items) {
     if (!isRecord(item)) {
       continue;
@@ -191,7 +225,7 @@ function mergeSetupMetadata(...items) {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function readSetupMetadataFromObject(value) {
+function readSetupMetadataFromObject(value: unknown): SetupMetadata | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -208,7 +242,7 @@ function readSetupMetadataFromObject(value) {
   });
 }
 
-function parseSetupMetadataFromManifestText(raw) {
+function parseSetupMetadataFromManifestText(raw: string): SetupMetadata | undefined {
   const value = stripWrappingQuotes(raw);
   if (!value) {
     return undefined;
@@ -246,7 +280,7 @@ function parseSetupMetadataFromManifestText(raw) {
   });
 }
 
-function extractFrontmatterBlock(markdown) {
+function extractFrontmatterBlock(markdown: string): string | undefined {
   const lines = markdown.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") {
     return undefined;
@@ -255,10 +289,10 @@ function extractFrontmatterBlock(markdown) {
   return endIndex > 0 ? lines.slice(1, endIndex).join("\n") : undefined;
 }
 
-function parseIndentedSetupMetadata(frontmatter) {
+function parseIndentedSetupMetadata(frontmatter: string): SetupMetadata | undefined {
   const lines = frontmatter.split(/\r?\n/);
-  const stack = [];
-  const metadata = {};
+  const stack: Array<{ indent: number; key: string }> = [];
+  const metadata: SetupMetadata = {};
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     if (!line.trim() || line.trimStart().startsWith("#")) {
@@ -289,11 +323,11 @@ function parseIndentedSetupMetadata(frontmatter) {
   return mergeSetupMetadata(metadata);
 }
 
-function isYamlBlockScalarIndicator(value) {
+function isYamlBlockScalarIndicator(value: string): boolean {
   return /^[|>][+-]?(\d+)?[+-]?$/u.test(value.trim());
 }
 
-function parseMetadataValueSetupMetadata(frontmatter) {
+function parseMetadataValueSetupMetadata(frontmatter: string): SetupMetadata | undefined {
   const lines = frontmatter.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
@@ -306,7 +340,7 @@ function parseMetadataValueSetupMetadata(frontmatter) {
       return parseSetupMetadataFromManifestText(rawValue);
     }
 
-    const valueLines = [];
+    const valueLines: string[] = [];
     for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
       const nextLine = lines[cursor] ?? "";
       if (nextLine.trim() && !nextLine.startsWith(" ") && !nextLine.startsWith("\t")) {
@@ -319,7 +353,7 @@ function parseMetadataValueSetupMetadata(frontmatter) {
   return undefined;
 }
 
-function parseSetupMetadataFromSkillMarkdown(markdown) {
+function parseSetupMetadataFromSkillMarkdown(markdown: string): SetupMetadata | undefined {
   const frontmatter = extractFrontmatterBlock(markdown);
   if (!frontmatter) {
     return undefined;
@@ -337,7 +371,7 @@ function parseSetupMetadataFromSkillMarkdown(markdown) {
 // SDK gap: OpenClaw does not expose a public resolver for an installed skill's
 // setup script. Needed public surface: `resolveSkillSetupScriptPath(skillDir)`
 // that reads the supported metadata shape and enforces the same path boundary.
-async function resolveSetupScriptPath(skillDir) {
+async function resolveSetupScriptPath(skillDir: string): Promise<SetupScriptResolution | undefined> {
   const skillMarkdown = await readFile(path.join(skillDir, "SKILL.md"), "utf8");
   const metadata = parseSetupMetadataFromSkillMarkdown(skillMarkdown);
   const script = metadata?.script;
@@ -367,8 +401,8 @@ async function resolveSetupScriptPath(skillDir) {
 // operator-provided credential vars while blocking only execution-context
 // overrides. The generic sandbox sanitizer blocks token-like keys, which is
 // wrong for this setup hook. Needed public surface: `sanitizeSetupEnvOverlay()`.
-function normalizeEnvMap(value) {
-  const env = {};
+function normalizeEnvMap(value: unknown): EnvMap {
+  const env: EnvMap = {};
   if (!isRecord(value)) {
     return env;
   }
@@ -385,16 +419,28 @@ function normalizeEnvMap(value) {
   return env;
 }
 
-function readSkillConfigEnv(config, skillKey) {
-  if (!isRecord(config?.skills) || !isRecord(config.skills.entries)) {
+function readSkillConfigEnv(config: unknown, skillKey: string): EnvMap {
+  if (!isRecord(config)) {
     return {};
   }
-  const entry = config.skills.entries[skillKey];
+  const skills = config.skills;
+  if (!isRecord(skills) || !isRecord(skills.entries)) {
+    return {};
+  }
+  const entry = skills.entries[skillKey];
   return isRecord(entry) ? normalizeEnvMap(entry.env) : {};
 }
 
-function buildSetupEnv({ configEnv, overlayEnv, skillDir }) {
-  const env = {};
+function buildSetupEnv({
+  configEnv,
+  overlayEnv,
+  skillDir,
+}: {
+  configEnv: EnvMap;
+  overlayEnv: EnvMap;
+  skillDir: string;
+}): EnvMap {
+  const env: EnvMap = {};
   Object.assign(env, configEnv, overlayEnv);
   env.SKILL_DIR = skillDir;
   return env;
@@ -404,7 +450,7 @@ function buildSetupEnv({ configEnv, overlayEnv, skillDir }) {
 
 // #region Timeout resolution
 
-function clampTimeoutMs(candidate, fallback) {
+function clampTimeoutMs(candidate: unknown, fallback: number): number {
   if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
     return fallback;
   }
@@ -418,11 +464,15 @@ function clampTimeoutMs(candidate, fallback) {
   return rounded;
 }
 
-function readPluginConfigTimeoutMs(config) {
-  if (!isRecord(config?.plugins) || !isRecord(config.plugins.entries)) {
+function readPluginConfigTimeoutMs(config: unknown): unknown {
+  if (!isRecord(config)) {
     return undefined;
   }
-  const entry = config.plugins.entries[PLUGIN_ID];
+  const plugins = config.plugins;
+  if (!isRecord(plugins) || !isRecord(plugins.entries)) {
+    return undefined;
+  }
+  const entry = plugins.entries[PLUGIN_ID];
   // OpenClaw plugin config schema lives at plugins.entries.<id>.config.* — see
   // openclaw/src/plugin-sdk/plugin-config-runtime.ts resolvePluginConfigObject.
   // Reading entry.timeoutMs directly would silently ignore the operator setting.
@@ -432,7 +482,13 @@ function readPluginConfigTimeoutMs(config) {
   return entry.config.timeoutMs;
 }
 
-function resolveTimeoutMs({ config, params }) {
+function resolveTimeoutMs({
+  config,
+  params,
+}: {
+  config: unknown;
+  params?: Record<string, unknown>;
+}): number {
   const configured = clampTimeoutMs(readPluginConfigTimeoutMs(config), DEFAULT_TIMEOUT_MS);
   return clampTimeoutMs(params?.timeoutMs, configured);
 }
@@ -441,12 +497,18 @@ function resolveTimeoutMs({ config, params }) {
 
 // #region Gateway RPC registration
 
-function respondError(respond, code, message) {
+function respondError(
+  respond: GatewayRequestHandlerOptions["respond"],
+  code: Parameters<typeof errorShape>[0],
+  message: string,
+): void {
   respond(false, { error: message }, errorShape(code, message));
 }
 
 export default definePluginEntry({
   id: "skills-setup",
+  name: "Skills Setup",
+  description: "Runs installed skill setup scripts through the admin-only skills.setup gateway RPC.",
   register(api) {
     api.registerGatewayMethod(
       METHOD_NAME,
@@ -464,7 +526,7 @@ export default definePluginEntry({
           const skillDir = await resolveInstalledSkillDir({ workspaceDir, slug });
           const setupScript = await resolveSetupScriptPath(skillDir);
           if (!setupScript) {
-            api.logger.debug(
+            api.logger.debug?.(
               `skills.setup ${slug} (agent=${agentId}) skipped: no setup script declared`,
             );
             respond(true, { code: 0, stdout: "", stderr: "" });
@@ -473,7 +535,7 @@ export default definePluginEntry({
 
           const { scriptPath, skillKey = slug } = setupScript;
           const timeoutMs = resolveTimeoutMs({ config, params });
-          api.logger.debug(
+          api.logger.debug?.(
             `skills.setup ${slug} (agent=${agentId}) started: script=${path.relative(skillDir, scriptPath)} timeoutMs=${timeoutMs}`,
           );
 
@@ -487,7 +549,7 @@ export default definePluginEntry({
             }),
             timeoutMs,
           });
-          api.logger.debug(
+          api.logger.debug?.(
             `skills.setup ${slug} (agent=${agentId}) completed: code=${result.code} durationMs=${Date.now() - startedAt}`,
           );
           respond(true, result);
@@ -498,7 +560,7 @@ export default definePluginEntry({
           // (see openclaw src/gateway/protocol/schema/error-codes.ts). Reserve
           // UNAVAILABLE for transient / server-side execution failures.
           const code =
-            error?.code === ERR_SKILL_NOT_FOUND
+            hasErrorCode(error, ERR_SKILL_NOT_FOUND)
               ? ErrorCodes.INVALID_REQUEST
               : ErrorCodes.UNAVAILABLE;
           api.logger.warn(
