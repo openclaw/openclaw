@@ -372,7 +372,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("private final");
-    expect(getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback).toBe(
+    expect(getReplyPayloadMetadata(payloads[0])?.messageToolOnlyFinalFallback).toBe(
       true,
     );
   });
@@ -399,7 +399,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
     if (payloads[0]) {
       expect(
-        getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback,
+        getReplyPayloadMetadata(payloads[0])?.messageToolOnlyFinalFallback,
       ).toBeUndefined();
     }
   });
@@ -424,7 +424,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
     expect(payloads).toHaveLength(1);
     expect(
-      getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback,
+      getReplyPayloadMetadata(payloads[0])?.messageToolOnlyFinalFallback,
     ).toBeUndefined();
   });
 
@@ -449,7 +449,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const result = await run();
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
     expect(payloads).toHaveLength(1);
-    expect(getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback).toBe(
+    expect(getReplyPayloadMetadata(payloads[0])?.messageToolOnlyFinalFallback).toBe(
       true,
     );
   });
