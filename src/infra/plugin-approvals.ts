@@ -170,6 +170,9 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
 const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
 const CURL_NETRC_FILE_FLAGS = new Set(["--netrc-file"]);
 const CURL_NETRC_FLAGS = new Set(["-n", "--netrc", "--netrc-optional"]);
+const CURL_COOKIE_FLAGS = new Set(["-b", "--cookie"]);
+const CURL_COOKIE_JAR_FLAGS = new Set(["-c", "--cookie-jar"]);
+const CURL_HEADER_FLAGS = new Set(["-H", "--header"]);
 const CURL_OUTPUT_FLAGS = new Set([
   "-D",
   "-o",
@@ -350,6 +353,7 @@ function redactSensitiveCommandText(command: string): string {
       /(authorization:\s*(?:(?:bearer|basic|token)\s+)?)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
     )
+    .replace(/((?:set-)?cookie:\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1[redacted]")
     .replace(
       /((?:x[-_])?(?:api[-_]?key|auth[-_]?token|access[-_]?token|private[-_]?token|password|passwd|secret|token)\s*:\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
@@ -364,10 +368,13 @@ function redactSensitiveCommandText(command: string): string {
     )
     .replace(/(^|\s)(-u|-U)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
     .replace(/(^|\s)(-u|-U)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
+    .replace(/(^|\s)(-b)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
+    .replace(/(^|\s)(-b)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
     .replace(
       /(^|\s)(--(?:user|proxy-user|http-user|http-password|ftp-user|ftp-password|password|proxy-password|ftp-account))(=|\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1$2$3[redacted]",
     )
+    .replace(/(^|\s)(--cookie)(=|\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
     .replace(/(https?:\/\/[^:\s/@]+:)[^@\s/]+@/gi, "$1[redacted]@");
 }
 
@@ -1671,15 +1678,19 @@ function summarizeNetworkCommand(
   const outputFiles = uniqueStrings(transfer.outputFiles);
   const configFiles = uniqueStrings(transfer.configFiles);
   const credentialFiles = uniqueStrings(transfer.credentialFiles);
+  const cookieJarFiles = uniqueStrings(transfer.cookieJarFiles);
   if (
     uploadFiles.length > 0 ||
     outputFiles.length > 0 ||
     configFiles.length > 0 ||
+    cookieJarFiles.length > 0 ||
     transfer.usesAmbiguousStdinUpload ||
     transfer.usesAmbiguousConfig ||
     credentialFiles.length > 0 ||
     transfer.usesDefaultCredentialSource ||
-    transfer.usesAmbiguousCredentialSource
+    transfer.usesAmbiguousCredentialSource ||
+    transfer.usesInlineCredentialSource ||
+    transfer.usesHeaderCredentialSource
   ) {
     const actions: string[] = [];
     if (uploadFiles.length > 0) {
@@ -1703,8 +1714,17 @@ function summarizeNetworkCommand(
     if (transfer.usesAmbiguousCredentialSource) {
       actions.push("read network credentials from an ambiguous source");
     }
+    if (transfer.usesInlineCredentialSource) {
+      actions.push("send network credentials from command options");
+    }
+    if (transfer.usesHeaderCredentialSource) {
+      actions.push("send network credentials in headers");
+    }
     if (outputFiles.length > 0) {
       actions.push(`write network output to local files${formatTargets(outputFiles)}`);
+    }
+    if (cookieJarFiles.length > 0) {
+      actions.push(`write network cookies to local files${formatTargets(cookieJarFiles)}`);
     }
     if (transfer.urls.length > 0) {
       actions.push(`contact${formatNetworkTargetList(transfer.urls)}`);
@@ -1722,6 +1742,9 @@ function summarizeNetworkCommand(
         credentialFiles,
         transfer.usesDefaultCredentialSource,
         transfer.usesAmbiguousCredentialSource,
+        transfer.usesInlineCredentialSource,
+        transfer.usesHeaderCredentialSource,
+        cookieJarFiles,
       ),
       showCommandPreview: true,
     };
@@ -1743,22 +1766,28 @@ function collectNetworkTransferOperands(
   outputFiles: string[];
   configFiles: string[];
   credentialFiles: string[];
+  cookieJarFiles: string[];
   urls: string[];
   usesAmbiguousStdinUpload: boolean;
   usesAmbiguousConfig: boolean;
   usesDefaultCredentialSource: boolean;
   usesAmbiguousCredentialSource: boolean;
+  usesInlineCredentialSource: boolean;
+  usesHeaderCredentialSource: boolean;
 } {
   const uploadFiles: string[] = [];
   const outputFiles: string[] = [...getShellOutputRedirectionTargets(segment)];
   const configFiles: string[] = [];
   const credentialFiles: string[] = [];
+  const cookieJarFiles: string[] = [];
   const urls: string[] = [];
   const inputRedirection = getShellInputRedirection(segment);
   let usesAmbiguousStdinUpload = false;
   let usesAmbiguousConfig = false;
   let usesDefaultCredentialSource = false;
   let usesAmbiguousCredentialSource = false;
+  let usesInlineCredentialSource = false;
+  let usesHeaderCredentialSource = false;
   const recordStdinUpload = () => {
     if (inputRedirection.targets.length > 0) {
       uploadFiles.push(...inputRedirection.targets);
@@ -1807,6 +1836,54 @@ function collectNetworkTransferOperands(
       continue;
     }
 
+    const headerValue =
+      command === "curl" ? takeFlagValue(args, index, CURL_HEADER_FLAGS, ["-H"]) : null;
+    if (headerValue) {
+      if (isCredentialHeaderValue(headerValue.value)) {
+        usesHeaderCredentialSource = true;
+      }
+      index = Math.max(index, headerValue.nextIndex);
+      continue;
+    }
+    if (command === "curl" && CURL_HEADER_FLAGS.has(arg)) {
+      usesAmbiguousCredentialSource = true;
+      continue;
+    }
+
+    const cookieValue =
+      command === "curl" ? takeFlagValue(args, index, CURL_COOKIE_FLAGS, ["-b"]) : null;
+    if (cookieValue) {
+      const files = extractCurlCookieFiles(cookieValue.value);
+      if (files.length > 0) {
+        credentialFiles.push(...files);
+      } else {
+        usesInlineCredentialSource = true;
+      }
+      index = Math.max(index, cookieValue.nextIndex);
+      continue;
+    }
+    if (command === "curl" && CURL_COOKIE_FLAGS.has(arg)) {
+      usesAmbiguousCredentialSource = true;
+      continue;
+    }
+
+    const cookieJarValue =
+      command === "curl" ? takeFlagValue(args, index, CURL_COOKIE_JAR_FLAGS, ["-c"]) : null;
+    if (cookieJarValue) {
+      const files = extractPlainLocalFileOperands(cookieJarValue.value);
+      if (files.length > 0) {
+        cookieJarFiles.push(...files);
+      } else {
+        usesAmbiguousCredentialSource = true;
+      }
+      index = Math.max(index, cookieJarValue.nextIndex);
+      continue;
+    }
+    if (command === "curl" && CURL_COOKIE_JAR_FLAGS.has(arg)) {
+      usesAmbiguousCredentialSource = true;
+      continue;
+    }
+
     const uploadValue =
       command === "curl"
         ? takeFlagValue(args, index, CURL_UPLOAD_FILE_FLAGS, ["-T"])
@@ -1845,11 +1922,14 @@ function collectNetworkTransferOperands(
     outputFiles,
     configFiles,
     credentialFiles,
+    cookieJarFiles,
     urls: uniqueStrings(urls),
     usesAmbiguousStdinUpload,
     usesAmbiguousConfig,
     usesDefaultCredentialSource,
     usesAmbiguousCredentialSource,
+    usesInlineCredentialSource,
+    usesHeaderCredentialSource,
   };
 }
 
@@ -1883,6 +1963,20 @@ function extractPlainLocalFileOperands(value: string): string[] {
 
 function isNetworkStdinOperand(value: string): boolean {
   return stripNetworkFileOperandPrefix(value.trim()) === "-";
+}
+
+function isCredentialHeaderValue(value: string): boolean {
+  return /^(?:authorization|proxy-authorization|cookie|set-cookie|x[-_]?(?:api[-_]?key|auth[-_]?token|access[-_]?token|private[-_]?token))\s*:/i.test(
+    stripShellWordQuotes(value.trim()),
+  );
+}
+
+function extractCurlCookieFiles(value: string): string[] {
+  const trimmed = stripShellWordQuotes(value.trim());
+  if (!trimmed || trimmed === "-" || /[=;]/.test(trimmed)) {
+    return [];
+  }
+  return extractPlainLocalFileOperands(trimmed);
 }
 
 function extractCurlBodyFileOperands(value: string): string[] {
@@ -1929,16 +2023,24 @@ function buildNetworkTransferRiskReason(
   credentialFiles: readonly string[] = [],
   usesDefaultCredentialSource = false,
   usesAmbiguousCredentialSource = false,
+  usesInlineCredentialSource = false,
+  usesHeaderCredentialSource = false,
+  cookieJarFiles: readonly string[] = [],
 ): string {
   if (uploadFiles.some(isSensitivePath)) {
     return "This network command can send local sensitive files outside this machine.";
   }
+  if (cookieJarFiles.some((file) => isSensitivePath(file) || isSystemPath(file))) {
+    return "This network command can overwrite sensitive or system paths.";
+  }
   if (
     credentialFiles.length > 0 ||
     usesDefaultCredentialSource ||
-    usesAmbiguousCredentialSource
+    usesAmbiguousCredentialSource ||
+    usesInlineCredentialSource ||
+    usesHeaderCredentialSource
   ) {
-    return "netrc files can provide hidden login/password credentials for network requests.";
+    return "Network credential options can expose cookies, tokens, or login/password data.";
   }
   if (outputFiles.some((file) => isSensitivePath(file) || isSystemPath(file))) {
     return "This network command can overwrite sensitive or system paths.";
@@ -1948,6 +2050,9 @@ function buildNetworkTransferRiskReason(
   }
   if (usesAmbiguousStdinUpload) {
     return "This network command can send piped or redirected input outside this machine.";
+  }
+  if (cookieJarFiles.length > 0) {
+    return "Cookie jar options can save login or session credentials from network responses.";
   }
   if (uploadFiles.length > 0) {
     return "This network command can send local files outside this machine.";
