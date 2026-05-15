@@ -2443,8 +2443,10 @@
 
 .session-key-cell .session-link,
 .session-key-display-name {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-key-display-name {
@@ -2459,6 +2461,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
+  contain: layout paint;
 }
 
 .sessions-page-header {
@@ -2544,7 +2547,10 @@
 
 .data-table-container {
   overflow: auto;
-  max-height: 70vh;
+  max-height: min(70vh, 860px);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling: touch;
 }
 
 .data-table {
@@ -2556,7 +2562,11 @@
 }
 
 .sessions-table {
-  min-width: 1240px;
+  min-width: 1340px;
+}
+
+.sessions-table tbody tr.session-data-row > td {
+  white-space: nowrap;
 }
 
 .data-table th {

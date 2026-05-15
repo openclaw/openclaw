@@ -45,9 +45,17 @@ describe("sessions table responsive styles", () => {
     expect(componentsCss).toContain(".session-compaction-cell {");
     expect(componentsCss).toContain(".session-checkpoint-toggle {");
     expect(componentsCss).toContain(".session-status-badge {");
+    expect(componentsCss).toContain("contain: layout paint;");
+    expect(componentsCss).toContain("max-height: min(70vh, 860px);");
+    expect(componentsCss).toContain("scrollbar-gutter: stable both-edges;");
+    expect(componentsCss).toContain(".sessions-table {\n  min-width: 1340px;");
+    expect(componentsCss).toContain(".sessions-table tbody tr.session-data-row > td {");
     expect(componentsCss).toContain(".session-data-row--expanded td {");
     expect(componentsCss).toContain(".session-runtime-cell .mono {");
     expect(componentsCss).toContain("text-overflow: ellipsis;");
+    expect(componentsCss).toContain(
+      ".session-key-cell .session-link,\n.session-key-display-name {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;",
+    );
     expect(componentsCss).toContain(".session-checkpoint-panel {");
     expect(componentsCss).toContain(".session-checkpoint-card {");
     expect(componentsCss).not.toContain(".session-details-panel {");
