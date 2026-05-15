@@ -655,6 +655,23 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
+  it("forwards sendMessage suppressEmbeds overrides", async () => {
+    sendMessageDiscord.mockClear();
+
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "https://example.com",
+        suppressEmbeds: false,
+      },
+      enableAllActions,
+    );
+
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(sendOptions.suppressEmbeds).toBe(false);
+  });
+
   it("warns instead of renaming when threadName is provided but channel management is disabled", async () => {
     sendMessageDiscord.mockResolvedValueOnce({
       messageId: "M1",
