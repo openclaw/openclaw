@@ -526,6 +526,7 @@ describe("applyExtraParamsToAgent", () => {
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
     thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
+    runtimeModel?: Parameters<typeof applyExtraParamsToAgent>[8];
   }) {
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -540,6 +541,9 @@ describe("applyExtraParamsToAgent", () => {
       params.applyModelId,
       params.extraParamsOverride,
       params.thinkingLevel,
+      undefined,
+      undefined,
+      params.runtimeModel,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
@@ -699,6 +703,32 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("applies OpenAI completions model params after embedded maxTokens defaults", () => {
+    const model = {
+      api: "openai-completions",
+      provider: "DashScope",
+      id: "kimi-k2.6",
+      params: {
+        max_completion_tokens: 64_000,
+        extra_body: { thinking: { type: "enabled" } },
+        transport: "websocket",
+      },
+    } as unknown as Model<"openai-completions">;
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "DashScope",
+      applyModelId: "kimi-k2.6",
+      model,
+      runtimeModel: model,
+      payload: {
+        max_completion_tokens: 32_000,
+      },
+    });
+
+    expect(payload.max_completion_tokens).toBe(64_000);
+    expect(payload).not.toHaveProperty("extra_body");
+    expect(payload).not.toHaveProperty("transport");
   });
 
   it("strips disabled reasoning payloads for native OpenAI responses models that do not support none", () => {

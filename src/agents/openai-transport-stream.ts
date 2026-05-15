@@ -28,6 +28,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { applyOpenAICompletionsModelParams } from "./openai-completions-model-params.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
@@ -102,6 +103,7 @@ type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
 
 type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
+  params?: Record<string, unknown> | null;
 };
 
 type MutableAssistantOutput = {
@@ -1924,6 +1926,7 @@ export function buildOpenAICompletionsParams(
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
   }
+  applyOpenAICompletionsModelParams(params, model);
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
     ? resolveOpenAIReasoningEffortForModel({

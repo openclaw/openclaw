@@ -11,6 +11,7 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
+import { applyOpenAICompletionsModelParams } from "../openai-completions-model-params.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
@@ -641,6 +642,23 @@ function createOpenAICompletionsExtraBodyWrapper(
   };
 }
 
+function createOpenAICompletionsModelParamsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  configured: Record<string, unknown> | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      applyOpenAICompletionsModelParams(payloadObj, {
+        params: configured ?? (model as { params?: Record<string, unknown> | null }).params,
+      });
+    });
+  };
+}
+
 type ApplyExtraParamsContext = {
   agent: { streamFn?: StreamFn };
   cfg: OpenClawConfig | undefined;
@@ -687,6 +705,10 @@ function applyPostPluginStreamWrappers(
 ): void {
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAICompletionsModelParamsWrapper(
+    ctx.agent.streamFn,
+    ctx.model?.params,
+  );
 
   if (!ctx.providerWrapperHandled) {
     // Guard Google-family payloads against invalid negative thinking budgets

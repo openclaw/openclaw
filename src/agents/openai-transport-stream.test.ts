@@ -2629,6 +2629,37 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_tokens");
   });
 
+  it("lets model params override embedded OpenAI completions maxTokens defaults", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "DashScope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 262_144,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 32_000,
+        reasoningEffort: "high",
+      } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(64_000);
+  });
+
   it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
     const params = buildOpenAICompletionsParams(
       {
