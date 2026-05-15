@@ -1652,6 +1652,83 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)?.[0]?.media).toBeUndefined();
   });
 
+  it("records sticker image media for skipped mention-gated guild history", async () => {
+    const channelId = "channel-history-sticker";
+    const guildId = "guild-history-sticker";
+    const guildHistories = new Map();
+    saveRemoteMediaMock.mockResolvedValueOnce({
+      id: "test-sticker",
+      path: "/tmp/openclaw-discord-test/sticker.png",
+      size: 5,
+      contentType: "image/png",
+    });
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-history-sticker",
+        channelId,
+        content: "",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "Alice",
+        },
+      }),
+      {
+        stickers: [
+          {
+            id: "sticker-history",
+            name: "history-sticker",
+            format_type: 1,
+          },
+        ],
+      },
+    );
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(guildHistories.get(channelId)).toEqual([
+      expect.objectContaining({
+        sender: "Alice",
+        body: "<media:sticker> (1 sticker)",
+        messageId: "m-history-sticker",
+        media: [
+          {
+            path: "/tmp/openclaw-discord-test/sticker.png",
+            contentType: "image/png",
+            kind: "image",
+            messageId: "m-history-sticker",
+          },
+        ],
+      }),
+    ]);
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not drop @everyone messages when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-everyone";
     const guildId = "guild-other-mention-everyone";

@@ -27,6 +27,7 @@ import {
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
+import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
@@ -141,16 +142,21 @@ async function resolveDiscordHistoryEntryForPendingRecord(params: {
   const imageAttachments = (params.message.attachments ?? [])
     .filter(isDiscordImageAttachmentCandidate)
     .slice(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS);
-  if (imageAttachments.length === 0) {
+  const stickers = resolveDiscordMessageStickers(params.message).slice(
+    0,
+    Math.max(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS - imageAttachments.length),
+  );
+  if (imageAttachments.length === 0 && stickers.length === 0) {
     return params.entry;
   }
   const mediaMessage = Object.assign(
     Object.create(Object.getPrototypeOf(params.message)),
     params.message,
-    {
-      attachments: imageAttachments,
-    },
   ) as typeof params.message;
+  Object.defineProperties(mediaMessage, {
+    attachments: { value: imageAttachments },
+    stickers: { value: stickers },
+  });
   const mediaList = await resolveMediaList(
     mediaMessage,
     Math.min(params.preflight.mediaMaxBytes, DISCORD_HISTORY_MEDIA_MAX_BYTES),
