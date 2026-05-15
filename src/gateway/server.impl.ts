@@ -965,7 +965,10 @@ export async function startGatewayServer(
       const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
       const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
         await loadGatewayCloseModule();
+      const runtimeCfg = getRuntimeConfig();
       await createGatewayCloseHandler({
+        shutdownHookTimeoutMs: runtimeCfg.hooks?.internal?.gatewayShutdown?.timeoutMs,
+        preRestartHookTimeoutMs: runtimeCfg.hooks?.internal?.gatewayPreRestart?.timeoutMs,
         bonjourStop: runtimeState.bonjourStop,
         tailscaleCleanup: runtimeState.tailscaleCleanup,
         releasePluginRouteRegistry,

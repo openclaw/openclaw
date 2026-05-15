@@ -76,6 +76,17 @@ export type HookInstallRecord = InstallRecordBase & {
   hooks?: string[];
 };
 
+export type GatewayLifecycleHookConfig = {
+  /**
+   * Maximum time in milliseconds to wait for the hook handler to complete before
+   * continuing shutdown. If the handler exceeds this budget it is abandoned and
+   * a warning is recorded; the gateway always proceeds regardless.
+   *
+   * Defaults: `gateway:shutdown` → 5 000 ms, `gateway:pre-restart` → 10 000 ms.
+   */
+  timeoutMs?: number;
+};
+
 export type InternalHooksConfig = {
   /** Enable hooks system */
   enabled?: boolean;
@@ -88,6 +99,17 @@ export type InternalHooksConfig = {
   };
   /** Install records for hook packs or hooks */
   installs?: Record<string, HookInstallRecord>;
+  /**
+   * Timeout and behaviour settings for the `gateway:shutdown` lifecycle hook.
+   * The hook fires when gateway shutdown begins (stop, SIGTERM, SIGINT).
+   */
+  gatewayShutdown?: GatewayLifecycleHookConfig;
+  /**
+   * Timeout and behaviour settings for the `gateway:pre-restart` lifecycle hook.
+   * The hook fires only when shutdown is part of an expected restart
+   * (`restartExpectedMs` is a finite number).
+   */
+  gatewayPreRestart?: GatewayLifecycleHookConfig;
 };
 
 export type HooksConfig = {

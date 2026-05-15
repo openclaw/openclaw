@@ -135,6 +135,47 @@ plugin hook `before_agent_finalize` instead. See [Plugin hooks](/plugins/hooks).
 
 **Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls.
 
+#### Gateway lifecycle environment variables
+
+Shell-based HOOK.md handlers for gateway lifecycle events receive the following environment variables from the hook runner:
+
+| Variable                           | Present in  | Value                                                                      | Example                                      |
+| ---------------------------------- | ----------- | -------------------------------------------------------------------------- | -------------------------------------------- |
+| `OPENCLAW_EVENT`                   | Both events | The full event name                                                        | `gateway:shutdown`, `gateway:pre-restart`    |
+| `OPENCLAW_GATEWAY_SHUTDOWN_REASON` | Both events | Human-readable reason string                                               | `gateway stopping`, `config-apply`, `update` |
+| `OPENCLAW_RESTART_EXPECTED_MS`     | Both events | Milliseconds until restart is expected, or empty string when not a restart | `1500`, ``                                   |
+
+A non-empty `OPENCLAW_RESTART_EXPECTED_MS` is a reliable signal that the gateway is restarting (not stopping permanently). Use it to skip expensive cleanup in restart-only hooks.
+
+#### Notifying agents before a restart
+
+The `gateway:pre-restart` hook fires after safe-restart drain completes but before channels are stopped, so it can still make outbound calls. This makes it the right place to notify running agents:
+
+```bash
+#!/usr/bin/env bash
+# hooks/notify-agents-on-restart/handler.sh
+# HOOK.md: events: ["gateway:pre-restart"]
+#
+# Sends a system message to all sessions of agent "zero" before the gateway
+# restarts so in-flight work can checkpoint. Relies on the gateway still
+# accepting local API calls at this point in the shutdown sequence.
+
+set -euo pipefail
+
+if [ -z "${OPENCLAW_RESTART_EXPECTED_MS:-}" ]; then
+  # Not a restart — skip
+  exit 0
+fi
+
+RESTART_IN_S=$(( OPENCLAW_RESTART_EXPECTED_MS / 1000 ))
+
+openclaw sessions send \
+  --session-key "agent:zero" \
+  "Gateway restarting in ~${RESTART_IN_S}s (reason: ${OPENCLAW_GATEWAY_SHUTDOWN_REASON}). Checkpoint now."
+```
+
+The default timeout for `gateway:pre-restart` is **10 seconds**, giving hook scripts enough time to complete an `openclaw sessions send` call. Configure a longer window if needed (see [Gateway lifecycle hook timeouts](#gateway-lifecycle-hook-timeouts) below).
+
 Between the `gateway:shutdown` (or `gateway:pre-restart`) event and the rest of the shutdown sequence, the gateway also fires a typed `session_end` plugin hook for every session that was still active when the process stopped. The event's `reason` is `shutdown` for a plain SIGTERM/SIGINT stop and `restart` when the close was scheduled as part of an expected restart. This drain is bounded so a slow `session_end` handler cannot block process exit, and sessions that have already been finalized through replace / reset / delete / compaction are skipped to avoid double-firing.
 
 ## Hook discovery
@@ -276,6 +317,32 @@ Extra hook directories:
   }
 }
 ```
+
+#### Gateway lifecycle hook timeouts
+
+The `gateway:shutdown` and `gateway:pre-restart` hooks have default timeout budgets of **5 000 ms** and **10 000 ms** respectively (see [closes #6711](https://github.com/openclaw/openclaw/issues/6711)). If a handler exceeds its budget it is abandoned and a warning is logged; the gateway always proceeds regardless.
+
+Override the defaults in `openclaw.config.js`:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "gatewayShutdown": {
+        "timeoutMs": 8000
+      },
+      "gatewayPreRestart": {
+        "timeoutMs": 15000
+      }
+    }
+  }
+}
+```
+
+| Config key                                   | Default | Description                                                                         |
+| -------------------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `hooks.internal.gatewayShutdown.timeoutMs`   | `5000`  | Maximum wait (ms) for `gateway:shutdown` hook handlers before shutdown continues    |
+| `hooks.internal.gatewayPreRestart.timeoutMs` | `10000` | Maximum wait (ms) for `gateway:pre-restart` hook handlers before shutdown continues |
 
 <Note>
 The legacy `hooks.internal.handlers` array config format is still supported for backwards compatibility, but new hooks should use the discovery-based system.

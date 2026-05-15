@@ -11,8 +11,8 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
-const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
-const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 1_000;
+const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
+const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
 const ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS = 2_000;
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -170,6 +170,18 @@ function isServerNotRunningError(err: unknown): boolean {
 }
 
 export function createGatewayCloseHandler(params: {
+  /**
+   * Override the `gateway:shutdown` hook timeout (milliseconds).
+   * Typically sourced from `hooks.internal.gatewayShutdown.timeoutMs` in config.
+   * Falls back to `GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS` (5 000 ms) when absent.
+   */
+  shutdownHookTimeoutMs?: number | null;
+  /**
+   * Override the `gateway:pre-restart` hook timeout (milliseconds).
+   * Typically sourced from `hooks.internal.gatewayPreRestart.timeoutMs` in config.
+   * Falls back to `GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS` (10 000 ms) when absent.
+   */
+  preRestartHookTimeoutMs?: number | null;
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;
   releasePluginRouteRegistry?: (() => void) | null;
@@ -218,6 +230,15 @@ export function createGatewayCloseHandler(params: {
           : null;
       shutdownLog.info(`shutdown started: ${reason}`);
 
+      const resolvedShutdownHookTimeoutMs =
+        typeof params.shutdownHookTimeoutMs === "number" && params.shutdownHookTimeoutMs > 0
+          ? params.shutdownHookTimeoutMs
+          : GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS;
+      const resolvedPreRestartHookTimeoutMs =
+        typeof params.preRestartHookTimeoutMs === "number" && params.preRestartHookTimeoutMs > 0
+          ? params.preRestartHookTimeoutMs
+          : GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS;
+
       await shutdownStep(
         "gateway:shutdown",
         async () => {
@@ -228,7 +249,7 @@ export function createGatewayCloseHandler(params: {
           const result = await triggerGatewayLifecycleHookWithTimeout({
             event: shutdownEvent,
             hookName: "gateway:shutdown",
-            timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
+            timeoutMs: resolvedShutdownHookTimeoutMs,
           });
           if (result === "timeout") {
             recordShutdownWarning(warnings, "gateway:shutdown");
@@ -252,7 +273,7 @@ export function createGatewayCloseHandler(params: {
             const result = await triggerGatewayLifecycleHookWithTimeout({
               event: preRestartEvent,
               hookName: "gateway:pre-restart",
-              timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS,
+              timeoutMs: resolvedPreRestartHookTimeoutMs,
             });
             if (result === "timeout") {
               recordShutdownWarning(warnings, "gateway:pre-restart");
