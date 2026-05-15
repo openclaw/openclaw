@@ -186,6 +186,7 @@ function abortActiveRunsForRestart(params: {
         agentDeltaSentAt: params.chatRunState.agentDeltaSentAt,
         bufferedAgentEvents: params.chatRunState.bufferedAgentEvents,
         chatAbortedRuns: params.chatRunState.abortedRuns,
+        clearChatRunState: params.chatRunState.clearRun,
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         broadcast: params.broadcast,
