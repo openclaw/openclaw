@@ -9,7 +9,12 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
-import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import {
+  type HistoryEntry,
+  type HistoryMediaEntry,
+  recordPendingHistoryEntryIfEnabled,
+} from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -22,6 +27,7 @@ import {
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
+import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
@@ -56,8 +62,14 @@ import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
+  resolveMediaList,
+  type DiscordMediaInfo,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -78,6 +90,101 @@ function resolveDiscordPreflightConversationKind(params: {
     params.channelType === ChannelType.DM ||
     (!params.isGuildMessage && !isGroupDm && params.channelType == null);
   return { isDirectMessage, isGroupDm };
+}
+
+function isLocalDiscordMediaPath(path: string): boolean {
+  if (/^[a-z]:[\\/]/i.test(path)) {
+    return true;
+  }
+  return !/^[a-z][a-z0-9+.-]*:/i.test(path);
+}
+
+function buildDiscordHistoryMediaEntries(params: {
+  messageId: string;
+  mediaList: DiscordMediaInfo[];
+}): HistoryMediaEntry[] {
+  return params.mediaList
+    .filter(
+      (media) => media.contentType?.startsWith("image/") && isLocalDiscordMediaPath(media.path),
+    )
+    .map((media) => ({
+      path: media.path,
+      contentType: media.contentType,
+      kind: "image" as const,
+      messageId: params.messageId,
+    }));
+}
+
+function isDiscordImageAttachmentCandidate(attachment: {
+  content_type?: string | null;
+  filename?: string | null;
+  url?: string | null;
+}) {
+  const contentType = attachment.content_type?.split(";")[0]?.trim().toLowerCase();
+  if (contentType?.startsWith("image/")) {
+    return true;
+  }
+  return Boolean(
+    mimeTypeFromFilePath(attachment.filename)?.startsWith("image/") ||
+    mimeTypeFromFilePath(attachment.url)?.startsWith("image/"),
+  );
+}
+
+async function resolveDiscordHistoryEntryForPendingRecord(params: {
+  preflight: DiscordMessagePreflightParams;
+  message: DiscordMessagePreflightContext["message"];
+  entry?: HistoryEntry;
+}): Promise<HistoryEntry | undefined> {
+  if (!params.entry) {
+    return undefined;
+  }
+  const imageAttachments = (params.message.attachments ?? []).filter(
+    isDiscordImageAttachmentCandidate,
+  );
+  if (imageAttachments.length === 0 && resolveDiscordMessageStickers(params.message).length === 0) {
+    return params.entry;
+  }
+  const mediaMessage = Object.assign(
+    Object.create(Object.getPrototypeOf(params.message)),
+    params.message,
+    {
+      attachments: imageAttachments,
+    },
+  ) as typeof params.message;
+  const mediaList = await resolveMediaList(mediaMessage, params.preflight.mediaMaxBytes, {
+    fetchImpl: params.preflight.discordRestFetch,
+    ssrfPolicy: params.preflight.cfg.browser?.ssrfPolicy,
+    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    abortSignal: params.preflight.abortSignal,
+  });
+  const media = buildDiscordHistoryMediaEntries({
+    messageId: params.message.id,
+    mediaList,
+  });
+  return media.length > 0 ? { ...params.entry, media } : params.entry;
+}
+
+async function recordDiscordPendingHistoryEntry(params: {
+  preflight: DiscordMessagePreflightParams;
+  historyKey: string;
+  message: DiscordMessagePreflightContext["message"];
+  entry?: HistoryEntry;
+}) {
+  const entry = await resolveDiscordHistoryEntryForPendingRecord({
+    preflight: params.preflight,
+    message: params.message,
+    entry: params.entry,
+  });
+  if (isPreflightAborted(params.preflight.abortSignal)) {
+    return;
+  }
+  recordPendingHistoryEntryIfEnabled({
+    historyMap: params.preflight.guildHistories,
+    historyKey: params.historyKey,
+    limit: params.preflight.historyLimit,
+    entry: entry ?? null,
+  });
 }
 
 export async function preflightDiscordMessage(
@@ -536,11 +643,11 @@ export async function preflightDiscordMessage(
         },
         "discord: skipping guild message",
       );
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: params.guildHistories,
+      await recordDiscordPendingHistoryEntry({
+        preflight: params,
         historyKey: messageChannelId,
-        limit: params.historyLimit,
-        entry: historyEntry ?? null,
+        message,
+        entry: historyEntry,
       });
       return null;
     }
@@ -567,11 +674,11 @@ export async function preflightDiscordMessage(
     logVerbose(
       `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
     );
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: params.guildHistories,
+    await recordDiscordPendingHistoryEntry({
+      preflight: params,
       historyKey: messageChannelId,
-      limit: params.historyLimit,
-      entry: historyEntry ?? null,
+      message,
+      entry: historyEntry,
     });
     return null;
   }

@@ -30,13 +30,14 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   loadDispatchAcpMediaRuntime,
-  resolveAcpAttachments,
   resolveAcpInlineImageAttachments,
+  resolveAcpTurnAttachments,
 } from "./dispatch-acp-attachments.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
+import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -470,14 +471,28 @@ export async function tryDispatchAcpReply(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const mediaAttachments = hasInboundMedia(params.ctx)
-      ? await resolveAcpAttachments({ ctx: params.ctx, cfg: params.cfg })
-      : [];
+    const resolvedTurnAttachments = await resolveAcpTurnAttachments({
+      ctx: params.ctx,
+      cfg: params.cfg,
+    });
+    const mediaAttachments = resolvedTurnAttachments.attachments;
+    const inlineAttachments = resolveAcpInlineImageAttachments(params.images);
+    const mediaAttachmentsAreOnlyRecentHistory =
+      mediaAttachments.length > 0 &&
+      mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
     const attachments =
-      mediaAttachments.length > 0
+      mediaAttachments.length > 0 &&
+      !(mediaAttachmentsAreOnlyRecentHistory && inlineAttachments.length > 0)
         ? mediaAttachments
-        : resolveAcpInlineImageAttachments(params.images);
-    if (!promptText && attachments.length === 0) {
+        : inlineAttachments;
+    const turnPromptText =
+      attachments === mediaAttachments
+        ? appendRecentHistoryImageContext({
+            promptText,
+            images: resolvedTurnAttachments.recentHistoryImages,
+          })
+        : promptText;
+    if (!turnPromptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_empty_prompt" });
@@ -495,7 +510,7 @@ export async function tryDispatchAcpReply(params: {
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
       text: resolveAcpTurnText({
-        promptText,
+        promptText: turnPromptText,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       }),
       attachments: attachments.length > 0 ? attachments : undefined,
@@ -518,7 +533,7 @@ export async function tryDispatchAcpReply(params: {
       await persistAcpDispatchTranscript({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
-        promptText,
+        promptText: turnPromptText,
         finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
         meta: acpResolution.meta,
         threadId: params.ctx.MessageThreadId,
