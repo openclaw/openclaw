@@ -2447,6 +2447,15 @@ export async function runEmbeddedAttempt(
           model: params.modelId,
           api: params.model.api,
           transport: effectiveAgentTransport,
+          ...(params.contextWindowInfo?.tokens
+            ? { contextTokenBudget: params.contextWindowInfo.tokens }
+            : {}),
+          ...(params.contextWindowInfo?.source
+            ? { contextWindowSource: params.contextWindowInfo.source }
+            : {}),
+          ...(params.contextWindowInfo?.referenceTokens
+            ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+            : {}),
           trace: runTrace,
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
           onStarted: () => {
@@ -4006,6 +4015,15 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
+              ...(params.contextWindowInfo?.tokens
+                ? { contextTokenBudget: params.contextWindowInfo.tokens }
+                : {}),
+              ...(params.contextWindowInfo?.source
+                ? { contextWindowSource: params.contextWindowInfo.source }
+                : {}),
+              ...(params.contextWindowInfo?.referenceTokens
+                ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+                : {}),
               resolvedRef:
                 params.runtimePlan?.observability.resolvedRef ??
                 `${params.provider}/${params.modelId}`,
@@ -4024,6 +4042,15 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
               trigger: params.trigger,
+              ...(params.contextWindowInfo?.tokens
+                ? { contextTokenBudget: params.contextWindowInfo.tokens }
+                : {}),
+              ...(params.contextWindowInfo?.source
+                ? { contextWindowSource: params.contextWindowInfo.source }
+                : {}),
+              ...(params.contextWindowInfo?.referenceTokens
+                ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+                : {}),
               ...buildAgentHookContextChannelFields(params),
             },
           )

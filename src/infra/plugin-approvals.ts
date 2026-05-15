@@ -119,6 +119,23 @@ const SECRETISH_PATH_RE =
   /(^|[/_.-])(secret|secrets|token|tokens|password|passwd|credential|credentials|api[-_]?key|private[-_]?key|id_rsa|\.env)([/_.-]|$)/i;
 const SYSTEM_PATH_RE =
   /^(?:\/(?:bin|boot|dev|etc|lib|opt|proc|root|sbin|sys|usr)\b|\/var\/(?!log\b))/i;
+const EMPTY_OPTION_VALUE_FLAGS = new Set<string>();
+const GREP_OPTION_VALUE_FLAGS = new Set([
+  "-A",
+  "-B",
+  "-C",
+  "-e",
+  "-f",
+  "-m",
+  "--after-context",
+  "--before-context",
+  "--context",
+  "--file",
+  "--max-count",
+  "--regexp",
+]);
+const HEAD_TAIL_OPTION_VALUE_FLAGS = new Set(["-c", "-n", "--bytes", "--lines"]);
+const SED_OPTION_VALUE_FLAGS = new Set(["-e", "-f", "--expression", "--file"]);
 
 function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): string[] {
   const command = extractApprovalCommand(payload);
@@ -1200,24 +1217,7 @@ function getCommandTargetArgs(command: string, args: readonly string[]): string[
     return [];
   }
 
-  const optionValueFlags = new Set([
-    "-A",
-    "-B",
-    "-C",
-    "-c",
-    "-e",
-    "-f",
-    "-m",
-    "-n",
-    "--after-context",
-    "--before-context",
-    "--bytes",
-    "--context",
-    "--file",
-    "--lines",
-    "--max-count",
-    "--regexp",
-  ]);
+  const optionValueFlags = getCommandOptionValueFlags(command);
   const targets: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
@@ -1225,7 +1225,18 @@ function getCommandTargetArgs(command: string, args: readonly string[]): string[
       continue;
     }
     if (arg.startsWith("-")) {
+      const inlineValue = getInlineOptionValue(arg, optionValueFlags);
+      if (inlineValue) {
+        if (isSensitivePath(inlineValue) || isSystemPath(inlineValue)) {
+          targets.push(inlineValue);
+        }
+        continue;
+      }
       if (optionValueFlags.has(arg) && args[index + 1]) {
+        const value = args[index + 1] ?? "";
+        if (isSensitivePath(value) || isSystemPath(value)) {
+          targets.push(value);
+        }
         index += 1;
       }
       continue;
@@ -1236,6 +1247,31 @@ function getCommandTargetArgs(command: string, args: readonly string[]): string[
     targets.push(arg);
   }
   return targets;
+}
+
+function getCommandOptionValueFlags(command: string): ReadonlySet<string> {
+  if (command === "grep" || command === "rg") {
+    return GREP_OPTION_VALUE_FLAGS;
+  }
+  if (command === "head" || command === "tail") {
+    return HEAD_TAIL_OPTION_VALUE_FLAGS;
+  }
+  if (command === "sed") {
+    return SED_OPTION_VALUE_FLAGS;
+  }
+  return EMPTY_OPTION_VALUE_FLAGS;
+}
+
+function getInlineOptionValue(arg: string, optionValueFlags: ReadonlySet<string>): string | null {
+  const separatorIndex = arg.indexOf("=");
+  if (separatorIndex < 1) {
+    return null;
+  }
+  const option = arg.slice(0, separatorIndex);
+  if (!optionValueFlags.has(option)) {
+    return null;
+  }
+  return arg.slice(separatorIndex + 1);
 }
 
 function formatReadFileAction(command: string, args: readonly string[]): string {

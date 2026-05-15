@@ -193,6 +193,19 @@ describe("msteams graph helpers", () => {
       }),
       "Graph /teams/team-1/channels failed (403): forbidden",
     );
+
+    mockTextFetchResponse("{ nope", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expectRejectsToThrow(
+      fetchGraphJson({
+        token: graphToken,
+        path: "/teams/team-1/channels",
+      }),
+      "Graph /teams/team-1/channels failed: malformed JSON response",
+    );
   });
 
   it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
