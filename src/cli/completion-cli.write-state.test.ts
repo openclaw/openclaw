@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stderrWrites = vi.hoisted(() => vi.fn());
+const stdoutWrites = vi.hoisted(() => vi.fn());
 const getCoreCliCommandNamesMock = vi.hoisted(() => vi.fn(() => []));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
@@ -47,9 +48,11 @@ describe("completion-cli write-state", () => {
   const originalHome = process.env.HOME;
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let restoreStderrWriteSpy: (() => void) | null = null;
+  let restoreStdoutWriteSpy: (() => void) | null = null;
 
   beforeEach(() => {
     stderrWrites.mockReset();
+    stdoutWrites.mockReset();
     getCoreCliCommandNamesMock.mockClear();
     registerCoreCliByNameMock.mockClear();
     getProgramContextMock.mockClear();
@@ -63,10 +66,18 @@ describe("completion-cli write-state", () => {
       return true;
     }) as typeof process.stderr.write);
     restoreStderrWriteSpy = () => stderrWriteSpy.mockRestore();
+    const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      stdoutWrites(chunk.toString());
+      return true;
+    }) as typeof process.stdout.write);
+    restoreStdoutWriteSpy = () => stdoutWriteSpy.mockRestore();
   });
 
   afterEach(async () => {
     restoreStderrWriteSpy?.();
+    restoreStdoutWriteSpy?.();
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
@@ -103,7 +114,7 @@ describe("completion-cli write-state", () => {
     expect(registerSubCliByNameMock.mock.calls).toEqual([
       [program, "qa", process.argv, { purpose: "completion" }],
     ]);
-    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(stderrWrites.mock.calls).toEqual([
       [
         "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.md\n",
@@ -112,6 +123,21 @@ describe("completion-cli write-state", () => {
 
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.rm(homeDir, { recursive: true, force: true });
+  });
+
+  it("keeps plugin command registration for direct completion output", async () => {
+    const { registerCompletionCli } = await import("./completion-cli.js");
+    const program = new Command();
+    program.name("openclaw");
+    registerCompletionCli(program);
+
+    await program.parseAsync(["completion", "--shell", "zsh"], { from: "user" });
+
+    expect(registerSubCliByNameMock.mock.calls).toEqual([
+      [program, "qa", process.argv, { purpose: "completion" }],
+    ]);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
+    expect(stdoutWrites.mock.calls.join("")).toContain("#compdef openclaw");
   });
 
   it("can skip plugin command registration for update-triggered cache writes", async () => {
