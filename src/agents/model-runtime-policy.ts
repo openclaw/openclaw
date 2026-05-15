@@ -111,22 +111,19 @@ function findRuntimePolicyInModelMap(
   params: {
     provider?: string;
     modelId: string;
+    matchKind: "exact" | "provider-wildcard";
   },
 ): AgentRuntimePolicyConfig | undefined {
-  let wildcardPolicy: AgentRuntimePolicyConfig | undefined;
   for (const [key, entry] of Object.entries(models ?? {})) {
     if (!hasRuntimePolicy(entry?.agentRuntime)) {
       continue;
     }
     const match = modelKeyMatchKind({ key, provider: params.provider, modelId: params.modelId });
-    if (match === "exact") {
+    if (match === params.matchKind) {
       return entry.agentRuntime;
     }
-    if (match === "provider-wildcard" && !wildcardPolicy) {
-      wildcardPolicy = entry.agentRuntime;
-    }
   }
-  return wildcardPolicy;
+  return undefined;
 }
 
 function resolveAgentModelEntryRuntimePolicy(params: {
@@ -135,6 +132,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   modelId?: string;
   agentId?: string;
   sessionKey?: string;
+  matchKind: "exact" | "provider-wildcard";
 }): ResolvedModelRuntimePolicy {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
   if (!params.config || !modelId) {
@@ -156,6 +154,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     const policy = findRuntimePolicyInModelMap(models, {
       provider: params.provider,
       modelId,
+      matchKind: params.matchKind,
     });
     if (policy) {
       return { policy, source: "model" };
@@ -185,9 +184,12 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
-  const agentModelPolicy = resolveAgentModelEntryRuntimePolicy(params);
-  if (agentModelPolicy.policy) {
-    return agentModelPolicy;
+  const exactAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
+    ...params,
+    matchKind: "exact",
+  });
+  if (exactAgentModelPolicy.policy) {
+    return exactAgentModelPolicy;
   }
   const providerConfig = resolveProviderConfig(params.config, params.provider);
   const modelConfig = resolveModelConfig({
@@ -197,6 +199,13 @@ export function resolveModelRuntimePolicy(params: {
   });
   if (hasRuntimePolicy(modelConfig?.agentRuntime)) {
     return { policy: modelConfig?.agentRuntime, source: "model" };
+  }
+  const wildcardAgentModelPolicy = resolveAgentModelEntryRuntimePolicy({
+    ...params,
+    matchKind: "provider-wildcard",
+  });
+  if (wildcardAgentModelPolicy.policy) {
+    return wildcardAgentModelPolicy;
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
     return { policy: providerConfig?.agentRuntime, source: "provider" };
