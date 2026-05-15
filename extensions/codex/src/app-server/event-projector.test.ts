@@ -1723,6 +1723,45 @@ describe("CodexAppServerEventProjector", () => {
     );
   });
 
+  it("uses gateway.webchat.toolTranscriptMaxChars for tool transcript snapshots", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        gateway: {
+          webchat: {
+            toolTranscriptMaxChars: 5,
+          },
+        },
+      },
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-tool-transcript-cap",
+          command: "echo hi",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "abcdefghij",
+          exitCode: 0,
+          durationMs: 1,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireRecord(
+      requireArray(toolResultMessage.content, "tool result content")[0],
+      "tool result content item",
+    );
+    expect(toolResultContent.content).toBe(`abcde\n...(truncated)...`);
+  });
+
   it("continues projecting turn completion when an event consumer throws", async () => {
     const onAgentEvent = vi.fn(() => {
       throw new Error("consumer failed");

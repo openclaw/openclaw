@@ -906,6 +906,7 @@ export const OpenClawSchema = z
         webchat: z
           .object({
             chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
+            toolTranscriptMaxChars: z.number().int().positive().max(500_000).optional(),
           })
           .strict()
           .optional(),

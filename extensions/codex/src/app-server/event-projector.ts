@@ -92,6 +92,13 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
 
+function resolveEffectiveToolTranscriptMaxChars(config?: EmbeddedRunAttemptParams["config"]): number {
+  if (typeof config?.gateway?.webchat?.toolTranscriptMaxChars === "number") {
+    return config.gateway.webchat.toolTranscriptMaxChars;
+  }
+  return TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS;
+}
+
 type ToolTranscriptCallInput = {
   id: string;
   name: string;
@@ -1244,7 +1251,10 @@ export class CodexAppServerEventProjector {
   }
 
   private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
-    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+    const text = truncateToolTranscriptText(
+      params.text?.trim() || toolResultStatusText(params),
+      this.params.config,
+    );
     return {
       role: "toolResult",
       toolCallId: params.id,
@@ -1689,11 +1699,15 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
     .join("\n");
 }
 
-function truncateToolTranscriptText(text: string): string {
-  if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+function truncateToolTranscriptText(
+  text: string,
+  config?: EmbeddedRunAttemptParams["config"],
+): string {
+  const maxChars = resolveEffectiveToolTranscriptMaxChars(config);
+  if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+  return `${text.slice(0, maxChars)}\n...(truncated)...`;
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {
