@@ -69,10 +69,25 @@ function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
  * Apply query instruction template for models that require it (e.g. Qwen3-Embedding).
  * Returns the original query if no matching template is found.
  */
-function applyQueryInstructionTemplate(model: string, queryText: string): string {
+function normalizeTemplateMatchModel(model: string): string {
   const normalizedModel = model.trim().toLowerCase();
+  const segments = normalizedModel.split("/").filter(Boolean);
+  return segments.at(-1) ?? normalizedModel;
+}
+
+function matchesTemplateModelAlias(model: string, prefix: string): boolean {
+  return (
+    model === prefix ||
+    model.startsWith(`${prefix}-`) ||
+    model.startsWith(`${prefix}:`) ||
+    model.includes(`-${prefix}`)
+  );
+}
+
+function applyQueryInstructionTemplate(model: string, queryText: string): string {
+  const normalizedModel = normalizeTemplateMatchModel(model);
   const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
-    normalizedModel.startsWith(prefix),
+    matchesTemplateModelAlias(normalizedModel, prefix),
   );
   return match ? match.template.replace("{query}", () => queryText) : queryText;
 }
