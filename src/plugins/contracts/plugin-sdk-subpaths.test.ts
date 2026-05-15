@@ -46,10 +46,9 @@ import type {
 } from "../../plugin-sdk/channel-plugin-common.js";
 import * as channelReplyPipelineDirectSdk from "../../plugin-sdk/channel-reply-pipeline.js";
 import * as coreDirectSdk from "../../plugin-sdk/core.js";
-import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
+import { publicPluginSdkSubpaths as pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
 import * as globalSingletonDirectSdk from "../../plugin-sdk/global-singleton.js";
 import * as providerEntryDirectSdk from "../../plugin-sdk/provider-entry.js";
-import * as textRuntimeDirectSdk from "../../plugin-sdk/text-runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -395,13 +394,13 @@ function sourceMentionsIdentifier(source: string, name: string): boolean {
 function expectSourceMentions(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
   const missing = names.filter((name) => !sourceMentionsIdentifier(source, name));
-  expect(missing, `${subpath} missing exports`).toEqual([]);
+  expect(missing, `${subpath} missing exports`).toStrictEqual([]);
 }
 
 function expectSourceOmits(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
   const present = names.filter((name) => sourceMentionsIdentifier(source, name));
-  expect(present, `${subpath} leaked exports`).toEqual([]);
+  expect(present, `${subpath} leaked exports`).toStrictEqual([]);
 }
 
 function expectSourceContract(
@@ -411,8 +410,8 @@ function expectSourceContract(
   const source = readPluginSdkSource(subpath);
   const missing = (params.mentions ?? []).filter((name) => !sourceMentionsIdentifier(source, name));
   const present = (params.omits ?? []).filter((name) => sourceMentionsIdentifier(source, name));
-  expect(missing, `${subpath} missing exports`).toEqual([]);
-  expect(present, `${subpath} leaked exports`).toEqual([]);
+  expect(missing, `${subpath} missing exports`).toStrictEqual([]);
+  expect(present, `${subpath} leaked exports`).toStrictEqual([]);
 }
 
 function expectSourceContains(subpath: string, snippet: string) {
@@ -421,6 +420,10 @@ function expectSourceContains(subpath: string, snippet: string) {
 
 function expectSourceOmitsSnippet(subpath: string, snippet: string) {
   expect(readPluginSdkSource(subpath)).not.toContain(snippet);
+}
+
+function expectRepoSourceOmitsSnippet(relativePath: string, snippet: string) {
+  expect(readRepoSource(relativePath)).not.toContain(snippet);
 }
 
 function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
@@ -471,7 +474,7 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
     const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
-    expect(banned).toEqual([]);
+    expect(banned).toStrictEqual([]);
   });
 
   it("keeps generated bundled-channel facades out of the public sdk list", () => {
@@ -485,7 +488,7 @@ describe("plugin-sdk subpath exports", () => {
           isGeneratedBundledFacadeSubpath(subpath),
       ),
     );
-    expect(banned).toEqual([]);
+    expect(banned).toStrictEqual([]);
   });
 
   it("keeps browser compatibility helper subpaths as thin facades", () => {
@@ -544,13 +547,17 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
+      "buildInboundHistoryFromEntries",
+      "buildInboundHistoryFromMap",
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "recordPendingHistoryEntryIfEnabled",
     ]);
     expectSourceMentions("mattermost", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "formatPairingApproveHint",
       "recordPendingHistoryEntryIfEnabled",
       "resolveControlCommandGate",
@@ -781,7 +788,7 @@ describe("plugin-sdk subpath exports", () => {
       )
       .toSorted();
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
@@ -799,7 +806,7 @@ describe("plugin-sdk subpath exports", () => {
         "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps deprecated comparable channel target helpers behind compatibility shims", () => {
@@ -820,7 +827,7 @@ describe("plugin-sdk subpath exports", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
       ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps deprecated channel route key aliases behind compatibility shims", () => {
@@ -839,7 +846,7 @@ describe("plugin-sdk subpath exports", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
       ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps removed channel-named runtime boundaries out of core imports", () => {
@@ -853,7 +860,7 @@ describe("plugin-sdk subpath exports", () => {
       ],
       excludeFilesMatching: [/\.test\.ts$/u, /\.test-harness\.ts$/u],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {
@@ -1200,9 +1207,9 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsSnippet("google-model-id", "./google.js");
     expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
     expectSourceOmitsSnippet("google-model-id", "../../extensions/");
-    expectSourceOmitsSnippet("xai-model-id", "./xai.js");
-    expectSourceOmitsSnippet("xai-model-id", "./facade-runtime.js");
-    expectSourceOmitsSnippet("xai-model-id", "../../extensions/");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [
@@ -1285,7 +1292,6 @@ describe("plugin-sdk subpath exports", () => {
     const globalSingletonSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/global-singleton",
     );
-    const textRuntimeSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime");
     const pluginEntrySdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry");
     const channelLifecycleSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/channel-lifecycle",
@@ -1312,11 +1318,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(globalSingletonSdk.createScopedExpiringIdCache).toBe(
       globalSingletonDirectSdk.createScopedExpiringIdCache,
     );
-    expect(textRuntimeSdk.createScopedExpiringIdCache).toBe(
-      textRuntimeDirectSdk.createScopedExpiringIdCache,
-    );
-    expect(textRuntimeSdk.resolveGlobalMap).toBe(textRuntimeDirectSdk.resolveGlobalMap);
-    expect(textRuntimeSdk.resolveGlobalSingleton).toBe(textRuntimeDirectSdk.resolveGlobalSingleton);
     expectSourceMentions("delivery-queue-runtime", ["drainPendingDeliveries"]);
     expectSourceContains("delivery-queue-runtime", "../infra/outbound/deliver-runtime.js");
     expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);

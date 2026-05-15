@@ -196,6 +196,11 @@ plugin-specific prefix. Core admin namespaces (`config.*`,
 `exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
 `operator.admin`, even if a plugin asks for a narrower scope.
 
+`openclaw/plugin-sdk/gateway-method-runtime` is a reserved control-plane bridge
+for plugin HTTP routes that declare
+`contracts.gatewayMethodDispatch: ["authenticated-request"]`. It is an
+intentional-use guard for reviewed native plugins, not a sandbox boundary.
+
 Hook guard semantics to keep in mind:
 
 - `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
@@ -247,6 +252,14 @@ register(api) {
   );
 }
 ```
+
+Tool factories receive a runtime-supplied context object. Use
+`ctx.activeModel` when a tool needs to log, display, or adapt to the active
+model for the current turn. The object can include `provider`, `modelId`, and
+`modelRef`. Treat it as informational runtime metadata, not as a security
+boundary against the local operator, installed plugin code, or a modified
+OpenClaw runtime. For sensitive local tools, keep an explicit plugin or operator
+opt-in and fail closed when the active model metadata is missing or unsuitable.
 
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:

@@ -192,7 +192,7 @@ describe("registerSubCliCommands", () => {
     await registerSubCliByName(program, "acp");
 
     const names = program.commands.map((cmd) => cmd.name());
-    expect(names.filter((name) => name === "acp")).toHaveLength(1);
+    expect(names.reduce((count, name) => count + (name === "acp" ? 1 : 0), 0)).toBe(1);
 
     await program.parseAsync(["acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
@@ -253,13 +253,13 @@ describe("registerSubCliCommands", () => {
     expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
   });
 
-  it("keeps plugin CLI registrations available for the plugins command root", async () => {
+  it("does not preload plugin CLI registrations for bare plugin parent help", async () => {
     process.argv = ["node", "openclaw", "plugins"];
     const program = new Command().name("openclaw");
 
     await registerSubCliByName(program, "plugins");
 
     expect(registerPluginsCli).toHaveBeenCalledTimes(1);
-    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
   });
 });

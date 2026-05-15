@@ -16,6 +16,16 @@ function descriptor(name: string, overrides: Partial<ToolDescriptor> = {}): Tool
   };
 }
 
+type ToolPlan = ReturnType<typeof buildToolPlan>;
+
+function expectHiddenTool(plan: ToolPlan, index: number): ToolPlan["hidden"][number] {
+  const entry = plan.hidden[index];
+  if (!entry) {
+    throw new Error(`Expected hidden tool at index ${index}`);
+  }
+  return entry;
+}
+
 describe("buildToolPlan", () => {
   it("sorts visible and hidden tools deterministically", () => {
     const plan = buildToolPlan({
@@ -32,7 +42,9 @@ describe("buildToolPlan", () => {
 
     expect(plan.visible.map((entry) => entry.descriptor.name)).toEqual(["alpha", "zeta"]);
     expect(plan.hidden.map((entry) => entry.descriptor.name)).toEqual(["hidden"]);
-    expect(plan.hidden[0]?.diagnostics.map((entry) => entry.reason)).toEqual(["env-missing"]);
+    expect(expectHiddenTool(plan, 0).diagnostics.map((entry) => entry.reason)).toEqual([
+      "env-missing",
+    ]);
   });
 
   it("fails deterministically on duplicate tool names", () => {
@@ -46,10 +58,9 @@ describe("buildToolPlan", () => {
     }
 
     expect(error).toBeInstanceOf(ToolPlanContractError);
-    expect(error).toMatchObject({
-      code: "duplicate-tool-name",
-      toolName: "read",
-    });
+    const contractError = error as ToolPlanContractError;
+    expect(contractError.code).toBe("duplicate-tool-name");
+    expect(contractError.toolName).toBe("read");
   });
 
   it("fails closed when a visible descriptor has no executor", () => {
@@ -63,10 +74,9 @@ describe("buildToolPlan", () => {
     }
 
     expect(error).toBeInstanceOf(ToolPlanContractError);
-    expect(error).toMatchObject({
-      code: "missing-executor",
-      toolName: "read",
-    });
+    const contractError = error as ToolPlanContractError;
+    expect(contractError.code).toBe("missing-executor");
+    expect(contractError.toolName).toBe("read");
   });
 
   it("does not require an executor for unavailable descriptors", () => {
@@ -80,9 +90,10 @@ describe("buildToolPlan", () => {
       availability: { enabledPluginIds: new Set() },
     });
 
-    expect(plan.visible).toEqual([]);
-    expect(plan.hidden[0]?.descriptor.name).toBe("plugin_tool");
-    expect(plan.hidden[0]?.diagnostics[0]?.reason).toBe("plugin-disabled");
+    expect(plan.visible).toStrictEqual([]);
+    const hiddenTool = expectHiddenTool(plan, 0);
+    expect(hiddenTool.descriptor.name).toBe("plugin_tool");
+    expect(hiddenTool.diagnostics.map((entry) => entry.reason)).toEqual(["plugin-disabled"]);
   });
 
   it("hides descriptors with malformed empty allOf availability", () => {
@@ -90,9 +101,10 @@ describe("buildToolPlan", () => {
       descriptors: [descriptor("malformed", { availability: { allOf: [] } })],
     });
 
-    expect(plan.visible).toEqual([]);
-    expect(plan.hidden[0]?.descriptor.name).toBe("malformed");
-    expect(plan.hidden[0]?.diagnostics).toEqual([
+    expect(plan.visible).toStrictEqual([]);
+    const hiddenTool = expectHiddenTool(plan, 0);
+    expect(hiddenTool.descriptor.name).toBe("malformed");
+    expect(hiddenTool.diagnostics).toEqual([
       {
         reason: "unsupported-signal",
         message: "Empty availability allOf group",

@@ -1,11 +1,13 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createOpenAIAttributionHeadersWrapper,
+  createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIThinkingLevelWrapper,
+  createCodexNativeWebSearchWrapper,
 } from "./openai-stream-wrappers.js";
 
 function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
@@ -92,6 +94,145 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
     );
 
     expect(payloads[0]).toHaveProperty("tools");
+  });
+});
+
+describe("createCodexNativeWebSearchWrapper", () => {
+  it("does not inject native web_search when code mode owns the tool surface", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [
+          { type: "function", name: "exec" },
+          { type: "function", name: "wait" },
+          { type: "function", name: "web_search" },
+          { type: "web_search" },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      config: {
+        tools: {
+          codeMode: { enabled: true },
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-codex-responses">,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: (payload) => {
+          const payloadObj = payload as { tools?: unknown } | undefined;
+          if (payloadObj && Array.isArray(payloadObj.tools)) {
+            payloadObj.tools.push({ type: "function", name: "web_search" });
+          }
+        },
+      },
+    );
+
+    expect(payloads[0]?.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+    ]);
+  });
+
+  it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {
+    const observedOptions: Array<Record<string, unknown>> = [];
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      observedOptions.push(options as Record<string, unknown>);
+      const payload: Record<string, unknown> = { model: model.id };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      config: {
+        tools: {
+          codeMode: { enabled: true },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-codex-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(observedOptions[0]?.openclawCodeModeToolSurface).toBeUndefined();
+    expect(payloads[0]).toEqual({ model: "gpt-5.5" });
+  });
+});
+
+describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
+  it("strips message keys to role and content for strict OpenAI-compatible endpoints", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        messages: [
+          {
+            role: "assistant",
+            content: "calling tool",
+            name: "agent",
+            tool_calls: [{ id: "call_1", type: "function", function: { name: "noop" } }],
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            role: "tool",
+            content: "tool result",
+            tool_call_id: "call_1",
+          },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenAICompletionsStrictMessageKeysWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "infomaniak",
+        id: "mistral3",
+        baseUrl: "https://api.infomaniak.com/1/ai/example/openai",
+        compat: { strictMessageKeys: true },
+      } as unknown as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.messages).toEqual([
+      { role: "assistant", content: "calling tool" },
+      { role: "tool", content: "tool result" },
+    ]);
   });
 });
 
@@ -300,10 +441,8 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
     );
 
     expect(codexCalls).toBe(1);
-    expect(capturedHeaders).toMatchObject({
-      originator: "openclaw",
-      "User-Agent": expect.stringMatching(/^openclaw\//),
-    });
+    expect(capturedHeaders?.originator).toBe("openclaw");
+    expect(capturedHeaders?.["User-Agent"]).toMatch(/^openclaw\//);
   });
 
   it("keeps existing wrapped Codex streams so runtime OAuth injection is preserved", () => {
@@ -345,12 +484,8 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
 
     expect(upstreamCalls).toBe(1);
     expect(codexCalls).toBe(0);
-    expect(capturedOptions).toMatchObject({
-      apiKey: "oauth-bearer-token",
-      headers: {
-        originator: "openclaw",
-        "User-Agent": expect.stringMatching(/^openclaw\//),
-      },
-    });
+    expect(capturedOptions?.apiKey).toBe("oauth-bearer-token");
+    expect(capturedOptions?.headers?.originator).toBe("openclaw");
+    expect(capturedOptions?.headers?.["User-Agent"]).toMatch(/^openclaw\//);
   });
 });

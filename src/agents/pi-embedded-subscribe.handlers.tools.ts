@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -341,16 +341,35 @@ function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): 
 function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushUniqueMediaUrl(urls, seen, attachment.media);
+    pushUniqueMediaUrl(urls, seen, attachment.mediaUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.path);
+    pushUniqueMediaUrl(urls, seen, attachment.filePath);
+    pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.url);
+  };
 
   pushUniqueMediaUrl(urls, seen, record.media);
   pushUniqueMediaUrl(urls, seen, record.mediaUrl);
   pushUniqueMediaUrl(urls, seen, record.path);
   pushUniqueMediaUrl(urls, seen, record.filePath);
+  pushUniqueMediaUrl(urls, seen, record.fileUrl);
 
   const mediaUrls = record.mediaUrls;
   if (Array.isArray(mediaUrls)) {
     for (const mediaUrl of mediaUrls) {
       pushUniqueMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  const attachments = record.attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      pushAttachment(attachment);
     }
   }
 
@@ -658,6 +677,13 @@ export function handleToolExecutionStart(
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    ctx.state.toolExecutionSinceLastBlockReply = true;
+    ctx.params.onExecutionPhase?.({
+      phase: "tool_execution_started",
+      tool: toolName,
+      toolCallId,
+      source: "pi-embedded",
+    });
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();

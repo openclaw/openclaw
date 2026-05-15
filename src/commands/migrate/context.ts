@@ -1,6 +1,7 @@
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -31,12 +32,14 @@ export function buildMigrationContext(params: {
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  providerOptions?: Record<string, unknown>;
   backupPath?: string;
+  configOverride?: OpenClawConfig;
   runtime: RuntimeEnv;
   reportDir?: string;
   json?: boolean;
 }): MigrationProviderContext {
-  const config = getRuntimeConfig();
+  const config = params.configOverride ?? getRuntimeConfig();
   const stateDir = resolveStateDir();
   return {
     config,
@@ -44,6 +47,7 @@ export function buildMigrationContext(params: {
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),
     overwrite: Boolean(params.overwrite),
+    providerOptions: params.providerOptions,
     backupPath: params.backupPath,
     reportDir: params.reportDir,
     logger: createMigrationLogger(params.runtime, { json: params.json }),

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
@@ -172,10 +172,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       ],
     });
 
-    expect(result).toMatchObject({
-      changed: true,
-      rewrittenEntries: 1,
-    });
+    expect(result.changed).toBe(true);
+    expect(result.rewrittenEntries).toBe(1);
     expect(result.bytesFreed).toBeGreaterThan(0);
 
     const branchMessages = getBranchMessages(sessionManager);
@@ -287,10 +285,11 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "[exact replacement]" },
     ]);
-    expect(branchMessages[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "summarized" }],
-    });
+    const replayedAssistant = branchMessages[2];
+    if (!replayedAssistant || replayedAssistant.role !== "assistant") {
+      throw new Error("expected rewritten suffix to replay the assistant summary");
+    }
+    expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
   });
 });
 

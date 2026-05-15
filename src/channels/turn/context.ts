@@ -1,9 +1,16 @@
+import {
+  commandTurnKindToSource,
+  createCommandTurnContext,
+  type CommandTurnContext,
+} from "../../auto-reply/command-turn-context.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
+import { buildChannelTurnMediaPayload } from "./media.js";
 import type {
   AccessFacts,
+  CommandFacts,
   ConversationFacts,
   InboundMediaFacts,
   MessageFacts,
@@ -28,31 +35,26 @@ export type BuildChannelTurnContextParams = {
   reply: ReplyPlanFacts;
   message: MessageFacts;
   access?: AccessFacts;
+  command?: CommandFacts;
+  commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
   contextVisibility?: ContextVisibilityMode;
   extra?: Record<string, unknown>;
 };
 
-function compactStrings(values: Array<string | undefined>): string[] | undefined {
-  const compacted = values.filter((value): value is string => Boolean(value));
-  return compacted.length > 0 ? compacted : undefined;
-}
-
-function mediaTranscribedIndexes(media: InboundMediaFacts[]): number[] | undefined {
-  const indexes = media
-    .map((item, index) => (item.transcribed ? index : undefined))
-    .filter((index): index is number => index !== undefined);
-  return indexes.length > 0 ? indexes : undefined;
-}
-
-function commandAuthorized(access: AccessFacts | undefined): boolean | undefined {
-  const commands = access?.commands;
-  if (!commands) {
-    return undefined;
-  }
-  return commands.authorizers.some((entry) => entry.allowed);
-}
+export type BuiltChannelTurnContext = FinalizedMsgContext & {
+  Body: string;
+  BodyForAgent: string;
+  BodyForCommands: string;
+  ChatType: ConversationFacts["kind"];
+  CommandAuthorized: boolean;
+  CommandBody: string;
+  From: string;
+  RawBody: string;
+  SessionKey: string;
+  To: string;
+};
 
 function keepSupplementalContext(params: {
   mode?: ContextVisibilityMode;
@@ -110,15 +112,53 @@ export function filterChannelTurnSupplementalContext(params: {
   };
 }
 
+function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): boolean | undefined {
+  const commands = access?.commands;
+  return typeof commands?.authorized === "boolean"
+    ? commands.authorized
+    : commands?.authorizers?.some((entry) => entry.allowed);
+}
+
+function resolveChannelTurnCommandContext(params: {
+  command?: CommandFacts;
+  commandTurn?: CommandTurnContext;
+  message: MessageFacts;
+  access?: AccessFacts;
+}): CommandTurnContext | undefined {
+  if (params.commandTurn) {
+    return params.commandTurn;
+  }
+  const command = params.command;
+  if (!command) {
+    return undefined;
+  }
+  const body = command.body ?? params.message.commandBody ?? params.message.rawBody;
+  return createCommandTurnContext(commandTurnKindToSource(command.kind), {
+    authorized:
+      command.kind === "normal"
+        ? false
+        : (command.authorized ?? resolveAccessFactsCommandAuthorized(params.access) === true),
+    commandName: command.name,
+    body,
+  });
+}
+
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
-): FinalizedMsgContext {
+): BuiltChannelTurnContext {
   const media = params.media ?? [];
+  const mediaPayload = buildChannelTurnMediaPayload(media);
   const supplemental = filterChannelTurnSupplementalContext({
     supplemental: params.supplemental,
     contextVisibility: params.contextVisibility,
   });
   const body = params.message.body ?? params.message.rawBody;
+  const commandTurn = resolveChannelTurnCommandContext({
+    command: params.command,
+    commandTurn: params.commandTurn,
+    message: params.message,
+    access: params.access,
+  });
 
   return finalizeInboundContext({
     Body: body,
@@ -147,24 +187,13 @@ export function buildChannelTurnContext(
     ThreadStarterBody: supplemental?.thread?.starterBody,
     ThreadHistoryBody: supplemental?.thread?.historyBody,
     ThreadLabel: supplemental?.thread?.label,
-    MediaPath: media[0]?.path,
-    MediaUrl: media[0]?.url ?? media[0]?.path,
-    MediaType: media[0]?.contentType ?? media[0]?.kind,
-    MediaPaths: compactStrings(media.map((item) => item.path)),
-    MediaUrls: compactStrings(media.map((item) => item.url ?? item.path)),
-    MediaTypes: compactStrings(media.map((item) => item.contentType ?? item.kind)),
-    MediaTranscribedIndexes: mediaTranscribedIndexes(media),
+    ...mediaPayload,
     ChatType: params.conversation.kind,
     ConversationLabel: params.conversation.label,
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
     GroupSystemPrompt: supplemental?.groupSystemPrompt,
-    UntrustedStructuredContext: Array.isArray(supplemental?.untrustedContext)
-      ? supplemental.untrustedContext.map((payload, index) => ({
-          label: `context ${index + 1}`,
-          payload,
-        }))
-      : undefined,
+    UntrustedStructuredContext: supplemental?.untrustedContext,
     SenderName: params.sender.name ?? params.sender.displayLabel,
     SenderId: params.sender.id,
     SenderUsername: params.sender.username,
@@ -174,7 +203,8 @@ export function buildChannelTurnContext(
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
-    CommandAuthorized: commandAuthorized(params.access),
+    CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
+    CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     OriginatingChannel: params.channel,

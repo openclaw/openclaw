@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
+import {
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
 } from "./main-session-restart-recovery.js";
@@ -59,6 +63,18 @@ function cleanedLockForPath(lockPath: string): SessionLockInspection {
 
 function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspection {
   return cleanedLockForPath(path.join(sessionsDir, `${sessionId}.jsonl.lock`));
+}
+
+function firstGatewayParams(): Record<string, unknown> {
+  const call = vi.mocked(callGateway).mock.calls[0];
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const params = call[0].params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected gateway params");
+  }
+  return params as Record<string, unknown>;
 }
 
 describe("main-session-restart-recovery", () => {
@@ -235,11 +251,10 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0].params).toMatchObject({
-      sessionKey: "agent:main:main",
-      deliver: false,
-      lane: "main",
-    });
+    const resumeParams = firstGatewayParams();
+    expect(resumeParams.sessionKey).toBe("agent:main:main");
+    expect(resumeParams.deliver).toBe(false);
+    expect(resumeParams.lane).toBe("main");
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
@@ -302,23 +317,62 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const callParams = vi.mocked(callGateway).mock.calls[0]?.[0].params as { message?: string };
-    expect(callParams.message).toContain(pendingPayload);
+    expect(firstGatewayParams().message).toContain(pendingPayload);
 
+    const beforeStoreRead = Date.now();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     const entry = store["agent:main:main"];
-    expect(entry).toMatchObject({
-      abortedLastRun: false,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: pendingPayload,
-      pendingFinalDeliveryAttemptCount: 1,
-      pendingFinalDeliveryLastError: null,
-    });
-    expect(entry?.pendingFinalDeliveryCreatedAt).toEqual(expect.any(Number));
-    expect(entry?.pendingFinalDeliveryLastAttemptAt).toEqual(expect.any(Number));
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.pendingFinalDelivery).toBe(true);
+    expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
+    expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
+    expect(entry?.pendingFinalDeliveryLastError).toBeNull();
+    expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
     expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
       entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const pendingPayload = [
+      "The final answer is 42.",
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "internal recovery detail",
+      INTERNAL_RUNTIME_CONTEXT_END,
+      "",
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+    ].join("\n");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingPayload,
+        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "calculate the answer" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
+      { role: "toolResult", content: "42" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams().message).toContain("The final answer is 42.");
+    expect(firstGatewayParams().message).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(firstGatewayParams().message).not.toContain("Conversation info");
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe("The final answer is 42.");
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {

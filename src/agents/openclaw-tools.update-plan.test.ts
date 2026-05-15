@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { isUpdatePlanToolEnabledForOpenClawTools } from "./openclaw-tools.registration.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -13,6 +14,17 @@ function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boole
 
 function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
   return tools.map((tool) => tool.name);
+}
+
+function expectToolNamed(
+  tools: ReturnType<typeof createOpenClawTools>,
+  name: string,
+): ReturnType<typeof createOpenClawTools>[number] {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new Error(`Expected tool ${name} to be registered`);
+  }
+  return tool;
 }
 
 function openAiGpt5Params(
@@ -33,6 +45,10 @@ function openAiGpt5Params(
 }
 
 describe("openclaw-tools update_plan gating", () => {
+  afterEach(() => {
+    setEmbeddedMode(false);
+  });
+
   it("keeps update_plan disabled by default", () => {
     expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, false);
   });
@@ -67,14 +83,21 @@ describe("openclaw-tools update_plan gating", () => {
       wrapBeforeToolCallHook: false,
     });
 
+    expect(isToolWrappedWithBeforeToolCallHook(expectToolNamed(tools, "sessions_list"))).toBe(true);
     expect(
-      isToolWrappedWithBeforeToolCallHook(tools.find((tool) => tool.name === "sessions_list")!),
-    ).toBe(true);
-    expect(
-      isToolWrappedWithBeforeToolCallHook(
-        unwrappedTools.find((tool) => tool.name === "sessions_list")!,
-      ),
+      isToolWrappedWithBeforeToolCallHook(expectToolNamed(unwrappedTools, "sessions_list")),
     ).toBe(false);
+  });
+
+  it("keeps message tool in embedded message-tool-only completions", () => {
+    setEmbeddedMode(true);
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(toolNames(tools)).toContain("message");
   });
 
   it("registers update_plan when explicitly enabled", () => {

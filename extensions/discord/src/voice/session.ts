@@ -25,18 +25,49 @@ export type VoiceOperationResult = {
   guildId?: string;
 };
 
+export type VoiceRealtimeSpeakerContext = {
+  extraSystemPrompt?: string;
+  senderIsOwner: boolean;
+  speakerLabel: string;
+};
+
+export type VoiceRealtimeAgentTurnParams = {
+  context: VoiceRealtimeSpeakerContext;
+  message: string;
+  toolsAllow?: string[];
+  userId: string;
+};
+
+export type VoiceRealtimeSpeakerTurn = {
+  close: () => void;
+  sendInputAudio: (discordPcm48kStereo: Buffer) => void;
+};
+
+export type VoiceRealtimeSession = {
+  beginSpeakerTurn: (
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+  ) => VoiceRealtimeSpeakerTurn;
+  close: () => void;
+  connect: () => Promise<void>;
+  handleBargeIn: (reason?: string) => void;
+  isBargeInEnabled: () => boolean;
+};
+
 export type VoiceSessionEntry = {
   guildId: string;
   guildName?: string;
   channelId: string;
   channelName?: string;
   sessionChannelId: string;
+  voiceSessionKey: string;
   route: ReturnType<typeof resolveAgentRoute>;
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  realtime?: VoiceRealtimeSession;
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: () => void;
 };

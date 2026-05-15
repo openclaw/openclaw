@@ -3,12 +3,9 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
-  ChannelDeliveryStreamingConfig,
-  ChannelPreviewStreamingConfig,
   ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
-  SlackChannelStreamingConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
@@ -152,6 +149,7 @@ export type ChannelProgressDraftLineInput =
     }
   | {
       event: "item";
+      itemId?: string;
       itemKind?: string;
       title?: string;
       name?: string;
@@ -198,6 +196,7 @@ export type ChannelProgressDraftLineInput =
 export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
 export type ChannelProgressDraftLine = {
+  id?: string;
   kind: ChannelProgressDraftLineKind;
   text: string;
   label: string;
@@ -238,7 +237,13 @@ function buildNamedProgressLine(
   });
   const display = resolveToolDisplay({ name: normalizedName });
   const prefix = `${display.emoji} ${display.label}`;
-  const detail = text.startsWith(`${prefix}: `) ? text.slice(prefix.length + 2).trim() : undefined;
+  const compactCommandPrefix =
+    (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
+      ? text.slice(display.emoji.length + 1).trim()
+      : undefined;
+  const detail = text.startsWith(`${prefix}: `)
+    ? text.slice(prefix.length + 2).trim()
+    : compactCommandPrefix;
   return {
     kind,
     text,
@@ -368,6 +373,7 @@ export function buildChannelProgressDraftLine(
       const text = compactStrings([meta, input.title]).at(0);
       return text
         ? {
+            ...(input.itemId ? { id: input.itemId } : {}),
             kind: input.event,
             text,
             label: input.title?.trim() || input.itemKind?.trim() || "Update",
@@ -731,15 +737,32 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     return "…";
   }
 
+  const compactWithPrefix = (prefix: string, detail: string): string | undefined => {
+    const prefixChars = Array.from(prefix).length;
+    const detailLimit = maxChars - prefixChars;
+    if (detailLimit < 8) {
+      return undefined;
+    }
+    return removeUnbalancedInlineBackticks(
+      `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
+    );
+  };
+
   const splitIndex = normalized.indexOf(": ");
   if (splitIndex > 0) {
     const prefix = normalized.slice(0, splitIndex + 2);
-    const prefixChars = Array.from(prefix).length;
-    const detailLimit = maxChars - prefixChars;
-    if (detailLimit >= 8) {
-      return removeUnbalancedInlineBackticks(
-        `${prefix}${compactProgressLineDetail(normalized.slice(splitIndex + 2), detailLimit)}`,
-      );
+    const compact = compactWithPrefix(prefix, normalized.slice(splitIndex + 2));
+    if (compact) {
+      return compact;
+    }
+  }
+
+  const compactCommandPrefixMatch = normalized.match(/^🛠️\s+/u);
+  if (compactCommandPrefixMatch) {
+    const prefix = compactCommandPrefixMatch[0];
+    const compact = compactWithPrefix(prefix, normalized.slice(prefix.length));
+    if (compact) {
+      return compact;
     }
   }
 
@@ -757,7 +780,9 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const label = line.label.trim();
   const detail = line.detail?.trim();
   if (detail) {
-    if (line.kind !== "patch" && label) {
+    const compactCommandLine =
+      line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
+    if (line.kind !== "patch" && label && !compactCommandLine) {
       return `${prefix}${label}: ${detail}`;
     }
     return `${prefix}${detail}`;
@@ -774,6 +799,44 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
     return text;
   }
   return `${prefix}${label}`.trim();
+}
+
+export function normalizeChannelProgressDraftLineIdentity(
+  line: string | ChannelProgressDraftLine | undefined,
+): string {
+  const text = typeof line === "string" ? line : line?.text;
+  return text?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  line: TLine,
+  params: { maxLines: number },
+): TLine[] {
+  const normalized = normalizeChannelProgressDraftLineIdentity(line);
+  if (!normalized) {
+    return lines;
+  }
+  const maxLines = Math.max(1, params.maxLines);
+  const lineId = typeof line === "object" ? line.id?.trim() : undefined;
+  if (lineId) {
+    const existingIndex = lines.findIndex(
+      (entry) => typeof entry === "object" && entry.id?.trim() === lineId,
+    );
+    if (existingIndex >= 0) {
+      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
+        return lines;
+      }
+      const next = [...lines];
+      next[existingIndex] = line;
+      return next.slice(-maxLines);
+    }
+  }
+  const previous = normalizeChannelProgressDraftLineIdentity(lines.at(-1));
+  if (previous === normalized) {
+    return lines;
+  }
+  return [...lines, line].slice(-maxLines);
 }
 
 export function formatChannelProgressDraftText(params: {

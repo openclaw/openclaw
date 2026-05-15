@@ -14,6 +14,7 @@ import type {
 } from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -44,6 +45,7 @@ type ConfigSummary = {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
+  warnings?: ConfigFileSnapshot["warnings"];
   controlUi?: GatewayControlUiConfig;
 };
 
@@ -96,6 +98,7 @@ const gatewayProbeAuthModuleLoader = createLazyImportLoader(
   () => import("../../gateway/probe-auth.js"),
 );
 const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
+const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
 const serviceAuditModuleLoader = createLazyImportLoader(
   () => import("../../daemon/service-audit.js"),
 );
@@ -109,6 +112,10 @@ function loadGatewayProbeAuthModule() {
 
 function loadDaemonInspectModule() {
   return daemonInspectModuleLoader.load();
+}
+
+function loadLaunchdModule() {
+  return launchdModuleLoader.load();
 }
 
 function loadServiceAuditModule() {
@@ -198,11 +205,16 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
 async function readFullStatusConfig(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
+  pluginValidation?: "full" | "skip";
 }): Promise<StatusConfigRead> {
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
-    pluginValidation: "skip",
+    pluginValidation: params.pluginValidation ?? "skip",
+    logger: {
+      error: () => {},
+      warn: () => {},
+    },
   });
   const snapshot = await io.readConfigFileSnapshot().catch(() => null);
   const cfg = resolveSnapshotRuntimeConfig(snapshot) ?? io.loadConfig();
@@ -212,6 +224,7 @@ async function readFullStatusConfig(params: {
       exists: snapshot?.exists ?? false,
       valid: snapshot?.valid ?? true,
       ...(snapshot?.issues?.length ? { issues: snapshot.issues } : {}),
+      ...(snapshot?.warnings?.length ? { warnings: snapshot.warnings } : {}),
       controlUi: cfg.gateway?.controlUi,
     },
     cfg,
@@ -222,12 +235,14 @@ async function readFullStatusConfig(params: {
 async function readStatusConfig(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
+  deep?: boolean;
 }): Promise<StatusConfigRead> {
   return (
-    (await readFastStatusConfig(params.configPath)) ??
+    (params.deep ? null : await readFastStatusConfig(params.configPath)) ??
     (await readFullStatusConfig({
       env: params.env,
       configPath: params.configPath,
+      pluginValidation: params.deep ? "full" : "skip",
     }))
   );
 }
@@ -259,6 +274,7 @@ export type DaemonStatus = {
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
     restartHandoff?: GatewayRestartHandoff;
+    staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
   config?: {
     cli: ConfigSummary;
@@ -323,6 +339,7 @@ function resolveCliStatusSummary(argv: string[] = process.argv): CliStatusSummar
 
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
+  opts: { deep?: boolean } = {},
 ): Promise<DaemonConfigContext> {
   const mergedDaemonEnv = {
     ...(process.env as Record<string, string | undefined>),
@@ -338,6 +355,7 @@ async function loadDaemonConfigContext(
   const cliConfigRead = await readStatusConfig({
     env: process.env,
     configPath: cliConfigPath,
+    deep: opts.deep,
   });
   const sharesDaemonConfigContext =
     sameConfigPath && (cliConfigRead.mode === "fast" || !serviceEnv);
@@ -346,6 +364,7 @@ async function loadDaemonConfigContext(
     : await readStatusConfig({
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
         configPath: daemonConfigPath,
+        deep: opts.deep,
       });
 
   return {
@@ -477,7 +496,7 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(command?.environment);
+  } = await loadDaemonConfigContext(command?.environment, { deep: opts.deep });
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
@@ -499,6 +518,12 @@ export async function gatherDaemonStatus(
         )
         .catch(() => [])
     : [];
+  const staleUpdateLaunchdJobs =
+    opts.deep && process.platform === "darwin"
+      ? await loadLaunchdModule()
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .catch(() => [])
+      : [];
 
   const timeoutMs =
     parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
@@ -583,6 +608,7 @@ export async function gatherDaemonStatus(
       runtime,
       configAudit,
       ...(restartHandoff ? { restartHandoff } : {}),
+      ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },
     config: {
       cli: cliConfigSummary,

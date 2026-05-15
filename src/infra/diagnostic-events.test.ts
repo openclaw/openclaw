@@ -26,6 +26,17 @@ describe("diagnostic-events", () => {
     vi.restoreAllMocks();
   });
 
+  function expectConsoleErrorPrefix(errorSpy: { mock: { calls: unknown[][] } }, prefix: string) {
+    expect(errorSpy.mock.calls).toHaveLength(1);
+    const [call] = errorSpy.mock.calls;
+    if (!call) {
+      throw new Error("expected console error call");
+    }
+    const [message] = call;
+    expect(typeof message).toBe("string");
+    expect((message as string).startsWith(prefix)).toBe(true);
+  }
+
   it("emits monotonic seq and timestamps to subscribers", () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
     const events: Array<{ seq: number; ts: number; type: string }> = [];
@@ -65,8 +76,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(seen).toEqual(["message.queued"]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=message.queued seq=1: Error: boom"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=message.queued seq=1: Error: boom",
     );
   });
 
@@ -272,7 +284,7 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(publicEvents).toEqual([]);
+    expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
 
@@ -292,8 +304,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(seen).toEqual([false]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=message.queued seq=1: TypeError"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=message.queued seq=1: TypeError",
     );
   });
 
@@ -322,8 +335,9 @@ describe("diagnostic-events", () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(seen).toEqual([{ traceId: trace.traceId, trusted: true }]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=model.call.started seq=1: TypeError"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=model.call.started seq=1: TypeError",
     );
   });
 
@@ -347,8 +361,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(seen).toEqual([{ total: 42, trusted: true }]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=model.usage seq=1: TypeError"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=model.usage seq=1: TypeError",
     );
   });
 
@@ -395,7 +410,7 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    expect(events).toEqual([]);
+    expect(events).toStrictEqual([]);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
   });
@@ -417,7 +432,7 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(publicEvents).toEqual([]);
+    expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual(["log.record"]);
   });
 
@@ -434,7 +449,7 @@ describe("diagnostic-events", () => {
       channel: "telegram",
     });
 
-    expect(seen).toEqual([]);
+    expect(seen).toStrictEqual([]);
     expect(nowSpy).not.toHaveBeenCalled();
   });
 
@@ -457,10 +472,8 @@ describe("diagnostic-events", () => {
     });
 
     expect(calls).toBe(101);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "recursion guard tripped at depth=101, dropping type=queue.lane.enqueue",
-      ),
+    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+      "[diagnostic-events] recursion guard tripped at depth=101, dropping type=queue.lane.enqueue",
     );
   });
 

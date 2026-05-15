@@ -19,9 +19,9 @@ const mocks = vi.hoisted(() => ({
   writeOps: undefined as CapturedWriteOperations | undefined,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("@earendil-works/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+    "@earendil-works/pi-coding-agent",
   );
   return {
     ...actual,
@@ -64,6 +64,16 @@ function readWriteOps(): CapturedWriteOperations {
     throw new Error("expected captured write operations");
   }
   return mocks.writeOps;
+}
+
+async function expectMissingPath(operation: Promise<unknown>) {
+  let error: NodeJS.ErrnoException | undefined;
+  try {
+    await operation;
+  } catch (caught) {
+    error = caught as NodeJS.ErrnoException;
+  }
+  expect(error?.code).toBe("ENOENT");
 }
 
 describe("host tool tilde expansion (non-workspace mode)", () => {
@@ -140,11 +150,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     await readWriteOps().writeFile(toTildePath(testFile), "written via os home");
 
     expect(await fs.readFile(testFile, "utf8")).toBe("written via os home");
-    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toMatchObject(
-      {
-        code: "ENOENT",
-      },
-    );
+    await expectMissingPath(fs.access(path.join(openclawHome, path.basename(testFile))));
   });
 
   it("ignores OPENCLAW_HOME for mkdir operations", async () => {
@@ -157,9 +163,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     await readWriteOps().mkdir(toTildePath(newDir));
 
     expect((await fs.stat(newDir)).isDirectory()).toBe(true);
-    await expect(fs.access(path.join(openclawHome, path.basename(newDir)))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(fs.access(path.join(openclawHome, path.basename(newDir))));
   });
 
   it("ignores OPENCLAW_HOME for readFile operations", async () => {
@@ -173,11 +177,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     const content = await readEditOps().readFile(toTildePath(testFile));
 
     expect(content.toString("utf8")).toBe("OS home content");
-    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toMatchObject(
-      {
-        code: "ENOENT",
-      },
-    );
+    await expectMissingPath(fs.access(path.join(openclawHome, path.basename(testFile))));
   });
 
   it("ignores OPENCLAW_HOME for access operations", async () => {
@@ -190,10 +190,6 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     createHostWorkspaceEditTool(openclawHome, { workspaceOnly: false });
 
     await expect(readEditOps().access(toTildePath(testFile))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toMatchObject(
-      {
-        code: "ENOENT",
-      },
-    );
+    await expectMissingPath(fs.access(path.join(openclawHome, path.basename(testFile))));
   });
 });

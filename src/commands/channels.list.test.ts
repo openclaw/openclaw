@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
     () => true,
   ),
+  callGateway: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
@@ -27,6 +28,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../cli/command-secret-targets.js", () => ({
@@ -96,6 +101,14 @@ function createCatalogEntry(id: string, label: string): ChannelPluginCatalogEntr
   } as unknown as ChannelPluginCatalogEntry;
 }
 
+function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {
+  const value = runtime.log.mock.calls[0]?.[0];
+  if (typeof value !== "string") {
+    throw new Error("expected runtime log text");
+  }
+  return value;
+}
+
 describe("channels list", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();
@@ -107,6 +120,8 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.isCatalogChannelInstalled.mockReset();
     mocks.isCatalogChannelInstalled.mockReturnValue(true);
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
   });
 
   it("does not include auth providers in JSON output (auth section was removed)", async () => {
@@ -118,7 +133,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true }, runtime);
 
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    const payload = JSON.parse(loggedText(runtime)) as Record<string, unknown>;
     expect(payload.auth).toBeUndefined();
     expect(payload).toHaveProperty("chat");
   });
@@ -128,27 +143,27 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ accountIds: ["alerts", "default"] }),
     ]);
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          telegram: {
-            accounts: {
-              default: { botToken: "123:abc" },
-              alerts: { botToken: "456:def" },
-            },
+    const config = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: { botToken: "123:abc" },
+            alerts: { botToken: "456:def" },
           },
         },
       },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config,
     });
 
     await channelsListCommand({ json: true }, runtime);
 
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ includeSetupFallbackPlugins: true }),
-    );
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
+      includeSetupFallbackPlugins: true,
+    });
+    const payload = JSON.parse(loggedText(runtime)) as {
       chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
     };
     expect(payload.chat?.telegram).toEqual({
@@ -167,7 +182,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true }, runtime);
 
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    const payload = JSON.parse(loggedText(runtime)) as {
       usage?: unknown;
     };
     expect(payload.usage).toBeUndefined();
@@ -185,32 +200,138 @@ describe("channels list", () => {
       tokenSource: "config",
       enabled: true,
     });
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          telegram: {
-            accounts: {
-              default: { botToken: "123:abc" },
-            },
+    const config = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: { botToken: "123:abc" },
           },
         },
       },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config,
     });
 
     await channelsListCommand({}, runtime);
 
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ includeSetupFallbackPlugins: true }),
-    );
-    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
+      includeSetupFallbackPlugins: true,
+    });
+    const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Chat channels:");
     expect(output).toContain("Telegram default:");
     expect(output).toContain("installed");
     expect(output).toContain("configured");
     expect(output).toContain("enabled");
     expect(output).not.toContain("Auth providers");
+  });
+
+  it("prefers reachable gateway account snapshots over command-local token state", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: false,
+      tokenSource: "none",
+      enabled: true,
+    });
+    mocks.callGateway.mockResolvedValue({
+      channelAccounts: {
+        discord: [
+          {
+            accountId: "default",
+            name: "clawsweeper",
+            configured: true,
+            tokenSource: "env",
+            tokenStatus: "available",
+            enabled: true,
+          },
+        ],
+      },
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ all: true }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "channels.status",
+      params: { probe: false, timeoutMs: 5000 },
+      timeoutMs: 5000,
+    });
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Discord default (clawsweeper):");
+    expect(output).toContain("configured");
+    expect(output).toContain("token=env");
+    expect(output).not.toContain("not configured");
+    expect(output).not.toContain("token=none");
+  });
+
+  it("falls back to command-local account snapshots when gateway status is unavailable", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: false,
+      tokenSource: "none",
+      enabled: true,
+    });
+    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ all: true }, runtime);
+
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Discord default:");
+    expect(output).toContain("not configured");
+    expect(output).toContain("token=none");
+  });
+
+  it("marks configured-but-unavailable credential sources in text output", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: true,
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+      enabled: true,
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ all: true }, runtime);
+
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("configured");
+    expect(output).toContain("token=config-unavailable");
   });
 
   it("default output does NOT show installable catalog channels (only configured ones)", async () => {
@@ -227,7 +348,7 @@ describe("channels list", () => {
 
     await channelsListCommand({}, runtime);
 
-    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Chat channels:");
     expect(output).not.toContain("QQ Bot");
     // Hint user about --all
@@ -248,7 +369,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ all: true }, runtime);
 
-    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("QQ Bot");
     expect(output).toContain("not installed");
     expect(output).toContain("not configured");
@@ -271,14 +392,14 @@ describe("channels list", () => {
 
     // Without --all: discord should not appear.
     await channelsListCommand({}, runtime);
-    const noAllOutput = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const noAllOutput = stripAnsi(loggedText(runtime));
     expect(noAllOutput).not.toContain("Discord default:");
 
     runtime.log.mockClear();
 
     // With --all: discord is rendered with installed + not configured + disabled.
     await channelsListCommand({ all: true }, runtime);
-    const allOutput = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const allOutput = stripAnsi(loggedText(runtime));
     expect(allOutput).toContain("Discord default:");
     expect(allOutput).toContain("installed");
     expect(allOutput).toContain("not configured");
@@ -311,12 +432,15 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true, all: true }, runtime);
 
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    const payload = JSON.parse(loggedText(runtime)) as {
       chat: Record<string, { origin: string; installed: boolean }>;
     };
-    expect(payload.chat.telegram).toMatchObject({ origin: "configured", installed: true });
-    expect(payload.chat.discord).toMatchObject({ origin: "available", installed: true });
-    expect(payload.chat.qqbot).toMatchObject({ origin: "installable", installed: false });
+    expect(payload.chat.telegram?.origin).toBe("configured");
+    expect(payload.chat.telegram?.installed).toBe(true);
+    expect(payload.chat.discord?.origin).toBe("available");
+    expect(payload.chat.discord?.installed).toBe(true);
+    expect(payload.chat.qqbot?.origin).toBe("installable");
+    expect(payload.chat.qqbot?.installed).toBe(false);
   });
 
   it(
@@ -341,7 +465,7 @@ describe("channels list", () => {
 
       await channelsListCommand({ all: true }, runtime);
 
-      const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+      const output = stripAnsi(loggedText(runtime));
       expect(output).toContain("WeCom");
       expect(output).toContain("installed");
       expect(output).not.toContain("not installed");
@@ -352,13 +476,11 @@ describe("channels list", () => {
       // not written a config entry for it).
       runtime.log.mockClear();
       await channelsListCommand({ json: true, all: true }, runtime);
-      const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+      const payload = JSON.parse(loggedText(runtime)) as {
         chat: Record<string, { origin: string; installed: boolean }>;
       };
-      expect(payload.chat.wecom).toMatchObject({
-        origin: "available",
-        installed: true,
-      });
+      expect(payload.chat.wecom?.origin).toBe("available");
+      expect(payload.chat.wecom?.installed).toBe(true);
     },
   );
 });

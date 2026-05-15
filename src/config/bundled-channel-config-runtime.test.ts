@@ -53,11 +53,10 @@ describe("bundled channel config runtime", () => {
       "../../test/helpers/config/bundled-channel-config-runtime.js?scope=missing-bundled-list",
     );
 
-    expect(runtimeModule.getBundledChannelConfigSchemaMap().get("msteams")).toMatchObject({
-      schema: { type: "object" },
-      runtime: {},
-    });
-    expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toEqual({});
+    const schemaEntry = runtimeModule.getBundledChannelConfigSchemaMap().get("msteams");
+    expect(schemaEntry?.schema).toEqual({ type: "object" });
+    expect(schemaEntry?.runtime).toEqual({});
+    expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toStrictEqual({});
   });
 
   it("falls back to static channel schemas when bundled plugin access hits a TDZ-style ReferenceError", async () => {

@@ -83,6 +83,16 @@ function requireString(value: string | undefined, label: string): string {
   return value;
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
@@ -198,21 +208,22 @@ describe("gateway session utils", () => {
       createModelDefaultsConfig({ primary: "openai-codex/gpt-5.5" }),
     );
 
-    expect(defaults).toMatchObject({
+    expectFields(defaults, {
       modelProvider: "openai-codex",
       model: "gpt-5.5",
       thinkingDefault: "adaptive",
     });
-    expect(defaults.thinkingLevels).toEqual(
-      expect.arrayContaining([
-        { id: "adaptive", label: "adaptive" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "maximum" },
-      ]),
+    const levelLabels = Object.fromEntries(
+      defaults.thinkingLevels?.map((level) => [level.id, level.label]) ?? [],
     );
-    expect(defaults.thinkingOptions).toEqual(
-      expect.arrayContaining(["adaptive", "xhigh", "maximum"]),
-    );
+    expectFields(levelLabels, {
+      adaptive: "adaptive",
+      xhigh: "xhigh",
+      max: "maximum",
+    });
+    expect(defaults.thinkingOptions).toContain("adaptive");
+    expect(defaults.thinkingOptions).toContain("xhigh");
+    expect(defaults.thinkingOptions).toContain("maximum");
   });
 
   test("session defaults and rows use catalog reasoning metadata for provider thinking options", () => {
@@ -318,8 +329,8 @@ describe("gateway session utils", () => {
       .filter((session) => !session.thinkingOptions?.includes("medium"))
       .map((session) => session.sessionId);
 
-    expect(missingMediumLevelSessionIds).toEqual([]);
-    expect(missingMediumOptionSessionIds).toEqual([]);
+    expect(missingMediumLevelSessionIds).toStrictEqual([]);
+    expect(missingMediumOptionSessionIds).toStrictEqual([]);
     expect(result.sessions.map((session) => session.thinkingDefault)).toEqual(
       Array.from({ length: result.sessions.length }, () => "medium"),
     );
@@ -421,7 +432,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig);
 
-    expect(defaults).toMatchObject({
+    expectFields(defaults, {
       modelProvider: "openai-codex",
       model: "gpt-5.5",
       thinkingDefault: "high",
@@ -457,7 +468,7 @@ describe("gateway session utils", () => {
       key: "agent:alpha:main",
     });
 
-    expect(row).toMatchObject({
+    expectFields(row, {
       modelProvider: "openai-codex",
       model: "gpt-5.5",
       thinkingDefault: "high",
@@ -486,7 +497,7 @@ describe("gateway session utils", () => {
       key: "main",
     });
 
-    expect(row).toMatchObject({
+    expectFields(row, {
       modelProvider: "openai-codex",
       model: "gpt-5.5",
       thinkingDefault: "max",
@@ -612,7 +623,8 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("agent:ops:main");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
+    expect(target.storeKeys).toContain("agent:ops:main");
+    expect(target.storeKeys).toContain("main");
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
   });
 
@@ -630,9 +642,8 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
     expect(target.canonicalKey).toBe("agent:ops:mysession");
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
-    );
+    expect(target.storeKeys).toContain("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:MySession");
     const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
     const found = target.storeKeys.some((k) => Boolean(store[k]));
     expect(found).toBe(true);
@@ -654,9 +665,8 @@ describe("gateway session utils", () => {
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
-    );
+    expect(target.storeKeys).toContain("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:MySession");
   });
 
   test("resolveGatewaySessionStoreTarget finds legacy main alias key when mainKey is customized", () => {
@@ -673,7 +683,7 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
     expect(target.canonicalKey).toBe("agent:ops:work");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
+    expect(target.storeKeys).toContain("agent:ops:MAIN");
   });
 
   test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
@@ -1062,17 +1072,17 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
 
     const result = listAgentsForGateway(cfg);
-    expect(result.agents[0]).toMatchObject({
+    expectFields(result.agents[0], {
       id: "main",
       workspace: "/tmp/default-workspace",
-      model: {
-        primary: "openai/gpt-5.4",
-        fallbacks: ["openai-codex/gpt-5.4"],
-      },
-      agentRuntime: {
-        id: "codex",
-        source: "implicit",
-      },
+    });
+    expect(result.agents[0]?.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["openai-codex/gpt-5.4"],
+    });
+    expect(result.agents[0]?.agentRuntime).toEqual({
+      id: "codex",
+      source: "implicit",
     });
   });
 
@@ -1097,12 +1107,12 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
 
     const result = listAgentsForGateway(cfg);
-    expect(result.agents[0]).toMatchObject({
+    expectFields(result.agents[0], {
       id: "main",
-      agentRuntime: {
-        id: "codex",
-        source: "provider",
-      },
+    });
+    expect(result.agents[0]?.agentRuntime).toEqual({
+      id: "codex",
+      source: "provider",
     });
   });
 
@@ -1237,7 +1247,7 @@ describe("resolveSessionModelRef", () => {
 
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -1255,7 +1265,7 @@ describe("resolveSessionModelRef", () => {
 
   test("preserves provider from slash-prefixed model when modelProvider is missing", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -1320,13 +1330,11 @@ describe("listSessionsFromStore selected model display", () => {
       expect(listed.count).toBe(expected.count);
       expect(listed.defaults).toEqual(expected.defaults);
       expect(listed.sessions).toHaveLength(expected.sessions.length);
-      expect(listed.sessions[0]).toEqual(
-        expect.objectContaining({
-          key: "agent:main:sess-yield-0",
-          derivedTitle: "title 0",
-          lastMessagePreview: "last 0",
-        }),
-      );
+      expectFields(listed.sessions[0], {
+        key: "agent:main:sess-yield-0",
+        derivedTitle: "title 0",
+        lastMessagePreview: "last 0",
+      });
       expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
       expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
       expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
@@ -1600,7 +1608,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("does not inherit default provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveLegacyIdentityRef(cfg);
@@ -1610,7 +1618,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers provider from configured model allowlist when unambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "anthropic/claude-sonnet-4-6": {},
       },
@@ -1623,7 +1631,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers provider from configured provider catalogs when allowlist is absent", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
     cfg.models = {
       providers: {
@@ -1645,7 +1653,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("keeps provider unknown when configured models are ambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "anthropic/claude-sonnet-4-6": {},
         "minimax/claude-sonnet-4-6": {},
@@ -1659,7 +1667,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("keeps provider unknown when configured provider catalog matches are ambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
     cfg.models = {
       providers: {
@@ -1684,7 +1692,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("preserves provider from slash-prefixed runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelIdentityRef(cfg, {
@@ -1699,7 +1707,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers wrapper provider for slash-prefixed runtime model when allowlist match is unique", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
       },

@@ -1,18 +1,52 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveSTTConfig, transcribeAudio } from "./stt.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+const ssrfRuntimeMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
 }));
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: ssrfRuntimeMocks.fetchWithSsrFGuard,
+}));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
+import { resolveSTTConfig, transcribeAudio } from "./stt.js";
+
+function requireFirstSsrfRequest(): {
+  url?: unknown;
+  auditContext?: unknown;
+  init?: RequestInit;
+} {
+  const [call] = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected QQBot STT fetch call");
+  }
+  return call[0] as {
+    url?: unknown;
+    auditContext?: unknown;
+    init?: RequestInit;
+  };
+}
+
 describe("engine/utils/stt", () => {
+  beforeEach(() => {
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => ({
+        response: await fetch(url, init),
+        release: vi.fn(async () => {}),
+      }),
+    );
+  });
+
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -80,7 +114,7 @@ describe("engine/utils/stt", () => {
     fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: Response.json({
         text: "hello from audio",
       }),
@@ -100,33 +134,22 @@ describe("engine/utils/stt", () => {
     });
 
     expect(transcript).toBe("hello from audio");
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auditContext: "qqbot-stt",
-        url: "https://api.example.test/v1/audio/transcriptions",
-        init: expect.objectContaining({
-          method: "POST",
-          headers: { Authorization: "Bearer secret" },
-          body: expect.any(FormData),
-        }),
-      }),
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFirstSsrfRequest();
+    expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
+    expect(request.auditContext).toBe("qqbot-stt");
+    expect(request.init?.method).toBe("POST");
+    expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
+    expect(request.init?.body).toBeInstanceOf(FormData);
+    const body = request.init?.body as FormData;
+    expect(body.get("model")).toBe("whisper-1");
+    const file = body.get("file");
+    expect(file).toBeInstanceOf(File);
+    expect((file as File).name).toBe("voice.wav");
+    expect((file as File).type).toBe("audio/wav");
+    expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4]),
     );
     expect(release).toHaveBeenCalledTimes(1);
-    const [{ init }] = fetchWithSsrFGuardMock.mock.calls[0] as [
-      {
-        init: {
-          body: FormData;
-          headers: Record<string, string>;
-          method: string;
-        };
-      },
-    ];
-    expect(init).toEqual(
-      expect.objectContaining({
-        method: "POST",
-        headers: { Authorization: "Bearer secret" },
-        body: expect.any(FormData),
-      }),
-    );
   });
 });

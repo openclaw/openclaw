@@ -49,6 +49,15 @@ describe("cdp.helpers internal", () => {
     }
   });
 
+  function requireGuardedFetchRequest() {
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    if (!call) {
+      throw new Error("expected guarded CDP fetch call");
+    }
+    const [request] = call;
+    return request;
+  }
+
   describe("assertCdpEndpointAllowed", () => {
     it("throws on non-http/https/ws/wss protocols under any SSRF policy", async () => {
       await expect(
@@ -142,11 +151,8 @@ describe("cdp.helpers internal", () => {
       await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250, undefined, {
         allowPrivateNetwork: true,
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          policy: expect.objectContaining({ allowPrivateNetwork: true }),
-        }),
-      );
+      const request = requireGuardedFetchRequest();
+      expect(request?.policy?.allowPrivateNetwork).toBe(true);
     });
 
     it("falls back to a permissive private-network policy when none is supplied on a non-loopback host", async () => {
@@ -157,11 +163,8 @@ describe("cdp.helpers internal", () => {
         release,
       });
       await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250);
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          policy: { allowPrivateNetwork: true },
-        }),
-      );
+      const request = requireGuardedFetchRequest();
+      expect(request?.policy).toEqual({ allowPrivateNetwork: true });
     });
   });
 
@@ -240,7 +243,7 @@ describe("cdp.helpers internal", () => {
         connectionCount += 1;
         socket.on("message", () => {
           // Defer close so the pending entry is definitely registered.
-          setTimeout(() => socket.close(), 10);
+          setImmediate(() => socket.close());
         });
       });
       await expect(
@@ -354,7 +357,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket("ws://127.0.0.1:1/devtools/browser/NO", async () => {
           return "unreachable";
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/ECONNREFUSED|CDP socket closed/);
     });
 
     it("wraps a non-Error callback throw before closing the socket", async () => {
@@ -438,7 +441,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket(server.url, async (send) => {
           await send("Test.boom");
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/CDP socket closed|WebSocket was closed/i);
     });
 
     // The non-Error branch of the `err instanceof Error ? ... : new Error(String(err))`

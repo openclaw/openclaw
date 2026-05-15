@@ -6,9 +6,11 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
@@ -118,13 +120,19 @@ async function noteDefaultModelResult(params: {
     params.previousPrimary !== params.selectedModel
   ) {
     await params.prompter.note(
-      `Kept existing default model ${params.previousPrimary}; ${selectedModelDisplay} is available.`,
-      "Model configured",
+      t("wizard.model.keptExistingDefault", {
+        current: params.previousPrimary,
+        selected: selectedModelDisplay,
+      }),
+      t("wizard.model.configuredTitle"),
     );
     return;
   }
 
-  await params.prompter.note(`Default model set to ${selectedModelDisplay}`, "Model configured");
+  await params.prompter.note(
+    t("wizard.model.defaultSet", { model: selectedModelDisplay }),
+    t("wizard.model.configuredTitle"),
+  );
 }
 
 async function applyDefaultModelFromAuthChoice(params: {
@@ -152,18 +160,33 @@ async function applyDefaultModelFromAuthChoice(params: {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
-    const { ensureCodexRuntimePluginForModelSelection } =
+    const { CODEX_RUNTIME_PLUGIN_ID, ensureCodexRuntimePluginForModelSelection } =
       await import("../commands/codex-runtime-plugin-install.js");
-    nextConfig = (
-      await ensureCodexRuntimePluginForModelSelection({
-        cfg: nextConfig,
-        model: params.selectedModel,
-        prompter: params.prompter,
-        runtime: params.runtime,
-        ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      })
-    ).cfg;
+    const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+      cfg: nextConfig,
+      model: params.selectedModel,
+      prompter: params.prompter,
+      runtime: params.runtime,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    nextConfig = codexInstall.cfg;
     await params.runSelectedModelHook(nextConfig);
+    if (codexInstall.installed) {
+      // Offer Codex CLI state migration whenever the harness is in place for
+      // the selected model, regardless of whether this run was a fresh install
+      // or a repair against an already-present harness. The user can always
+      // decline the prompt; surfacing it again costs nothing if there is no
+      // migratable state to find.
+      const { offerPostInstallMigrations } =
+        await import("../wizard/setup.post-install-migration.js");
+      const migrationResult = await offerPostInstallMigrations({
+        config: nextConfig,
+        runtime: params.runtime,
+        prompter: params.prompter,
+        installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+      });
+      nextConfig = migrationResult.config;
+    }
   }
   await noteDefaultModelResult({
     previousPrimary,
@@ -289,9 +312,13 @@ export async function runProviderPluginAuthMethod(params: {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
+  const defaultModel = result.defaultModel
+    ? normalizeAgentModelRefForConfig(result.defaultModel)
+    : undefined;
+
   return {
     config: nextConfig,
-    defaultModel: result.defaultModel,
+    ...(defaultModel ? { defaultModel } : {}),
   };
 }
 
@@ -548,8 +575,11 @@ export async function applyAuthChoicePluginProvider(
     }
     if (params.agentId) {
       await params.prompter.note(
-        `Default model set to ${selectedModelDisplay} for agent "${params.agentId}".`,
-        "Model configured",
+        t("wizard.model.defaultSetForAgent", {
+          agent: params.agentId,
+          model: selectedModelDisplay,
+        }),
+        t("wizard.model.configuredTitle"),
       );
     }
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);

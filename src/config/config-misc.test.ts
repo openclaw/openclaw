@@ -47,10 +47,41 @@ function issueMessages(issues: Array<{ message: string }>): string[] {
   return issues.map((issue) => issue.message);
 }
 
+function expectSomeIssueMessageContains(issues: Array<{ message: string }>, text: string): void {
+  expect(issueMessages(issues).join("\n")).toContain(text);
+}
+
 describe("boolean config validation", () => {
   it.each(nonBooleanConfigCases)("rejects non-boolean values for $name", ({ config }) => {
     const result = OpenClawSchema.safeParse(config);
     expect(result.success).toBe(false);
+  });
+});
+
+describe("model provider localService config", () => {
+  it("accepts on-demand local provider service settings", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          ds4: {
+            baseUrl: "http://127.0.0.1:18000/v1",
+            api: "openai-completions",
+            localService: {
+              command: "/Users/me/ds4-server",
+              args: ["--port", "18000"],
+              cwd: "/Users/me/ds4",
+              env: { METAL_DEVICE_WRAPPER_TYPE: "1" },
+              healthUrl: "http://127.0.0.1:18000/v1/models",
+              readyTimeoutMs: 180_000,
+              idleStopMs: 0,
+            },
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
   });
 });
 
@@ -888,37 +919,40 @@ describe("broadcast", () => {
 });
 
 describe("model compat config schema", () => {
-  it("accepts full openai-completions compat fields", () => {
-    const res = OpenClawSchema.safeParse({
-      models: {
-        providers: {
-          local: {
-            baseUrl: "http://127.0.0.1:1234/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "qwen3-32b",
-                name: "Qwen3 32B",
-                compat: {
-                  supportsUsageInStreaming: true,
-                  supportsStrictMode: false,
-                  requiresStringContent: true,
-                  thinkingFormat: "zai",
-                  requiresToolResultName: true,
-                  requiresAssistantAfterToolResult: false,
-                  requiresThinkingAsText: false,
-                  requiresMistralToolIds: false,
-                  requiresOpenAiAnthropicToolPayload: true,
+  it.each(["zai", "qwen", "qwen-chat-template"] as const)(
+    "accepts full openai-completions compat fields with %s thinking format",
+    (thinkingFormat) => {
+      const res = OpenClawSchema.safeParse({
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "qwen3-32b",
+                  name: "Qwen3 32B",
+                  compat: {
+                    supportsUsageInStreaming: true,
+                    supportsStrictMode: false,
+                    requiresStringContent: true,
+                    thinkingFormat,
+                    requiresToolResultName: true,
+                    requiresAssistantAfterToolResult: false,
+                    requiresThinkingAsText: false,
+                    requiresMistralToolIds: false,
+                    requiresOpenAiAnthropicToolPayload: true,
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(res.success).toBe(true);
-  });
+      expect(res.success).toBe(true);
+    },
+  );
 });
 
 describe("config paths", () => {
@@ -994,11 +1028,9 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(issueMessages(snap.issues)).toEqual(
-        expect.arrayContaining([expect.stringContaining('"memorySearch"')]),
-      );
+      expectSomeIssueMessageContains(snap.issues, '"memorySearch"');
       expect(issuePaths(snap.legacyIssues)).toContain("memorySearch");
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toEqual({
         provider: "local",
         fallback: "none",
         query: { maxResults: 7 },
@@ -1019,11 +1051,9 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(issueMessages(snap.issues)).toEqual(
-        expect.arrayContaining([expect.stringContaining('"heartbeat"')]),
-      );
+      expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
       expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
       });
@@ -1044,11 +1074,9 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(issueMessages(snap.issues)).toEqual(
-        expect.arrayContaining([expect.stringContaining('"heartbeat"')]),
-      );
+      expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
       expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         showOk: true,
         showAlerts: false,
         useIndicator: true,
@@ -1079,6 +1107,26 @@ describe("config strict validation", () => {
     expect(raw.messages.tts).not.toHaveProperty("providers");
   });
 
+  it("reports retired queue steering modes without read-time auto-migration", async () => {
+    const raw = {
+      messages: {
+        queue: {
+          mode: "queue",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
+    expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
+    expect(raw.messages.queue.mode).toBe("queue");
+    expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
+  });
+
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -1102,12 +1150,10 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(issuePaths(snap.issues)).toEqual(
-        expect.arrayContaining(["agents.defaults.sandbox", "agents.list.0.sandbox"]),
-      );
-      expect(issuePaths(snap.legacyIssues)).toEqual(
-        expect.arrayContaining(["agents.defaults.sandbox", "agents.list"]),
-      );
+      expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
+      expect(issuePaths(snap.issues)).toContain("agents.list.0.sandbox");
+      expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
+      expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
       expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });

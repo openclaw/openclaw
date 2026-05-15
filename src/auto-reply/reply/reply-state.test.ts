@@ -8,6 +8,8 @@ import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
+  buildInboundHistoryFromEntries,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   HISTORY_CONTEXT_MARKER,
@@ -179,6 +181,58 @@ describe("history helpers", () => {
     expect(result).toContain("current");
   });
 
+  it("builds structured inbound history with media metadata", () => {
+    const historyMap = new Map([
+      [
+        "group",
+        [
+          {
+            sender: "Older",
+            body: "zero",
+            timestamp: 0,
+          },
+          {
+            sender: "A",
+            body: "one",
+            timestamp: 1,
+            messageId: "m1",
+            media: [
+              {
+                path: "/tmp/image.png",
+                contentType: "image/png",
+                kind: "image" as const,
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+
+    expect(buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 1 })).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
+    expect(
+      buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 0 }),
+    ).toBeUndefined();
+    expect(
+      buildInboundHistoryFromEntries({ entries: historyMap.get("group") ?? [], limit: 1 }),
+    ).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
+  });
+
   it("records pending entries only when enabled", () => {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
 
@@ -218,7 +272,7 @@ describe("history helpers", () => {
     expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
 
     clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 2 });
-    expect(historyMap.get("group")).toEqual([]);
+    expect(historyMap.get("group")).toStrictEqual([]);
   });
 });
 
@@ -291,6 +345,22 @@ describe("shouldRunMemoryFlush", () => {
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
+  });
+
+  it("runs on consecutive compaction cycles when flush records the pre-increment count", () => {
+    const params = {
+      contextWindowTokens: 100_000,
+      reserveTokensFloor: 5_000,
+      softThresholdTokens: 2_000,
+    };
+
+    for (const entry of [
+      { totalTokens: 95_000, compactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 2, memoryFlushCompactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
+    ]) {
+      expect(shouldRunMemoryFlush({ entry, ...params })).toBe(true);
+    }
   });
 
   it("ignores stale cached totals", () => {

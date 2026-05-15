@@ -69,6 +69,33 @@ function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFil
   );
 }
 
+export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
+
+export function createPluginRuntimeMediaMock(
+  overrides: Partial<PluginRuntimeMediaMock> = {},
+): PluginRuntimeMediaMock {
+  const readRemoteMediaBuffer =
+    vi.fn() as unknown as PluginRuntimeMediaMock["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia:
+      readRemoteMediaBuffer as unknown as PluginRuntimeMediaMock["fetchRemoteMedia"],
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveMediaBuffer"],
+    ...overrides,
+  };
+}
+
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
     bindSession: vi.fn(
@@ -265,7 +292,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         CommandAuthorized: params.access?.commands
-          ? params.access.commands.authorizers.some((entry) => entry.allowed)
+          ? (params.access.commands.authorized ??
+            params.access.commands.authorizers?.some((entry) => entry.allowed) ??
+            false)
           : false,
         ...params.extra,
       }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
@@ -277,6 +306,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       mutateConfigFile: vi.fn(async () => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig: {},
         afterWrite: { mode: "auto" },
@@ -286,6 +316,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig,
         afterWrite: { mode: "auto" },
@@ -402,6 +433,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFile"],
       describeImageFileWithModel:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFileWithModel"],
+      extractStructuredWithModel:
+        vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["extractStructuredWithModel"],
       describeVideoFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeVideoFile"],
       transcribeAudioFile:
@@ -520,14 +553,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           created: true,
         }) as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
-      media: {
-        fetchRemoteMedia:
-          vi.fn() as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-        saveMediaBuffer: vi.fn().mockResolvedValue({
-          path: "/tmp/test-media.jpg",
-          contentType: "image/jpeg",
-        }) as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-      },
+      media: createPluginRuntimeMediaMock(),
       session: {
         resolveStorePath: vi.fn(
           () => "/tmp/sessions.json",
@@ -636,6 +662,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
+        runAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
         runResolved: vi.fn(
           async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
             await runChannelTurnMock({

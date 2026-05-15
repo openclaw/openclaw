@@ -1,16 +1,20 @@
 import path from "node:path";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
 export const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
-export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
-export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
-export const MIGRATION_SKILL_SELECTION_SKIP = "__openclaw_migrate_skip_for_now__";
+export const MIGRATION_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
+export const MIGRATION_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
+export const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
+export const MIGRATION_SKILL_SELECTION_ACCEPT = MIGRATION_SELECTION_ACCEPT;
+export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = MIGRATION_SELECTION_TOGGLE_ALL_ON;
+export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = MIGRATION_SELECTION_TOGGLE_ALL_OFF;
 
-export type InteractiveMigrationSkillSelection =
-  | { action: "skip" }
-  | { action: "select"; selectedItemIds: Set<string> };
+type InteractiveMigrationSelection = { action: "select"; selectedItemIds: Set<string> };
+export type InteractiveMigrationSkillSelection = InteractiveMigrationSelection;
+export type InteractiveMigrationPluginSelection = InteractiveMigrationSelection;
 
 function normalizeSelectionRef(value: string): string {
   return value.trim().toLowerCase();
@@ -33,6 +37,11 @@ function readMigrationPluginName(item: MigrationItem): string | undefined {
 
 function readMigrationPluginConfigKey(item: MigrationItem): string | undefined {
   const value = item.details?.configKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readMigrationPluginMarketplaceName(item: MigrationItem): string | undefined {
+  const value = item.details?.marketplaceName;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
@@ -206,12 +215,24 @@ export function getSelectableMigrationSkillItems(plan: MigrationPlan): Migration
 }
 
 export function getSelectableMigrationPluginItems(plan: MigrationPlan): MigrationItem[] {
+  // Only source-installed curated Codex plugins become selectable install items.
+  // Cached/manual-review plugin bundles are emitted as manual items, the aggregate
+  // Codex plugin config write is a config item, and already skipped/applied/error
+  // items are no longer user-actionable in the selector. Conflicts stay selectable
+  // so the user can explicitly choose or deselect them before apply.
   return plan.items.filter(
-    (item) => item.kind === "plugin" && item.action === "install" && item.status === "planned",
+    (item) =>
+      item.kind === "plugin" &&
+      item.action === "install" &&
+      (item.status === "planned" || item.status === "conflict"),
   );
 }
 
 export function getMigrationSkillSelectionValue(item: MigrationItem): string {
+  return item.id;
+}
+
+export function getMigrationPluginSelectionValue(item: MigrationItem): string {
   return item.id;
 }
 
@@ -223,20 +244,39 @@ export function getDefaultMigrationSkillSelectionValues(items: readonly Migratio
   return items.filter((item) => item.status === "planned").map(getMigrationSkillSelectionValue);
 }
 
+export function getDefaultMigrationPluginSelectionValues(
+  items: readonly MigrationItem[],
+): string[] {
+  return items.filter((item) => item.status === "planned").map(getMigrationPluginSelectionValue);
+}
+
 export function formatMigrationSkillSelectionLabel(item: MigrationItem): string {
   return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
 }
 
-export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
-  const parts = [readMigrationSkillSourceLabel(item)];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+function humanizeMigrationConflictReason(reason: string | undefined): string {
+  if (!reason) {
+    return "conflict";
   }
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  return MIGRATION_CONFLICT_REASON_PHRASES[reason] ?? reason;
+}
+
+export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
+  if (item.status !== "conflict") {
+    return undefined;
+  }
+  const sourceLabel = readMigrationSkillSourceLabel(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return sourceLabel ? `${sourceLabel} ${reason}` : reason;
+}
+
+export function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined {
+  if (item.status !== "conflict") {
+    return undefined;
+  }
+  const marketplace = readMigrationPluginMarketplaceName(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
 
 export function applyMigrationSelectedSkillItemIds(
@@ -278,10 +318,18 @@ export function applyMigrationPluginSelection(
   }
   const selectable = getSelectableMigrationPluginItems(plan);
   const selectedIds = resolveSelectedPluginItemIds(selectable, selectedPluginRefs);
+  return applyMigrationSelectedPluginItemIds(plan, selectedIds);
+}
+
+export function applyMigrationSelectedPluginItemIds(
+  plan: MigrationPlan,
+  selectedItemIds: ReadonlySet<string>,
+): MigrationPlan {
+  const selectable = getSelectableMigrationPluginItems(plan);
   const selectableIds = new Set(selectable.map((item) => item.id));
   const selectedConfigKeys = new Set(
     selectable
-      .filter((item) => selectedIds.has(item.id))
+      .filter((item) => selectedItemIds.has(item.id))
       .map(readMigrationPluginConfigKey)
       .filter((value): value is string => value !== undefined),
   );
@@ -289,7 +337,7 @@ export function applyMigrationPluginSelection(
     if (isCodexPluginConfigItem(item)) {
       return applyCodexPluginConfigSelection(item, selectedConfigKeys);
     }
-    if (!selectableIds.has(item.id) || selectedIds.has(item.id)) {
+    if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
       return item;
     }
     return markMigrationItemSkipped(item, MIGRATION_PLUGIN_NOT_SELECTED_REASON);
@@ -360,25 +408,22 @@ function applyCodexPluginConfigSelection(
   };
 }
 
-export function resolveInteractiveMigrationSkillSelection(
+function resolveInteractiveMigrationSelection(
   items: readonly MigrationItem[],
   selectedValues: readonly string[],
-): InteractiveMigrationSkillSelection {
-  const selectableIds = new Set(items.map(getMigrationSkillSelectionValue));
+  getSelectionValue: (item: MigrationItem) => string,
+): InteractiveMigrationSelection {
+  const selectableIds = new Set(items.map(getSelectionValue));
   const selectedItemIds = new Set(selectedValues.filter((value) => selectableIds.has(value)));
   if (selectedItemIds.size > 0) {
     return { action: "select", selectedItemIds };
   }
 
   const selectedValueSet = new Set(selectedValues);
-  if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_SKIP)) {
-    return { action: "skip" };
-  }
-
-  if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF)) {
+  if (selectedValueSet.has(MIGRATION_SELECTION_TOGGLE_ALL_OFF)) {
     return { action: "select", selectedItemIds: new Set() };
   }
-  if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON)) {
+  if (selectedValueSet.has(MIGRATION_SELECTION_TOGGLE_ALL_ON)) {
     return { action: "select", selectedItemIds: selectableIds };
   }
 
@@ -388,35 +433,75 @@ export function resolveInteractiveMigrationSkillSelection(
   };
 }
 
+export function resolveInteractiveMigrationSkillSelection(
+  items: readonly MigrationItem[],
+  selectedValues: readonly string[],
+): InteractiveMigrationSkillSelection {
+  return resolveInteractiveMigrationSelection(
+    items,
+    selectedValues,
+    getMigrationSkillSelectionValue,
+  );
+}
+
+export function resolveInteractiveMigrationPluginSelection(
+  items: readonly MigrationItem[],
+  selectedValues: readonly string[],
+): InteractiveMigrationPluginSelection {
+  return resolveInteractiveMigrationSelection(
+    items,
+    selectedValues,
+    getMigrationPluginSelectionValue,
+  );
+}
+
 export function reconcileInteractiveMigrationSkillToggleValues(
   selectedValues: readonly string[],
   activatedValue: string | undefined,
   selectableValues: readonly string[],
 ): string[] {
-  if (activatedValue === MIGRATION_SKILL_SELECTION_SKIP) {
-    return selectedValues.includes(MIGRATION_SKILL_SELECTION_SKIP)
-      ? [MIGRATION_SKILL_SELECTION_SKIP]
-      : [];
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_ON) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
   }
-  if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON) {
-    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
-  }
-  if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF) {
-    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_OFF) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
   }
   if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
     return selectedValues.filter(
       (value) =>
-        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON &&
-        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF &&
-        value !== MIGRATION_SKILL_SELECTION_SKIP,
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON && value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF,
     );
   }
   return selectedValues.filter(
     (value) =>
-      value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON ||
-      !selectedValues.includes(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF),
+      value !== MIGRATION_SELECTION_TOGGLE_ALL_ON ||
+      !selectedValues.includes(MIGRATION_SELECTION_TOGGLE_ALL_OFF),
   );
+}
+
+export function reconcileInteractiveMigrationEnterValues(
+  selectedValues: readonly string[],
+  activatedValue: string | undefined,
+  selectableValues: readonly string[],
+  opts: { preserveDeselectedActivatedValue?: boolean } = {},
+): string[] {
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_ON) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_OFF) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
+  }
+  if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
+    const selectedSelectableValues = selectedValues.filter(
+      (value) =>
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON && value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF,
+    );
+    if (opts.preserveDeselectedActivatedValue && !selectedValues.includes(activatedValue)) {
+      return selectedSelectableValues;
+    }
+    return Array.from(new Set([...selectedSelectableValues, activatedValue]));
+  }
+  return [...selectedValues];
 }
 
 export function reconcileInteractiveMigrationShortcutValues(
@@ -426,20 +511,16 @@ export function reconcileInteractiveMigrationShortcutValues(
   key: "a" | "i",
 ): string[] {
   const previousSelectable = previousValues.filter((value) => selectableValues.includes(value));
-  if (
-    key === "a" &&
-    !previousValues.includes(MIGRATION_SKILL_SELECTION_SKIP) &&
-    previousSelectable.length === selectableValues.length
-  ) {
-    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  if (key === "a" && previousSelectable.length === selectableValues.length) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
   }
 
   const selectedSelectable = selectedValues.filter((value) => selectableValues.includes(value));
   if (selectedSelectable.length === selectableValues.length) {
-    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+    return [MIGRATION_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
   }
   if (selectedSelectable.length === 0) {
-    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+    return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
   }
   return selectedSelectable;
 }

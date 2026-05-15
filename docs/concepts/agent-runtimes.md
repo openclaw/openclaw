@@ -94,7 +94,11 @@ This is the agent-facing decision tree:
    `agentRuntime.id: "pi"`. A selected `openai-codex` auth profile is routed
    internally through PI's legacy Codex-auth transport.
 4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
-   `openai/<model>` with `openclaw doctor --fix`.
+   `openai/<model>` with `openclaw doctor --fix`; doctor keeps the Codex auth
+   route by adding provider/model-scoped `agentRuntime.id: "codex"` where the
+   old model ref implied it.
+   Legacy **`codex-cli/*` model refs** repair to the same `openai/<model>` Codex
+   app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
 5. If the user explicitly says **ACP**, **acpx**, or **Codex ACP adapter**, use
    ACP with `runtime: "acp"` and `agentId: "codex"`.
 6. If the request is for **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or
@@ -109,7 +113,7 @@ This is the agent-facing decision tree:
 
 For the OpenAI-family prefix split, see [OpenAI](/providers/openai) and
 [Model providers](/concepts/model-providers). For the Codex runtime support
-contract, see [Codex harness](/plugins/codex-harness#v1-support-contract).
+contract, see [Codex harness runtime](/plugins/codex-harness-runtime#v1-support-contract).
 
 ## Runtime ownership
 
@@ -178,6 +182,10 @@ Legacy refs such as `claude-cli/claude-opus-4-7` remain supported for
 compatibility, but new config should keep the provider/model canonical and put
 the execution backend in provider/model runtime policy.
 
+Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
+they run through the Codex app-server harness instead of preserving a Codex CLI
+backend.
+
 `auto` mode is intentionally conservative for most providers. OpenAI agent
 models are the exception: unset runtime and `auto` both resolve to the Codex
 harness. Explicit PI runtime config remains an opt-in compatibility route for
@@ -207,7 +215,7 @@ Use this shape for runtime docs:
 | What is intentionally unsupported?     | Users should not assume PI equivalence where the native runtime owns more state.                  |
 
 The Codex runtime support contract is documented in
-[Codex harness](/plugins/codex-harness#v1-support-contract).
+[Codex harness runtime](/plugins/codex-harness-runtime#v1-support-contract).
 
 ## Status labels
 
@@ -224,6 +232,7 @@ runtime policy first. Legacy session runtime pins no longer decide routing.
 ## Related
 
 - [Codex harness](/plugins/codex-harness)
+- [Codex harness runtime](/plugins/codex-harness-runtime)
 - [OpenAI](/providers/openai)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Agent loop](/concepts/agent-loop)

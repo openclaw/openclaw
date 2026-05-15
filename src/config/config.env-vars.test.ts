@@ -165,7 +165,7 @@ describe("config env vars", () => {
 
   it("returns empty record when the state-dir .env file is missing", async () => {
     await withTempHome(async (_home) => {
-      expect(readStateDirDotEnvVars(process.env)).toEqual({});
+      expect(readStateDirDotEnvVars(process.env)).toStrictEqual({});
     });
   });
 

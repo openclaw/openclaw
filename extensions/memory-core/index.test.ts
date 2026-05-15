@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildMemoryFlushPlan,
@@ -10,7 +10,7 @@ import { buildPromptSection } from "./src/prompt-section.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
-    expect(buildPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(buildPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
@@ -115,7 +115,6 @@ describe("buildMemoryFlushPlan", () => {
 
   it("defaults to safe prompts and gating values", () => {
     const plan = buildMemoryFlushPlan();
-    expect(plan).not.toBeNull();
     expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
     expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(plan?.prompt).toContain("memory/");

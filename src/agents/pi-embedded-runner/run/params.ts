@@ -1,6 +1,9 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
-import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import type {
+  PartialReplyPayload,
+  SourceReplyDeliveryMode,
+} from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
@@ -20,35 +23,15 @@ import type {
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
 export type CurrentTurnPromptContext = {
-  reply?: {
-    body: string;
-    senderLabel?: string;
-    isQuote?: boolean;
-  };
-  replyChain?: Array<{
-    messageId?: string;
-    threadId?: string;
-    sender?: string;
-    senderId?: string;
-    senderUsername?: string;
-    timestamp?: number;
-    body?: string;
-    isQuote?: boolean;
-    mediaType?: string;
-    mediaPath?: string;
-    mediaRef?: string;
-    replyToId?: string;
-    forwardedFrom?: string;
-    forwardedFromId?: string;
-    forwardedFromUsername?: string;
-    forwardedDate?: number;
-  }>;
+  text: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
 };
 
 export type RunEmbeddedPiAgentParams = {
@@ -167,13 +150,34 @@ export type RunEmbeddedPiAgentParams = {
   >;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
+  /**
+   * Explicit per-run timeout override, in milliseconds, when the caller knows
+   * the run was launched with a deliberate per-run value (e.g. a cron payload's
+   * `timeoutSeconds`) rather than inheriting `agents.defaults.timeoutSeconds`.
+   * When set, the LLM idle watchdog honors this value directly instead of
+   * inferring "explicitness" from `timeoutMs !== agents.defaults.timeoutSeconds`,
+   * which fails when the explicit value happens to numerically equal the agent
+   * default.
+   */
+  runTimeoutOverrideMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (info: {
+    phase: EmbeddedAgentExecutionPhase;
+    provider?: string;
+    model?: string;
+    backend?: string;
+    source?: string;
+    tool?: string;
+    toolCallId?: string;
+    itemId?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;

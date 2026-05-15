@@ -1,4 +1,4 @@
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
@@ -82,63 +82,69 @@ describe("google provider plugin hooks", () => {
       } as ProviderSanitizeReplayHistoryContext),
     );
 
-    expect(sanitized).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: "(session bootstrap)",
-        }),
-      ]),
-    );
+    const bootstrapMessage = sanitized?.[0] as
+      | { role?: string; content?: unknown; timestamp?: unknown }
+      | undefined;
+    expect(bootstrapMessage?.role).toBe("user");
+    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
+    expect(typeof bootstrapMessage?.timestamp).toBe("number");
+    expect(sanitized?.[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+    });
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", async () => {
+  it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
-    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const providerIds = ["google", "google-gemini-cli"] as const;
 
-    const [tool] =
-      provider.normalizeToolSchemas?.({
-        provider: "google-gemini-cli",
-        tools: [
-          {
-            name: "write_file",
-            description: "Write a file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                path: { type: "string", pattern: "^src/" },
+    for (const providerId of providerIds) {
+      const provider = requireRegisteredProvider(providers, providerId);
+      const [tool] =
+        provider.normalizeToolSchemas?.({
+          provider: providerId,
+          tools: [
+            {
+              name: "write_file",
+              description: "Write a file",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  path: { type: "string", pattern: "^src/" },
+                },
               },
             },
-          },
-        ],
-      } as never) ?? [];
+          ],
+        } as never) ?? [];
 
-    expect(tool).toMatchObject({
-      name: "write_file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
+      expect(tool).toEqual({
+        name: "write_file",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
         },
-      },
-    });
-    expect(tool?.parameters).not.toHaveProperty("additionalProperties");
-    expect(
-      (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
-    ).not.toHaveProperty("pattern");
-    expect(
-      provider.inspectToolSchemas?.({
-        provider: "google-gemini-cli",
-        tools: [tool],
-      } as never),
-    ).toEqual([]);
+      });
+      expect(tool?.parameters).not.toHaveProperty("additionalProperties");
+      expect(
+        (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
+      ).not.toHaveProperty("pattern");
+      expect(
+        provider.inspectToolSchemas?.({
+          provider: providerId,
+          tools: [tool],
+        } as never),
+      ).toEqual([]);
+    }
   });
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
@@ -170,8 +176,12 @@ describe("google provider plugin hooks", () => {
       );
 
       const capturedPayload = capturedStream.getCapturedPayload();
-      expect(capturedPayload).toMatchObject({
-        config: { thinkingConfig: { thinkingLevel: "HIGH" } },
+      expect(capturedPayload).toEqual({
+        config: {
+          thinkingConfig: {
+            thinkingLevel: "HIGH",
+          },
+        },
       });
       const thinkingConfig = (
         (capturedPayload as Record<string, unknown>).config as Record<string, unknown>

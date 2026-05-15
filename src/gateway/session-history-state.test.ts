@@ -77,6 +77,55 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
+  test("uses carried sequence for inline SSE appends", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "initial" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "carried" }],
+      },
+      messageSeq: 9,
+    });
+
+    expect(appended?.messageSeq).toBe(9);
+    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(9);
+  });
+
+  test("requests refresh for non-monotonic carried inline sequence", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "current" }],
+          __openclaw: { seq: 5 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "rewound branch" }],
+      },
+      messageSeq: 3,
+    });
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    expect(state.snapshot().messages).toHaveLength(1);
+    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(5);
+  });
+
   test("marks bounded tail snapshots as having older history", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [
@@ -200,6 +249,47 @@ describe("SessionHistorySseState", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "visible answer" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+  });
+
+  test("drops subagent announce inter-session user messages from projected history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=webchat sourceTool=subagent_announce isUser=false",
+                "This content was routed by OpenClaw from another session or internal tool.",
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "subagent completion payload",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+              ].join("\n"),
+            },
+          ],
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceTool: "subagent_announce",
+          },
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "clean child result" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "clean child result" }],
         __openclaw: { seq: 2 },
       },
     ]);

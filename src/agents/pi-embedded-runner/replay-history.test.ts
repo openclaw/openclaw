@@ -1,5 +1,11 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+} from "../internal-runtime-context.js";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
@@ -152,6 +158,36 @@ describe("normalizeAssistantReplayContent", () => {
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
+  it("drops standalone silent assistant replay text", () => {
+    const messages = [userMessage("first"), bedrockAssistant("NO_REPLY"), userMessage("second")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("strips copied runtime context from assistant replay text", () => {
+    const messages = [
+      userMessage("first"),
+      bedrockAssistant([
+        {
+          type: "text",
+          text: [
+            "Visible before",
+            INTERNAL_RUNTIME_CONTEXT_BEGIN,
+            "keep this internal",
+            INTERNAL_RUNTIME_CONTEXT_END,
+            OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+            OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+            "",
+            "Visible after",
+          ].join("\n"),
+        },
+      ]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([{ type: "text", text: "Visible before\n\nVisible after" }]);
+  });
+
   it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {
     const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
     const messages = [
@@ -196,16 +232,14 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [userMessage("hello"), bedrockAssistant([], "error")];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).not.toBe(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 
   it("drops a trailing zero-usage empty stop assistant turn (#77228)", () => {
     const falseSuccessStop = bedrockAssistant([], "stop");
     const messages = [userMessage("hello"), falseSuccessStop];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 
   it("drops a trailing assistant turn that already carries the persisted sentinel content (#77228)", () => {
@@ -216,8 +250,7 @@ describe("normalizeAssistantReplayContent", () => {
     const persistedSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error");
     const messages = [userMessage("hello"), persistedSentinel];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 
   it("drops several consecutive trailing sentinel/empty-error turns at the tail", () => {
@@ -296,7 +329,6 @@ describe("normalizeAssistantReplayContent", () => {
     );
     const messages = [userMessage("hi"), persistedZeroUsageSentinel];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 });

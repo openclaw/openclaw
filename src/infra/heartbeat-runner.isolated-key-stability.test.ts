@@ -12,13 +12,25 @@ import {
 } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+  deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
+  deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetSystemEventsForTest();
 });
+
+type HeartbeatReplyContext = {
+  Body?: string;
+  ForceSenderIsOwnerFalse?: boolean;
+  Provider?: string;
+  SessionKey?: string;
+};
+
+function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
+  return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
+}
 
 describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   /**
@@ -57,7 +69,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    return replySpy.mock.calls[0]?.[0];
+    return replyCall(replySpy);
   }
 
   function makeIsolatedHeartbeatConfig(tmpDir: string, storePath: string): OpenClawConfig {
@@ -133,7 +145,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       // Key must remain stable — no double :heartbeat suffix.
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(replyCall(replySpy).SessionKey).toBe(`${baseSessionKey}:heartbeat`);
     });
   });
 
@@ -179,9 +191,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         { heartbeatIsolatedBaseSessionKey?: string }
       >;
       expect(store[deeplyAccumulatedKey]).toBeUndefined();
-      expect(store[`${baseSessionKey}:heartbeat`]).toMatchObject({
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
+      expect(store[`${baseSessionKey}:heartbeat`]?.heartbeatIsolatedBaseSessionKey).toBe(
+        baseSessionKey,
+      );
     });
   });
 
@@ -225,7 +237,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         },
       });
 
-      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+      expect(peekSystemEventEntries(baseSessionKey)).toStrictEqual([]);
 
       await runHeartbeatOnce({
         cfg,
@@ -238,16 +250,8 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(2);
-      const firstCtx = replySpy.mock.calls[0]?.[0] as {
-        Body?: string;
-        Provider?: string;
-        SessionKey?: string;
-      };
-      const secondCtx = replySpy.mock.calls[1]?.[0] as {
-        Body?: string;
-        Provider?: string;
-        SessionKey?: string;
-      };
+      const firstCtx = replyCall(replySpy);
+      const secondCtx = replyCall(replySpy, 1);
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(firstCtx.Provider).toBe("cron-event");
@@ -288,7 +292,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         },
       });
 
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(alreadyIsolatedKey);
+      expect(replyCall(replySpy).SessionKey).toBe(alreadyIsolatedKey);
     });
   });
 
@@ -326,11 +330,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(result.status).toBe("ran");
-      const calledCtx = replySpy.mock.calls[0]?.[0] as {
-        SessionKey?: string;
-        Provider?: string;
-        ForceSenderIsOwnerFalse?: boolean;
-      };
+      const calledCtx = replyCall(replySpy);
       expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
       expect(calledCtx.Provider).toBe("exec-event");
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
@@ -387,7 +387,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(isolatedSessionKey);
+      expect(replyCall(replySpy).SessionKey).toBe(isolatedSessionKey);
     });
   });
 
@@ -493,7 +493,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       // Must converge to the same canonical isolated key, not produce :heartbeat:heartbeat.
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(legacyIsolatedKey);
+      expect(replyCall(replySpy).SessionKey).toBe(legacyIsolatedKey);
     });
   });
 });

@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -31,6 +31,25 @@ describe("getTelegramSequentialKey", () => {
         }),
       },
       "telegram:123",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          message_thread_id: 9,
+          is_topic_message: true,
+        }),
+      },
+      "telegram:123:topic:9",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          is_topic_message: true,
+        }),
+      },
+      "telegram:123:topic:1",
     ],
     [
       {

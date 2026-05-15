@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeEvent } from "../runtime-api.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import { AcpxRuntime, __testing } from "./runtime.js";
 
@@ -25,6 +28,7 @@ function makeRuntime(
     cancel: AcpRuntime["cancel"];
     close: AcpRuntime["close"];
     ensureSession: AcpRuntime["ensureSession"];
+    runTurn: AcpRuntime["runTurn"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
     isHealthy(): boolean;
@@ -66,6 +70,7 @@ function makeRuntime(
           cancel: AcpRuntime["cancel"];
           close: AcpRuntime["close"];
           ensureSession: AcpRuntime["ensureSession"];
+          runTurn: AcpRuntime["runTurn"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
           isHealthy(): boolean;
@@ -108,6 +113,20 @@ function makeLeaseStore() {
   };
 }
 
+function readFirstEnsureSessionInput(ensure: {
+  mock: { calls: Array<Array<unknown>> };
+}): Parameters<AcpRuntime["ensureSession"]>[0] {
+  const [call] = ensure.mock.calls;
+  if (!call) {
+    throw new Error("Expected ensureSession to be called");
+  }
+  const [input] = call;
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Expected ensureSession to be called with an input object");
+  }
+  return input as Parameters<AcpRuntime["ensureSession"]>[0];
+}
+
 describe("AcpxRuntime fresh reset wrapper", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -126,17 +145,24 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     for (const badMode of ["run", "session", "", undefined, null, 0]) {
-      await expect(
-        runtime.ensureSession({
+      let error: unknown;
+      try {
+        await runtime.ensureSession({
           sessionKey: "agent:claude:acp:test",
           agent: "claude",
           mode: badMode as never,
-        }),
-      ).rejects.toMatchObject({
-        name: "AcpRuntimeError",
-        code: "ACP_INVALID_RUNTIME_OPTION",
-        message: expect.stringContaining("Unsupported ACP runtime session mode"),
-      });
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(AcpRuntimeError);
+      const acpError = error as AcpRuntimeError;
+      expect(acpError.name).toBe("AcpRuntimeError");
+      expect(acpError.code).toBe("ACP_INVALID_RUNTIME_OPTION");
+      expect(acpError.message).toBe(
+        `Unsupported ACP runtime session mode ${JSON.stringify(badMode)}. Expected one of: persistent, oneshot.`,
+      );
     }
 
     expect(ensureSpy).not.toHaveBeenCalled();
@@ -174,11 +200,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai-codex/gpt-5.4",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-5.4",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.4",
+    });
   });
 
   it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
@@ -204,13 +231,174 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "persistent",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const ensureInput = readFirstEnsureSessionInput(ensure);
+    expect(ensureInput).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+    expect(ensureInput).not.toHaveProperty("model");
+    expect(ensureInput).not.toHaveProperty("thinking");
+  });
+
+  it("adds Codex wrapper stderr tail to generic session initialization failures", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    const leaseStore = makeLeaseStore();
+    const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? wrapperCommand : agentName),
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async () => {
+      const leaseId = String(Array.from(leaseStore.leases.values())[0]?.leaseId);
+      await fs.writeFile(
+        path.join(wrapperRoot, `codex-acp-wrapper.stderr.${leaseId}.log`),
+        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+        "utf8",
+      );
+      throw new Error("Internal error");
+    });
+
+    const outcome = await runtime
+      .ensureSession({
+        sessionKey: "agent:codex:acp:test",
         agent: "codex",
-      }),
+        mode: "oneshot",
+      })
+      .then(
+        () => ({ status: "resolved" as const }),
+        (error) => ({ status: "rejected" as const, error }),
+      );
+
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      return;
+    }
+    expect(outcome.error).toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_SESSION_INIT_FAILED",
+      message: expect.stringContaining("deployment missing"),
+    });
+    expect(outcome.error.message).not.toContain("sk-testsecret1234567890");
+  });
+
+  it("adds Codex wrapper stderr tail to generic first-turn failures", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    await fs.writeFile(
+      path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-turn.log"),
+      "Unhandled error during turn: upstream model returned 404\n",
+      "utf8",
     );
-    expect(ensure.mock.calls[0]?.[0]).not.toHaveProperty("model");
-    expect(ensure.mock.calls[0]?.[0]).not.toHaveProperty("thinking");
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-turn",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "runTurn").mockImplementation(async function* () {
+      const emptyAsyncIterable: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ done: true, value: undefined as never }),
+        }),
+      };
+      yield* emptyAsyncIterable;
+      throw new Error("Internal error");
+    });
+
+    await expect(async () => {
+      for await (const _event of runtime.runTurn({
+        handle: {
+          sessionKey: "agent:codex:acp:test",
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:acp:test",
+          acpxRecordId: "agent:codex:acp:test",
+        },
+        text: "Reply exactly OK",
+        mode: "prompt",
+        requestId: "turn-1",
+      })) {
+        // no-op
+      }
+    }).rejects.toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+      message: expect.stringContaining("upstream model returned 404"),
+    });
+  });
+
+  it("adds Codex wrapper stderr tail to generic terminal turn error events", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    await fs.writeFile(
+      path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-turn-event.log"),
+      "Unhandled error during turn: profile missing OPENAI_API_KEY\n",
+      "utf8",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-turn-event",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "runTurn").mockImplementation(async function* () {
+      yield {
+        type: "error",
+        message: "Internal error",
+        retryable: false,
+      };
+    });
+
+    const events: AcpRuntimeEvent[] = [];
+    for await (const event of runtime.runTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-1",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        code: "ACP_TURN_FAILED",
+        message: expect.stringContaining("profile missing OPENAI_API_KEY"),
+        retryable: false,
+      },
+    ]);
   });
 
   it("does not normalize model startup for non-Codex ACP agents", async () => {
@@ -237,12 +425,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai-codex/gpt-5.5",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "main",
-        model: "openai-codex/gpt-5.5",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:main:acp:test",
+      agent: "main",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.5",
+    });
   });
 
   it("injects Codex ACP startup config into the scoped registry", () => {
@@ -283,11 +471,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai-codex/gpt-5.5",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-5.5",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.5",
+    });
   });
 
   it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
@@ -315,11 +504,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       thinking: "x-high",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-5.4/xhigh",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.4/xhigh",
+      thinking: "x-high",
+    });
   });
 
   it("normalizes Codex ACP model config controls to adapter ids", async () => {
@@ -449,7 +640,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("forwards timeout config controls for non-Codex ACP agents", async () => {
+  it("ignores unsupported claude-agent-acp timeout config controls", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -471,13 +662,68 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "timeout",
       value: "60",
     });
+    await runtime.setConfigOption({
+      handle,
+      key: "Timeout_Seconds",
+      value: "60",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
+  it("still forwards non-timeout config controls for claude-agent-acp", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "claude-sonnet-4.6",
+    });
 
     expect(setConfigOption).toHaveBeenCalledOnce();
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
-      key: "timeout",
-      value: "60",
+      key: "model",
+      value: "claude-sonnet-4.6",
     });
+  });
+
+  it("recognizes claude-agent-acp commands", () => {
+    expect(__testing.isClaudeAcpCommand("npx @agentclientprotocol/claude-agent-acp")).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand("npx -y @agentclientprotocol/claude-agent-acp@0.33.1"),
+    ).toBe(true);
+    expect(__testing.isClaudeAcpCommand("claude-agent-acp")).toBe(true);
+    expect(__testing.isClaudeAcpCommand("claude-agent-acp.exe")).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`),
+    ).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand(
+        `node.exe "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
+      ),
+    ).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand(
+        `Node.EXE "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
+      ),
+    ).toBe(true);
+    expect(__testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
+    expect(__testing.isClaudeAcpCommand("npx @zed-industries/codex-acp")).toBe(false);
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
@@ -645,20 +891,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
     const leases = Array.from(leaseStore.leases.values());
     expect(leases).toHaveLength(1);
-    expect(leases[0]).toMatchObject({
-      gatewayInstanceId: "gateway-test",
-      sessionKey: "agent:codex:acp:binding:test",
-      rootPid: 777,
-      state: "open",
-      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-    });
+    const lease = leases[0];
+    expect(lease?.gatewayInstanceId).toBe("gateway-test");
+    expect(lease?.sessionKey).toBe("agent:codex:acp:binding:test");
+    expect(lease?.rootPid).toBe(777);
+    expect(lease?.state).toBe("open");
+    expect(lease?.wrapperPath).toBe("/tmp/openclaw/acpx/codex-acp-wrapper.mjs");
     expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
     expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
     expect(savedRecords[0]?.agentCommand).toBe(CODEX_ACP_WRAPPER_COMMAND);
-    expect(savedRecords[0]).toMatchObject({
-      openclawGatewayInstanceId: "gateway-test",
-      openclawLeaseId: leases[0]?.leaseId,
-    });
+    expect(savedRecords[0]?.openclawGatewayInstanceId).toBe("gateway-test");
+    expect(savedRecords[0]?.openclawLeaseId).toBe(lease?.leaseId);
   });
 
   it("keeps reusable persistent ACP launch commands stable across ensures", async () => {
@@ -735,10 +978,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
 
-    await expect(wrappedStore.load("agent:codex:acp:binding:test")).resolves.toMatchObject({
-      openclawGatewayInstanceId: "gateway-test",
-      openclawLeaseId: "lease-loaded",
-    });
+    const loadedRecord = await wrappedStore.load("agent:codex:acp:binding:test");
+    expect(loadedRecord?.openclawGatewayInstanceId).toBe("gateway-test");
+    expect(loadedRecord?.openclawLeaseId).toBe("lease-loaded");
   });
 
   it("merges the lease for the current ACPX session process when old leases exist", async () => {
@@ -779,10 +1021,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
 
-    await expect(wrappedStore.load("agent:codex:acp:binding:test")).resolves.toMatchObject({
-      openclawGatewayInstanceId: "gateway-test",
-      openclawLeaseId: "lease-current",
-    });
+    const loadedRecord = await wrappedStore.load("agent:codex:acp:binding:test");
+    expect(loadedRecord?.openclawGatewayInstanceId).toBe("gateway-test");
+    expect(loadedRecord?.openclawLeaseId).toBe("lease-current");
   });
 
   it("uses matching leases before legacy pid cleanup on close", async () => {
@@ -929,9 +1170,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       { pid: 941, signal: "SIGTERM" },
       { pid: 940, signal: "SIGTERM" },
     ]);
-    expect(leaseStore.store.markState).not.toHaveBeenCalledWith("lease-old", expect.any(String));
-    expect(leaseStore.store.markState).toHaveBeenCalledWith("lease-current", "closing");
-    expect(leaseStore.store.markState).toHaveBeenLastCalledWith("lease-current", "closed");
+    expect(leaseStore.store.markState.mock.calls).toEqual([
+      ["lease-current", "closing"],
+      ["lease-current", "closed"],
+    ]);
   });
 
   it("does not clean up a stale close pid reused by another wrapper root", async () => {
@@ -976,7 +1218,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       reason: "user-close",
     });
 
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not tear down reusable ACPX sessions after cancel", async () => {
@@ -1019,7 +1261,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     expect(cancel).toHaveBeenCalledWith(input);
     expect(listProcesses).not.toHaveBeenCalled();
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {

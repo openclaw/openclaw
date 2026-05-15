@@ -49,7 +49,7 @@ const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 
 class AcpBindSkipError extends Error {
-  readonly name = "AcpBindSkipError";
+  override readonly name = "AcpBindSkipError";
 }
 
 function createSlackCurrentConversationBindingRegistry() {
@@ -98,18 +98,21 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
 }
 
 function extractAssistantTexts(messages: unknown[]): string[] {
-  return messages
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return undefined;
-      }
-      const role = (entry as { role?: unknown }).role;
-      if (role !== "assistant") {
-        return undefined;
-      }
-      return extractFirstTextBlock(entry);
-    })
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const role = (entry as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
 
 function createAcpRecallPrompt(

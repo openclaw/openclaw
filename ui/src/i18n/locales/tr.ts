@@ -216,6 +216,14 @@ export const tr: TranslationMap = {
     sessionDetails: "Oturum ayrıntıları",
     compactionHistory: "Sıkıştırma geçmişi",
     status: "Durum",
+    statusLive: "Canlı",
+    statusIdle: "Boşta",
+    statusUnknown: "Bilinmiyor",
+    statusRunning: "Çalışıyor",
+    statusDone: "Tamamlandı",
+    statusFailed: "Başarısız",
+    statusKilled: "Sonlandırıldı",
+    statusTimeout: "Zaman aşımına uğradı",
     model: "Model",
     provider: "Sağlayıcı",
     runtime: "Çalışma zamanı",
@@ -341,6 +349,12 @@ export const tr: TranslationMap = {
     eventLogTitle: "Olay Günlüğü",
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
+  },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
   },
   execApproval: {
     expiresIn: "expires in {time}",
@@ -689,10 +703,6 @@ export const tr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
-    },
     common: {
       emptyValue: "—",
       unknown: "bilinmiyor",
@@ -1040,6 +1050,10 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    autoScrollMode: "Otomatik kaydırma modu",
+    autoScrollAlways: "Her zaman",
+    autoScrollNearBottom: "Alta yakın",
+    autoScrollOff: "Kapalı",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",
     hideCronSessions: "Cron oturumlarını gizle",
     showCronSessions: "Cron oturumlarını göster",
@@ -1055,6 +1069,42 @@ export const tr: TranslationMap = {
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Dışa aktar",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Oturumları ajana göre filtrele",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "İngilizce",

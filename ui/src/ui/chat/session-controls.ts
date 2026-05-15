@@ -1,5 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { t } from "../../i18n/index.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, CHAT_SESSIONS_REFRESH_LIMIT } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -9,8 +11,10 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
 import {
   buildAgentMainSessionKey,
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
@@ -56,7 +60,7 @@ export function renderChatSessionSelect(
       <label class="field chat-controls__session chat-controls__session-picker">
         <select
           data-chat-session-select="true"
-          aria-label="Chat session"
+          aria-label=${t("chat.selectors.session")}
           .value=${state.sessionKey}
           title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
@@ -111,7 +115,7 @@ function renderChatAgentSelect(
     <label class="field chat-controls__session chat-controls__agent">
       <select
         data-chat-agent-filter="true"
-        aria-label="Filter sessions by agent"
+        aria-label=${t("chat.selectors.agentFilter")}
         title=${selectedLabel}
         .value=${activeAgentId}
         ?disabled=${!state.connected}
@@ -138,12 +142,19 @@ function renderChatAgentSelect(
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
-    limit: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
+    agentId: resolveSessionOptionsAgentId(state),
   });
+}
+
+function resolveSessionOptionsAgentId(state: AppViewState): string {
+  return (
+    parseAgentSessionKey(state.sessionKey)?.agentId ?? normalizeAgentId(state.agentsList?.defaultId)
+  );
 }
 
 async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
@@ -168,7 +179,7 @@ function renderChatModelSelect(state: AppViewState) {
     <label class="field chat-controls__session chat-controls__model">
       <select
         data-chat-model-select="true"
-        aria-label="Chat model"
+        aria-label=${t("chat.selectors.model")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
@@ -311,7 +322,7 @@ export function renderChatThinkingSelect(state: AppViewState) {
       <select
         class="chat-controls__thinking-select-full"
         data-chat-thinking-select="true"
-        aria-label="Chat thinking level"
+        aria-label=${t("chat.selectors.thinkingLevel")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${onChange}
@@ -429,132 +440,12 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
   }
 }
 
-/* Channel display labels. */
-const CHANNEL_LABELS: Record<string, string> = {
-  imessage: "iMessage",
-  telegram: "Telegram",
-  discord: "Discord",
-  signal: "Signal",
-  slack: "Slack",
-  whatsapp: "WhatsApp",
-  matrix: "Matrix",
-  email: "Email",
-  sms: "SMS",
-};
-
-const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
-
-/** Parsed type / context extracted from a session key. */
-export type SessionKeyInfo = {
-  /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
-  prefix: string;
-  /** Human-readable fallback when no label / displayName is available. */
-  fallbackName: string;
-};
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-/**
- * Parse a session key to extract type information and a human-readable
- * fallback display name. Exported for testing.
- */
-export function parseSessionKey(key: string): SessionKeyInfo {
-  const normalized = normalizeLowercaseStringOrEmpty(key);
-
-  // Main session.
-  if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
-  }
-
-  // Subagent.
-  if (key.includes(":subagent:")) {
-    return { prefix: "Subagent:", fallbackName: "Subagent:" };
-  }
-
-  // Cron job.
-  if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
-  }
-
-  // Direct chat: agent:<x>:<channel>:direct:<id>.
-  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
-  if (directMatch) {
-    const channel = directMatch[1];
-    const identifier = directMatch[2];
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
-  }
-
-  // Group chat: agent:<x>:<channel>:group:<id>.
-  const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
-  if (groupMatch) {
-    const channel = groupMatch[1];
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} Group` };
-  }
-
-  // Channel-prefixed legacy keys, for example "imessage:g-...".
-  for (const ch of KNOWN_CHANNEL_KEYS) {
-    if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
-    }
-  }
-
-  // Unknown: return key as-is.
-  return { prefix: "", fallbackName: key };
-}
-
-export function resolveSessionDisplayName(
-  key: string,
-  row?: SessionsListResult["sessions"][number],
-): string {
-  const label = normalizeOptionalString(row?.label) ?? "";
-  const displayName = normalizeOptionalString(row?.displayName) ?? "";
-  const { prefix, fallbackName } = parseSessionKey(key);
-
-  const applyTypedPrefix = (name: string): string => {
-    if (!prefix) {
-      return name;
-    }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
-  };
-
-  if (label && label !== key) {
-    return applyTypedPrefix(label);
-  }
-  if (displayName && displayName !== key) {
-    return applyTypedPrefix(displayName);
-  }
-  return fallbackName;
-}
-
-export function isCronSessionKey(key: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(key);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("cron:")) {
-    return true;
-  }
-  if (!normalized.startsWith("agent:")) {
-    return false;
-  }
-  const parts = normalized.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return false;
-  }
-  const rest = parts.slice(2).join(":");
-  return rest.startsWith("cron:");
-}
-
 type SessionOptionEntry = {
   key: string;
   label: string;
   scopeLabel: string;
   title: string;
+  parentKey?: string;
 };
 
 export type SessionOptionGroup = {
@@ -665,7 +556,7 @@ export function resolveSessionOptionGroups(
     return created;
   };
 
-  const addOption = (key: string) => {
+  const addOption = (key: string, parentKey?: string, isChild?: boolean) => {
     if (!key || seenKeys.has(key)) {
       return;
     }
@@ -679,12 +570,16 @@ export function resolveSessionOptionGroups(
         )
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    let label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    if (isChild) {
+      label = `└─ ${label.replace(/^Subagent:\s*/i, "")}`;
+    }
     group.options.push({
       key,
       label,
       scopeLabel,
       title: key,
+      ...(parentKey ? { parentKey } : {}),
     });
   };
 
@@ -701,12 +596,47 @@ export function resolveSessionOptionGroups(
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    addOption(row.key);
+    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    if (isSubagent && row.spawnedBy && byKey.has(row.spawnedBy)) {
+      addOption(row.key, row.spawnedBy, true);
+    } else {
+      addOption(row.key);
+    }
   }
   if (byKey.has(sessionKey)) {
     addOption(sessionKey);
   } else if (isAgentMainSessionKey(sessionKey)) {
     addOption(sessionKey);
+  }
+
+  for (const group of groups.values()) {
+    const options = group.options;
+    const optionKeys = new Set(options.map((option) => option.key));
+    const childrenByParent = new Map<string, SessionOptionEntry[]>();
+    for (const option of options) {
+      if (option.parentKey && optionKeys.has(option.parentKey)) {
+        const siblings = childrenByParent.get(option.parentKey);
+        if (siblings) {
+          siblings.push(option);
+        } else {
+          childrenByParent.set(option.parentKey, [option]);
+        }
+      }
+    }
+    if (childrenByParent.size > 0) {
+      const reordered: SessionOptionEntry[] = [];
+      for (const option of options) {
+        if (option.parentKey && optionKeys.has(option.parentKey)) {
+          continue;
+        }
+        reordered.push(option);
+        const children = childrenByParent.get(option.key);
+        if (children) {
+          reordered.push(...children);
+        }
+      }
+      options.splice(0, options.length, ...reordered);
+    }
   }
 
   for (const group of groups.values()) {

@@ -196,7 +196,7 @@ describe("hooks", () => {
     it("should use empty context if not provided", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
 
-      expect(event.context).toEqual({});
+      expect(event.context).toStrictEqual({});
     });
   });
 
@@ -458,7 +458,7 @@ describe("hooks", () => {
 
     it("should return empty array when no handlers are registered", () => {
       const keys = getRegisteredEventKeys();
-      expect(keys).toEqual([]);
+      expect(keys).toStrictEqual([]);
     });
   });
 
@@ -470,7 +470,7 @@ describe("hooks", () => {
       clearInternalHooks();
 
       const keys = getRegisteredEventKeys();
-      expect(keys).toEqual([]);
+      expect(keys).toStrictEqual([]);
     });
   });
 });

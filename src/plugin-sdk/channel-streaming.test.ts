@@ -8,6 +8,7 @@ import {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
@@ -167,7 +168,7 @@ describe("channel-streaming", () => {
 
   it("uses auto progress labels when no explicit label is configured", () => {
     const invalidLabels = DEFAULT_PROGRESS_DRAFT_LABELS.filter((label) => !label.endsWith("..."));
-    expect(invalidLabels).toEqual([]);
+    expect(invalidLabels).toStrictEqual([]);
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -250,7 +251,7 @@ describe("channel-streaming", () => {
     expect(
       formatChannelProgressDraftText({
         entry: { streaming: { progress: { label: "Shelling" } } },
-        lines: ["x".repeat(80)],
+        lines: ["x".repeat(160)],
         formatLine: (line) => `\`${line}\``,
       }),
     ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
@@ -274,25 +275,25 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe("Shelling\n🛠️ Exec: run node script…that/keeps/going/and/going/index…");
+    expect(text).toBe("Shelling\n🛠️ run node script…th/that/keeps/going/and/going/index…");
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 
   it("formats progress draft lines with shared tool display labels", () => {
-    expect(
-      buildChannelProgressDraftLine({
-        event: "tool",
-        name: "write",
-        args: { path: "/tmp/demo/index.html" },
-      }),
-    ).toMatchObject({
-      kind: "tool",
-      icon: "✍️",
-      label: "Write",
-      detail: "to /tmp/demo/index.html",
-      text: "✍️ Write: to /tmp/demo/index.html",
-      toolName: "write",
+    const progressLine = buildChannelProgressDraftLine({
+      event: "tool",
+      name: "write",
+      args: { path: "/tmp/demo/index.html" },
     });
+    if (!progressLine) {
+      throw new Error("expected tool progress draft line");
+    }
+    expect(progressLine.kind).toBe("tool");
+    expect(progressLine.icon).toBe("✍️");
+    expect(progressLine.label).toBe("Write");
+    expect(progressLine.detail).toBe("to /tmp/demo/index.html");
+    expect(progressLine.text).toBe("✍️ Write: to /tmp/demo/index.html");
+    expect(progressLine.toolName).toBe("write");
     expect(
       formatChannelProgressDraftLine({
         event: "tool",
@@ -323,14 +324,14 @@ describe("channel-streaming", () => {
         },
         { detailMode: "raw" },
       ),
-    ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
+    ).toBe("🛠️ run tests, `pnpm test -- --watch=false`");
     expect(
       formatChannelProgressDraftLine({
         event: "tool",
         name: "bash",
         args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
       }),
-    ).toBe("🛠️ Bash: print lines 1-80 from extensions/discord/src/draft-stream.ts");
+    ).toBe("🛠️ print lines 1-80 from extensions/discord/src/draft-stream.ts");
     expect(
       formatChannelProgressDraftLine({
         event: "tool",
@@ -345,7 +346,7 @@ describe("channel-streaming", () => {
         name: "exec",
         progressText: "raw command output",
       }),
-    ).toBe("🛠️ Exec: raw command output");
+    ).toBe("🛠️ raw command output");
     expect(
       formatChannelProgressDraftLine(
         {
@@ -393,6 +394,42 @@ describe("channel-streaming", () => {
         progressText: "Reading the code path",
       }),
     ).toBe("Reading the code path");
+  });
+
+  it("updates keyed progress lines in place", () => {
+    const first = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "preamble-1",
+      itemKind: "preamble",
+      title: "Preamble",
+      progressText: "Checking the",
+    });
+    const second = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "preamble-1",
+      itemKind: "preamble",
+      title: "Preamble",
+      progressText: "Checking the app-server stream",
+    });
+    if (!first || !second) {
+      throw new Error("expected preamble progress lines");
+    }
+
+    const initialLines: Array<string | typeof first> = ["🛠️ Exec"];
+    const lines = mergeChannelProgressDraftLine(initialLines, first, { maxLines: 4 });
+    const updated = mergeChannelProgressDraftLine(lines, second, { maxLines: 4 });
+
+    expect(updated).toHaveLength(2);
+    expect(updated.at(-1)).toMatchObject({
+      id: "preamble-1",
+      text: "Checking the app-server stream",
+    });
+    expect(
+      formatChannelProgressDraftText({
+        lines: updated,
+        entry: { streaming: { progress: { label: false } } },
+      }),
+    ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

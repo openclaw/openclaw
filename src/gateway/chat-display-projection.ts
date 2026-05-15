@@ -1,6 +1,10 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
+  INTER_SESSION_PROMPT_PREFIX_BASE,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
+import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
@@ -505,12 +509,59 @@ function isEmptyTextOnlyContent(content: unknown): boolean {
   return sawText;
 }
 
+function hasTranscriptMediaPaths(message: Record<string, unknown>): boolean {
+  const mediaPaths = Array.isArray(message.MediaPaths)
+    ? message.MediaPaths
+    : typeof message.MediaPath === "string"
+      ? [message.MediaPath]
+      : [];
+  return mediaPaths.some((value) => typeof value === "string" && value.trim());
+}
+
+function extractProjectedText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string") {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n");
+}
+
+function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+    return true;
+  }
+  const text = extractProjectedText(message.content ?? message.text);
+  return (
+    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
+  );
+}
+
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
   }
-  if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content ?? message.text)) {
+  if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
+    return true;
+  }
+  if (
+    roleContent.role === "user" &&
+    isEmptyTextOnlyContent(message.content ?? message.text) &&
+    !hasTranscriptMediaPaths(message)
+  ) {
     return true;
   }
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {

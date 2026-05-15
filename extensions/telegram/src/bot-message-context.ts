@@ -1,10 +1,13 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
+import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -116,6 +119,7 @@ export const buildTelegramMessageContext = async ({
   allMedia,
   replyMedia = [],
   replyChain = [],
+  promptContext = [],
   storeAllowFrom,
   options,
   bot,
@@ -580,6 +584,7 @@ export const buildTelegramMessageContext = async ({
     allMedia,
     replyMedia,
     replyChain,
+    promptContext,
     isGroup,
     isForum,
     chatId,

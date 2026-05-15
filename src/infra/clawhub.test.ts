@@ -20,6 +20,41 @@ import {
   searchClawHubSkills,
 } from "./clawhub.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  expect((statError as { code?: unknown }).code).toBe("ENOENT");
+}
+
+function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: Uint8Array }): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+} {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(params.firstChunk);
+    },
+    cancel(reason) {
+      cancel(reason);
+    },
+  });
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers: params.headers,
+    }),
+    cancel,
+  };
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
@@ -237,7 +272,7 @@ describe("clawhub helpers", () => {
       });
     };
 
-    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
 
   it("fetches typed package readiness reports", async () => {
@@ -359,7 +394,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -398,7 +433,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -448,6 +483,19 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
+  it("wraps malformed successful ClawHub JSON responses", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(
@@ -480,6 +528,63 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded$/);
   });
 
+  it("times out and cancels stalled skill archive body reads", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new Uint8Array([4]),
+      headers: { "content-type": "application/zip" },
+    });
+
+    await expect(
+      downloadClawHubSkillArchive({
+        slug: "agentreceipt",
+        version: "1.0.0",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(/skill archive download for agentreceipt body stalled after 5ms/i);
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("times out and cancels stalled package archive body reads", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new Uint8Array([1]),
+      headers: { "content-type": "application/zip" },
+    });
+
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "@hyf/zai-external-alpha",
+        version: "0.0.1",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(
+      /package archive download for @hyf\/zai-external-alpha body stalled after 5ms/i,
+    );
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("times out and cancels stalled ClawPack artifact body reads", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new Uint8Array([7]),
+      headers: { "content-type": "application/octet-stream" },
+    });
+
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact: "clawpack",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(/ClawPack download for demo@1.2.3 body stalled after 5ms/i);
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
       slug: "agentreceipt",
@@ -497,7 +602,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 });

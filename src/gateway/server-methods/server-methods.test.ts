@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -30,6 +31,43 @@ import { logsHandlers } from "./logs.js";
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function lastMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
+  const call = mock.mock.calls.at(-1);
+  if (!call) {
+    throw new Error("Expected mock call");
+  }
+  return call[argIndex];
+}
 
 describe("waitForAgentJob", () => {
   async function runLifecycleScenario(params: {
@@ -74,10 +112,11 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await snapshotPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("timeout");
-      expect(snapshot?.startedAt).toBe(100);
-      expect(snapshot?.endedAt).toBe(200);
+      expectRecordFields(snapshot, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -89,10 +128,11 @@ describe("waitForAgentJob", () => {
       startedAt: 300,
       endedAt: 400,
     });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(300);
-    expect(snapshot?.endedAt).toBe(400);
+    expectRecordFields(snapshot, {
+      status: "ok",
+      startedAt: 300,
+      endedAt: 400,
+    });
   });
 
   it("ignores transient aborted end events when the same run later succeeds", async () => {
@@ -119,10 +159,11 @@ describe("waitForAgentJob", () => {
     });
 
     const snapshot = await waitPromise;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(500);
-    expect(snapshot?.endedAt).toBe(700);
+    expectRecordFields(snapshot, {
+      status: "ok",
+      startedAt: 500,
+      endedAt: 700,
+    });
   });
 
   it("lets a later aborted timeout replace a pending lifecycle error", async () => {
@@ -149,10 +190,11 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await waitPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("timeout");
-      expect(snapshot?.startedAt).toBe(800);
-      expect(snapshot?.endedAt).toBe(1_000);
+      expectRecordFields(snapshot, {
+        status: "timeout",
+        startedAt: 800,
+        endedAt: 1_000,
+      });
       expect(snapshot?.error).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -183,11 +225,12 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await waitPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("error");
-      expect(snapshot?.startedAt).toBe(1_100);
-      expect(snapshot?.endedAt).toBe(1_300);
-      expect(snapshot?.error).toBe("final error");
+      expectRecordFields(snapshot, {
+        status: "error",
+        startedAt: 1_100,
+        endedAt: 1_300,
+        error: "final error",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -551,6 +594,28 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
+
+  it("keeps media-only user messages while dropping empty text-only user messages", () => {
+    const mediaOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/openclaw/user-upload.png",
+      timestamp: 1,
+    };
+    const multiMediaOnly = {
+      role: "user",
+      content: "",
+      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+      timestamp: 2,
+    };
+    const result = projectRecentChatDisplayMessages([
+      mediaOnly,
+      multiMediaOnly,
+      { role: "user", content: "", timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
@@ -722,12 +787,13 @@ describe("exec approval handlers", () => {
     handlers: ExecApprovalHandlers;
     id: string;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalGetArgs["client"];
   }) {
     return params.handlers["exec.approval.get"]({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-get", type: "req", method: "exec.approval.get" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -736,12 +802,13 @@ describe("exec approval handlers", () => {
   async function listExecApprovals(params: {
     handlers: ExecApprovalHandlers;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.list"]({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-list", type: "req", method: "exec.approval.list" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -752,6 +819,7 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -795,7 +863,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -807,6 +875,7 @@ describe("exec approval handlers", () => {
     decision?: "allow-once" | "allow-always" | "deny";
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: {
@@ -815,18 +884,19 @@ describe("exec approval handlers", () => {
       } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
   }
 
-  function createExecApprovalFixture() {
+  function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const respond = vi.fn();
     const context = {
+      getRuntimeConfig: () => opts?.config ?? {},
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
       },
@@ -919,13 +989,11 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "nodeId is required for host=node",
-      }),
-    );
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "nodeId is required for host=node",
+    });
   });
 
   it("rejects host=node approval requests without systemRunPlan", async () => {
@@ -938,13 +1006,11 @@ describe("exec approval handlers", () => {
         systemRunPlan: undefined,
       },
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "systemRunPlan is required for host=node",
-      }),
-    );
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "systemRunPlan is required for host=node",
+    });
   });
 
   it("rejects whitespace-only approval commands without trimming display text", async () => {
@@ -960,13 +1026,34 @@ describe("exec approval handlers", () => {
         systemRunPlan: undefined,
       },
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "command is required",
-      }),
-    );
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), { message: "command is required" });
+  });
+
+  it("rejects approval requests when the command display would be truncated", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "command exceeds exec approval display limit",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+    });
+    expect(broadcasts).toEqual([]);
   });
 
   it("returns pending approval details for exec.approval.get", async () => {
@@ -993,18 +1080,17 @@ describe("exec approval handlers", () => {
     const getRespond = vi.fn();
     await getExecApproval({ handlers, id, respond: getRespond });
 
-    expect(getRespond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        id,
-        commandText: "echo ok",
-        allowedDecisions: expect.arrayContaining(["allow-once", "allow-always", "deny"]),
-        host: "gateway",
-        nodeId: null,
-        agentId: null,
-      }),
-      undefined,
-    );
+    expect(mockCallArg(getRespond)).toBe(true);
+    const approval = mockCallArg(getRespond, 0, 1) as Record<string, unknown>;
+    expectRecordFields(approval, {
+      id,
+      commandText: "echo ok",
+      host: "gateway",
+      nodeId: null,
+      agentId: null,
+    });
+    expect(approval.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
+    expect(mockCallArg(getRespond, 0, 2)).toBeUndefined();
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1035,13 +1121,10 @@ describe("exec approval handlers", () => {
 
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
-    expect(request.request?.commandAnalysis).toEqual(
-      expect.objectContaining({
-        commandCount: 1,
-        riskKinds: expect.arrayContaining(["inline-eval"]),
-        warningLines: expect.arrayContaining(["Contains inline-eval: python3 -c"]),
-      }),
-    );
+    const commandAnalysis = request.request?.commandAnalysis as Record<string, unknown>;
+    expect(commandAnalysis.commandCount).toBe(1);
+    expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
+    expect(commandAnalysis.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1071,18 +1154,12 @@ describe("exec approval handlers", () => {
     const listRespond = vi.fn();
     await listExecApprovals({ handlers, respond: listRespond });
 
-    expect(listRespond).toHaveBeenCalledWith(
-      true,
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "approval-list-1",
-          request: expect.objectContaining({
-            command: "echo ok",
-          }),
-        }),
-      ]),
-      undefined,
-    );
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    const approval = approvals.find((entry) => entry.id === "approval-list-1");
+    expectRecordFields(approval, { id: "approval-list-1" });
+    expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
+    expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1092,6 +1169,83 @@ describe("exec approval handlers", () => {
       context,
     });
     await requestPromise;
+  });
+
+  it("lists and resolves only exec approvals owned by the caller", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+    const ownerClient = {
+      connId: "conn-owner",
+      connect: {
+        client: { id: "client-owner" },
+        device: { id: "device-owner" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+    const otherClient = {
+      connId: "conn-other",
+      connect: {
+        client: { id: "client-other" },
+        device: { id: "device-other" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+
+    const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
+    visible.requestedByDeviceId = "device-owner";
+    visible.requestedByConnId = "conn-owner";
+    visible.requestedByClientId = "client-owner";
+    void manager.register(visible, 60_000);
+
+    const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
+    hidden.requestedByDeviceId = "device-other";
+    hidden.requestedByConnId = "conn-other";
+    hidden.requestedByClientId = "client-other";
+    void manager.register(hidden, 60_000);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond: resolveRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const hiddenRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: hiddenRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(mockCallArg(hiddenRespond)).toBe(false);
+    expectRecordFields(mockCallArg(hiddenRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const otherRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: otherRespond,
+      context,
+      client: otherClient,
+    });
+    expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("returns not found for stale exec.approval.get ids", async () => {
@@ -1117,14 +1271,12 @@ describe("exec approval handlers", () => {
 
     const getRespond = vi.fn();
     await getExecApproval({ handlers, id: acceptedId as string, respond: getRespond });
-    expect(getRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown or expired approval id",
-      }),
-    );
+    expect(mockCallArg(getRespond)).toBe(false);
+    expect(mockCallArg(getRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(getRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
   });
 
   it("broadcasts request + resolve", async () => {
@@ -1139,11 +1291,9 @@ describe("exec approval handlers", () => {
 
     const { id } = getRequestedExecApprovalPayload(broadcasts);
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "accepted", id }),
-      undefined,
-    );
+    expect(mockCallArg(respond)).toBe(true);
+    expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
+    expect(mockCallArg(respond, 0, 2)).toBeUndefined();
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -1156,11 +1306,9 @@ describe("exec approval handlers", () => {
     await requestPromise;
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id, decision: "allow-once" }),
-      undefined,
-    );
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
     expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
   });
 
@@ -1207,17 +1355,14 @@ describe("exec approval handlers", () => {
 
     expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
+    expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
       resolvedBroadcastCount,
     );
-    expect(conflictingResolveRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "approval already resolved",
-        details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
-      }),
-    );
+    expect(mockCallArg(conflictingResolveRespond)).toBe(false);
+    expect(mockCallArg(conflictingResolveRespond, 0, 1)).toBeUndefined();
+    const error = mockCallArg(conflictingResolveRespond, 0, 2) as Record<string, unknown>;
+    expect(error.message).toBe("approval already resolved");
+    expectRecordFields(error.details, { reason: "APPROVAL_ALREADY_RESOLVED" });
   });
 
   it("rejects allow-always when the request ask mode is always", async () => {
@@ -1241,14 +1386,12 @@ describe("exec approval handlers", () => {
       context,
     });
 
-    expect(resolveRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message:
-          "allow-always is unavailable because the effective policy requires approval every time",
-      }),
-    );
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      message:
+        "allow-always is unavailable because the effective policy requires approval every time",
+    });
 
     const denyRespond = vi.fn();
     await resolveExecApproval({
@@ -1465,7 +1608,9 @@ describe("exec approval handlers", () => {
   });
 
   it("preserves command analysis and normalizes command spans", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -1483,19 +1628,61 @@ describe("exec approval handlers", () => {
       },
     });
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toEqual(expect.objectContaining({ event: "exec.approval.requested" }));
+    expectRecordFields(requested, { event: "exec.approval.requested" });
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toEqual([
       { startIndex: 0, endIndex: 2 },
       { startIndex: 5, endIndex: 11 },
     ]);
   });
 
-  it("drops command spans when command display sanitization changes offsets", async () => {
+  it("drops command spans by default", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command highlighting is disabled", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: false } } },
+    });
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -1547,11 +1734,9 @@ describe("exec approval handlers", () => {
     });
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ decision: "allow-once" }),
-      undefined,
-    );
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), { decision: "allow-once" });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("accepts explicit approval ids", async () => {
@@ -1577,11 +1762,12 @@ describe("exec approval handlers", () => {
     });
 
     await requestPromise;
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-123", decision: "allow-once" }),
-      undefined,
-    );
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-123",
+      decision: "allow-once",
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
@@ -1595,14 +1781,12 @@ describe("exec approval handlers", () => {
       params: { id: "plugin:approval-123", host: "gateway" },
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "approval ids starting with plugin: are reserved",
-      }),
-    );
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "approval ids starting with plugin: are reserved",
+    });
   });
 
   it("accepts unique short approval id prefixes", async () => {
@@ -1651,13 +1835,11 @@ describe("exec approval handlers", () => {
       context,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "ambiguous approval id prefix; use the full id",
-      }),
-    );
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "ambiguous approval id prefix; use the full id",
+    });
   });
 
   it("returns deterministic unknown/expired message for missing approval ids", async () => {
@@ -1670,15 +1852,14 @@ describe("exec approval handlers", () => {
       context,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown or expired approval id",
-        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
-      }),
-    );
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    const error = mockCallArg(respond, 0, 2) as Record<string, unknown>;
+    expectRecordFields(error, {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expectRecordFields(error.details, { reason: "APPROVAL_NOT_FOUND" });
   });
 
   it("resolves only the targeted approval id when multiple requests are pending", async () => {
@@ -1723,16 +1904,18 @@ describe("exec approval handlers", () => {
     await requestOne;
     await requestTwo;
 
-    expect(respondOne).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-one", decision: "allow-once" }),
-      undefined,
-    );
-    expect(respondTwo).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-two", decision: null }),
-      undefined,
-    );
+    expect(lastMockCallArg(respondOne)).toBe(true);
+    expectRecordFields(lastMockCallArg(respondOne, 1), {
+      id: "approval-one",
+      decision: "allow-once",
+    });
+    expect(lastMockCallArg(respondOne, 2)).toBeUndefined();
+    expect(lastMockCallArg(respondTwo)).toBe(true);
+    expectRecordFields(lastMockCallArg(respondTwo, 1), {
+      id: "approval-two",
+      decision: null,
+    });
+    expect(lastMockCallArg(respondTwo, 2)).toBeUndefined();
   });
 
   it("forwards turn-source metadata to exec approval forwarding", async () => {
@@ -1754,16 +1937,13 @@ describe("exec approval handlers", () => {
       });
       await drainApprovalRequestTicks();
       expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-      expect(forwarder.handleRequested).toHaveBeenCalledWith(
-        expect.objectContaining({
-          request: expect.objectContaining({
-            turnSourceChannel: "whatsapp",
-            turnSourceTo: "+15555550123",
-            turnSourceAccountId: "work",
-            turnSourceThreadId: "1739201675.123",
-          }),
-        }),
-      );
+      const forwarded = mockCallArg(forwarder.handleRequested) as Record<string, unknown>;
+      expectRecordFields(forwarded.request, {
+        turnSourceChannel: "whatsapp",
+        turnSourceTo: "+15555550123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "1739201675.123",
+      });
 
       await vi.runOnlyPendingTimersAsync();
       await requestPromise;
@@ -1813,31 +1993,26 @@ describe("exec approval handlers", () => {
     await requestPromise;
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(forwarder.handleResolved).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "approval-control-ui-multichannel",
-        decision: "allow-once",
-        request: expect.objectContaining({
-          sessionKey: "agent:main:feishu:chat-123",
-          turnSourceChannel: "feishu",
-          turnSourceTo: "chat-123",
-          turnSourceAccountId: "work",
-          turnSourceThreadId: "thread-456",
-        }),
-      }),
-    );
-    expect(broadcasts).toContainEqual(
-      expect.objectContaining({
-        event: "exec.approval.resolved",
-        payload: expect.objectContaining({
-          id: "approval-control-ui-multichannel",
-          request: expect.objectContaining({
-            turnSourceChannel: "feishu",
-            turnSourceTo: "chat-123",
-          }),
-        }),
-      }),
-    );
+    const resolved = mockCallArg(forwarder.handleResolved) as Record<string, unknown>;
+    expectRecordFields(resolved, {
+      id: "approval-control-ui-multichannel",
+      decision: "allow-once",
+    });
+    expectRecordFields(resolved.request, {
+      sessionKey: "agent:main:feishu:chat-123",
+      turnSourceChannel: "feishu",
+      turnSourceTo: "chat-123",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: "thread-456",
+    });
+    const resolvedBroadcast = broadcasts.find((entry) => entry.event === "exec.approval.resolved");
+    expect(resolvedBroadcast?.event).toBe("exec.approval.resolved");
+    const payload = resolvedBroadcast?.payload as Record<string, unknown>;
+    expect(payload.id).toBe("approval-control-ui-multichannel");
+    expectRecordFields(payload.request, {
+      turnSourceChannel: "feishu",
+      turnSourceTo: "chat-123",
+    });
   });
 
   it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
@@ -1854,11 +2029,12 @@ describe("exec approval handlers", () => {
 
     expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-no-approver", decision: null }),
-      undefined,
-    );
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-no-approver",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("keeps approvals pending when iOS push delivery accepted the request", async () => {
@@ -1885,21 +2061,71 @@ describe("exec approval handlers", () => {
     });
 
     await vi.waitFor(() => {
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "accepted", id: "approval-ios-push" }),
-        undefined,
-      );
+      expect(lastMockCallArg(respond)).toBe(true);
+      expectRecordFields(lastMockCallArg(respond, 1), {
+        status: "accepted",
+        id: "approval-ios-push",
+      });
+      expect(lastMockCallArg(respond, 2)).toBeUndefined();
     });
 
     expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-    expect(iosPushDelivery.handleRequested).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "approval-ios-push" }),
-    );
+    expectRecordFields(mockCallArg(iosPushDelivery.handleRequested), { id: "approval-ios-push" });
     expect(expireSpy).not.toHaveBeenCalled();
 
     manager.resolve("approval-ios-push", "allow-once");
     await requestPromise;
+  });
+
+  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+    const iosPushDelivery = {
+      handleRequested: vi.fn(
+        async (
+          _request: unknown,
+          opts?: {
+            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+          },
+        ) =>
+          opts?.isTargetVisible?.({
+            deviceId: "device-other",
+            scopes: ["operator.approvals"],
+          }) ?? true,
+      ),
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
+      iosPushDelivery,
+    });
+    const expireSpy = vi.spyOn(manager, "expire");
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+          scopes: ["operator.approvals"],
+        },
+      } as unknown as ExecApprovalRequestArgs["client"],
+      params: {
+        timeoutMs: 60_000,
+        id: "approval-ios-hidden-push",
+        host: "gateway",
+      },
+    });
+
+    expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-ios-hidden-push",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("sends iOS cleanup delivery on resolve", async () => {
@@ -1928,9 +2154,10 @@ describe("exec approval handlers", () => {
     await requestPromise;
 
     await vi.waitFor(() => {
-      expect(iosPushDelivery.handleResolved).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "approval-ios-cleanup", decision: "allow-once" }),
-      );
+      expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
+        id: "approval-ios-cleanup",
+        decision: "allow-once",
+      });
     });
   });
 
@@ -1962,9 +2189,9 @@ describe("exec approval handlers", () => {
       await requestPromise;
 
       await vi.waitFor(() => {
-        expect(iosPushDelivery.handleExpired).toHaveBeenCalledWith(
-          expect.objectContaining({ id: "approval-ios-expire" }),
-        );
+        expectRecordFields(mockCallArg(iosPushDelivery.handleExpired), {
+          id: "approval-ios-expire",
+        });
       });
     } finally {
       vi.useRealTimers();
@@ -1993,11 +2220,12 @@ describe("exec approval handlers", () => {
       });
 
       await vi.waitFor(() => {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "accepted", id: "approval-chat-route" }),
-          undefined,
-        );
+        expect(lastMockCallArg(respond)).toBe(true);
+        expectRecordFields(lastMockCallArg(respond, 1), {
+          status: "accepted",
+          id: "approval-chat-route",
+        });
+        expect(lastMockCallArg(respond, 2)).toBeUndefined();
       });
 
       expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
@@ -2037,11 +2265,12 @@ describe("exec approval handlers", () => {
     await requestPromise;
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-forwarded", decision: "allow-once" }),
-      undefined,
-    );
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-forwarded",
+      decision: "allow-once",
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 });
 
@@ -2111,9 +2340,19 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let pricingState: typeof import("../model-pricing-cache-state.js");
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
+    pricingState = await import("../model-pricing-cache-state.js");
+  });
+
+  beforeEach(() => {
+    pricingState.clearGatewayModelPricingCacheState();
+  });
+
+  afterEach(() => {
+    pricingState.clearGatewayModelPricingCacheState();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -2252,7 +2491,69 @@ describe("gateway healthHandlers.health cache freshness", () => {
       includeSensitive: false,
     });
     expect(getEventLoopHealth).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ eventLoop }), undefined);
+    expect(mockCallArg(respond)).toBe(true);
+    expectRecordFields(mockCallArg(respond, 0, 1), { eventLoop });
+    expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+  });
+
+  it("merges live model-pricing state into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      modelPricing: { state: "ok", sources: [] },
+    };
+    pricingState.recordGatewayModelPricingSourceFailure(
+      "openrouter",
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      123,
+    );
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | {
+          modelPricing?: {
+            state?: string;
+            detail?: string;
+            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
+          };
+        }
+      | undefined;
+    expect(payload?.modelPricing?.state).toBe("degraded");
+    expect(payload?.modelPricing?.detail).toBe(
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+    );
+    expect(payload?.modelPricing?.sources).toHaveLength(1);
+    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
+    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
+    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
@@ -2366,14 +2667,12 @@ describe("logs.tail", () => {
       isWebchatConnect: logsNoop,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        file: newer,
-        lines: ['{"msg":"new"}'],
-      }),
-      undefined,
-    );
+    expect(mockCallArg(respond)).toBe(true);
+    expectRecordFields(mockCallArg(respond, 0, 1), {
+      file: newer,
+      lines: ['{"msg":"new"}'],
+    });
+    expect(mockCallArg(respond, 0, 2)).toBeUndefined();
 
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
@@ -2399,14 +2698,12 @@ describe("logs.tail", () => {
       isWebchatConnect: logsNoop,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        file,
-        lines: ["starting gog gmail watch serve --token push-t…bbbb --hook-token hook-t…aaaa"],
-      }),
-      undefined,
-    );
+    expect(mockCallArg(respond)).toBe(true);
+    expectRecordFields(mockCallArg(respond, 0, 1), {
+      file,
+      lines: ["starting gog gmail watch serve --token push-t…bbbb --hook-token hook-t…aaaa"],
+    });
+    expect(mockCallArg(respond, 0, 2)).toBeUndefined();
 
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });

@@ -62,7 +62,7 @@ describe("markdownToSlackMrkdwn", () => {
     );
   });
 
-  it("does not throw when input is undefined at runtime", () => {
+  it("returns empty text when input is undefined at runtime", () => {
     expect(markdownToSlackMrkdwn(undefined as unknown as string)).toBe("");
   });
 
@@ -74,7 +74,7 @@ describe("markdownToSlackMrkdwn", () => {
       chunks
         .map((chunk, index) => ({ index, length: chunk.length }))
         .filter((chunk) => chunk.length > 8),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

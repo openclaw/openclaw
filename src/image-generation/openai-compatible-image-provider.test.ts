@@ -60,6 +60,32 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
 
+function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected request call");
+  }
+  const [request] = call as [{ headers?: Headers }];
+  if (!request) {
+    throw new Error("expected request call");
+  }
+  const headers = request.headers;
+  expect(headers).toBeInstanceOf(Headers);
+  if (!headers) {
+    throw new Error("expected request headers");
+  }
+  return headers;
+}
+
+function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
+  const call = (mock.mock.calls as unknown as Array<[unknown] | undefined>)[0];
+  const arg = call?.[0];
+  if (!arg) {
+    throw new Error("expected mock call argument");
+  }
+  return arg;
+}
+
 function createProvider(overrides: Partial<OpenAiCompatibleImageProviderOptions> = {}) {
   return createOpenAiCompatibleImageGenerationProvider({
     id: "sample",
@@ -153,6 +179,7 @@ describe("OpenAI-compatible image provider helper", () => {
       prompt: "draw a square",
       count: 2,
       size: "512x512",
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       cfg: {
         models: {
           providers: {
@@ -165,32 +192,36 @@ describe("OpenAI-compatible image provider helper", () => {
       },
     } as never);
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "sample" }),
-    );
+    const apiKeyParams = requireFirstCallArg(resolveApiKeyForProviderMock) as { provider?: string };
+    expect(apiKeyParams.provider).toBe("sample");
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
       allowPrivateNetwork: true,
     });
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://sample.example/v1/images/generations",
-        allowPrivateNetwork: true,
-        dispatcherPolicy: { request: { allowPrivateNetwork: true } },
-        body: {
-          model: "custom-image",
-          prompt: "draw a square",
-          n: 2,
-          size: "512x512",
-          response_format: "b64_json",
-        },
-      }),
-    );
-    const headers = postJsonRequestMock.mock.calls[0]?.[0].headers as Headers;
-    expect(headers.get("Content-Type")).toBe("application/json");
-    expect(result).toMatchObject({
+    const jsonRequest = requireFirstCallArg(postJsonRequestMock) as {
+      url?: string;
+      allowPrivateNetwork?: boolean;
+      ssrfPolicy?: unknown;
+      dispatcherPolicy?: unknown;
+      body?: unknown;
+    };
+    expect(jsonRequest.url).toBe("https://sample.example/v1/images/generations");
+    expect(jsonRequest.allowPrivateNetwork).toBe(true);
+    expect(jsonRequest.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+    expect(jsonRequest.dispatcherPolicy).toEqual({ request: { allowPrivateNetwork: true } });
+    expect(jsonRequest.body).toEqual({
       model: "custom-image",
-      images: [{ mimeType: "image/png", fileName: "image-1.png", revisedPrompt: "revised" }],
+      prompt: "draw a square",
+      n: 2,
+      size: "512x512",
+      response_format: "b64_json",
     });
+    const headers = requireFirstRequestHeaders(postJsonRequestMock);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(result.model).toBe("custom-image");
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.mimeType).toBe("image/png");
+    expect(result.images[0]?.fileName).toBe("image-1.png");
+    expect(result.images[0]?.revisedPrompt).toBe("revised");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -206,13 +237,13 @@ describe("OpenAI-compatible image provider helper", () => {
       cfg: {} as never,
     });
 
-    expect(postMultipartRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://sample.example/v1/images/edits",
-        body: expect.any(FormData),
-      }),
-    );
-    const headers = postMultipartRequestMock.mock.calls[0]?.[0].headers as Headers;
+    const multipartRequest = requireFirstCallArg(postMultipartRequestMock) as {
+      url?: string;
+      body?: unknown;
+    };
+    expect(multipartRequest.url).toBe("https://sample.example/v1/images/edits");
+    expect(multipartRequest.body).toBeInstanceOf(FormData);
+    const headers = requireFirstRequestHeaders(postMultipartRequestMock);
     expect(headers.has("Content-Type")).toBe(false);
   });
 
@@ -244,8 +275,7 @@ describe("OpenAI-compatible image provider helper", () => {
       deadline: { timeoutMs: 123, label: "Sample image generation" },
       defaultTimeoutMs: 60_000,
     });
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 60_000 }),
-    );
+    const timeoutRequest = requireFirstCallArg(postJsonRequestMock) as { timeoutMs?: number };
+    expect(timeoutRequest.timeoutMs).toBe(60_000);
   });
 });

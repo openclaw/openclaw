@@ -6,6 +6,15 @@ import {
   createDiscordGatewaySupervisor,
 } from "./gateway-supervisor.js";
 
+function firstErrorArg(runtime: { error: ReturnType<typeof vi.fn> }): unknown {
+  const [call] = runtime.error.mock.calls;
+  if (!call) {
+    throw new Error("expected runtime.error call");
+  }
+  expect(call).toHaveLength(1);
+  return call[0];
+}
+
 describe("classifyDiscordGatewayEvent", () => {
   it("maps current gateway errors onto domain events", () => {
     const transientTypeError = new TypeError();
@@ -85,8 +94,9 @@ describe("createDiscordGatewaySupervisor", () => {
     emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1006"));
 
     expect(seen).toEqual(["disallowed-intents", "fatal"]);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed late gateway reconnect-exhausted error during teardown"),
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(String(firstErrorArg(runtime))).toContain(
+      "suppressed late gateway reconnect-exhausted error during teardown",
     );
   });
 
@@ -116,8 +126,9 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.dispose();
 
     emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005"));
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(String(firstErrorArg(runtime))).toContain(
+      "suppressed late gateway reconnect-exhausted error after dispose",
     );
   });
 
@@ -139,10 +150,8 @@ describe("createDiscordGatewaySupervisor", () => {
     emitter.emit("error", second);
 
     expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
-      ),
+    expect(String(firstErrorArg(runtime))).toContain(
+      "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
     );
   });
 });

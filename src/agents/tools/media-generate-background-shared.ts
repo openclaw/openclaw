@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
+import { completionRequiresMessageToolDelivery } from "../../auto-reply/reply/completion-delivery-policy.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -13,6 +13,10 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import {
+  mediaUrlsFromGeneratedAttachments,
+  type AgentGeneratedAttachment,
+} from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 
@@ -59,6 +63,7 @@ type WakeMediaGenerationTaskCompletionParams = {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
 };
@@ -231,12 +236,12 @@ function buildMediaGenerationReplyInstruction(params: {
       return [
         `The ${params.completionLabel} is ready for the original channel/group chat.`,
         "This route requires message-tool delivery: the user will NOT see your normal assistant final reply.",
-        'Call the message tool with action="send" to the original/current chat, put a short caption in the message, and attach the generated media paths from the result.',
+        'Call the message tool with action="send" to the original/current chat, put a short caption in the message, and attach every structured attachment from the internal event.',
         `After the message tool succeeds, reply only ${SILENT_REPLY_TOKEN}.`,
-        "Do not put MEDIA: lines only in your final answer; that final answer is private in this chat.",
+        "Do not rely on text-only output; the media must be sent as message-tool attachments.",
       ].join(" ");
     }
-    return `Tell the user the ${params.completionLabel} is ready. If visible source delivery requires the message tool, send it there with the generated media attached.`;
+    return `Tell the user the ${params.completionLabel} is ready and include every structured attachment. If visible source delivery requires the message tool, send it there with those attachments.`;
   }
   return [
     `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed.`,
@@ -245,45 +250,13 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
-function inferMediaGenerationCompletionChatType(
-  handle: MediaGenerationTaskHandle,
-): "direct" | "group" | "channel" | "unknown" {
-  const sessionKeyChatType = deriveSessionChatTypeFromKey(handle.requesterSessionKey);
-  if (sessionKeyChatType !== "unknown") {
-    return sessionKeyChatType;
-  }
-  const to = handle.requesterOrigin?.to?.trim().toLowerCase();
-  if (to?.startsWith("group:")) {
-    return "group";
-  }
-  if (to?.startsWith("channel:")) {
-    return "channel";
-  }
-  if (to?.startsWith("dm:") || to?.startsWith("direct:")) {
-    return "direct";
-  }
-  return "unknown";
-}
-
-function mediaGenerationCompletionRequiresMessageToolDelivery(params: {
-  config?: OpenClawConfig;
-  handle: MediaGenerationTaskHandle;
-}): boolean {
-  const chatType = inferMediaGenerationCompletionChatType(params.handle);
-  if (chatType === "group" || chatType === "channel") {
-    const configuredMode =
-      params.config?.messages?.groupChat?.visibleReplies ?? params.config?.messages?.visibleReplies;
-    return configuredMode !== "automatic";
-  }
-  return params.config?.messages?.visibleReplies === "message_tool";
-}
-
 async function wakeMediaGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
   eventSource: AgentInternalEvent["source"];
@@ -295,6 +268,12 @@ async function wakeMediaGenerationTaskCompletion(params: {
     return;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
+  const mediaUrls = Array.from(
+    new Set([
+      ...(params.mediaUrls ?? []),
+      ...mediaUrlsFromGeneratedAttachments(params.attachments),
+    ]),
+  );
   const internalEvents: AgentInternalEvent[] = [
     {
       type: "task_completion",
@@ -306,14 +285,16 @@ async function wakeMediaGenerationTaskCompletion(params: {
       status: params.status,
       statusLabel: params.statusLabel,
       result: params.result,
-      ...(params.mediaUrls?.length ? { mediaUrls: params.mediaUrls } : {}),
+      ...(params.attachments?.length ? { attachments: params.attachments } : {}),
+      ...(mediaUrls.length ? { mediaUrls } : {}),
       ...(params.statsLine?.trim() ? { statsLine: params.statsLine } : {}),
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
-        requiresMessageToolDelivery: mediaGenerationCompletionRequiresMessageToolDelivery({
-          config: params.config,
-          handle: params.handle,
+        requiresMessageToolDelivery: completionRequiresMessageToolDelivery({
+          cfg: params.config ?? {},
+          requesterSessionKey: params.handle.requesterSessionKey,
+          directOrigin: params.handle.requesterOrigin,
         }),
       }),
     },

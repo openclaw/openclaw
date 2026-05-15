@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -521,6 +522,7 @@ export function runAgentAttempt(params: {
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
+        toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
       });
@@ -617,6 +619,7 @@ export function runAgentAttempt(params: {
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
+    bashElevated: params.opts.bashElevated,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
@@ -624,8 +627,10 @@ export function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
+    toolsAllow: params.opts.toolsAllow,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
+    sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
@@ -683,17 +688,25 @@ export function emitAcpLifecycleEnd(params: { runId: string }) {
   });
 }
 
-export function emitAcpLifecycleError(params: { runId: string; message: string }) {
+export function emitAcpLifecycleError(params: {
+  runId: string;
+  error: unknown;
+  sessionKey?: string;
+}) {
   emitAgentEvent({
     runId: params.runId,
     stream: "lifecycle",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     data: {
       phase: "error",
-      error: params.message,
+      error: formatAcpErrorChain(params.error),
       endedAt: Date.now(),
     },
   });
 }
+
+/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
+export const formatAcpLifecycleError = formatAcpErrorChain;
 
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({

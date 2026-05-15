@@ -1,13 +1,13 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import {
-  presentationToInteractiveReply,
+  presentationToInteractiveControlsReply,
   reduceInteractiveReply,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveReply,
   MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "./reply-action-ids.js";
 import { truncateSlackText } from "./truncate.js";
 
@@ -227,11 +227,7 @@ export function buildSlackPresentationBlocks(
       blocks.push({ type: "divider" });
     }
   }
-  const interactive = presentationToInteractiveReply({
-    blocks: presentation.blocks.filter(
-      (block) => block.type === "buttons" || block.type === "select",
-    ),
-  });
+  const interactive = presentationToInteractiveControlsReply(presentation);
   blocks.push(...buildSlackInteractiveBlocks(interactive, options));
   return blocks;
 }

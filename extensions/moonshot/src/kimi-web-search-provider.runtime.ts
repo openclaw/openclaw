@@ -1,4 +1,7 @@
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
@@ -21,7 +24,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
@@ -216,7 +219,7 @@ async function runKimiSearch(params: {
           throw await createProviderHttpError(res, "Kimi API error");
         }
 
-        const data = (await res.json()) as KimiSearchResponse;
+        const data = await readProviderJsonResponse<KimiSearchResponse>(res, "Kimi API error");
         if (hasKimiSearchResults(data)) {
           hasGroundingEvidence = true;
         }

@@ -23,7 +23,7 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   const unmatchedFragments = fragments.filter((fragment) =>
     changes.every((change) => !change.includes(fragment)),
   );
-  expect({ changes, unmatchedFragments }).toMatchObject({ unmatchedFragments: [] });
+  expect(unmatchedFragments).toStrictEqual([]);
 }
 
 describe("legacy session maintenance migrate", () => {
@@ -44,7 +44,7 @@ describe("legacy session maintenance migrate", () => {
       pruneAfter: "30d",
       maxEntries: 500,
     });
-    expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
+    expect(res.changes).toStrictEqual(["Removed deprecated session.maintenance.rotateBytes."]);
   });
 });
 
@@ -60,9 +60,9 @@ describe("legacy session parent fork migrate", () => {
     expect(res.config?.session).toEqual({
       store: "sessions.json",
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
-    );
+    ]);
   });
 });
 
@@ -84,9 +84,9 @@ describe("legacy thread binding spawn migrate", () => {
       enabled: true,
       spawnSessions: true,
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved channels.discord.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.threadBindings.spawnSessions (true).",
-    );
+    ]);
   });
 
   it("collapses conflicting split spawn flags conservatively", () => {
@@ -110,8 +110,40 @@ describe("legacy thread binding spawn migrate", () => {
     ).toEqual({
       spawnSessions: false,
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Collapsed conflicting channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.accounts.work.threadBindings.spawnSessions (false).",
+    ]);
+  });
+});
+
+describe("legacy message queue mode migrate", () => {
+  it("moves retired queue steering modes to followup mode", () => {
+    const res = migrateLegacyConfigForTest({
+      messages: {
+        queue: {
+          mode: "queue",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+            slack: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.messages?.queue).toEqual({
+      mode: "steer",
+      byChannel: {
+        discord: "followup",
+        telegram: "collect",
+        slack: "steer",
+      },
+    });
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.mode "queue" → "steer"; use "steer" for default active-run steering.',
+    );
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.byChannel.discord "steer-backlog" → "followup"; use "steer" for default active-run steering.',
     );
   });
 });
@@ -127,7 +159,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -147,7 +179,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -160,7 +192,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Removed audio.transcription (invalid or empty command).");
+    expect(res.changes).toStrictEqual(["Removed audio.transcription (invalid or empty command)."]);
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
@@ -175,7 +207,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved audio.transcription → tools.media.audio.models.");
+    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio?.models).toEqual([
       {
@@ -226,16 +258,14 @@ describe("legacy migrate mention routing", () => {
       historyLimit: 12,
       mentionPatterns: ["@openclaw"],
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
-        'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
-        'Removed routing.groupChat.requireMention (channels.telegram.groups."*" already set).',
-        'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
-        "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
-        "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
-      ]),
-    );
+    expect(res.changes).toStrictEqual([
+      "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
+      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
+      'Removed routing.groupChat.requireMention (channels.telegram.groups."*" already set).',
+      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
+      "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
+      "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
+    ]);
   });
 
   it("removes legacy routing requireMention when no compatible channel exists", () => {
@@ -268,9 +298,9 @@ describe("legacy migrate mention routing", () => {
         "*": { requireMention: false },
       },
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       'Moved channels.telegram.requireMention → channels.telegram.groups."*".requireMention.',
-    );
+    ]);
   });
 });
 
@@ -283,9 +313,9 @@ describe("legacy bundled provider discovery migrate", () => {
     });
 
     expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-    );
+    ]);
   });
 
   it("does not override explicit bundled discovery mode", () => {
@@ -297,7 +327,7 @@ describe("legacy bundled provider discovery migrate", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 });
 
@@ -314,9 +344,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
-    );
+    ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: { primary: "openai/gpt-5.4" },
     });
@@ -344,14 +374,12 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
-        "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
-        "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
-      ]),
-    );
-    expect(res.config?.agents?.defaults).toEqual({});
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
+      "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
+      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toStrictEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
     });
@@ -368,9 +396,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved agents.defaults.sandbox.perSession → agents.defaults.sandbox.scope (session).",
-    );
+    ]);
     expect(res.config?.agents?.defaults?.sandbox).toEqual({
       scope: "session",
     });
@@ -390,9 +418,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
-    );
+    ]);
     expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
       scope: "shared",
     });
@@ -410,9 +438,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Removed agents.defaults.sandbox.perSession (agents.defaults.sandbox.scope already set).",
-    );
+    ]);
     expect(res.config?.agents?.defaults?.sandbox).toEqual({
       scope: "agent",
     });
@@ -431,7 +459,7 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 });
@@ -453,10 +481,10 @@ describe("legacy migrate MCP server type aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       'Moved mcp.servers.silo.type "http" → transport "streamable-http".',
-    );
-    expect(res.changes).toContain('Moved mcp.servers.legacySse.type "sse" → transport "sse".');
+      'Moved mcp.servers.legacySse.type "sse" → transport "sse".',
+    ]);
     expect(res.config?.mcp?.servers?.silo).toEqual({
       url: "https://example.com/mcp",
       transport: "streamable-http",
@@ -480,7 +508,9 @@ describe("legacy migrate MCP server type aliases", () => {
       },
     });
 
-    expect(res.changes).toContain('Removed mcp.servers.mixed.type (transport "sse" already set).');
+    expect(res.changes).toStrictEqual([
+      'Removed mcp.servers.mixed.type (transport "sse" already set).',
+    ]);
     expect(res.config?.mcp?.servers?.mixed).toEqual({
       url: "https://example.com/mcp",
       transport: "sse",
@@ -529,7 +559,7 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved heartbeat → agents.defaults.heartbeat.");
+    expect(res.changes).toStrictEqual(["Moved heartbeat → agents.defaults.heartbeat."]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       model: "anthropic/claude-3-5-haiku-20241022",
       every: "30m",
@@ -546,7 +576,9 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved heartbeat visibility → channels.defaults.heartbeat.");
+    expect(res.changes).toStrictEqual([
+      "Moved heartbeat visibility → channels.defaults.heartbeat.",
+    ]);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({
       showOk: true,
       showAlerts: false,
@@ -571,9 +603,9 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
-    );
+    ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
@@ -598,9 +630,9 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
-    );
+    ]);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({
       showOk: false,
       showAlerts: true,
@@ -655,9 +687,11 @@ describe("legacy migrate heartbeat config", () => {
       heartbeat: {},
     });
 
-    expect(res.changes).toContain("Removed empty top-level heartbeat.");
-    expect(res.config).not.toBeNull();
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    expect(res.changes).toStrictEqual(["Removed empty top-level heartbeat."]);
+    if (res.config === null) {
+      throw new Error("Expected migrated config");
+    }
+    expect((res.config as { heartbeat?: unknown }).heartbeat).toBeUndefined();
   });
 });
 
@@ -673,9 +707,8 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expectMigrationChangesToIncludeFragments(res.changes, [
-      "gateway.controlUi.allowedOrigins",
-      "bind=lan",
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
     ]);
   });
 
@@ -701,8 +734,11 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
         auth: { mode: "token", token: "tok" },
       },
     });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain("http://192.168.1.100:18789");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain("http://localhost:18789");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+      "http://192.168.1.100:18789",
+    ]);
   });
 
   it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
@@ -716,7 +752,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       },
     });
     expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null", () => {
@@ -728,7 +764,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       },
     });
     expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("seeds allowedOrigins when existing entries are blank strings", () => {
@@ -743,7 +779,9 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expectMigrationChangesToIncludeFragments(res.changes, ["gateway.controlUi.allowedOrigins"]);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+    ]);
   });
 
   it("does not migrate loopback bind — returns null", () => {
@@ -754,7 +792,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       },
     });
     expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("preserves existing controlUi fields when seeding allowedOrigins", () => {

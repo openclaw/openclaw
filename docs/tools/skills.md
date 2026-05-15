@@ -31,9 +31,12 @@ If a skill name conflicts, the highest source wins.
 
 Codex CLI's native `$CODEX_HOME/skills` directory is not one of these OpenClaw
 skill roots. In Codex harness mode, local app-server launches use isolated
-per-agent Codex homes, so personal Codex CLI skills are not loaded implicitly.
-Use `openclaw migrate codex --dry-run` to inventory them and
-`openclaw migrate codex` to choose skill directories with an interactive
+per-agent Codex homes, so skills in the operator's personal `~/.codex/skills`
+are not loaded implicitly. Codex-native `.agents` discovery uses inherited
+`HOME` separately; OpenClaw's own skill roots above already include
+`~/.agents/skills`. Use `openclaw migrate codex --dry-run` to inventory skills
+from the Codex home, then `openclaw migrate codex` to choose skill directories
+with an interactive
 checkbox prompt before copying them into the current OpenClaw agent workspace.
 For non-interactive runs, repeat `--skill <name>` for the exact skills to copy.
 
@@ -142,6 +145,17 @@ Configured skill roots also support one grouping level, such as
 `skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
 kept under a shared folder without broad recursive scanning.
 
+Gateway clients that need private, non-ClawHub delivery can stage a zip skill
+archive with `skills.upload.begin`, `skills.upload.chunk`, and
+`skills.upload.commit`, then install the committed upload with
+`skills.install({ source: "upload", uploadId, slug, force?, sha256? })`. This is
+an explicit admin upload path for trusted clients, not the normal
+`openclaw skills install <slug>` or ClawHub install flow. It is off by default
+and only works when `skills.install.allowUploadedArchives: true` is set in
+`openclaw.json`. Upload mode still installs into the default agent workspace
+`skills/<slug>` directory; the archive's internal folder name is ignored for the
+final install target.
+
 ClawHub skill pages expose the latest security scan state before install,
 with scanner detail pages for VirusTotal, ClawScan, and static analysis.
 `openclaw skills install <slug>` remains only the install path; publishers
@@ -156,7 +170,13 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
 [Sandboxing](/gateway/sandboxing) for the agent-side controls.
 </Warning>
 
-- Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
+- Workspace, project-agent, and extra-dir skill discovery only accepts skill roots whose resolved realpath stays inside the configured root unless `skills.load.allowSymlinkTargets` explicitly trusts a target root. Bundled skills always stay contained. Managed `~/.openclaw/skills` and personal `~/.agents/skills` roots may contain symlinked skill folders installed by ClawHub or another local skill manager, but every `SKILL.md` realpath must still stay inside its resolved skill directory.
+- Gateway private archive installs are off by default. When explicitly enabled,
+  they require a committed zip upload containing `SKILL.md` and reuse the same
+  archive extraction, path traversal, symlink, force, and rollback protections as
+  ClawHub skill installs. They are gated by
+  `skills.install.allowUploadedArchives`; normal ClawHub installs do not require
+  that setting.
 - Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
 - `openclaw skills install <slug>` is different - it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
@@ -419,6 +439,8 @@ when `SKILL.md` files change. Configure under `skills.load`:
 {
   skills: {
     load: {
+      extraDirs: ["~/Projects/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
       watch: true,
       watchDebounceMs: 250,
     },
@@ -434,6 +456,12 @@ OPENCLAW_SKILLS_WATCH_POLLING=1 OPENCLAW_SKILLS_WATCH_POLL_INTERVAL_MS=1000 pnpm
 ```
 
 Invalid polling intervals are ignored. Values below `1` ms are treated as invalid.
+Use `allowSymlinkTargets` for intentional workspace, project-agent, or extra-dir
+layouts where a skill root contains a symlink, for example
+`<workspace>/skills/manager -> ~/Projects/manager/skills`. Managed
+`~/.openclaw/skills` and personal `~/.agents/skills` can follow skill-directory
+symlinks from local skill managers by default, but the target list is still
+matched after realpath resolution and should stay narrow when configured.
 
 ### Remote macOS nodes (Linux gateway)
 

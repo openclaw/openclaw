@@ -9,9 +9,8 @@ describe("parseExecApprovalRequested", () => {
       createdAtMs: 1000,
       expiresAtMs: 2000,
     });
-    expect(result).not.toBeNull();
-    expect(result!.kind).toBe("exec");
-    expect(result!.request.command).toBe("rm -rf /");
+    expect(result?.kind).toBe("exec");
+    expect(result?.request.command).toBe("rm -rf /");
   });
 });
 
@@ -34,17 +33,16 @@ describe("parsePluginApprovalRequested", () => {
 
   it("parses a valid payload", () => {
     const result = parsePluginApprovalRequested(validPayload);
-    expect(result).not.toBeNull();
-    expect(result!.kind).toBe("plugin");
-    expect(result!.pluginTitle).toBe("Dangerous command detected");
-    expect(result!.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
-    expect(result!.pluginSeverity).toBe("high");
-    expect(result!.pluginId).toBe("sage");
-    expect(result!.request.command).toBe("Dangerous command detected");
-    expect(result!.request.agentId).toBe("agent-1");
-    expect(result!.request.sessionKey).toBe("sess-1");
-    expect(result!.createdAtMs).toBe(1000);
-    expect(result!.expiresAtMs).toBe(120_000);
+    expect(result?.kind).toBe("plugin");
+    expect(result?.pluginTitle).toBe("Dangerous command detected");
+    expect(result?.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
+    expect(result?.pluginSeverity).toBe("high");
+    expect(result?.pluginId).toBe("sage");
+    expect(result?.request.command).toBe("Dangerous command detected");
+    expect(result?.request.agentId).toBe("agent-1");
+    expect(result?.request.sessionKey).toBe("sess-1");
+    expect(result?.createdAtMs).toBe(1000);
+    expect(result?.expiresAtMs).toBe(120_000);
   });
 
   it("returns null when title is missing from request", () => {
@@ -86,14 +84,13 @@ describe("parsePluginApprovalRequested", () => {
       request: { title: "Alert" },
     };
     const result = parsePluginApprovalRequested(minimal);
-    expect(result).not.toBeNull();
-    expect(result!.kind).toBe("plugin");
-    expect(result!.pluginTitle).toBe("Alert");
-    expect(result!.pluginDescription).toBeNull();
-    expect(result!.pluginSeverity).toBeNull();
-    expect(result!.pluginId).toBeNull();
-    expect(result!.request.agentId).toBeNull();
-    expect(result!.request.sessionKey).toBeNull();
+    expect(result?.kind).toBe("plugin");
+    expect(result?.pluginTitle).toBe("Alert");
+    expect(result?.pluginDescription).toBeNull();
+    expect(result?.pluginSeverity).toBeNull();
+    expect(result?.pluginId).toBeNull();
+    expect(result?.request.agentId).toBeNull();
+    expect(result?.request.sessionKey).toBeNull();
   });
 });
 

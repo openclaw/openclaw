@@ -84,15 +84,11 @@ describe("ensureSkillsWatcher", () => {
     expect(opts.ignored).toBe(refreshModule.shouldIgnoreSkillsWatchPath);
     expect(opts.depth).toBe(2);
     const posix = (p: string) => p.replaceAll("\\", "/");
-    expect(targets).toEqual(
-      expect.arrayContaining([
-        posix(path.join("/tmp/workspace", "skills")),
-        posix(path.join("/tmp/workspace", ".agents", "skills")),
-        posix(path.join(os.homedir(), ".agents", "skills")),
-      ]),
-    );
+    expect(targets).toContain(posix(path.join("/tmp/workspace", "skills")));
+    expect(targets).toContain(posix(path.join("/tmp/workspace", ".agents", "skills")));
+    expect(targets).toContain(posix(path.join(os.homedir(), ".agents", "skills")));
     const wildcardTargets = targets.filter((target) => target.includes("*"));
-    expect(wildcardTargets).toEqual([]);
+    expect(wildcardTargets).toStrictEqual([]);
     const ignored = refreshModule.shouldIgnoreSkillsWatchPath;
 
     // Node/JS paths

@@ -64,12 +64,11 @@ describe("qa agentic parity report", () => {
       ],
     };
 
-    expect(computeQaAgenticParityMetrics(summary)).toMatchObject({
-      totalScenarios: 3,
-      passedScenarios: 3,
-      validToolCallCount: 1,
-      validToolCallRate: 1,
-    });
+    const metrics = computeQaAgenticParityMetrics(summary);
+    expect(metrics.totalScenarios).toBe(3);
+    expect(metrics.passedScenarios).toBe(3);
+    expect(metrics.validToolCallCount).toBe(1);
+    expect(metrics.validToolCallRate).toBe(1);
   });
 
   it("fails the parity gate when the candidate regresses against baseline", () => {
@@ -198,7 +197,7 @@ describe("qa agentic parity report", () => {
     const regressionFailures = comparison.failures.filter((failure) =>
       failure.includes("completion rate"),
     );
-    expect(regressionFailures).toEqual([]);
+    expect(regressionFailures).toStrictEqual([]);
   });
 
   it("fails the parity gate when required parity scenarios are missing on both sides", () => {

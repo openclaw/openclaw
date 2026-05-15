@@ -1,5 +1,5 @@
-import type { Model } from "@mariozechner/pi-ai";
-import { getModel, streamSimple } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
+import { getModel, streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
@@ -59,8 +59,8 @@ describeLive("pi embedded extra params (live)", () => {
       }
     }
 
-    expect(stopReason).toEqual(expect.any(String));
-    expect(outputTokens).toEqual(expect.any(Number));
+    expect(stopReason).toBeTypeOf("string");
+    expect(outputTokens).toBeTypeOf("number");
     // Should respect maxTokens from config (16) — allow a small buffer for provider rounding.
     expect(outputTokens ?? 0).toBeLessThanOrEqual(20);
   }, 30_000);

@@ -213,6 +213,14 @@ export const ko: TranslationMap = {
     sessionDetails: "세션 세부 정보",
     compactionHistory: "압축 기록",
     status: "상태",
+    statusLive: "실시간",
+    statusIdle: "유휴",
+    statusUnknown: "알 수 없음",
+    statusRunning: "실행 중",
+    statusDone: "완료",
+    statusFailed: "실패",
+    statusKilled: "종료됨",
+    statusTimeout: "시간 초과",
     model: "모델",
     provider: "제공업체",
     runtime: "런타임",
@@ -338,6 +346,12 @@ export const ko: TranslationMap = {
     eventLogTitle: "이벤트 로그",
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
+  },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
   },
   execApproval: {
     expiresIn: "expires in {time}",
@@ -683,10 +697,6 @@ export const ko: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "토큰이 어디에 사용되는지, 언제 세션이 급증하는지, 무엇이 비용을 유발하는지 확인하세요.",
-    },
     common: {
       emptyValue: "—",
       unknown: "알 수 없음",
@@ -1027,6 +1037,10 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
+    autoScrollMode: "자동 스크롤 모드",
+    autoScrollAlways: "항상",
+    autoScrollNearBottom: "하단 근처",
+    autoScrollOff: "끔",
     focusToggle: "집중 모드 전환(사이드바 + 페이지 헤더 숨기기)",
     hideCronSessions: "Cron 세션 숨기기",
     showCronSessions: "Cron 세션 표시",
@@ -1042,6 +1056,42 @@ export const ko: TranslationMap = {
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
     switchedSession: "{session}(으)로 전환됨",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "내보내기",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "에이전트별로 세션 필터링",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "영어",

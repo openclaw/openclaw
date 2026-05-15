@@ -12,7 +12,7 @@ import {
   type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
@@ -21,11 +21,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  collectAnthropicApiKeys,
-  isAnthropicBillingError,
-  isAnthropicRateLimitError,
-} from "../agents/live-auth-keys.js";
+import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
@@ -37,12 +33,15 @@ import {
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import {
+  isLiveBillingDrift,
+  isLiveRateLimitDrift,
+  shouldSkipLiveProviderDrift,
+} from "../agents/live-test-provider-drift.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
-import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
@@ -52,6 +51,7 @@ import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
+import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -74,7 +74,6 @@ const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
@@ -118,10 +117,13 @@ function parseFilter(raw?: string): Set<string> | null {
   if (!trimmed || trimmed === "all") {
     return null;
   }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const ids: string[] = [];
+  for (const rawId of trimmed.split(",")) {
+    const id = rawId.trim();
+    if (id.length > 0) {
+      ids.push(id);
+    }
+  }
   return ids.length ? new Set(ids) : null;
 }
 
@@ -375,7 +377,7 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
-  if (THINKING_TAG_RE.test(params.text) || FINAL_TAG_RE.test(params.text)) {
+  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -394,7 +396,7 @@ function isMeaningful(text: string): boolean {
   if (trimmed.length < 60) {
     return false;
   }
-  const words = trimmed.split(/\s+/g).filter(Boolean);
+  const words = trimmed.split(/\s+/g);
   if (words.length < 12) {
     return false;
   }
@@ -438,10 +440,10 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
 }
 
 function stripKnownLiveReasoningWrappers(text: string): string {
-  return text
+  const withoutThinking = text
     .replace(/<\s*think\b[^<>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
-    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "")
-    .replace(/<\s*final\b[^<>]*>([\s\S]*?)<\s*\/\s*final\s*>/gi, "$1");
+    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "");
+  return stripFinalTags(withoutThinking);
 }
 
 function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
@@ -488,6 +490,12 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<final>Visible</final>",
+        "google/gemini-3-flash-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final data-model=openrouter/google/gemini/>Visible",
         "google/gemini-3-flash-preview",
       ),
     ).toBe("Visible");
@@ -794,7 +802,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
       resolveGatewayLiveModelThinkingLevel({
         cfg: {},
         model: {
-          ...createGatewayLiveTestModel("xai", "grok-4.3"),
+          ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
           thinkingLevelMap: {
             off: null,
@@ -846,20 +854,6 @@ function isAccountIdExtractionError(error: string): boolean {
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
-}
-
-function isProviderUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    msg.includes("no allowed providers are available") ||
-    msg.includes("provider unavailable") ||
-    msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google") ||
-    msg.includes("temporarily rate-limited upstream") ||
-    msg.includes("unable to access non-serverless model") ||
-    msg.includes("create and start a new dedicated endpoint") ||
-    msg.includes("no available capacity was found for the model")
-  );
 }
 
 function isOllamaUnavailableErrorMessage(raw: string): boolean {
@@ -1355,10 +1349,8 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-      });
+      expect(sanitized.profiles.codexProfile?.type).toBe("oauth");
+      expect(sanitized.profiles.codexProfile?.provider).toBe("openai-codex");
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -1388,17 +1380,17 @@ function extractTranscriptMessageText(message: unknown): string {
   if (!Array.isArray(record.content)) {
     return "";
   }
-  return record.content
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return "";
-      }
+  const textParts: string[] = [];
+  for (const entry of record.content) {
+    if (entry && typeof entry === "object") {
       const text = (entry as { text?: unknown }).text;
-      return typeof text === "string" && text.trim() ? text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      if (trimmed.length > 0) {
+        textParts.push(trimmed);
+      }
+    }
+  }
+  return textParts.join("\n").trim();
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
@@ -2403,18 +2395,18 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           const message = String(err);
           if (
             model.provider === "anthropic" &&
-            isAnthropicRateLimitError(message) &&
+            isLiveRateLimitDrift(message) &&
             attempt + 1 < attemptMax
           ) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
-          if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+          if (model.provider === "anthropic" && isLiveRateLimitDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic rate limit)`);
             break;
           }
-          if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+          if (model.provider === "anthropic" && isLiveBillingDrift(message)) {
             if (attempt + 1 < attemptMax) {
               logProgress(`${progressLabel}: billing issue, retrying with next key`);
               continue;
@@ -2446,14 +2438,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
             break;
           }
-          if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
+          if (isGoogleishProvider(model.provider) && isLiveRateLimitDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (google rate limit)`);
             break;
           }
-          if (isBillingErrorMessage(message)) {
+          const driftSkip = shouldSkipLiveProviderDrift({
+            error: message,
+            allowAuth: true,
+            allowBilling: true,
+            allowProviderUnavailable: true,
+          });
+          if (driftSkip) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (billing drift)`);
+            logProgress(`${progressLabel}: skip (${driftSkip.label})`);
             break;
           }
           if (
@@ -2461,15 +2459,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               model.provider === "opencode" ||
               model.provider === "opencode-go" ||
               model.provider === "zai") &&
-            isRateLimitErrorMessage(message)
+            isLiveRateLimitDrift(message)
           ) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (rate limit)`);
-            break;
-          }
-          if (isProviderUnavailableErrorMessage(message)) {
-            skippedCount += 1;
-            logProgress(`${progressLabel}: skip (provider unavailable)`);
             break;
           }
           if (isAudioOnlyModelErrorMessage(message)) {

@@ -5,6 +5,16 @@ import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js
 
 type Delivery = { kind: string; text?: string };
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function createProjectorHarness(
   cfgOverrides?: Parameters<typeof createCfg>[0],
   opts?: { onProgress?: () => void },
@@ -305,7 +315,7 @@ describe("createAcpReplyProjector", () => {
       });
 
       await vi.advanceTimersByTimeAsync(1200);
-      expect(deliveries).toEqual([]);
+      expect(deliveries).toStrictEqual([]);
 
       await projector.onEvent({
         type: "text_delta",
@@ -351,7 +361,7 @@ describe("createAcpReplyProjector", () => {
       text: " now?",
       tag: "agent_message_chunk",
     });
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "done" });
     expect(deliveries).toHaveLength(3);
@@ -379,7 +389,7 @@ describe("createAcpReplyProjector", () => {
       title: "Run tests",
       text: "Run tests (in_progress)",
     });
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "error", message: "turn failed" });
     expect(deliveries).toHaveLength(2);
@@ -399,7 +409,7 @@ describe("createAcpReplyProjector", () => {
       used: 10,
       size: 100,
     });
-    expect(hidden).toEqual([]);
+    expect(hidden).toStrictEqual([]);
 
     const { deliveries: shown, projector: shownProjector } = createProjectorHarness(
       createLiveCfgOverrides({
@@ -447,7 +457,7 @@ describe("createAcpReplyProjector", () => {
       tag: "available_commands_update",
     });
 
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toStrictEqual([]);
   });
 
   it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
@@ -567,7 +577,7 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries.filter((entry) => entry.kind === "tool").length).toBe(4);
+    expect(countMatching(deliveries, (entry) => entry.kind === "tool")).toBe(4);
     expect(deliveries[0]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated"),
@@ -639,12 +649,13 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries).toHaveLength(2);
-    expect(deliveries).toContainEqual({ kind: "block", text: "hello" });
-    expect(deliveries).toContainEqual({
-      kind: "tool",
-      text: prefixSystemMessage("output truncated"),
-    });
+    expect(deliveries).toEqual([
+      { kind: "block", text: "hello" },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("output truncated"),
+      },
+    ]);
   });
 
   it("supports tagVisibility overrides for tool updates", async () => {
