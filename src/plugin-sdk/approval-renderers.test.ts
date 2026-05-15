@@ -439,6 +439,29 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Low");
   });
 
+  it("parses git global options before destructive subcommands", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-git-global-options",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: git -C repo reset --hard",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run a higher-risk git operation (reset)");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("This git operation can discard local work or publish changes.");
+    expect(payload.text).not.toContain("- run a git command");
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("splits background shell commands before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

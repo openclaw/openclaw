@@ -1134,8 +1134,91 @@ function summarizePackageManagerCommand(
   };
 }
 
+const GIT_GLOBAL_FLAGS = new Set([
+  "--bare",
+  "--glob-pathspecs",
+  "--help",
+  "--html-path",
+  "--icase-pathspecs",
+  "--info-path",
+  "--literal-pathspecs",
+  "--man-path",
+  "--no-lazy-fetch",
+  "--no-optional-locks",
+  "--no-pager",
+  "--no-replace-objects",
+  "--noglob-pathspecs",
+  "--paginate",
+  "--version",
+  "-h",
+  "-p",
+  "-v",
+]);
+
+const GIT_GLOBAL_VALUE_OPTIONS = new Set([
+  "--config-env",
+  "--exec-path",
+  "--git-dir",
+  "--namespace",
+  "--super-prefix",
+  "--work-tree",
+  "-C",
+  "-c",
+]);
+
+function parseGitSubcommand(args: readonly string[]): {
+  ambiguous: boolean;
+  subcommand: string;
+} {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg) {
+      continue;
+    }
+    if (arg === "--") {
+      return { ambiguous: false, subcommand: "" };
+    }
+    if (!arg.startsWith("-")) {
+      return { ambiguous: false, subcommand: arg };
+    }
+
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (GIT_GLOBAL_FLAGS.has(arg) || GIT_GLOBAL_FLAGS.has(optionName)) {
+      continue;
+    }
+    if (
+      (arg.startsWith("-C") && arg.length > 2) ||
+      (arg.startsWith("-c") && arg.length > 2)
+    ) {
+      continue;
+    }
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(optionName)) {
+      if (!arg.includes("=")) {
+        index += 1;
+        if (index >= args.length) {
+          return { ambiguous: true, subcommand: "" };
+        }
+      }
+      continue;
+    }
+
+    return { ambiguous: true, subcommand: "" };
+  }
+  return { ambiguous: false, subcommand: "" };
+}
+
 function summarizeGitCommand(args: readonly string[]): CommandActionSummary {
-  const subcommand = args.find((arg) => !arg.startsWith("-")) ?? "";
+  const { ambiguous, subcommand } = parseGitSubcommand(args);
+  if (ambiguous) {
+    return {
+      text: "run a git command with global options",
+      risk: "high",
+      kind: "source-control",
+      reason:
+        "I cannot confidently identify the git subcommand after its global options, so review it before approving.",
+      showCommandPreview: true,
+    };
+  }
   if (["diff", "log", "show", "status", "branch"].includes(subcommand)) {
     return { text: `inspect git state (${subcommand})`, risk: "low", kind: "source-control" };
   }
