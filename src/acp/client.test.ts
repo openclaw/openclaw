@@ -270,6 +270,16 @@ describe("buildServerArgs", () => {
   });
 });
 
+describe("buildServerArgs", () => {
+  it("prepends acp when callers pass only extra server args", () => {
+    expect(buildServerArgs({ serverArgs: ["--verbose"] })).toEqual(["acp", "--verbose"]);
+  });
+
+  it("dedupes a leading acp server arg from callers", () => {
+    expect(buildServerArgs({ serverArgs: ["acp", "--verbose"] })).toEqual(["acp", "--verbose"]);
+  });
+});
+
 describe("resolveAcpClientSpawnInvocation", () => {
   it("keeps non-windows invocation unchanged", () => {
     const resolved = resolveAcpClientSpawnInvocation(
