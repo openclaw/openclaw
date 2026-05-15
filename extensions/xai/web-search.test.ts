@@ -379,6 +379,9 @@ describe("xai web search config resolution", () => {
         },
       },
     });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
 
     await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
       "xAI web search failed: malformed JSON response",

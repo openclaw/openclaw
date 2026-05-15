@@ -243,7 +243,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -301,7 +301,7 @@ describe("brave web search provider", () => {
         json: async () => {
           throw new SyntaxError("Unexpected token");
         },
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -330,7 +330,7 @@ describe("brave web search provider", () => {
         json: async () => {
           throw new SyntaxError("Unexpected token");
         },
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
