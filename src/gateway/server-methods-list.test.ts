@@ -14,6 +14,14 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("does not advertise hidden core handlers", () => {
+    const methods = listGatewayMethods();
+    expect(methods).not.toContain("config.openFile");
+    expect(methods).not.toContain("chat.inject");
+    expect(methods).not.toContain("nativeHook.invoke");
+    expect(methods).not.toContain("sessions.usage");
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");

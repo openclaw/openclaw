@@ -1,7 +1,15 @@
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodDescriptorsFromHandlers,
+  createGatewayMethodRegistry,
+  createPluginGatewayMethodDescriptors,
+  type GatewayMethodRegistry,
+} from "./methods/registry.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -50,12 +58,6 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
-const CONTROL_PLANE_WRITE_METHODS = new Set([
-  "config.apply",
-  "config.patch",
-  "gateway.restart.request",
-  "update.run",
-]);
 function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
@@ -132,10 +134,31 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...artifactsHandlers,
 };
 
+function createRequestGatewayMethodRegistry(
+  extraHandlers?: GatewayRequestHandlers,
+): GatewayMethodRegistry {
+  const activePluginRegistry = getPluginRegistryState()?.activeRegistry;
+  const activePluginHandlers = activePluginRegistry?.gatewayHandlers ?? {};
+  const auxHandlers = Object.fromEntries(
+    Object.entries(extraHandlers ?? {}).filter(([method]) => !activePluginHandlers[method]),
+  );
+  return createGatewayMethodRegistry([
+    ...createCoreGatewayMethodDescriptors(coreGatewayHandlers),
+    ...(activePluginRegistry ? createPluginGatewayMethodDescriptors(activePluginRegistry) : []),
+    ...createGatewayMethodDescriptorsFromHandlers({
+      handlers: auxHandlers,
+      owner: { kind: "aux", area: "gateway-extra" },
+      defaultScope: ADMIN_SCOPE,
+    }),
+  ]);
+}
+
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
+  const methodRegistry =
+    opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
   const authError = authorizeGatewayMethod(req.method, client, req.params);
   if (authError) {
     respond(false, undefined, authError);
@@ -153,7 +176,7 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  if (CONTROL_PLANE_WRITE_METHODS.has(req.method)) {
+  if (methodRegistry.isControlPlaneWrite(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });
     if (!budget.allowed) {
       const actor = resolveControlPlaneActor(client);
@@ -179,7 +202,7 @@ export async function handleGatewayRequest(
       return;
     }
   }
-  const handler = opts.extraHandlers?.[req.method] ?? coreGatewayHandlers[req.method];
+  const handler = methodRegistry.getHandler(req.method);
   if (!handler) {
     respond(
       false,

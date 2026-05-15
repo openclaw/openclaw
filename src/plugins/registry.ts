@@ -15,6 +15,7 @@ import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
 } from "../context-engine/registry.js";
+import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
@@ -716,6 +717,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
     }
     const effectiveScope = normalizedScope.scope;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: record.id,
+        name: trimmed,
+        handler,
+        scope: effectiveScope,
+      }),
+    );
     if (effectiveScope) {
       registry.gatewayMethodScopes ??= {};
       registry.gatewayMethodScopes[trimmed] = effectiveScope;

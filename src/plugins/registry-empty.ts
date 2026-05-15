@@ -27,6 +27,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     memoryEmbeddingProviders: [],
     agentHarnesses: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     coreGatewayMethodNames: [],
     gatewayMethodScopes: {},
     httpRoutes: [],

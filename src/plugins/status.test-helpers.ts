@@ -153,6 +153,7 @@ export function createPluginLoadResult(
     typedHooks: [],
     httpRoutes: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     cliRegistrars: [],
     services: [],
     commands: [],
