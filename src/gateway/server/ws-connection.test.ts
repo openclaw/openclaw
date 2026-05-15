@@ -164,6 +164,22 @@ describe("attachGatewayWsConnectionHandler", () => {
     );
   });
 
+  it("logs the last completed handshake phase when a socket closes before connect", async () => {
+    const logWsControl = createLogger();
+    const { socket } = await connectTestWs({
+      options: {
+        logWsControl: logWsControl as never,
+      },
+    });
+
+    socket.emit("close", 1006, Buffer.from("bye"));
+
+    expect(logWsControl.warn).toHaveBeenCalled();
+    const [message, context] = logWsControl.warn.mock.calls.at(0) ?? [];
+    expect(String(message)).toContain("phase=ws-upgrade-started");
+    expect((context as { phase?: string } | undefined)?.phase).toBe("ws-upgrade-started");
+  });
+
   it("threads generic plugin surface URLs into the handshake handler", async () => {
     const { passed } = await connectTestWs({
       host: "gateway.example.com",

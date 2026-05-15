@@ -104,6 +104,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const send = vi.fn();
     const isClosed = vi.fn(() => false);
     let client: unknown = null;
+    const setHandshakePhase = vi.fn();
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "none",
       allowTailscale: false,
@@ -136,6 +137,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         client = next;
         return true;
       },
+      setHandshakePhase,
       setHandshakeState: vi.fn(),
       setCloseCause: vi.fn(),
       setLastFrameMeta: vi.fn(),
@@ -169,11 +171,21 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(socketSend).toHaveBeenCalled();
-    });
+    await vi.waitFor(
+      () => {
+        expect(socketSend).toHaveBeenCalled();
+      },
+      { timeout: 5_000 },
+    );
     const hello = JSON.parse(socketSend.mock.calls.at(0)?.[0] ?? "{}") as { ok?: boolean };
     expect(hello.ok).toBe(true);
+
+    expect(setHandshakePhase.mock.calls.map(([phase]) => phase)).toEqual([
+      "auth-token-received",
+      "auth-validated",
+      "session-attached",
+      "ready",
+    ]);
 
     await vi.waitFor(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });

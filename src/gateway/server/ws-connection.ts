@@ -25,6 +25,7 @@ import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
 import type {
   GatewayWsMessageHandlerParams,
+  GatewayWsHandshakePhase,
   WsOriginCheckMetrics,
 } from "./ws-connection/message-handler.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
@@ -263,6 +264,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
+    let handshakePhase: GatewayWsHandshakePhase = "ws-upgrade-started";
     let holdsPreauthBudget = true;
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
@@ -358,6 +360,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
+        phase: handshakePhase,
         durationMs,
         lastFrameType,
         lastFrameMethod,
@@ -378,7 +381,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           ? logWsControl.debug
           : logWsControl.warn;
         logFn(
-          `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
+          `closed before connect conn=${connId} phase=${handshakePhase} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
           closeContext,
         );
       }
@@ -412,6 +415,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         durationMs,
         cause: closeCause,
         handshake: handshakeState,
+        phase: handshakePhase,
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
@@ -431,7 +435,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           endpoint,
         });
         logWsControl.warn(
-          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
+          `handshake timeout conn=${connId} phase=${handshakePhase} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
         );
         close();
       }
@@ -484,6 +488,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           }
         }, 25_000);
         return true;
+      },
+      setHandshakePhase: (next) => {
+        handshakePhase = next;
       },
       setHandshakeState: (next) => {
         handshakeState = next;

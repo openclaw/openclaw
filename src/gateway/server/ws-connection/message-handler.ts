@@ -144,6 +144,13 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+export type GatewayWsHandshakePhase =
+  | "ws-upgrade-started"
+  | "auth-token-received"
+  | "auth-validated"
+  | "session-attached"
+  | "ready";
+
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
 export type WsOriginCheckMetrics = {
@@ -236,6 +243,7 @@ export type GatewayWsMessageHandlerParams = {
   clearHandshakeTimer: () => void;
   getClient: () => GatewayWsClient | null;
   setClient: (next: GatewayWsClient) => boolean;
+  setHandshakePhase: (phase: GatewayWsHandshakePhase) => void;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
@@ -279,6 +287,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     clearHandshakeTimer,
     getClient,
     setClient,
+    setHandshakePhase,
     setHandshakeState,
     setCloseCause,
     setLastFrameMeta,
@@ -456,6 +465,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         const frame = parsed;
         const connectParams = frame.params as ConnectParams;
+        setHandshakePhase("auth-token-received");
         const resolvedAuth = getResolvedAuth();
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
         const clientMeta = {
@@ -896,6 +906,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             return;
           }
         }
+        setHandshakePhase("auth-validated");
         const issuedBootstrapProfile =
           authMethod === "bootstrap-token" && bootstrapTokenCandidate
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
@@ -1433,6 +1444,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           });
           return;
         }
+        setHandshakePhase("session-attached");
         setHandshakeState("connected");
         logWs("in", "connect", {
           connId,
@@ -1451,6 +1463,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           );
         }
 
+        setHandshakePhase("ready");
         if (presenceKey) {
           upsertPresence(presenceKey, {
             host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
