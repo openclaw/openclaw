@@ -5327,17 +5327,8 @@ describe("openai transport stream", () => {
   });
 });
 
-describe("buildOpenAICompletionsParams strips response-only reasoning fields", () => {
-  // OpenRouter and other OpenAI-Completions providers echo `reasoning_details`
-  // (array) and `reasoning_content` (string) in response choices to expose the
-  // model's chain of thought. If those fields leak back into a follow-up
-  // request, OpenRouter rejects the call with HTTP 500 ("Internal Server
-  // Error"). buildOpenAICompletionsParams must scrub them before the wire.
-  // Repro recipe (verified against live OpenRouter):
-  //   POST /chat/completions with messages[*].reasoning_details: "..." => 500
-  //   Same body without that key                                       => 200
-
-  const baseModel = {
+describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
+  const openRouterModel = {
     id: "deepseek/deepseek-v4-flash",
     name: "DeepSeek v4 Flash",
     api: "openai-completions",
@@ -5350,6 +5341,19 @@ describe("buildOpenAICompletionsParams strips response-only reasoning fields", (
     maxTokens: 8192,
   } satisfies Model<"openai-completions">;
 
+  const openAIModel = {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
   function getAssistantMessage(params: { messages: unknown }) {
     expect(Array.isArray(params.messages)).toBe(true);
     const list = params.messages as Array<Record<string, unknown>>;
@@ -5358,13 +5362,80 @@ describe("buildOpenAICompletionsParams strips response-only reasoning fields", (
     return assistant as Record<string, unknown>;
   }
 
-  it("removes reasoning_details, reasoning_content, and reasoning from assistant replay", () => {
-    const params = buildOpenAICompletionsParams(
-      baseModel,
+  function buildReplayParams(model: Model<"openai-completions">, thinkingSignature: string) {
+    return buildOpenAICompletionsParams(
+      model,
       {
         systemPrompt: "system",
         messages: [
-          { role: "user", content: "你好" },
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: model.provider,
+            api: model.api,
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need to answer politely.",
+                thinkingSignature,
+              },
+              { type: "text", text: "Hello!" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+  }
+
+  it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
+    "strips %s from stock OpenAI Chat Completions assistant replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    },
+  );
+
+  it("normalizes OpenRouter string reasoning_details to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each(["reasoning", "reasoning_content"])(
+    "preserves OpenRouter %s string reasoning replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openRouterModel, thinkingSignature));
+
+      expect(assistant[thinkingSignature]).toBe("Need to answer politely.");
+    },
+  );
+
+  it("normalizes OpenRouter reasoning_text to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
+
+    expect(assistant).not.toHaveProperty("reasoning_text");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {
+    const reasoningDetail = { type: "reasoning.encrypted", id: "rs_1", data: "ciphertext" };
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "lookup" },
           {
             role: "assistant",
             provider: "openrouter",
@@ -5374,14 +5445,23 @@ describe("buildOpenAICompletionsParams strips response-only reasoning fields", (
             timestamp: 0,
             content: [
               {
-                type: "thinking",
-                thinking: "User said hi, I should respond politely.",
-                thinkingSignature: "considering",
+                type: "toolCall",
+                id: "call_1",
+                name: "lookup",
+                arguments: { query: "weather" },
+                thoughtSignature: JSON.stringify(reasoningDetail),
               },
-              { type: "text", text: "Hello!" },
             ],
           },
-          { role: "user", content: "再来一个" },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "sunny" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "answer" },
         ],
         tools: [],
       } as never,
@@ -5389,8 +5469,6 @@ describe("buildOpenAICompletionsParams strips response-only reasoning fields", (
     ) as { messages: unknown };
 
     const assistant = getAssistantMessage(params);
-    expect(assistant).not.toHaveProperty("reasoning_details");
-    expect(assistant).not.toHaveProperty("reasoning_content");
-    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant.reasoning_details).toEqual([reasoningDetail]);
   });
 });

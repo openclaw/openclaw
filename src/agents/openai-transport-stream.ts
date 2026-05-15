@@ -2376,27 +2376,61 @@ function injectToolCallThoughtSignatures(
   }
 }
 
-// OpenRouter / many OpenAI-Completions providers ECHO `reasoning_details`
-// (array) and `reasoning_content` (string) inside response choices to surface
-// the model's chain of thought. Some downstream message builders inadvertently
-// preserve those fields when persisting an assistant turn, so they get
-// replayed verbatim on the next request. The Chat Completions request schema
-// does NOT accept either field on input messages — and worse, OpenRouter
-// rejects the call with a generic HTTP 500 ("Internal Server Error") instead
-// of a 4xx with a parse error, which makes the failure look like an upstream
-// outage. Always strip them from outgoing messages before we hit the wire.
-//
-// This is a defensive guard at the last possible point in the pipeline; the
-// underlying serializer (pi-ai's `convertMessages`) is the one that ought to
-// drop these, but until that is fixed upstream we cannot let a single stale
-// reasoning echo break every subsequent turn for the session.
-const COMPLETIONS_RESPONSE_ONLY_MESSAGE_FIELDS = [
+const COMPLETIONS_REASONING_REPLAY_FIELDS = [
   "reasoning_details",
   "reasoning_content",
   "reasoning",
+  "reasoning_text",
 ] as const;
 
-function stripCompletionsResponseOnlyFields(messages: unknown): void {
+function stripCompletionsReasoningReplayFields(record: Record<string, unknown>): void {
+  for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
+    if (field in record) {
+      delete record[field];
+    }
+  }
+}
+
+function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>): void {
+  const reasoningDetails = record.reasoning_details;
+  if (typeof reasoningDetails === "string") {
+    if (reasoningDetails.length > 0 && typeof record.reasoning !== "string") {
+      record.reasoning = reasoningDetails;
+    }
+    delete record.reasoning_details;
+  } else if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
+    delete record.reasoning_details;
+  }
+
+  if ("reasoning" in record && typeof record.reasoning !== "string") {
+    delete record.reasoning;
+  }
+  if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
+    delete record.reasoning_content;
+  }
+
+  const reasoningText = record.reasoning_text;
+  if (
+    typeof reasoningText === "string" &&
+    reasoningText.length > 0 &&
+    typeof record.reasoning !== "string" &&
+    typeof record.reasoning_content !== "string"
+  ) {
+    record.reasoning = reasoningText;
+  }
+  if ("reasoning_text" in record) {
+    delete record.reasoning_text;
+  }
+}
+
+// OpenAI Chat Completions assistant-message input does not define reasoning
+// replay fields, while OpenRouter documents a compatible pass-back contract.
+// Keep OpenRouter's valid shapes, but normalize leaked string reasoning_details
+// from pi-ai thinking signatures before a follow-up request hits the wire.
+function sanitizeCompletionsReasoningReplayFields(
+  messages: unknown,
+  options: { preserveOpenRouterReasoning: boolean },
+): void {
   if (!Array.isArray(messages)) {
     return;
   }
@@ -2408,10 +2442,10 @@ function stripCompletionsResponseOnlyFields(messages: unknown): void {
     if (record.role !== "assistant") {
       continue;
     }
-    for (const field of COMPLETIONS_RESPONSE_ONLY_MESSAGE_FIELDS) {
-      if (field in record) {
-        delete record[field];
-      }
+    if (options.preserveOpenRouterReasoning) {
+      sanitizeOpenRouterReasoningReplayFields(record);
+    } else {
+      stripCompletionsReasoningReplayFields(record);
     }
   }
 }
@@ -2431,7 +2465,9 @@ export function buildOpenAICompletionsParams(
     : context;
   let messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
-  stripCompletionsResponseOnlyFields(messages);
+  sanitizeCompletionsReasoningReplayFields(messages, {
+    preserveOpenRouterReasoning: compat.thinkingFormat === "openrouter",
+  });
   if (compat.strictMessageKeys) {
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
