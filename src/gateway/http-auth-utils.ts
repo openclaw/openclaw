@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,7 +11,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
+import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -52,7 +52,7 @@ export type GatewayHttpRequestAuthCheckResult =
 
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
-  cfg = loadConfig(),
+  cfg = getRuntimeConfig(),
 ): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
   return {
     requestHost: getHeader(req, "host"),
@@ -151,7 +151,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
     requestAuth: AuthorizedGatewayHttpRequest,
   ) => string[];
 }): Promise<{ cfg: OpenClawConfig; requestAuth: AuthorizedGatewayHttpRequest } | null> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req: params.req,
     res: params.res,
@@ -167,13 +167,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   const requestedScopes = params.resolveOperatorScopes(params.req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, requestedScopes);
   if (!scopeAuth.allowed) {
-    sendJson(params.res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
     return null;
   }
 

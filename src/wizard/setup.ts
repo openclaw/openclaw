@@ -8,7 +8,7 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import { createConfigIO, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -57,10 +57,13 @@ function loadModelPickerModule(): Promise<ModelPickerModule> {
 async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawConfig> {
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
-    commit: async (nextConfig, writeOptions) =>
-      writeOptions
-        ? await writeConfigFile(nextConfig, writeOptions)
-        : await writeConfigFile(nextConfig),
+    commit: async (nextConfig, writeOptions) => {
+      return await replaceConfigFile({
+        nextConfig,
+        writeOptions: { ...writeOptions, allowConfigSizeDrop: true },
+        afterWrite: { mode: "auto" },
+      });
+    },
   });
   return committed.config;
 }
@@ -175,9 +178,10 @@ async function requireRiskAcknowledgement(params: {
 
 export async function runSetupWizard(
   opts: OnboardOptions,
-  runtime: RuntimeEnv = defaultRuntime,
+  runtime: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  runtime ??= defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro("OpenClaw setup");
@@ -230,8 +234,8 @@ export async function runSetupWizard(
     );
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
-  const manualHint = "Configure port, network, Tailscale, and auth options.";
+  const quickstartHint = `Recommended local setup. Change details later with ${formatCliCommand("openclaw configure")}.`;
+  const manualHint = "Choose Gateway port, network exposure, Tailscale, and auth.";
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const firstMigrationDetection = migrationDetections[0];
   const importOption = firstMigrationDetection
@@ -249,7 +253,9 @@ export async function runSetupWizard(
     normalizedExplicitFlow !== "advanced" &&
     normalizedExplicitFlow !== "import"
   ) {
-    runtime.error("Invalid --flow (use quickstart, manual, advanced, or import).");
+    runtime.error(
+      "Invalid --flow. Use quickstart, manual, advanced, or import. Example: openclaw onboard --flow quickstart",
+    );
     runtime.exit(1);
     return;
   }
@@ -264,8 +270,8 @@ export async function runSetupWizard(
     (await prompter.select({
       message: "Setup mode",
       options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Manual", hint: manualHint },
+        { value: "quickstart", label: "QuickStart (recommended)", hint: quickstartHint },
+        { value: "advanced", label: "Manual setup", hint: manualHint },
         ...(importOption ? [importOption] : []),
       ],
       initialValue: "quickstart",
@@ -288,9 +294,9 @@ export async function runSetupWizard(
     const action = await prompter.select({
       message: "Config handling",
       options: [
-        { value: "keep", label: "Use existing values" },
-        { value: "modify", label: "Update values" },
-        { value: "reset", label: "Reset" },
+        { value: "keep", label: "Keep current values" },
+        { value: "modify", label: "Review and update" },
+        { value: "reset", label: "Reset before setup" },
       ],
     });
 
@@ -323,7 +329,7 @@ export async function runSetupWizard(
       detections: migrationDetections,
       prompter,
       runtime,
-      writeConfigFile: writeWizardConfigFile,
+      commitConfigFile: writeWizardConfigFile,
     });
     return;
   }
@@ -649,7 +655,7 @@ export async function runSetupWizard(
       runtime,
       setDefaultModel: true,
       opts: {
-        tokenProvider: opts.tokenProvider,
+        ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
       },
     });
@@ -737,6 +743,7 @@ export async function runSetupWizard(
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
   if (opts.skipSearch) {
@@ -758,6 +765,13 @@ export async function runSetupWizard(
 
   // Plugin configuration (sandbox backends, tool plugins, etc.)
   if (flow !== "quickstart") {
+    const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
+    nextConfig = await setupOfficialPluginInstalls({
+      config: nextConfig,
+      prompter,
+      runtime,
+      workspaceDir,
+    });
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({
       config: nextConfig,
@@ -766,9 +780,11 @@ export async function runSetupWizard(
     });
   }
 
-  // Setup hooks (session memory on /new)
-  const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
-  nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+  if (!opts.skipHooks) {
+    // Setup hooks (session memory on /new)
+    const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
+    nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+  }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await writeWizardConfigFile(nextConfig);

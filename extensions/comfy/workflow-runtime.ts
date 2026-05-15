@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   isProviderApiKeyConfigured,
   type AuthProfileStore,
@@ -27,8 +28,8 @@ import {
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -39,11 +40,11 @@ const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
-export type ComfyMode = "local" | "cloud";
-export type ComfyCapability = "image" | "music" | "video";
-export type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
-export type ComfyWorkflow = Record<string, unknown>;
-export type ComfyProviderConfig = Record<string, unknown>;
+type ComfyMode = "local" | "cloud";
+type ComfyCapability = "image" | "music" | "video";
+type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
+type ComfyWorkflow = Record<string, unknown>;
+type ComfyProviderConfig = Record<string, unknown>;
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
@@ -84,20 +85,20 @@ type ComfyApiKeyResolution =
       status: "configured_unavailable";
     };
 
-export type ComfySourceImage = {
+type ComfySourceImage = {
   buffer: Buffer;
   mimeType: string;
   fileName?: string;
 };
 
-export type ComfyGeneratedAsset = {
+type ComfyGeneratedAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
   nodeId: string;
 };
 
-export type ComfyWorkflowResult = {
+type ComfyWorkflowResult = {
   assets: ComfyGeneratedAsset[];
   model: string;
   promptId: string;
@@ -137,7 +138,7 @@ function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProvider
   return next;
 }
 
-export function getComfyCapabilityConfig(
+function getComfyCapabilityConfig(
   config: ComfyProviderConfig,
   capability: ComfyCapability,
 ): ComfyProviderConfig {
@@ -149,7 +150,7 @@ export function getComfyCapabilityConfig(
   return { ...shared, ...nested };
 }
 
-export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
+function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
   return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
 }
 
@@ -298,31 +299,20 @@ async function readJsonResponse<T>(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch (cause) {
+      throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
+    }
   } finally {
     await release();
   }
 }
 
-function inferFileExtension(params: { fileName?: string; mimeType?: string }): string {
-  const normalizedMime = normalizeOptionalLowercaseString(params.mimeType);
-  if (normalizedMime?.includes("jpeg")) {
-    return "jpg";
-  }
-  if (normalizedMime?.includes("png")) {
-    return "png";
-  }
-  if (normalizedMime?.includes("webm")) {
-    return "webm";
-  }
-  if (normalizedMime?.includes("mp4")) {
-    return "mp4";
-  }
-  if (normalizedMime?.includes("mpeg")) {
-    return "mp3";
-  }
-  if (normalizedMime?.includes("wav")) {
-    return "wav";
+function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
+  const extension = extensionForMime(params.mimeType);
+  if (extension) {
+    return extension.slice(1);
   }
   const fileName = params.fileName?.trim();
   if (!fileName) {
@@ -356,7 +346,7 @@ async function uploadInputImage(params: {
     "image",
     new Blob([toBlobBytes(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
-      `input.${inferFileExtension({ mimeType: params.image.mimeType })}`,
+      `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
   );
   form.set("type", "input");
   form.set("overwrite", "true");
@@ -823,7 +813,7 @@ export async function runComfyWorkflow(params: {
       mimeType: downloaded.mimeType,
       fileName:
         originalName ||
-        `${params.capability}-${assetIndex}.${inferFileExtension({ mimeType: downloaded.mimeType })}`,
+        `${params.capability}-${assetIndex}.${resolveFileExtension({ mimeType: downloaded.mimeType })}`,
       nodeId: output.nodeId,
     });
   }

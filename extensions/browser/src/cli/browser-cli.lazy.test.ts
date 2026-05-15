@@ -3,16 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const manageMocks = vi.hoisted(() => {
   const doctorAction = vi.fn();
+  const openAction = vi.fn();
   const statusAction = vi.fn();
+  const tabsAction = vi.fn();
   const registerBrowserManageCommands = vi.fn((browser: Command) => {
     browser.command("status").description("Show browser status").action(statusAction);
+    browser.command("tabs").description("List tabs").action(tabsAction);
+    browser.command("open").description("Open URL").argument("<url>").action(openAction);
     browser
       .command("doctor")
       .description("Check browser plugin readiness")
       .option("--deep", "Run a live snapshot probe")
       .action(doctorAction);
   });
-  return { doctorAction, registerBrowserManageCommands, statusAction };
+  return { doctorAction, openAction, registerBrowserManageCommands, statusAction, tabsAction };
 });
 const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
@@ -39,12 +43,33 @@ vi.mock("./browser-cli-state.js", () => stateMocks);
 
 const { registerBrowserCli } = await import("./browser-cli.js");
 
+function requireFirstCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  label: string,
+): TArgs {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
+function requireTrailingCommand(args: unknown[], label: string): Command {
+  const command = args.at(-1);
+  if (!(command instanceof Command)) {
+    throw new Error(`expected trailing command for ${label}`);
+  }
+  return command;
+}
+
 describe("registerBrowserCli lazy browser subcommands", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     manageMocks.registerBrowserManageCommands.mockClear();
     manageMocks.doctorAction.mockClear();
+    manageMocks.openAction.mockClear();
     manageMocks.statusAction.mockClear();
+    manageMocks.tabsAction.mockClear();
     inspectMocks.registerBrowserInspectCommands.mockClear();
     actionInputMocks.registerBrowserActionInputCommands.mockClear();
     actionObserveMocks.registerBrowserActionObserveCommands.mockClear();
@@ -66,8 +91,10 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(browser?.commands.map((command) => command.name())).toContain("status");
     expect(browser?.commands.map((command) => command.name())).toContain("snapshot");
     const doctor = browser?.commands.find((command) => command.name() === "doctor");
-    expect(doctor).toBeDefined();
-    expect(doctor?.options.map((option) => option.long)).toContain("--deep");
+    if (!doctor) {
+      throw new Error("expected browser doctor command placeholder");
+    }
+    expect(doctor.options.map((option) => option.long)).toContain("--deep");
     expect(manageMocks.registerBrowserManageCommands).not.toHaveBeenCalled();
     expect(inspectMocks.registerBrowserInspectCommands).not.toHaveBeenCalled();
     expect(actionInputMocks.registerBrowserActionInputCommands).not.toHaveBeenCalled();
@@ -100,7 +127,37 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
     expect(manageMocks.doctorAction).toHaveBeenCalledTimes(1);
-    expect(manageMocks.doctorAction.mock.calls[0]?.[0]).toMatchObject({ deep: true });
+    const [doctorOptions] = requireFirstCall(manageMocks.doctorAction, "doctor action call");
+    expect(doctorOptions.deep).toBe(true);
+  });
+
+  it("preserves parent --json while reparsing lazy manage commands", async () => {
+    const program = new Command();
+    program.name("openclaw");
+
+    registerBrowserCli(program, ["node", "openclaw", "browser", "--json", "open", "about:blank"]);
+
+    await program.parseAsync(["browser", "--json", "open", "about:blank"], { from: "user" });
+
+    expect(manageMocks.openAction).toHaveBeenCalledTimes(1);
+    const openCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.openAction, "open action call"),
+      "open action",
+    );
+    expect(openCommand.parent?.opts().json).toBe(true);
+
+    const tabsProgram = new Command();
+    tabsProgram.name("openclaw");
+    registerBrowserCli(tabsProgram, ["node", "openclaw", "browser", "--json", "tabs"]);
+
+    await tabsProgram.parseAsync(["browser", "--json", "tabs"], { from: "user" });
+
+    expect(manageMocks.tabsAction).toHaveBeenCalledTimes(1);
+    const tabsCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
+      "tabs action",
+    );
+    expect(tabsCommand.parent?.opts().json).toBe(true);
   });
 
   it("can eagerly register all browser groups for compatibility", async () => {

@@ -7,6 +7,8 @@ actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
+    private let canvasSurfaceUrl: @Sendable () async -> String?
+    private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
@@ -17,10 +19,16 @@ actor MacNodeRuntime {
         },
         browserProxyRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeBrowserProxy.shared.request(paramsJSON: paramsJSON)
-        })
+        },
+        canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
+            await GatewayConnection.shared.canvasPluginSurfaceUrl()
+        },
+        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
+        self.canvasSurfaceUrl = canvasSurfaceUrl
+        self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -441,7 +449,7 @@ actor MacNodeRuntime {
 
     private func ensureA2UIHost() async throws {
         if await self.isA2UIReady() { return }
-        guard let a2uiUrl = await self.resolveA2UIHostUrl() else {
+        guard let a2uiUrl = await self.resolveA2UIHostUrlWithCapabilityRefresh() else {
             throw NSError(domain: "Canvas", code: 30, userInfo: [
                 NSLocalizedDescriptionKey: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
             ])
@@ -451,16 +459,35 @@ actor MacNodeRuntime {
             try CanvasManager.shared.show(sessionKey: sessionKey, path: a2uiUrl)
         }
         if await self.isA2UIReady(poll: true) { return }
+        if let refreshedUrl = await self.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true) {
+            _ = try await MainActor.run {
+                try CanvasManager.shared.show(sessionKey: sessionKey, path: refreshedUrl)
+            }
+            if await self.isA2UIReady(poll: true) { return }
+        }
         throw NSError(domain: "Canvas", code: 31, userInfo: [
             NSLocalizedDescriptionKey: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
         ])
     }
 
     private func resolveA2UIHostUrl() async -> String? {
-        guard let raw = await GatewayConnection.shared.canvasHostUrl() else { return nil }
+        let canvasSurfaceUrl = await self.canvasSurfaceUrl()
+        return Self.resolveA2UIHostUrl(from: canvasSurfaceUrl)
+    }
+
+    private static func resolveA2UIHostUrl(from raw: String?) -> String? {
+        guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let baseUrl = URL(string: trimmed) else { return nil }
         return baseUrl.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=macos"
+    }
+
+    func resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {
+        if !forceRefresh, let current = await self.resolveA2UIHostUrl() {
+            return current
+        }
+        let refreshedCanvasSurfaceUrl = await self.refreshCanvasSurfaceUrl()
+        return Self.resolveA2UIHostUrl(from: refreshedCanvasSurfaceUrl)
     }
 
     private func isA2UIReady(poll: Bool = false) async -> Bool {
@@ -494,7 +521,8 @@ actor MacNodeRuntime {
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
-        let runId = UUID().uuidString
+        let providedRunId = params.runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let runId = providedRunId.isEmpty ? UUID().uuidString : providedRunId
         let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
             overrides: params.env,
             blockPathOverrides: true)

@@ -6,6 +6,7 @@ import {
   resolveNodeLaunchAgentLabel,
 } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import { findSystemGatewayServices, type ExtraGatewayService } from "../daemon/inspect.js";
 import {
   isLaunchAgentLoaded,
   launchAgentPlistExists,
@@ -14,7 +15,15 @@ import {
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
+import {
+  formatPortDiagnostics,
+  inspectPortUsage,
+  isExpectedGatewayListeners,
+} from "../infra/ports.js";
+import {
+  formatGatewayRestartHandoffDiagnostic,
+  readGatewayRestartHandoffSync,
+} from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -32,6 +41,7 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatHealthCheckFailure } from "./health-format.js";
@@ -91,6 +101,16 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   return true;
 }
 
+function renderBlockingSystemGatewayServices(services: ExtraGatewayService[]): string {
+  return [
+    "System-level OpenClaw gateway service detected while the user gateway service is not installed.",
+    ...services.map((svc) => `- ${svc.label} (${svc.detail})`),
+    "OpenClaw will not install a second user-level gateway service automatically.",
+    "Run `openclaw gateway status --deep` or `openclaw doctor --deep` to inspect duplicate services.",
+    `Set ${SERVICE_REPAIR_POLICY_ENV}=external if a system supervisor owns the gateway lifecycle.`,
+  ].join("\n");
+}
+
 export async function maybeRepairGatewayDaemon(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -114,8 +134,23 @@ export async function maybeRepairGatewayDaemon(params: {
     loaded = false;
   }
   let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
+  const command = params.options.deep
+    ? await Promise.resolve(service.readCommand(process.env)).catch(() => null)
+    : null;
+  const serviceEnv = command?.environment
+    ? ({
+        ...process.env,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : process.env;
   if (loaded) {
-    serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+    serviceRuntime = await service.readRuntime(serviceEnv).catch(() => undefined);
+  }
+  if (params.options.deep) {
+    const handoff = readGatewayRestartHandoffSync(serviceEnv);
+    if (handoff) {
+      note(formatGatewayRestartHandoffDiagnostic(handoff), "Gateway");
+    }
   }
 
   if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
@@ -147,7 +182,10 @@ export async function maybeRepairGatewayDaemon(params: {
   if (params.cfg.gateway?.mode !== "remote") {
     const port = resolveGatewayPort(params.cfg, process.env);
     const diagnostics = await inspectPortUsage(port);
-    if (diagnostics.status === "busy") {
+    if (
+      diagnostics.status === "busy" &&
+      !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port)
+    ) {
       note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
     } else if (loaded && serviceRuntime?.status === "running") {
       const lastError = await readLastGatewayErrorLine(process.env);
@@ -171,6 +209,13 @@ export async function maybeRepairGatewayDaemon(params: {
     }
     note("Gateway service not installed.", "Gateway");
     if (params.cfg.gateway?.mode !== "remote") {
+      if (process.platform === "linux") {
+        const systemGatewayServices = await findSystemGatewayServices();
+        if (systemGatewayServices.length > 0) {
+          note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
+          return;
+        }
+      }
       if (serviceRepairExternal) {
         note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
         return;
@@ -180,9 +225,16 @@ export async function maybeRepairGatewayDaemon(params: {
         {
           message: "Install gateway service now?",
           initialValue: true,
+          requiresInteractiveConfirmation: true,
         },
         serviceRepairPolicy,
       );
+      if (!install) {
+        note(
+          `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+          "Gateway",
+        );
+      }
       if (install) {
         const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
           {
@@ -211,13 +263,14 @@ export async function maybeRepairGatewayDaemon(params: {
           return;
         }
         const port = resolveGatewayPort(params.cfg, process.env);
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: params.cfg,
-        });
+        const { programArguments, workingDirectory, environment, environmentValueSources } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: params.cfg,
+          });
         try {
           await service.install({
             env: process.env,
@@ -225,6 +278,7 @@ export async function maybeRepairGatewayDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
         } catch (err) {
           note(`Gateway service install failed: ${String(err)}`, "Gateway");

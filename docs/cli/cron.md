@@ -24,6 +24,7 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
     - `isolated` creates a fresh transcript and session id for each run.
     - `current` binds to the active session at creation time.
     - `session:<id>` pins to an explicit persistent session key.
+
   </Accordion>
   <Accordion title="Isolated session semantics">
     Isolated runs reset ambient conversation context. Channel and group routing, send/queue policy, elevation, origin, and ACP runtime binding are reset for the new run. Safe preferences and explicit user-selected model or auth overrides can carry across runs.
@@ -33,6 +34,8 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
 ## Delivery
 
 `openclaw cron list` and `openclaw cron show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+
+Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel; `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
 <Note>
 Isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep output internal. `--deliver` remains as a deprecated alias for `--announce`.
@@ -67,6 +70,14 @@ Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
 
+If an isolated run times out before the first model request, `openclaw cron show`
+and `openclaw cron runs` include a phase-specific error such as
+`setup timed out before runner start` or
+`stalled before first model call (last phase: context-engine)`.
+For CLI-backed providers, the pre-model watchdog stays active until the external
+CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are
+reported as pre-model cron failures.
+
 ## Scheduling
 
 ### One-shot jobs
@@ -83,6 +94,8 @@ Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw cron edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 
+For isolated jobs that target a local configured model provider, cron runs a lightweight provider preflight before starting the agent turn. Loopback, private-network, and `.local` `api: "ollama"` providers are probed at `/api/tags`; local OpenAI-compatible providers such as vLLM, SGLang, and LM Studio are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; matching dead endpoints are cached for 5 minutes to avoid many jobs hammering the same local server.
+
 Note: cron job definitions live in `jobs.json`, while pending runtime state lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot.
 
 ### Manual runs
@@ -98,8 +111,15 @@ Note: cron job definitions live in `jobs.json`, while pending runtime state live
 `cron add|edit --model <ref>` selects an allowed model for the job.
 
 <Warning>
-If the model is not allowed, cron warns and falls back to the job's agent or default model selection. Configured fallback chains still apply, but a plain model override with no explicit per-job fallback list no longer appends the agent primary as a hidden extra retry target.
+If the model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
 </Warning>
+
+Cron `--model` is a **job primary**, not a chat-session `/model` override. That means:
+
+- Configured model fallbacks still apply when the selected job model fails.
+- Per-job payload `fallbacks` replaces the configured fallback list when present.
+- An empty per-job fallback list (`fallbacks: []` in the job payload/API) makes the cron run strict.
+- When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden retry target.
 
 ### Isolated cron model precedence
 
@@ -173,6 +193,12 @@ Announce to a specific channel:
 openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
 ```
 
+Announce to a Telegram forum topic:
+
+```bash
+openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
+```
+
 Create an isolated job with lightweight bootstrap context:
 
 ```bash
@@ -193,11 +219,19 @@ Manual run and inspection:
 
 ```bash
 openclaw cron list
+openclaw cron list --agent ops
+openclaw cron get <job-id>
 openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due
 openclaw cron runs --id <job-id> --limit 50
 ```
+
+`openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+
+`openclaw cron get <job-id>` returns the stored job JSON directly. Use `cron show <job-id>` when you want the human-readable view with delivery-route preview.
+
+`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. This mirrors the human-readable status column so external tooling can read job state without re-deriving it.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
 
@@ -209,6 +243,8 @@ openclaw cron edit <job-id> --clear-agent
 openclaw cron edit <job-id> --session current
 openclaw cron edit <job-id> --session "session:daily-brief"
 ```
+
+`openclaw cron add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
 
 Delivery tweaks:
 

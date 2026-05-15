@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -40,7 +41,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
     "subagent_ended",
     "subagent_spawning",
   ],
-  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
+  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
@@ -54,19 +55,19 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/diffs/src/plugin.ts": [
     "resolveLivePluginConfigObject(",
     '"diffs"',
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-core/src/dreaming.ts": [
     'params.reason === "runtime"',
     "resolveMemoryCorePluginConfig(startupCfg)",
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
   "extensions/skill-workshop/index.ts": ["resolveLivePluginConfigObject(", '"skill-workshop"'],
   "extensions/thread-ownership/index.ts": [
     "resolveLivePluginConfigObject(",
     '"thread-ownership"',
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    "api.runtime.config?.current?.() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
@@ -75,6 +76,11 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
     "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
+  ],
+  "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
+    "resolvePluginConfigObject(",
+    "const startupPluginConfig = (api.pluginConfig ?? {})",
+    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
   ],
   "extensions/codex/provider.ts": [
     "resolvePluginConfigObject(",
@@ -165,14 +171,46 @@ function isAllowedBundledExtensionImport(specifier: string): boolean {
 }
 
 function collectBundledExtensionImports(source: string): string[] {
-  const matches = [
-    ...source.matchAll(/from\s+["']([^"']*extensions\/[^"']+)["']/gu),
-    ...source.matchAll(/vi\.(?:mock|doMock)\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
-    ...source.matchAll(/importActual(?:<[^>]*>)?\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
-  ];
-  return matches
-    .map((match) => match[1])
-    .filter((specifier): specifier is string => typeof specifier === "string");
+  const sourceFile = ts.createSourceFile(
+    "boundary-invariants-input.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const specifiers: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    }
+    if (ts.isCallExpression(node) && isBundledExtensionImportHelperCall(node.expression)) {
+      const firstArgument = node.arguments[0];
+      if (firstArgument && ts.isStringLiteralLike(firstArgument)) {
+        specifiers.push(firstArgument.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return specifiers.filter((specifier) => specifier.includes("extensions/"));
+}
+
+function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean {
+  if (ts.isPropertyAccessExpression(expression)) {
+    return (
+      ((expression.name.text === "mock" || expression.name.text === "doMock") &&
+        ts.isIdentifier(expression.expression) &&
+        expression.expression.text === "vi") ||
+      expression.name.text === "importActual"
+    );
+  }
+  return ts.isIdentifier(expression) && expression.text === "importActual";
 }
 
 function collectTypedHookNames(source: string): string[] {
@@ -195,7 +233,7 @@ describe("plugin contract boundary invariants", () => {
       }
       return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps the bundled contract inventory out of non-test runtime code", () => {
@@ -203,7 +241,7 @@ describe("plugin contract boundary invariants", () => {
     const offenders = files.filter((file) => {
       return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps core tests off bundled extension deep imports", () => {
@@ -213,7 +251,7 @@ describe("plugin contract boundary invariants", () => {
         (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps plugin contract tests off bundled path helpers unless the test is explicitly about paths", () => {
@@ -222,9 +260,15 @@ describe("plugin contract boundary invariants", () => {
       if (file === "src/plugins/contracts/boundary-invariants.test.ts") {
         return false;
       }
-      return readRepoSource(file).includes("test/helpers/bundled-plugin-paths");
+      const source = readRepoSource(file);
+      return (
+        source.includes("openclaw/plugin-sdk/test-fixtures") &&
+        /\b(?:BUNDLED_PLUGIN_|bundled(?:Dist)?Plugin(?:Root|File|DirPrefix)|installedPluginRoot|repoInstallSpec)\b/u.test(
+          source,
+        )
+      );
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps channel production code off bundled-plugin-metadata helpers", () => {
@@ -232,7 +276,7 @@ describe("plugin contract boundary invariants", () => {
     const offenders = files.filter((file) => {
       return readRepoSource(file).includes("plugins/bundled-plugin-metadata");
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps contract loaders off hand-built bundled extension paths", () => {
@@ -244,13 +288,13 @@ describe("plugin contract boundary invariants", () => {
       const source = readRepoSource(file);
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled plugin production code off legacy before_agent_start hooks", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => readRepoSource(file).includes("before_agent_start"));
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled plugin typed hook registrations on an explicit allowlist", () => {
@@ -273,7 +317,7 @@ describe("plugin contract boundary invariants", () => {
   it("keeps bundled plugin production code off raw registerHook calls", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps long-lived bundled hook handlers on live runtime config lookups", () => {
@@ -285,7 +329,7 @@ describe("plugin contract boundary invariants", () => {
           .map((snippet) => `${file}: ${snippet}`);
       },
     );
-    expect(missingGuards).toEqual([]);
+    expect(missingGuards).toStrictEqual([]);
   });
 
   it("keeps live provider config surfaces on runtime config lookups", () => {
@@ -297,7 +341,7 @@ describe("plugin contract boundary invariants", () => {
           .map((snippet) => `${file}: ${snippet}`);
       },
     );
-    expect(missingGuards).toEqual([]);
+    expect(missingGuards).toStrictEqual([]);
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {
@@ -309,6 +353,6 @@ describe("plugin contract boundary invariants", () => {
           .map((snippet) => `${file}: ${snippet}`);
       },
     );
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

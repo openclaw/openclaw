@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -22,6 +24,15 @@ let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLogge
 const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
+
+function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 vi.mock("./connection-controller-registry.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
@@ -70,9 +81,9 @@ vi.mock("./text-runtime.js", async () => {
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
-  const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
-  const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
-  const sendReaction = vi.fn(async () => {});
+  const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
+  const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
+  const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
 
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
@@ -131,6 +142,25 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("sends newsletter messages via the active listener without composing presence", async () => {
+    const result = await sendMessageWhatsApp("120363401234567890@newsletter", "hi", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "120363401234567890@newsletter",
+    });
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "120363401234567890@newsletter",
+      "hi",
+      undefined,
+      undefined,
+    );
   });
 
   it("uses configured defaultAccount when outbound accountId is omitted", async () => {
@@ -267,9 +297,28 @@ describe("web outbound", () => {
       mediaUrl: `/tmp/${media.fileName}`,
     });
 
-    expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
-      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
-    );
+    expect(hoisted.runFfmpeg).toHaveBeenCalledTimes(1);
+    const ffmpegArgs = hoisted.runFfmpeg.mock.calls.at(0)?.[0] as string[] | undefined;
+    expect(ffmpegArgs?.slice(0, 5)).toEqual(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
+    expect(ffmpegArgs?.[5]).toContain(`/input.${media.name}`);
+    expect(ffmpegArgs?.slice(6, -1)).toEqual([
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+      "-ar",
+      "48000",
+      "-ac",
+      "1",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+    ]);
+    const outputPath = ffmpegArgs?.at(-1);
+    expect(outputPath).toContain("/fs-safe-output-");
+    expect(outputPath).toContain("-voice.ogg.part");
     expect(sendMessage).toHaveBeenNthCalledWith(
       1,
       "+1555",
@@ -352,12 +401,12 @@ describe("web outbound", () => {
       mediaUrls: [" /tmp/secondary.jpg "],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      "/tmp/primary.jpg",
-      expect.objectContaining({
-        hostReadCapability: false,
-      }),
-    );
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/primary.jpg", {
+      maxBytes: 50 * 1024 * 1024,
+      localRoots: undefined,
+      readFile: undefined,
+      hostReadCapability: false,
+    });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
@@ -373,12 +422,12 @@ describe("web outbound", () => {
       cfg: WHATSAPP_TEST_CFG,
       mediaUrls: ["   ", " /tmp/pic.jpg "],
     });
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      "/tmp/pic.jpg",
-      expect.objectContaining({
-        hostReadCapability: false,
-      }),
-    );
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
+      maxBytes: 50 * 1024 * 1024,
+      localRoots: undefined,
+      readFile: undefined,
+      hostReadCapability: false,
+    });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
@@ -434,13 +483,12 @@ describe("web outbound", () => {
       mediaLocalRoots: ["/tmp/workspace"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      "/tmp/pic.jpg",
-      expect.objectContaining({
-        maxBytes: 100 * 1024 * 1024,
-        localRoots: ["/tmp/workspace"],
-      }),
-    );
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
+      maxBytes: 100 * 1024 * 1024,
+      localRoots: ["/tmp/workspace"],
+      readFile: undefined,
+      hostReadCapability: false,
+    });
   });
 
   it("sends polls via active listener", async () => {

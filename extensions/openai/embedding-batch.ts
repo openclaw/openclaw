@@ -11,7 +11,6 @@ import {
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
   throwIfBatchTerminalFailure,
-  type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
   type BatchCompletionResult,
   type ProviderBatchOutputLine,
@@ -20,7 +19,15 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
-export type OpenAiBatchRequest = {
+type EmbeddingBatchExecutionParams = {
+  wait: boolean;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  concurrency: number;
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+};
+
+type OpenAiBatchRequest = {
   custom_id: string;
   method: "POST";
   url: "/v1/embeddings";
@@ -30,8 +37,8 @@ export type OpenAiBatchRequest = {
   };
 };
 
-export type OpenAiBatchStatus = EmbeddingBatchStatus;
-export type OpenAiBatchOutputLine = ProviderBatchOutputLine;
+type OpenAiBatchStatus = EmbeddingBatchStatus;
+type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
@@ -115,7 +122,7 @@ async function fetchOpenAiBatchResource<T>(params: {
   });
 }
 
-function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
+export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
@@ -123,7 +130,13 @@ function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as OpenAiBatchOutputLine);
+    .map((line) => {
+      try {
+        return JSON.parse(line) as OpenAiBatchOutputLine;
+      } catch {
+        throw new Error("OpenAI embedding batch output contained malformed JSONL");
+      }
+    });
 }
 
 async function readOpenAiBatchError(params: {

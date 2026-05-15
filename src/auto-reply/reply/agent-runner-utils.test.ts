@@ -2,15 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
-  const resolveRunModelFallbacksOverrideMock = vi.fn();
+  const resolveEffectiveModelFallbacksMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
-    hoisted.resolveRunModelFallbacksOverrideMock(...args),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    hoisted.resolveEffectiveModelFallbacksMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -56,22 +56,23 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
-    const run = makeRun();
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun({ hasSessionModelOverride: true, modelOverrideSource: "user" });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
-      sessionKey: run.sessionKey,
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
     });
     expect(resolved).toEqual({
       cfg: run.config,
@@ -83,15 +84,16 @@ describe("agent-runner-utils", () => {
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: undefined,
-      sessionKey: run.sessionKey,
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
@@ -113,26 +115,24 @@ describe("agent-runner-utils", () => {
       authProfile,
     });
 
-    expect(resolved).toMatchObject({
-      sessionFile: run.sessionFile,
-      workspaceDir: run.workspaceDir,
-      agentDir: run.agentDir,
-      config: run.config,
-      skillsSnapshot: run.skillsSnapshot,
-      ownerNumbers: run.ownerNumbers,
-      enforceFinalTag: true,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      authProfileId: "profile-openai",
-      authProfileIdSource: "user",
-      thinkLevel: run.thinkLevel,
-      verboseLevel: run.verboseLevel,
-      reasoningLevel: run.reasoningLevel,
-      execOverrides: run.execOverrides,
-      bashElevated: run.bashElevated,
-      timeoutMs: run.timeoutMs,
-      runId: "run-1",
-    });
+    expect(resolved.sessionFile).toBe(run.sessionFile);
+    expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.agentDir).toBe(run.agentDir);
+    expect(resolved.config).toBe(run.config);
+    expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
+    expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
+    expect(resolved.enforceFinalTag).toBe(true);
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.model).toBe("gpt-4.1-mini");
+    expect(resolved.authProfileId).toBe("profile-openai");
+    expect(resolved.authProfileIdSource).toBe("user");
+    expect(resolved.thinkLevel).toBe(run.thinkLevel);
+    expect(resolved.verboseLevel).toBe(run.verboseLevel);
+    expect(resolved.reasoningLevel).toBe(run.reasoningLevel);
+    expect(resolved.execOverrides).toBe(run.execOverrides);
+    expect(resolved.bashElevated).toBe(run.bashElevated);
+    expect(resolved.timeoutMs).toBe(run.timeoutMs);
+    expect(resolved.runId).toBe("run-1");
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {
@@ -168,14 +168,12 @@ describe("agent-runner-utils", () => {
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(resolved.embeddedContext).toMatchObject({
-      sessionId: run.sessionId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
-      messageProvider: "openai",
-      messageTo: "channel-1",
-      memberRoleIds: ["admin", "operator"],
-    });
+    expect(resolved.embeddedContext.sessionId).toBe(run.sessionId);
+    expect(resolved.embeddedContext.sessionKey).toBe(run.sessionKey);
+    expect(resolved.embeddedContext.agentId).toBe(run.agentId);
+    expect(resolved.embeddedContext.messageProvider).toBe("openai");
+    expect(resolved.embeddedContext.messageTo).toBe("channel-1");
+    expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
       senderName: undefined,
@@ -233,11 +231,9 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context).toMatchObject({
-      currentChannelId: "telegram:-1003841603622",
-      currentThreadTs: "928",
-      currentMessageId: "2284",
-    });
+    expect(context.currentChannelId).toBe("telegram:-1003841603622");
+    expect(context.currentThreadTs).toBe("928");
+    expect(context.currentMessageId).toBe("2284");
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
@@ -253,9 +249,7 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context).toMatchObject({
-      currentChannelId: "channel:123456789012345678",
-      currentMessageId: "msg-9",
-    });
+    expect(context.currentChannelId).toBe("channel:123456789012345678");
+    expect(context.currentMessageId).toBe("msg-9");
   });
 });

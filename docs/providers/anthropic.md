@@ -106,7 +106,11 @@ Anthropic's current public docs:
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
-          agentRuntime: { id: "claude-cli" },
+          models: {
+            "anthropic/claude-opus-4-7": {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
         },
       },
     }
@@ -114,7 +118,7 @@ Anthropic's current public docs:
 
     Legacy `claude-cli/claude-opus-4-7` model refs still work for
     compatibility, but new config should keep provider/model selection as
-    `anthropic/*` and put the execution backend in `agentRuntime.id`.
+    `anthropic/*` and put the execution backend in provider/model runtime policy.
 
     <Tip>
     If you want the clearest billing path, use an Anthropic API key instead. OpenClaw also supports subscription-style options from [OpenAI Codex](/providers/openai), [Qwen Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [Z.AI / GLM](/providers/glm).
@@ -147,6 +151,7 @@ Override per-message with `/think:<level>` or in model params:
 Related Anthropic docs:
 - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
 - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
 </Note>
 
 ## Prompt caching
@@ -209,6 +214,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
     - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
     - API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock refs when no explicit value is set.
+
   </Accordion>
 </AccordionGroup>
 
@@ -241,6 +247,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - Only injected for direct `api.anthropic.com` requests. Proxy routes leave `service_tier` untouched.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - On accounts without Priority Tier capacity, `service_tier: "auto"` may resolve to `standard`.
+
     </Note>
 
   </Accordion>
@@ -250,9 +257,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     auto-resolves media capabilities from the configured Anthropic auth — no
     additional config is needed.
 
-    | Property       | Value                |
-    | -------------- | -------------------- |
-    | Default model  | `claude-opus-4-6`    |
+    | Property        | Value                 |
+    | --------------- | --------------------- |
+    | Default model   | `claude-opus-4-7`     |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically

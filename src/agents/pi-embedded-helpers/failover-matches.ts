@@ -40,11 +40,20 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
 ] as const satisfies readonly ErrorPattern[];
 
+const CJK_AUTH_ERROR_PATTERNS = [
+  "无权访问",
+  "认证失败",
+  "鉴权失败",
+  "密钥无效",
+  "apikey 无效",
+] as const satisfies readonly ErrorPattern[];
+
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
   /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
+const HTTP_5XX_STATUS_RE = /\bHTTP\s+5\d\d\b/i;
 
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
@@ -69,6 +78,14 @@ const ERROR_PATTERNS = {
     /\btpm\b/i,
     "tokens per minute",
     "tokens per day",
+    // Chinese provider rate-limit messages
+    "请求过于频繁",
+    "调用频率",
+    "频率限制",
+    "配额不足",
+    "配额已用尽",
+    "额度不足",
+    "额度已用尽",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
@@ -79,6 +96,10 @@ const ERROR_PATTERNS = {
     // provider-overload (#32828).
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
+    "high load",
+    // Chinese provider overloaded messages
+    "服务过载",
+    "当前负载过高",
   ],
   serverError: [
     "an error occurred while processing",
@@ -92,6 +113,13 @@ const ERROR_PATTERNS = {
     "upstream error",
     "upstream connect error",
     "connection reset",
+    // Chinese provider server error messages
+    "内部错误",
+    "服务器错误",
+    "服务器内部错误",
+    "系统错误",
+    "系统繁忙",
+    "系统异常",
   ],
   timeout: [
     "timeout",
@@ -106,6 +134,14 @@ const ERROR_PATTERNS = {
     "network request failed",
     "fetch failed",
     "socket hang up",
+    // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
+    "网络错误",
+    "网络异常",
+    "服务暂时不可用",
+    "服务繁忙",
+    "请求超时",
+    "连接超时",
+    "连接错误",
     /\beconn(?:refused|reset|aborted)\b/i,
     /\benetunreach\b/i,
     /\behostunreach\b/i,
@@ -132,6 +168,7 @@ const ERROR_PATTERNS = {
     // aborted). These arrive as bare strings on the outer error and, without
     // an explicit match, the fallback chain is never attempted (#69368).
     /^terminated$/i,
+    /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
     // pi-ai's openai-codex provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s
@@ -144,15 +181,26 @@ const ERROR_PATTERNS = {
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
+    /used\s+all\s+available\s+credits/i,
+    /(?:monthly\s+)?spend(?:ing)?\s+limit/i,
     /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",
-    "insufficient balance",
+    /insufficient[_ ]balance/i,
+    // Fuzzy: "Insufficient MBT balance", "Insufficient token balance", etc.
+    // Exactly one intervening word — avoids false positives like
+    // "insufficient to reconcile the final balance"
+    /\binsufficient\s+\w+\s+balance\b/i,
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // Chinese provider billing messages
+    "余额不足",
+    "账户余额不足",
+    "欠费",
+    "账户已欠费",
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
   ],
@@ -161,6 +209,7 @@ const ERROR_PATTERNS = {
     ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
     ...COMMON_AUTH_ERROR_PATTERNS,
     ...ZAI_AUTH_ERROR_PATTERNS,
+    ...CJK_AUTH_ERROR_PATTERNS,
   ],
   format: [
     "string should match pattern",
@@ -169,6 +218,12 @@ const ERROR_PATTERNS = {
     "messages.1.content.1.tool_use.id",
     "invalid request format",
     /tool call id was.*must be/i,
+    // Prefill-strict models (e.g. claude-opus-4-7) reject requests that end
+    // with an assistant turn. The lane must not re-queue these — the same
+    // payload will fail identically on every retry, causing an infinite loop
+    // (#79688).
+    "does not support assistant message prefill",
+    "conversation must end with a user message",
   ],
 } as const;
 
@@ -245,6 +300,7 @@ export function isAuthErrorMessage(raw: string): boolean {
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
     COMMON_AUTH_ERROR_PATTERNS,
     ZAI_AUTH_ERROR_PATTERNS,
+    CJK_AUTH_ERROR_PATTERNS,
   ]);
 }
 
@@ -257,9 +313,12 @@ export function isServerErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value)) {
+  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value) || HTTP_5XX_STATUS_RE.test(value)) {
     return true;
   }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
-  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+  if (scrubbed === "") {
+    return true;
+  }
+  return matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }

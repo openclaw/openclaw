@@ -31,6 +31,30 @@ async function withTempHome<T>(
   }
 }
 
+function noteArg(noteFn: ReturnType<typeof vi.fn>, argIndex: number): unknown {
+  const call = noteFn.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected note call");
+  }
+  return call.at(argIndex);
+}
+
+function noteBody(noteFn: ReturnType<typeof vi.fn>): string {
+  const value = noteArg(noteFn, 0);
+  if (typeof value !== "string") {
+    throw new Error("Expected note body");
+  }
+  return value;
+}
+
+function noteTitle(noteFn: ReturnType<typeof vi.fn>): string {
+  const value = noteArg(noteFn, 1);
+  if (typeof value !== "string") {
+    throw new Error("Expected note title");
+  }
+  return value;
+}
+
 describe("resolveClaudeCliProjectDirForWorkspace", () => {
   it("matches Claude's sanitized workspace project dir shape", () => {
     expect(
@@ -98,8 +122,8 @@ describe("noteClaudeCliHealth", () => {
       );
 
       expect(noteFn).toHaveBeenCalledTimes(1);
-      expect(noteFn.mock.calls[0]?.[1]).toBe("Claude CLI");
-      const body = String(noteFn.mock.calls[0]?.[0]);
+      expect(noteTitle(noteFn)).toBe("Claude CLI");
+      const body = noteBody(noteFn);
       expect(body).toContain("Binary: /opt/homebrew/bin/claude.");
       expect(body).toContain("Headless Claude auth: OK (oauth).");
       expect(body).toContain(
@@ -109,6 +133,71 @@ describe("noteClaudeCliHealth", () => {
       expect(body).toContain("(writable).");
       expect(body).toContain("Claude project dir:");
       expect(body).toContain("(present).");
+    });
+  });
+
+  it("reports the Claude CLI workspace for a non-default runtime agent", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const root = path.dirname(workspaceDir);
+      const defaultWorkspace = path.join(root, "workspace-coder");
+      const claudeWorkspace = path.join(root, "workspace-xiaoao");
+      fs.mkdirSync(defaultWorkspace, { recursive: true });
+      fs.mkdirSync(claudeWorkspace, { recursive: true });
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({
+        workspaceDir: claudeWorkspace,
+        homeDir,
+      });
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+            },
+            list: [
+              {
+                id: "coder",
+                default: true,
+                workspace: defaultWorkspace,
+              },
+              {
+                id: "xiaoao",
+                workspace: claudeWorkspace,
+                model: "anthropic/claude-opus-4-7",
+                models: {
+                  "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+                },
+              },
+            ],
+          },
+        },
+        {
+          homeDir,
+          noteFn,
+          store: createStore({
+            [CLAUDE_CLI_PROFILE_ID]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "token-a",
+              refresh: "token-r",
+              expires: Date.now() + 60_000,
+            },
+          }),
+          readClaudeCliCredentials: () => ({
+            type: "oauth",
+            expires: Date.now() + 60_000,
+          }),
+          resolveCommandPath: () => "/opt/homebrew/bin/claude",
+        },
+      );
+
+      expect(noteFn).toHaveBeenCalledTimes(1);
+      const body = noteBody(noteFn);
+      expect(body).toContain(`Agent xiaoao workspace: ${claudeWorkspace} (writable).`);
+      expect(body).toContain(`Agent xiaoao Claude project dir: ${projectDir} (present).`);
+      expect(body).not.toContain(defaultWorkspace);
     });
   });
 
@@ -136,7 +225,7 @@ describe("noteClaudeCliHealth", () => {
         },
       );
 
-      const body = String(noteFn.mock.calls[0]?.[0]);
+      const body = noteBody(noteFn);
       expect(body).toContain("Headless Claude auth: OK (oauth).");
       expect(body).toContain(`OpenClaw auth profile: missing (${CLAUDE_CLI_PROFILE_ID})`);
       expect(body).toContain(
@@ -169,7 +258,7 @@ describe("noteClaudeCliHealth", () => {
         },
       );
 
-      const body = String(noteFn.mock.calls[0]?.[0]);
+      const body = noteBody(noteFn);
       expect(body).toContain('Binary: command "claude" was not found on PATH.');
       expect(body).toContain("Headless Claude auth: unavailable without interactive prompting.");
       expect(body).toContain("claude auth login");

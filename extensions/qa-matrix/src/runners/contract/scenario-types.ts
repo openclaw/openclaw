@@ -17,6 +17,16 @@ export type MatrixQaCanaryArtifact = {
 
 export type MatrixQaScenarioArtifacts = {
   accepted?: MatrixQaScenarioArtifacts;
+  approval?: MatrixQaObservedEvent["approval"] & {
+    eventId: string;
+    roomId: string;
+  };
+  approvals?: Array<
+    MatrixQaObservedEvent["approval"] & {
+      eventId: string;
+      roomId: string;
+    }
+  >;
   attachments?: Array<{
     eventId: string;
     filename?: string;
@@ -39,6 +49,7 @@ export type MatrixQaScenarioArtifacts = {
   dedupeCommitObserved?: boolean;
   duplicateWindowMs?: number;
   driverEventId?: string;
+  driverEventIds?: string[];
   driverUserId?: string;
   editEventId?: string;
   editedToken?: string;
@@ -93,6 +104,8 @@ export type MatrixQaScenarioArtifacts = {
   noticeEventId?: string;
   previewBodyPreview?: string;
   previewEventId?: string;
+  previewFormattedBodyPreview?: string;
+  previewMentions?: MatrixQaObservedEvent["mentions"];
   blockEventIds?: string[];
   bootstrapActor?: "driver" | "observer" | "sut";
   bootstrapErrorPreview?: string;

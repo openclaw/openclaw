@@ -1,4 +1,4 @@
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
@@ -122,7 +122,7 @@ function resolveGatewayOverrideToken(params: {
 }
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const validatedOverride =
     trimToUndefined(opts?.gatewayUrl) !== undefined
       ? validateGatewayUrlOverrideForAgentTools({
@@ -154,7 +154,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   const gateway = resolveGatewayOptions(opts);
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
-    : resolveLeastPrivilegeOperatorScopesForMethod(method);
+    : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,

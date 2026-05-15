@@ -48,6 +48,8 @@ const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
 const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
 const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -204,6 +206,27 @@ describe("isBillingErrorMessage", () => {
     const sample = "The evidence is insufficient to reconcile the final balance after compaction.";
     expect(isBillingErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
+  });
+  it("matches insufficient_balance snake_case error codes (#74079)", () => {
+    expect(isBillingErrorMessage("insufficient_balance")).toBe(true);
+    expect(classifyFailoverReason("insufficient_balance")).toBe("billing");
+  });
+  it("matches 'Insufficient MBT balance' with intervening words (#74079)", () => {
+    const msg = "Insufficient MBT balance. Top up or upgrade your subscription to continue.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("matches provider spending-limit exhaustion messages", () => {
+    const msg =
+      "Your team has either used all available credits or reached its monthly spending limit.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("classifies flat JSON billing payloads with string error code (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("billing");
   });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
@@ -409,17 +432,6 @@ describe("isContextOverflowError", () => {
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
   });
-
-  it("excludes reasoning-required invalid-request errors", () => {
-    const samples = [
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-      "This model requires reasoning to be enabled",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(false);
-    }
-  });
 });
 
 describe("error classifiers", () => {
@@ -506,17 +518,6 @@ describe("isLikelyContextOverflowError", () => {
     expect(classifyFailoverReason(sample)).toBeNull();
   });
 
-  it("excludes reasoning-required invalid-request errors", () => {
-    const samples = [
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-      "This endpoint requires reasoning",
-    ];
-    for (const sample of samples) {
-      expect(isLikelyContextOverflowError(sample)).toBe(false);
-    }
-  });
-
   it("excludes billing errors even when text matches context overflow patterns", () => {
     const samples = [
       "402 Payment Required: request token limit exceeded for this billing plan",
@@ -526,6 +527,33 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+});
+
+describe("reasoning-required invalid-request errors", () => {
+  it.each([
+    {
+      name: "strict context overflow classifier",
+      classifier: isContextOverflowError,
+      samples: [
+        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+        "This model requires reasoning to be enabled",
+      ],
+    },
+    {
+      name: "likely context overflow classifier",
+      classifier: isLikelyContextOverflowError,
+      samples: [
+        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+        "This endpoint requires reasoning",
+      ],
+    },
+  ])("excludes reasoning-required invalid-request errors from $name", ({ classifier, samples }) => {
+    for (const sample of samples) {
+      expect(classifier(sample)).toBe(false);
     }
   });
 });
@@ -630,6 +658,16 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("billing");
   });
 
+  it("lets OpenRouter API-key budget limit 403 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        403,
+        "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+        { provider: "openrouter" },
+      ),
+    ).toBe("billing");
+  });
+
   it("keeps generic HTTP 401 key-limit text on the auth path without provider context", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),
@@ -645,6 +683,27 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
     ).toBe("overloaded");
+  });
+
+  it("does not let structured server_error markers override 4xx status handling", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(classifyFailoverReasonFromHttpStatus(401, payload)).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(402, payload)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(422, payload)).toBe("format");
+  });
+
+  it("preserves structured server_error markers on explicit HTTP 5xx statuses", () => {
+    expect(classifyFailoverReasonFromHttpStatus(500, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(502, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(504, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(500)).toBe("timeout");
   });
 
   it("treats generic HTTP 410 responses as retryable timeouts", () => {
@@ -667,7 +726,7 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
   });
 });
 
-describe("classifyFailoverReason", () => {
+describe("classifyFailoverReason HTTP 410 handling", () => {
   it("treats generic 410 text as retryable timeout", () => {
     expect(classifyFailoverReason("410")).toBe("timeout");
     expect(classifyFailoverReason("HTTP 410")).toBe("timeout");
@@ -733,9 +792,9 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
-  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+  it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
     const message = "Unknown error (no error details in response)";
-    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(classifyFailoverReason(message)).toBe("no_error_details");
     expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
@@ -897,6 +956,8 @@ describe("isFailoverErrorMessage", () => {
       "terminated",
       "Terminated",
       "  terminated  ",
+      "stream_read_error",
+      "  stream_read_error  ",
       "UND_ERR_SOCKET",
       "Error: UND_ERR_SOCKET other side closed",
       "UND_ERR_CONNECT_TIMEOUT",
@@ -937,10 +998,12 @@ describe("image dimension errors", () => {
     const raw =
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}';
     const parsed = parseImageDimensionError(raw);
-    expect(parsed).not.toBeNull();
-    expect(parsed?.maxDimensionPx).toBe(2000);
-    expect(parsed?.messageIndex).toBe(84);
-    expect(parsed?.contentIndex).toBe(1);
+    expect(parsed).toEqual({
+      maxDimensionPx: 2000,
+      messageIndex: 84,
+      contentIndex: 1,
+      raw,
+    });
     expect(isImageDimensionErrorMessage(raw)).toBe(true);
   });
 });
@@ -1043,7 +1106,7 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
   });
 });
 
-describe("classifyFailoverReason", () => {
+describe("classifyFailoverReason provider messages", () => {
   it("classifies documented provider error messages", () => {
     expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");
@@ -1118,12 +1181,25 @@ describe("classifyFailoverReason", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
+    expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
     expect(
       classifyFailoverReason(
-        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+        "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
       ),
     ).toBe("timeout");
+    expect(classifyFailoverReason(`402 Payment Required ${OPENAI_SERVER_ERROR_PAYLOAD}`)).toBe(
+      "billing",
+    );
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
+    expect(
+      classifyFailoverReason(
+        "This model does not support assistant message prefill. The conversation must end with a user message.",
+      ),
+    ).toBe("format");
+    expect(
+      classifyFailoverReason("LLM request rejected: does not support assistant message prefill"),
+    ).toBe("format");
+    expect(classifyFailoverReason("conversation must end with a user message")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
       classifyFailoverReason(
@@ -1266,6 +1342,62 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("auth_permanent");
   });
+
+  it("classifies Chinese provider error messages correctly", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" (network error) — real production error
+    // from https://github.com/openclaw/openclaw/issues/56242
+    expect(
+      classifyFailoverReason(
+        "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      ),
+    ).toBe("timeout");
+
+    // Network/connection errors
+    expect(classifyFailoverReason("网络异常，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("连接超时")).toBe("timeout");
+    expect(classifyFailoverReason("请求超时，请重试")).toBe("timeout");
+    expect(classifyFailoverReason("服务暂时不可用")).toBe("timeout");
+    expect(classifyFailoverReason("连接错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务繁忙，请稍后再试")).toBe("timeout");
+
+    // Server errors
+    expect(classifyFailoverReason("内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("系统错误，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("系统繁忙")).toBe("timeout");
+    expect(classifyFailoverReason("系统异常")).toBe("timeout");
+
+    // Rate limit errors
+    expect(classifyFailoverReason("请求过于频繁，请稍后重试")).toBe("rate_limit");
+    expect(classifyFailoverReason("调用频率超限")).toBe("rate_limit");
+    expect(classifyFailoverReason("频率限制")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额不足")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额已用尽")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度不足，请充值")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度已用尽")).toBe("rate_limit");
+
+    // Billing errors
+    expect(classifyFailoverReason("余额不足，请充值")).toBe("billing");
+    expect(classifyFailoverReason("账户余额不足")).toBe("billing");
+    expect(classifyFailoverReason("账户已欠费")).toBe("billing");
+
+    // Auth errors
+    expect(classifyFailoverReason("无权访问该模型")).toBe("auth");
+    expect(classifyFailoverReason("403 您无权访问glm-5.1。")).toBe("auth");
+    expect(classifyFailoverReason("认证失败")).toBe("auth");
+    expect(classifyFailoverReason("鉴权失败，请检查API Key")).toBe("auth");
+    expect(classifyFailoverReason("密钥无效")).toBe("auth");
+
+    // Overloaded errors
+    expect(classifyFailoverReason("服务过载，请稍后重试")).toBe("overloaded");
+    expect(classifyFailoverReason("当前负载过高")).toBe("overloaded");
+  });
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
@@ -1310,11 +1442,34 @@ describe("classifyProviderRuntimeFailureKind", () => {
   });
 
   it("classifies OAuth refresh failures", () => {
-    expect(
-      classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
-      ),
-    ).toBe("auth_refresh");
+    const refreshFailures = [
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+      "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    ];
+    for (const message of refreshFailures) {
+      expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth_permanent");
+    }
+  });
+
+  it("does not make uncertain OAuth refresh wrappers terminal", () => {
+    const message =
+      "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
+    expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+    expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth");
+  });
+
+  it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
+    const entitlementMessages = [
+      "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM.",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits, try again later.",
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"You\\u0027ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM."}}',
+    ];
+    for (const message of entitlementMessages) {
+      expect(classifyProviderRuntimeFailureKind(message)).not.toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("rate_limit");
+    }
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
@@ -1374,6 +1529,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
+    expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
+    expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(
+      "no_error_details",
+    );
+    expect(classifyProviderRuntimeFailureKind("provider sent a strange opaque failure")).toBe(
+      "unclassified",
+    );
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {

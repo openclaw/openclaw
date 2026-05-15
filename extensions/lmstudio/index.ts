@@ -34,7 +34,7 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
       provider: PROVIDER_ID,
       id: entry.id,
       name: entry.name ?? entry.id,
-      compat: { supportsUsageInStreaming: true },
+      compat: { ...entry.compat, supportsUsageInStreaming: true },
       contextWindow: entry.contextWindow,
       contextTokens: entry.contextTokens,
       reasoning: entry.reasoning,
@@ -81,7 +81,7 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         // Run after early providers so local LM Studio detection does not dominate resolution.
         order: "late",
         run: async (ctx) => {

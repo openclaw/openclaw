@@ -1,4 +1,4 @@
-export type QaChannelActionConfig = {
+type QaChannelActionConfig = {
   messages?: boolean;
   reactions?: boolean;
   search?: boolean;
@@ -13,11 +13,21 @@ export type QaChannelAccountConfig = {
   botDisplayName?: string;
   pollTimeoutMs?: number;
   allowFrom?: Array<string | number>;
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groupAllowFrom?: Array<string | number>;
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+      tools?: Record<string, unknown>;
+      toolsBySender?: Record<string, Record<string, unknown>>;
+    }
+  >;
   defaultTo?: string;
   actions?: QaChannelActionConfig;
 };
 
-export type QaChannelConfig = QaChannelAccountConfig & {
+type QaChannelConfig = QaChannelAccountConfig & {
   accounts?: Record<string, Partial<QaChannelAccountConfig>>;
   defaultAccount?: string;
 };

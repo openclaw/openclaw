@@ -20,8 +20,8 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["node", "operator"],
-  scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+  roles: ["node"],
+  scopes: [],
 };
 
 export function resolveBootstrapProfileScopesForRole(
@@ -34,6 +34,26 @@ export function resolveBootstrapProfileScopesForRole(
     return normalizedScopes.filter((scope) => BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET.has(scope));
   }
   return [];
+}
+
+export function resolveBootstrapProfileScopesForRoles(
+  roles: readonly string[],
+  scopes: readonly string[],
+): string[] {
+  return normalizeDeviceAuthScopes(
+    roles.flatMap((role) => resolveBootstrapProfileScopesForRole(role, scopes)),
+  );
+}
+
+export function normalizeDeviceBootstrapHandoffProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): DeviceBootstrapProfile {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  // Bootstrap handoff profiles can only carry the documented handoff allowlist.
+  return {
+    roles: profile.roles,
+    scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes),
+  };
 }
 
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {

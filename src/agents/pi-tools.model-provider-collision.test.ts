@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  XAI_TOOL_SCHEMA_PROFILE,
-} from "../plugin-sdk/provider-tools.js";
 import { __testing } from "./pi-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+
+const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
+const XAI_TOOL_SCHEMA_PROFILE = "xai";
 
 const baseTools = [
   { name: "read" },
@@ -66,6 +65,27 @@ describe("applyModelProviderToolPolicy", () => {
     });
 
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("can keep managed web_search for Codex app-server dynamic tools", () => {
+    const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+      modelProvider: "gateway",
+      modelApi: "openai-codex-responses",
+      modelId: "gpt-5.4",
+      suppressManagedWebSearch: false,
+    });
+
+    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
 
   it("removes managed web_search for direct Codex models when auth is available", () => {

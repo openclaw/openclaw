@@ -8,14 +8,14 @@ title: "Android app"
 ---
 
 <Note>
-The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN). It is a companion node and requires a running OpenClaw Gateway. The source code is also available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`; see [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
 </Note>
 
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Getting Started](/start/getting-started) + [Pairing](/channels/pairing).
+- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) for the app, [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
@@ -37,7 +37,7 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 ### Prerequisites
 
-- You can run the Gateway on the “master” machine.
+- You can run the Gateway on the "master" machine.
 - Android device/emulator can reach the gateway WebSocket:
   - Same LAN with mDNS/NSD, **or**
   - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
@@ -84,7 +84,7 @@ service endpoint instead of TXT-only hints.
 
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
-Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead.
+Android NSD/mDNS discovery won't cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead.
 
 Discovery alone is not sufficient for tailnet/public Android pairing. The discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
 
@@ -106,6 +106,17 @@ After the first successful pairing, Android auto-reconnects on launch:
 
 - Manual endpoint (if enabled), otherwise
 - The last discovered gateway (best-effort).
+
+### Presence alive beacons
+
+After the authenticated node session connects, and when the app moves to the background while the
+foreground service is still connected, Android calls `node.event` with
+`event: "node.presence.alive"`. The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the
+paired node/device metadata only after the authenticated node device identity is known.
+
+The app counts the beacon as successfully recorded only when the gateway response includes
+`handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is
+compatible but does not count as a durable last-seen update.
 
 ### 4) Approve pairing (CLI)
 

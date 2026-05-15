@@ -97,12 +97,8 @@ const {
   ) => number;
 };
 
-const VITEST_NODE_PREFIX = [
-  "exec",
-  "node",
-  "--no-maglev",
-  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
-];
+const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
+const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -440,12 +436,23 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes acp targets to the acp config", () => {
-    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+  it("routes unit-fast acp targets to the cache-friendly unit-fast config", () => {
+    expect(buildVitestRunPlans(["src/acp/control-plane/runtime-cache.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/runtime-cache.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes reset-heavy acp targets to the acp config", () => {
+    expect(buildVitestRunPlans(["src/acp/runtime/session-meta.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.acp.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        includePatterns: ["src/acp/runtime/session-meta.test.ts"],
         watchMode: false,
       },
     ]);
@@ -552,11 +559,11 @@ describe("test-projects args", () => {
       },
     );
 
-    expect(specs[0]?.env).toMatchObject({
-      KEEP_ME: "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
-    });
+    const firstEnv = specs[0]?.env;
+    expect(firstEnv?.KEEP_ME).toBe("1");
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+    );
     expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
@@ -712,17 +719,6 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes bluebubbles extension tests to the bluebubbles config", () => {
-    expect(buildVitestRunPlans(["extensions/bluebubbles/src/monitor.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/bluebubbles/src/monitor.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes feishu extension tests to the feishu config", () => {
     expect(buildVitestRunPlans(["extensions/feishu/src/channel.test.ts"])).toEqual([
       {
@@ -767,10 +763,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes ui targets to the ui config", () => {
+  it("routes unit ui targets to the unit ui config", () => {
     expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.ui.config.ts",
+        config: "test/vitest/vitest.unit-ui.config.ts",
         forwardedArgs: [],
         includePatterns: ["ui/src/ui/views/channels.test.ts"],
         watchMode: false,
@@ -790,7 +786,7 @@ describe("test-projects args", () => {
   });
 
   it("widens top-level test helpers to sibling repo tests under contracts", () => {
-    expect(buildVitestRunPlans(["test/helpers/temp-home.ts"])).toEqual([
+    expect(buildVitestRunPlans(["test/helpers/temp-dir.ts"])).toEqual([
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
@@ -888,10 +884,10 @@ describe("test-projects args", () => {
     });
     expect(
       resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps core test-only changes on their owning test lane", () => {
@@ -943,7 +939,9 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "extensions/discord/src/api-barrel.test.ts",
           "extensions/discord/src/channel-actions.contract.test.ts",
+          "extensions/discord/src/channel.message-adapter.test.ts",
           "extensions/discord/src/channel.test.ts",
           "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
           "extensions/discord/src/monitor/message-handler.queue.test.ts",

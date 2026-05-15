@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
@@ -66,6 +67,36 @@ describe("scripts/test-docker-all scheduler", () => {
     ).toBe(false);
   });
 
+  it("can co-schedule the split installer provider lanes", () => {
+    expect(
+      canStartSchedulerLane(
+        {
+          name: "install-e2e-anthropic",
+          resources: ["npm", "service"],
+          weight: 3,
+        },
+        activePool({
+          count: 1,
+          resources: {
+            docker: 3,
+            npm: 3,
+            service: 3,
+          },
+          weight: 3,
+        }),
+        10,
+        {
+          resourceLimits: {
+            docker: 10,
+            npm: 10,
+            service: 7,
+          },
+          weightLimit: 10,
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("preserves the parallelism count cap", () => {
     expect(
       canStartSchedulerLane(
@@ -128,6 +159,10 @@ describe("scripts/test-docker-all scheduler", () => {
         limits,
       ),
     ).toBe(false);
+  });
+
+  it("serializes live OpenAI Docker lanes by default", () => {
+    expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
   });
 
   it("describes effective scheduler limits for operator errors", () => {

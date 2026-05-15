@@ -1,11 +1,11 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,
   runSetupWizardFinalize,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappSetupWizard } from "./setup-surface.js";
 import {
   createWhatsAppAllowlistModeInput,
@@ -118,7 +118,6 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
 function expectFinalizeResult(result: Awaited<ReturnType<typeof runFinalizeWithHarness>>): {
   cfg: OpenClawConfig;
 } {
-  expect(result).toBeDefined();
   if (!result || typeof result !== "object" || !("cfg" in result) || !result.cfg) {
     throw new Error("Expected WhatsApp finalize result with cfg");
   }

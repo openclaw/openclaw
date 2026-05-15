@@ -56,16 +56,42 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
 
 const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
   {
+    path: ["agents", "defaults", "agentRuntime", "fallback"],
+    message:
+      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
+  },
+  {
     path: ["agents", "defaults", "embeddedHarness"],
     message:
-      'agents.defaults.embeddedHarness is legacy; use agents.defaults.agentRuntime instead. Run "openclaw doctor --fix".',
+      'agents.defaults.embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "defaults", "agentRuntime"],
+    message:
+      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
     match: (value) => getRecord(value) !== null,
   },
   {
     path: ["agents", "list"],
     message:
-      'agents.list[].embeddedHarness is legacy; use agents.list[].agentRuntime instead. Run "openclaw doctor --fix".',
+      'agents.list[].agentRuntime is ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
+    match: (value) => hasAgentListRuntimePolicy(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAgentListEmbeddedHarness(value),
+  },
+];
+
+const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "llm"],
+    message:
+      'agents.defaults.llm is legacy; use models.providers.<id>.timeoutSeconds for slow model/provider timeouts. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
   },
 ];
 
@@ -146,6 +172,13 @@ function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
   return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
 }
 
+function hasAgentListRuntimePolicy(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -167,42 +200,46 @@ function migrateLegacySandboxPerSession(
   delete sandbox.perSession;
 }
 
-function migrateLegacyAgentRuntimePolicy(
+function removeLegacyAgentRuntimePolicy(
   container: Record<string, unknown>,
   pathLabel: string,
   changes: string[],
 ): void {
-  const legacy = getRecord(container.embeddedHarness);
-  if (!legacy) {
-    return;
+  if (getRecord(container.embeddedHarness) !== null) {
+    delete container.embeddedHarness;
+    changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
   }
-
-  const existing = getRecord(container.agentRuntime);
-  const next = existing ? structuredClone(existing) : {};
-  if (next.id === undefined && legacy.runtime !== undefined) {
-    next.id = legacy.runtime;
+  if (getRecord(container.agentRuntime) !== null) {
+    delete container.agentRuntime;
+    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
   }
-  if (next.fallback === undefined && legacy.fallback !== undefined) {
-    next.fallback = legacy.fallback;
-  }
-
-  if (Object.keys(next).length > 0) {
-    container.agentRuntime = next;
-  }
-  delete container.embeddedHarness;
-  changes.push(`Moved ${pathLabel}.embeddedHarness → ${pathLabel}.agentRuntime.`);
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
-    id: "agents.embeddedHarness->agentRuntime",
-    describe: "Move legacy embeddedHarness runtime policy to agentRuntime",
+    id: "agents.defaults.llm->models.providers.timeoutSeconds",
+    describe: "Remove legacy agents.defaults.llm timeout config",
+    legacyRules: LEGACY_AGENT_LLM_TIMEOUT_RULES,
+    apply: (raw, changes) => {
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      if (!defaults || getRecord(defaults.llm) === null) {
+        return;
+      }
+      delete defaults.llm;
+      changes.push(
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.agentRuntime-ignored",
+    describe: "Remove ignored agent-wide runtime policy",
     legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
     apply: (raw, changes) => {
       const agents = getRecord(raw.agents);
       const defaults = getRecord(agents?.defaults);
       if (defaults) {
-        migrateLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
+        removeLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
       }
 
       if (!Array.isArray(agents?.list)) {
@@ -213,7 +250,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         if (!agentRecord) {
           continue;
         }
-        migrateLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
+        removeLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
       }
     },
   }),

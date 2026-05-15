@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("./plugin-registry-contributions.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     mocks.loadPluginManifestRegistryForPluginRegistry(...args),
 }));
@@ -210,7 +210,11 @@ describe("activation planner", () => {
           command: "demo-tools",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
+      trigger: {
+        kind: "command",
+        command: "demo-tools",
+      },
       pluginIds: ["demo-channel"],
       entries: [
         {
@@ -372,6 +376,6 @@ describe("activation planner", () => {
         },
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

@@ -21,6 +21,7 @@ type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   enqueueTargetedSessionSync: ReturnType<typeof vi.fn>;
   runSync: ReturnType<typeof vi.fn>;
   openDatabase: ReturnType<typeof vi.fn>;
+  closeDatabase: ReturnType<typeof vi.fn>;
   resetVectorState: ReturnType<typeof vi.fn>;
   ensureSchema: ReturnType<typeof vi.fn>;
   readMeta: ReturnType<typeof vi.fn>;
@@ -80,6 +81,9 @@ describe("memory manager readonly recovery", () => {
       enqueueTargetedSessionSync: vi.fn(async () => {}),
       runSync: vi.fn(async (_params) => undefined) as ReadonlyRecoveryHarness["runSync"],
       openDatabase: vi.fn(() => reopenedDb),
+      closeDatabase: vi.fn((db: DatabaseSync) => {
+        db.close();
+      }),
       resetVectorState: vi.fn(function (this: ReadonlyRecoveryHarness) {
         this.vector.dims = undefined;
         this.vectorDegradedWriteWarningShown = false;
@@ -209,7 +213,7 @@ describe("memory manager readonly recovery", () => {
     expect(harness.vector.dims).toBe(768);
   });
 
-  it("sets busy_timeout on memory sqlite connections", async () => {
+  it("sets busy_timeout on memory sqlite connections", () => {
     const db = openMemoryDatabaseAtPath(indexPath, false);
     const row = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }

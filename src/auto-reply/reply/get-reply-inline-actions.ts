@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -40,30 +41,34 @@ type OpenClawToolsRuntime = typeof import("../../agents/openclaw-tools.runtime.j
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
 
-let skillCommandsRuntimePromise: Promise<SkillCommandsRuntime> | undefined;
-let openClawToolsRuntimePromise: Promise<OpenClawToolsRuntime> | undefined;
-let abortCutoffRuntimePromise: Promise<AbortCutoffRuntime> | undefined;
-let commandsRuntimePromise: Promise<CommandsRuntime> | undefined;
+const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
+  () => import("../skill-commands.runtime.js"),
+);
+const openClawToolsRuntimeLoader = createLazyImportLoader<OpenClawToolsRuntime>(
+  () => import("../../agents/openclaw-tools.runtime.js"),
+);
+const abortCutoffRuntimeLoader = createLazyImportLoader<AbortCutoffRuntime>(
+  () => import("./abort-cutoff.runtime.js"),
+);
+const commandsRuntimeLoader = createLazyImportLoader<CommandsRuntime>(
+  () => import("./commands.runtime.js"),
+);
 let builtinSlashCommands: Set<string> | null = null;
 
 function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
-  skillCommandsRuntimePromise ??= import("../skill-commands.runtime.js");
-  return skillCommandsRuntimePromise;
+  return skillCommandsRuntimeLoader.load();
 }
 
 function loadOpenClawToolsRuntime(): Promise<OpenClawToolsRuntime> {
-  openClawToolsRuntimePromise ??= import("../../agents/openclaw-tools.runtime.js");
-  return openClawToolsRuntimePromise;
+  return openClawToolsRuntimeLoader.load();
 }
 
 function loadAbortCutoffRuntime(): Promise<AbortCutoffRuntime> {
-  abortCutoffRuntimePromise ??= import("./abort-cutoff.runtime.js");
-  return abortCutoffRuntimePromise;
+  return abortCutoffRuntimeLoader.load();
 }
 
 function loadCommandsRuntime(): Promise<CommandsRuntime> {
-  commandsRuntimePromise ??= import("./commands.runtime.js");
-  return commandsRuntimePromise;
+  return commandsRuntimeLoader.load();
 }
 
 function getBuiltinSlashCommands(): Set<string> {
@@ -122,6 +127,7 @@ export type InlineActionResult =
       kind: "continue";
       directives: InlineDirectives;
       abortedLastRun: boolean;
+      cleanedBody: string;
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
@@ -137,6 +143,22 @@ function extractTextFromToolResult(result: unknown): string | null {
   const out = parts.join("");
   const trimmed = out.trim();
   return trimmed ? trimmed : null;
+}
+
+function extractBlockedToolReason(result: unknown): string | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const status = (details as { status?: unknown }).status;
+  if (status !== "blocked") {
+    return null;
+  }
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
 }
 
 export async function handleInlineActions(params: {
@@ -241,6 +263,7 @@ export async function handleInlineActions(params: {
             skillFilter,
           })
         : [];
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
@@ -280,6 +303,8 @@ export async function handleInlineActions(params: {
         config: cfg,
         allowGatewaySubagentBinding: true,
         senderIsOwner: command.senderIsOwner,
+        sessionId: targetSessionEntry?.sessionId,
+        currentChannelId: command.channelId,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -296,7 +321,15 @@ export async function handleInlineActions(params: {
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
         };
-        const result = await tool.execute(toolCallId, toolArgs);
+        const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
+        const blockedReason = extractBlockedToolReason(result);
+        if (blockedReason) {
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: { text: `❌ Tool call blocked: ${blockedReason}` },
+          };
+        }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
@@ -337,7 +370,6 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
   if (!isStopLikeInbound && targetSessionEntry) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
@@ -399,6 +431,7 @@ export async function handleInlineActions(params: {
       provider,
       model,
       contextTokens,
+      workspaceDir,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -505,6 +538,7 @@ export async function handleInlineActions(params: {
       kind: "continue",
       directives,
       abortedLastRun,
+      cleanedBody,
     };
   }
   const remainingBodyAfterInlineStatus = (() => {
@@ -523,15 +557,26 @@ export async function handleInlineActions(params: {
     return { kind: "reply", reply: undefined };
   }
 
+  const commandBodyBeforeRun = command.commandBodyNormalized;
+  const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
   const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: commandResult.reply };
+  }
+  if (command.commandBodyNormalized !== commandBodyBeforeRun) {
+    cleanedBody = command.commandBodyNormalized;
+  } else {
+    const bodyAfterRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+    if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
+      cleanedBody = bodyAfterRun;
+    }
   }
 
   return {
     kind: "continue",
     directives,
     abortedLastRun,
+    cleanedBody,
   };
 }

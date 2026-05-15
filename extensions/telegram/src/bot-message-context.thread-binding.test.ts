@@ -65,6 +65,13 @@ async function buildForumTopicMessageContext(accountId?: string) {
   });
 }
 
+function expectRouteArgs(): Record<string, unknown> {
+  expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
+  return (
+    resolveTelegramConversationRouteMock.mock.calls.at(0) as unknown as [Record<string, unknown>]
+  )[0];
+}
+
 describe("buildTelegramMessageContext thread binding override", () => {
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
@@ -82,20 +89,15 @@ describe("buildTelegramMessageContext thread binding override", () => {
 
     const ctx = await buildForumTopicMessageContext();
 
-    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        chatId: -100200300,
-        isGroup: true,
-        resolvedThreadId: 77,
-        replyThreadId: 77,
-        senderId: "42",
-      }),
-    );
+    const routeArgs = expectRouteArgs();
+    expect(routeArgs.accountId).toBe("default");
+    expect(routeArgs.chatId).toBe(-100200300);
+    expect(routeArgs.isGroup).toBe(true);
+    expect(routeArgs.resolvedThreadId).toBe(77);
+    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.senderId).toBe("42");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
-    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
-      updateLastRoute: undefined,
-    });
+    expect(ctx?.turn.record.updateLastRoute).toBeUndefined();
   });
 
   it("treats named-account bound conversations as explicit route matches", async () => {
@@ -109,17 +111,13 @@ describe("buildTelegramMessageContext thread binding override", () => {
 
     const ctx = await buildForumTopicMessageContext("work");
 
-    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "work",
-        chatId: -100200300,
-        isGroup: true,
-        resolvedThreadId: 77,
-        replyThreadId: 77,
-        senderId: "42",
-      }),
-    );
-    expect(ctx).not.toBeNull();
+    const routeArgs = expectRouteArgs();
+    expect(routeArgs.accountId).toBe("work");
+    expect(routeArgs.chatId).toBe(-100200300);
+    expect(routeArgs.isGroup).toBe(true);
+    expect(routeArgs.resolvedThreadId).toBe(77);
+    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.senderId).toBe("42");
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-2");
@@ -145,16 +143,42 @@ describe("buildTelegramMessageContext thread binding override", () => {
       },
     });
 
-    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const routeArgs = expectRouteArgs();
+    expect(routeArgs.accountId).toBe("default");
+    expect(routeArgs.chatId).toBe(1234);
+    expect(routeArgs.isGroup).toBe(false);
+    expect(routeArgs.resolvedThreadId).toBeUndefined();
+    expect(routeArgs.replyThreadId).toBeUndefined();
+    expect(routeArgs.senderId).toBe("42");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
+  });
+
+  it("preserves Telegram DM topic thread IDs in the inbound context", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(
+      createBoundRoute({
         accountId: "default",
-        chatId: 1234,
-        isGroup: false,
-        resolvedThreadId: undefined,
-        replyThreadId: undefined,
-        senderId: "42",
+        sessionKey: "agent:codex-acp:session-dm-topic",
+        agentId: "codex-acp",
       }),
     );
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
+
+    const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
+      message: {
+        message_id: 1,
+        message_thread_id: 77,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+    });
+
+    const routeArgs = expectRouteArgs();
+    expect(routeArgs.chatId).toBe(1234);
+    expect(routeArgs.isGroup).toBe(false);
+    expect(routeArgs.resolvedThreadId).toBeUndefined();
+    expect(routeArgs.replyThreadId).toBe(77);
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
   });
 });

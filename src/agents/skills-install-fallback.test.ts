@@ -66,6 +66,25 @@ function assertNoAptGetFallbackCalls() {
   expect(aptCalls).toHaveLength(0);
 }
 
+function commandCallAt(
+  index: number,
+): [
+  string[],
+  { env?: NodeJS.ProcessEnv | Record<string, string | undefined>; timeoutMs?: number },
+] {
+  const call =
+    index < 0
+      ? runCommandWithTimeoutMock.mock.calls[runCommandWithTimeoutMock.mock.calls.length + index]
+      : runCommandWithTimeoutMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected command call ${index}`);
+  }
+  return call as [
+    string[],
+    { env?: NodeJS.ProcessEnv | Record<string, string | undefined>; timeoutMs?: number },
+  ];
+}
+
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
@@ -141,10 +160,9 @@ describe("skills-install fallback edge cases", () => {
 
       expect(result.ok, testCase.label).toBe(false);
       testCase.assert(result);
-      expect(runCommandWithTimeoutMock, testCase.label).toHaveBeenCalledWith(
-        ["sudo", "-n", "true"],
-        expect.objectContaining({ timeoutMs: 5_000 }),
-      );
+      const sudoCall = commandCallAt(0);
+      expect(sudoCall?.[0], testCase.label).toEqual(["sudo", "-n", "true"]);
+      expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
       assertNoAptGetFallbackCalls();
     }
   });
@@ -163,6 +181,59 @@ describe("skills-install fallback edge cases", () => {
 
     // Verify NO curl command was attempted (no auto-install)
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it("does not use HOMEBREW_PREFIX as a brew bin fallback for go installs", async () => {
+    const envSnapshot = captureEnv(["HOMEBREW_PREFIX"]);
+    try {
+      const maliciousPrefix = path.join(workspaceDir, "evil-brew");
+      process.env.HOMEBREW_PREFIX = maliciousPrefix;
+      mockAvailableBinaries([]);
+      skillsInstallTesting.setDepsForTest({
+        hasBinary: (bin: string) => hasBinaryMock(bin),
+        resolveBrewExecutable: () => "/safe/homebrew/bin/brew",
+      });
+      runCommandWithTimeoutMock.mockResolvedValue({
+        code: 0,
+        stdout: "ok",
+        stderr: "",
+        signal: null,
+        killed: false,
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "installed go",
+        stderr: "",
+        signal: null,
+        killed: false,
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "prefix unavailable",
+        signal: null,
+        killed: false,
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      const brewInstallCall = commandCallAt(0);
+      const brewPrefixCall = commandCallAt(1);
+      expect(brewInstallCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "install", "go"]);
+      expect(brewInstallCall?.[1]?.timeoutMs).toBe(300_000);
+      expect(brewPrefixCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "--prefix"]);
+      expect(brewPrefixCall?.[1]?.timeoutMs).toBe(30_000);
+      const finalCall = commandCallAt(-1);
+      expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+      expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("preserves system uv/python env vars when running uv installs", async () => {
@@ -197,15 +268,9 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-        ["uv", "tool", "install", "example-package"],
-        expect.objectContaining({
-          timeoutMs: 10_000,
-        }),
-      );
-      const firstCall = runCommandWithTimeoutMock.mock.calls[0] as
-        | [string[], { timeoutMs?: number; env?: Record<string, string | undefined> }]
-        | undefined;
+      const firstCall = commandCallAt(0);
+      expect(firstCall?.[0]).toEqual(["uv", "tool", "install", "example-package"]);
+      expect(firstCall?.[1]?.timeoutMs).toBe(10_000);
       const envArg = firstCall?.[1]?.env;
       expect(envArg).toBeUndefined();
     } finally {

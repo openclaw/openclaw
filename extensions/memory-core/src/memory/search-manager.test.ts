@@ -35,6 +35,10 @@ function createManagerStatus(params: {
   };
 }
 
+function nativePath(candidate: string): string {
+  return path.resolve(candidate);
+}
+
 function createManagerMock(params: {
   backend: "qmd" | "builtin";
   provider: string;
@@ -69,14 +73,18 @@ function createManagerMock(params: {
   };
 }
 
-const mockPrimary = vi.hoisted(() => ({
-  ...createManagerMock({
+function createQmdManagerInstanceMock() {
+  return createManagerMock({
     backend: "qmd",
     provider: "qmd",
     model: "qmd",
     requestedProvider: "qmd",
     withMemorySourceCounts: true,
-  }),
+  });
+}
+
+const mockPrimary = vi.hoisted(() => ({
+  ...createQmdManagerInstanceMock(),
 }));
 
 const fallbackManager = vi.hoisted(() => ({
@@ -165,7 +173,6 @@ function createBuiltinCfg(agentId: string): OpenClawConfig {
 }
 
 function requireManager(result: SearchManagerResult): SearchManager {
-  expect(result.manager).toBeTruthy();
   if (!result.manager) {
     throw new Error("manager missing");
   }
@@ -173,12 +180,15 @@ function requireManager(result: SearchManagerResult): SearchManager {
 }
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -187,6 +197,70 @@ async function createFailedQmdSearchHarness(params: { agentId: string; errorMess
   mockPrimary.search.mockRejectedValueOnce(new Error(params.errorMessage));
   const first = await getMemorySearchManager({ cfg, agentId: params.agentId });
   return { cfg, manager: requireManager(first), firstResult: first };
+}
+
+function qmdCreateParams(index = 0): Record<string, unknown> {
+  const call = createQmdManagerMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected QMD manager create call ${index}`);
+  }
+  const params = call.at(0);
+  if (!params || typeof params !== "object") {
+    throw new Error(`expected QMD manager create params ${index}`);
+  }
+  return params as Record<string, unknown>;
+}
+
+async function expectPendingQmdReplacement(params: {
+  agentId: string;
+  firstCfg: OpenClawConfig;
+  secondCfg: OpenClawConfig;
+  firstAvailability: { command: string; cwd: string };
+  secondAvailability: { command: string; cwd: string };
+}) {
+  const firstPrimary = createQmdManagerInstanceMock();
+  const secondPrimary = createQmdManagerInstanceMock();
+  const firstGate = createDeferred<QmdManagerInstance>();
+  const secondGate = createDeferred<QmdManagerInstance>();
+  createQmdManagerMock
+    .mockImplementationOnce(async () => await firstGate.promise)
+    .mockImplementationOnce(async () => await secondGate.promise);
+
+  const firstPromise = getMemorySearchManager({
+    cfg: params.firstCfg,
+    agentId: params.agentId,
+  });
+  await Promise.resolve();
+  const secondPromise = getMemorySearchManager({
+    cfg: params.secondCfg,
+    agentId: params.agentId,
+  });
+  await vi.waitFor(() => {
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+  });
+
+  firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
+  await vi.waitFor(() => {
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+  });
+
+  secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
+  const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+  requireManager(first);
+  requireManager(second);
+  expect(first.manager).not.toBe(second.manager);
+  expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+  expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
+    command: params.firstAvailability.command,
+    env: process.env,
+    cwd: nativePath(params.firstAvailability.cwd),
+  });
+  expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
+    command: params.secondAvailability.command,
+    env: process.env,
+    cwd: nativePath(params.secondAvailability.cwd),
+  });
 }
 
 beforeEach(async () => {
@@ -226,7 +300,9 @@ describe("getMemorySearchManager caching", () => {
         cfg: createQmdCfg("corrupt-cache-agent"),
         agentId: "corrupt-cache-agent",
       });
-      requireManager(result);
+      const managerStatus = requireManager(result).status();
+      expect(managerStatus.backend).toBe("qmd");
+      expect(managerStatus.requestedProvider).toBe("qmd");
     } finally {
       await freshModule.closeAllMemorySearchManagers();
       delete (globalThis as Record<PropertyKey, unknown>)[cacheKey];
@@ -280,6 +356,56 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("backs off repeated full qmd open failures until the cooldown expires", async () => {
+    const agentId = "qmd-open-cooldown";
+    const cfg = createQmdCfg(agentId);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    createQmdManagerMock.mockRejectedValueOnce(new Error("Cannot find package 'chokidar'"));
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      const second = await getMemorySearchManager({ cfg, agentId });
+
+      expect(first.manager).toBe(fallbackManager);
+      expect(second.manager).toBe(fallbackManager);
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+      expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(62_001);
+      const third = await getMemorySearchManager({ cfg, agentId });
+      const thirdManager = requireManager(third);
+
+      expect(thirdManager.status().backend).toBe("qmd");
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+      expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("lets status probes bypass and clear a full qmd open-failure cooldown", async () => {
+    const agentId = "qmd-open-status-bypass";
+    const cfg = createQmdCfg(agentId);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    createQmdManagerMock.mockRejectedValueOnce(new Error("Cannot find package 'chokidar'"));
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      expect(first.manager).toBe(fallbackManager);
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+      const status = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+      expect(requireManager(status).status().backend).toBe("qmd");
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+
+      const full = await getMemorySearchManager({ cfg, agentId });
+      expect(requireManager(full).status().backend).toBe("qmd");
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(3);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("probes qmd availability from the agent workspace", async () => {
     const agentId = "workspace-probe";
     const cfg = createQmdCfg(agentId);
@@ -289,7 +415,7 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace",
+      cwd: nativePath("/tmp/workspace"),
     });
   });
 
@@ -340,9 +466,9 @@ describe("getMemorySearchManager caching", () => {
     requireManager(second);
     expect(first.manager).toBe(second.manager);
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ agentId: "main-agent" }),
-    );
+    const createParams = qmdCreateParams();
+    expect(createParams?.agentId).toBe("main-agent");
+    expect(createParams?.mode).toBe("full");
   });
 
   it("replaces cached full qmd manager across different workspaces", async () => {
@@ -380,12 +506,12 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-a",
+      cwd: nativePath("/tmp/workspace-a"),
     });
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-b",
+      cwd: nativePath("/tmp/workspace-b"),
     });
   });
 
@@ -460,7 +586,7 @@ describe("getMemorySearchManager caching", () => {
 
     expect(replacementAttempt.manager).toBe(fallbackManager);
     expect(firstPrimary.close).not.toHaveBeenCalled();
-    await expect(firstManager.search("hello")).resolves.toEqual([]);
+    await expect(firstManager.search("hello")).resolves.toStrictEqual([]);
 
     const firstAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });
     expect(firstAgain.manager).toBe(firstManager);
@@ -490,54 +616,12 @@ describe("getMemorySearchManager caching", () => {
     const agentId = "pending-qmd-workspace-reload";
     const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
     const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
-    const firstPrimary = createManagerMock({
-      backend: "qmd",
-      provider: "qmd",
-      model: "qmd",
-      requestedProvider: "qmd",
-      withMemorySourceCounts: true,
-    });
-    const secondPrimary = createManagerMock({
-      backend: "qmd",
-      provider: "qmd",
-      model: "qmd",
-      requestedProvider: "qmd",
-      withMemorySourceCounts: true,
-    });
-    const firstGate = createDeferred<QmdManagerInstance>();
-    const secondGate = createDeferred<QmdManagerInstance>();
-    createQmdManagerMock
-      .mockImplementationOnce(async () => await firstGate.promise)
-      .mockImplementationOnce(async () => await secondGate.promise);
-
-    const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
-    await Promise.resolve();
-    const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    });
-
-    firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
-    });
-
-    secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
-
-    requireManager(first);
-    requireManager(second);
-    expect(first.manager).not.toBe(second.manager);
-    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
-    expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
-      command: "qmd",
-      env: process.env,
-      cwd: "/tmp/workspace-a",
-    });
-    expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
-      command: "qmd",
-      env: process.env,
-      cwd: "/tmp/workspace-b",
+    await expectPendingQmdReplacement({
+      agentId,
+      firstCfg,
+      secondCfg,
+      firstAvailability: { command: "qmd", cwd: "/tmp/workspace-a" },
+      secondAvailability: { command: "qmd", cwd: "/tmp/workspace-b" },
     });
   });
 
@@ -545,54 +629,12 @@ describe("getMemorySearchManager caching", () => {
     const agentId = "pending-qmd-config-reload";
     const firstCfg = createQmdCfg(agentId, "/tmp/workspace", { command: "qmd" });
     const secondCfg = createQmdCfg(agentId, "/tmp/workspace", { command: "qmd-alt" });
-    const firstPrimary = createManagerMock({
-      backend: "qmd",
-      provider: "qmd",
-      model: "qmd",
-      requestedProvider: "qmd",
-      withMemorySourceCounts: true,
-    });
-    const secondPrimary = createManagerMock({
-      backend: "qmd",
-      provider: "qmd",
-      model: "qmd",
-      requestedProvider: "qmd",
-      withMemorySourceCounts: true,
-    });
-    const firstGate = createDeferred<QmdManagerInstance>();
-    const secondGate = createDeferred<QmdManagerInstance>();
-    createQmdManagerMock
-      .mockImplementationOnce(async () => await firstGate.promise)
-      .mockImplementationOnce(async () => await secondGate.promise);
-
-    const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
-    await Promise.resolve();
-    const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    });
-
-    firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
-    });
-
-    secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
-
-    requireManager(first);
-    requireManager(second);
-    expect(first.manager).not.toBe(second.manager);
-    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
-    expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
-      command: "qmd",
-      env: process.env,
-      cwd: "/tmp/workspace",
-    });
-    expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
-      command: "qmd-alt",
-      env: process.env,
-      cwd: "/tmp/workspace",
+    await expectPendingQmdReplacement({
+      agentId,
+      firstCfg,
+      secondCfg,
+      firstAvailability: { command: "qmd", cwd: "/tmp/workspace" },
+      secondAvailability: { command: "qmd-alt", cwd: "/tmp/workspace" },
     });
   });
 
@@ -629,18 +671,60 @@ describe("getMemorySearchManager caching", () => {
 
     requireManager(first);
     requireManager(second);
-    expect(first.manager?.status()).toMatchObject({
-      backend: "qmd",
-      provider: "qmd",
-      model: "qmd",
-      requestedProvider: "qmd",
-    });
+    const firstStatus = requireManager(first).status();
+    expect(firstStatus.backend).toBe("qmd");
+    expect(firstStatus.provider).toBe("qmd");
+    expect(firstStatus.model).toBe("qmd");
+    expect(firstStatus.requestedProvider).toBe("qmd");
     expect(createQmdManagerMock.mock.calls).toHaveLength(2);
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
 
     await first.manager?.close?.();
     await second.manager?.close?.();
     expect(mockPrimary.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse cached full qmd managers for one-shot CLI requests", async () => {
+    const agentId = "cli-agent";
+    const cfg = createQmdCfg(agentId);
+    const fullPrimary = createManagerMock({
+      backend: "qmd",
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      withMemorySourceCounts: true,
+    });
+    const cliPrimary = createManagerMock({
+      backend: "qmd",
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      withMemorySourceCounts: true,
+    });
+    createQmdManagerMock
+      .mockImplementationOnce(async () => fullPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => cliPrimary as unknown as QmdManagerInstance);
+
+    const full = await getMemorySearchManager({ cfg, agentId });
+    const cli = await getMemorySearchManager({ cfg, agentId, purpose: "cli" });
+    const fullManager = requireManager(full);
+    const cliManager = requireManager(cli);
+
+    expect(cliManager).toBe(cliPrimary);
+    expect(cliManager).not.toBe(fullManager);
+    const fullCreateParams = qmdCreateParams();
+    const cliCreateParams = qmdCreateParams(1);
+    expect(fullCreateParams?.agentId).toBe(agentId);
+    expect(fullCreateParams?.mode).toBe("full");
+    expect(cliCreateParams?.agentId).toBe(agentId);
+    expect(cliCreateParams?.mode).toBe("cli");
+
+    await cli.manager?.close?.();
+    expect(cliPrimary.close).toHaveBeenCalledTimes(1);
+    expect(fullPrimary.close).not.toHaveBeenCalled();
+
+    const fullAgain = await getMemorySearchManager({ cfg, agentId });
+    expect(fullAgain.manager).toBe(fullManager);
   });
 
   it("does not cache builtin managers for status-only requests", async () => {
@@ -695,15 +779,14 @@ describe("getMemorySearchManager caching", () => {
     const result = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
     const manager = requireManager(result);
 
-    expect(manager.status()).toMatchObject({
-      backend: "qmd",
-      files: 10,
-      chunks: 42,
-      sourceCounts: [{ source: "memory", files: 10, chunks: 42 }],
-    });
-    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ agentId, mode: "status" }),
-    );
+    const status = manager.status();
+    expect(status.backend).toBe("qmd");
+    expect(status.files).toBe(10);
+    expect(status.chunks).toBe(42);
+    expect(status.sourceCounts).toEqual([{ source: "memory", files: 10, chunks: 42 }]);
+    const createParams = qmdCreateParams();
+    expect(createParams?.agentId).toBe(agentId);
+    expect(createParams?.mode).toBe("status");
   });
 
   it("reuses cached full qmd manager for status-only requests", async () => {
@@ -757,12 +840,12 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-a",
+      cwd: nativePath("/tmp/workspace-a"),
     });
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-b",
+      cwd: nativePath("/tmp/workspace-b"),
     });
 
     const fullAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });
@@ -842,8 +925,8 @@ describe("getMemorySearchManager caching", () => {
     expect(mockCloseAllMemoryIndexManagers).toHaveBeenCalledTimes(1);
 
     const second = await getMemorySearchManager({ cfg, agentId: "teardown-agent" });
-    expect(second.manager).toBeTruthy();
-    expect(second.manager).not.toBe(firstManager);
+    const secondManager = requireManager(second);
+    expect(secondManager).not.toBe(firstManager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(2);
   });
 

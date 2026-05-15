@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -8,11 +8,12 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -27,7 +28,10 @@ import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
-import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import {
   addSession,
   appendOutput,
@@ -35,6 +39,7 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
+import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -336,13 +341,27 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, {
-    sessionKey,
+    sessionKey: resolveEventSessionKey(sessionKey, session.mainKey, session.sessionScope),
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
   });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-  );
+  // Subagent sessions receive exec results via process poll and announce flow;
+  // the heartbeat would fall back to the main session and cause spurious wakes.
+  if (!isSubagentSessionKey(sessionKey)) {
+    requestHeartbeat(
+      scopedHeartbeatWakeOptions(
+        sessionKey,
+        {
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        },
+        session.mainKey,
+        session.sessionScope,
+      ),
+    );
+  }
 }
 
 export function createApprovalSlug(id: string) {
@@ -407,21 +426,48 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
+  opts: {
+    sessionKey?: string;
+    contextKey?: string;
+    deliveryContext?: DeliveryContext;
+    /** `session.mainKey` from the runtime config; pass-through of `undefined`
+     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
+    mainKey?: string;
+    /** `session.scope` from the runtime config; needed so global-scope
+     *  agents route cron-run events to the "global" queue. */
+    sessionScope?: "per-sender" | "global";
+  },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
   enqueueSystemEvent(text, {
-    sessionKey,
+    sessionKey: resolveEventSessionKey(sessionKey, opts.mainKey, opts.sessionScope),
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
+    trusted: false,
   });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-  );
+  // Subagent sessions receive exec results via process poll and announce flow;
+  // the heartbeat would fall back to the main session and cause spurious wakes.
+  if (!isSubagentSessionKey(sessionKey)) {
+    requestHeartbeat(
+      scopedHeartbeatWakeOptions(
+        sessionKey,
+        {
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        },
+        opts.mainKey,
+        opts.sessionScope,
+      ),
+    );
+  }
 }
+
+export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
@@ -551,6 +597,15 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; snapshotted onto the
+   *  ProcessSession so background-exit notifications can remap cron-run
+   *  keys without an ambient config load. Long-running background exits use
+   *  this start-time value even if config changes while the process runs. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; snapshotted alongside
+   *  `mainKey` so the cron-run remap can route global-scope agents to
+   *  the "global" queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -570,6 +625,8 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    mainKey: opts.mainKey,
+    sessionScope: opts.sessionScope,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
@@ -612,7 +669,6 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
     // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
@@ -623,7 +679,9 @@ export async function runExecProcess(opts: {
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
     opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
+      content: [
+        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
+      ],
       details: {
         status: "running",
         sessionId,

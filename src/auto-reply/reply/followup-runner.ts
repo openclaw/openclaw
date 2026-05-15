@@ -1,14 +1,9 @@
 import crypto from "node:crypto";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -17,16 +12,16 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
+  resolveModelFallbackOptions,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
@@ -263,16 +258,9 @@ export function createFollowupRunner(params: {
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
+          ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
-          provider: run.provider,
-          model: run.model,
           runId,
-          agentDir: run.agentDir,
-          fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: runtimeConfig,
-            agentId: run.agentId,
-            sessionKey: run.sessionKey,
-          }),
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
@@ -311,7 +299,11 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                currentTurnContext: queued.currentTurnContext,
                 extraSystemPrompt: run.extraSystemPrompt,
+                silentReplyPromptMode: run.silentReplyPromptMode,
+                sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -336,13 +328,6 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
-                  if (evt.stream.startsWith("codex_app_server.")) {
-                    emitAgentEvent({
-                      runId,
-                      stream: evt.stream,
-                      data: evt.data,
-                    });
-                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }
@@ -405,7 +390,6 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),
           logLabel: "followup",
         });
       }
@@ -414,21 +398,9 @@ export function createFollowupRunner(params: {
       if (payloadArray.length === 0) {
         return;
       }
-      const sanitizedPayloads = payloadArray.flatMap((payload) => {
-        const text = payload.text;
-        if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [payload];
-        }
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-        if (stripped.shouldSkip && !hasMedia) {
-          return [];
-        }
-        return [{ ...payload, text: stripped.text }];
-      });
       const finalPayloads = resolveFollowupDeliveryPayloads({
         cfg: runtimeConfig,
-        payloads: sanitizedPayloads,
+        payloads: payloadArray,
         messageProvider: run.messageProvider,
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
@@ -443,6 +415,7 @@ export function createFollowupRunner(params: {
         return;
       }
 
+      let deliveryPayloads = finalPayloads;
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -452,6 +425,7 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
           amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
@@ -472,13 +446,23 @@ export function createFollowupRunner(params: {
         }
         if (run.verboseLevel && run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
+          deliveryPayloads = [
+            {
+              text: `🧹 Auto-compaction complete${suffix}.`,
+            },
+            ...finalPayloads,
+          ];
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, effectiveQueued, {
+      if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        logVerbose(
+          "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
+        );
+        return;
+      }
+
+      await sendFollowupPayloads(deliveryPayloads, effectiveQueued, {
         provider: providerUsed,
         modelId: modelUsed,
       });

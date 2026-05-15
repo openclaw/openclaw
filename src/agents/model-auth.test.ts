@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -9,12 +9,20 @@ import {
 } from "./model-auth-markers.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   loadPluginManifestRegistryForPluginRegistry: () => ({
     diagnostics: [],
     plugins: [
       {
         origin: "bundled",
         nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
+        providerAuthEnvVars: {
+          ollama: ["OLLAMA_API_KEY"],
+        },
       },
     ],
   }),
@@ -116,6 +124,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
+let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
@@ -132,6 +141,7 @@ beforeAll(async () => {
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
+    hasSyntheticLocalProviderAuthConfig,
     hasUsableCustomProviderApiKey,
     requireApiKey,
     resolveApiKeyForProvider,
@@ -152,6 +162,20 @@ afterEach(() => {
 async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const previous = process.env[key];
   delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
+async function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  process.env[key] = value;
   try {
     return await fn();
   } finally {
@@ -201,6 +225,21 @@ async function resolveCustomProviderAuth(
       },
     },
   });
+}
+
+function expectAuthFields(
+  auth: Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
+  expected: {
+    apiKey: string;
+    mode: "api-key" | "oauth";
+    source?: string;
+  },
+) {
+  expect(auth.apiKey).toBe(expected.apiKey);
+  expect(auth.mode).toBe(expected.mode);
+  if (expected.source !== undefined) {
+    expect(auth.source).toBe(expected.source);
+  }
 }
 
 describe("resolveAwsSdkEnvVarName", () => {
@@ -304,6 +343,10 @@ describe("resolveModelAuthMode", () => {
 
     try {
       expect(resolveModelAuthMode("codex", undefined, { version: 1, profiles: {} })).toBe("oauth");
+      expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+        ttlMs: 5_000,
+        allowKeychainPrompt: false,
+      });
     } finally {
       readCodexCliCredentialsCached.mockRestore();
     }
@@ -486,6 +529,36 @@ describe("resolveUsableCustomProviderApiKey", () => {
         delete process.env.MY_CUSTOM_KEY;
       } else {
         process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("resolves legacy __env__ markers from process env for custom providers", () => {
+    const previous = process.env.BAILIAN_API_KEY;
+    process.env.BAILIAN_API_KEY = "sk-bailian-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              bailian: {
+                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+                api: "openai-completions",
+                apiKey: "__env__:BAILIAN_API_KEY", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "bailian",
+      });
+      expect(resolved?.apiKey).toBe("sk-bailian-env");
+      expect(resolved?.source).toContain("BAILIAN_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BAILIAN_API_KEY;
+      } else {
+        process.env.BAILIAN_API_KEY = previous;
       }
     }
   });
@@ -677,7 +750,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "plugin-web-fallback-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -721,7 +794,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "plugin-web-runtime-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -803,15 +876,66 @@ describe("resolveApiKeyForProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "sk-config-live",
       source: "models.json",
       mode: "api-key",
     });
   });
+
+  it("prefers non-secret local env markers over ambient profiles", async () => {
+    const resolved = await withEnv("OLLAMA_API_KEY", "ollama-local", () =>
+      resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-cloud-profile", // pragma: allowlist secret
+            },
+          },
+        },
+      }),
+    );
+
+    expectAuthFields(resolved, {
+      apiKey: "ollama-local",
+      mode: "api-key",
+    });
+    expect(resolved.source).toContain("OLLAMA_API_KEY");
+  });
 });
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
+  it("recognizes local baseUrl variants for synthetic auth config", () => {
+    const localBaseUrls = [
+      "http://127.0.0.1:8080/v1",
+      "http://192.168.0.222:11434/v1",
+      "http://localhost:11434/v1",
+      "http://[::1]:8080/v1",
+      "http://0.0.0.0:11434/v1",
+      "http://[::ffff:127.0.0.1]:8080/v1",
+    ];
+
+    for (const baseUrl of localBaseUrls) {
+      expect(
+        hasSyntheticLocalProviderAuthConfig({
+          provider: "custom-local",
+          cfg: {
+            models: {
+              providers: {
+                "custom-local": createCustomProviderConfig(baseUrl),
+              },
+            },
+          },
+        }),
+        baseUrl,
+      ).toBe(true);
+    }
+  });
+
   it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {
     const auth = await resolveCustomProviderAuth(
       "custom-127-0-0-1-8080",
@@ -823,32 +947,20 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     expect(auth.source).toContain("synthetic local key");
   });
 
-  it("synthesizes a local auth marker for localhost custom providers", async () => {
-    const auth = await resolveCustomProviderAuth("my-local", "http://localhost:11434/v1");
-    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
-  });
-
-  it("synthesizes a local auth marker for IPv6 loopback (::1)", async () => {
-    const auth = await resolveCustomProviderAuth("my-ipv6", "http://[::1]:8080/v1");
-    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
-  });
-
-  it("synthesizes a local auth marker for 0.0.0.0", async () => {
-    const auth = await resolveCustomProviderAuth(
-      "my-wildcard",
-      "http://0.0.0.0:11434/v1",
-      "qwen",
-      "Qwen",
-    );
-    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
-  });
-
-  it("synthesizes a local auth marker for IPv4-mapped IPv6 (::ffff:127.0.0.1)", async () => {
-    const auth = await resolveCustomProviderAuth("my-mapped", "http://[::ffff:127.0.0.1]:8080/v1");
-    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
-  });
-
   it("does not synthesize auth for remote custom providers without apiKey", async () => {
+    expect(
+      hasSyntheticLocalProviderAuthConfig({
+        provider: "my-remote",
+        cfg: {
+          models: {
+            providers: {
+              "my-remote": createCustomProviderConfig("https://api.example.com/v1"),
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+
     await expect(
       resolveApiKeyForProvider({
         provider: "my-remote",
@@ -877,7 +989,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     ).rejects.toThrow("No API key found");
   });
 
-  it("resolves custom named Ollama providers with explicit local marker auth", async () => {
+  it("preserves custom named Ollama providers with explicit local marker auth", async () => {
     const auth = await resolveApiKeyForProvider({
       provider: "ollama-remote",
       cfg: {
@@ -905,11 +1017,111 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: "ollama-local",
-      source: "models.providers.ollama-remote (synthetic local key)",
+      source: "models.json (local marker)",
       mode: "api-key",
     });
+  });
+
+  it("uses Ollama plugin synthetic auth for custom private provider ids without apiKey", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "ollama-gpu1",
+      cfg: {
+        models: {
+          providers: {
+            "ollama-gpu1": {
+              baseUrl: "http://192.168.178.122:11435",
+              api: "ollama",
+              models: [
+                {
+                  id: "qwen3:14b",
+                  name: "Qwen 3 14B",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 16384,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "ollama-local",
+      source: "models.providers.ollama-gpu1 (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
+  it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "custom-192-168-0-222-11434",
+      cfg: {
+        models: {
+          providers: {
+            "custom-192-168-0-222-11434": {
+              baseUrl: "http://192.168.0.222:11434/v1",
+              api: "openai-completions",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "qwen3.5:9b",
+                  name: "Qwen 3.5 9B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.json (local marker)",
+      mode: "api-key",
+    });
+  });
+
+  it("does not accept non-secret local markers for remote custom providers", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "custom-remote",
+        cfg: {
+          models: {
+            providers: {
+              "custom-remote": {
+                baseUrl: "https://api.example.com/v1",
+                api: "openai-completions",
+                apiKey: "ollama-local",
+                models: [
+                  {
+                    id: "qwen3.5:9b",
+                    name: "Qwen 3.5 9B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "custom-remote"');
   });
 
   it("does not synthesize local auth when apiKey is explicitly configured but unresolved", async () => {
@@ -1029,10 +1241,8 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       },
     );
 
-    expect(model.headers).toMatchObject({
-      Authorization: null,
-      "X-Test": "1",
-    });
+    expect(model.headers?.Authorization).toBeNull();
+    expect(model.headers?.["X-Test"]).toBe("1");
   });
 });
 

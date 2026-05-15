@@ -5,7 +5,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type PluginActivationPlannerTrigger =
@@ -54,7 +54,6 @@ type ResolveManifestActivationPlanParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  cache?: boolean;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
@@ -70,7 +69,6 @@ export function resolveManifestActivationPlan(
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
-        cache: params.cache,
         includeDisabled: true,
       });
   const entries = registry.plugins

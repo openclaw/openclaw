@@ -8,7 +8,7 @@ title: "vLLM"
 
 vLLM can serve open-source (and some custom) models via an **OpenAI-compatible** HTTP API. OpenClaw connects to vLLM using the `openai-completions` API.
 
-OpenClaw can also **auto-discover** available models from vLLM when you opt in with `VLLM_API_KEY` (any value works if your server does not enforce auth) and you do not define an explicit `models.providers.vllm` entry.
+OpenClaw can also **auto-discover** available models from vLLM when you opt in with `VLLM_API_KEY` (any value works if your server does not enforce auth). Use `vllm/*` in `agents.defaults.models` to keep discovery dynamic when you also configure a custom vLLM base URL.
 
 OpenClaw treats `vllm` as a local OpenAI-compatible provider that supports
 streamed usage accounting, so status/context token counts can update from
@@ -72,7 +72,7 @@ GET http://127.0.0.1:8000/v1/models
 and converts the returned IDs into model entries.
 
 <Note>
-If you set `models.providers.vllm` explicitly, auto-discovery is skipped and you must define models manually.
+If you set `models.providers.vllm` explicitly, OpenClaw uses your declared models by default. Add `"vllm/*": {}` to `agents.defaults.models` when you want OpenClaw to query that configured provider's `/models` endpoint and include all advertised vLLM models.
 </Note>
 
 ## Explicit configuration (manual models)
@@ -111,6 +111,21 @@ Use explicit config when:
 }
 ```
 
+To keep this provider dynamic without manually listing every model, add a provider
+wildcard to the visible model catalog:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "vllm/*": {},
+      },
+    },
+  },
+}
+```
+
 ## Advanced configuration
 
 <AccordionGroup>
@@ -129,10 +144,31 @@ Use explicit config when:
 
   </Accordion>
 
+  <Accordion title="Qwen thinking controls">
+    For Qwen models served through vLLM, set
+    `params.qwenThinkingFormat: "chat-template"` on the model entry when the
+    server expects Qwen chat-template kwargs. OpenClaw maps `/think off` to:
+
+    ```json
+    {
+      "chat_template_kwargs": {
+        "enable_thinking": false,
+        "preserve_thinking": true
+      }
+    }
+    ```
+
+    Non-`off` thinking levels send `enable_thinking: true`. If your endpoint
+    expects DashScope-style top-level flags instead, use
+    `params.qwenThinkingFormat: "top-level"` to send `enable_thinking` at the
+    request root. Snake-case `params.qwen_thinking_format` is also accepted.
+
+  </Accordion>
+
   <Accordion title="Nemotron 3 thinking controls">
     vLLM/Nemotron 3 can use chat-template kwargs to control whether reasoning is
     returned as hidden reasoning or visible answer text. When an OpenClaw session
-    uses `vllm/nemotron-3-*` with thinking off, OpenClaw sends:
+    uses `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin sends:
 
     ```json
     {
@@ -165,6 +201,60 @@ Use explicit config when:
       },
     }
     ```
+
+  </Accordion>
+
+  <Accordion title="Qwen tool calls appear as text">
+    First make sure vLLM was started with the right tool-call parser and chat
+    template for the model. For example, vLLM documents `hermes` for Qwen2.5
+    models and `qwen3_xml` for Qwen3-Coder models.
+
+    Symptoms:
+
+    - skills or tools never run
+    - the assistant prints raw JSON/XML such as `{"name":"read","arguments":...}`
+    - vLLM returns an empty `tool_calls` array when OpenClaw sends
+      `tool_choice: "auto"`
+
+    Some Qwen/vLLM combinations return structured tool calls only when the
+    request uses `tool_choice: "required"`. For those model entries, force the
+    OpenAI-compatible request field with `params.extra_body`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen-Qwen2.5-Coder-32B-Instruct": {
+              params: {
+                extra_body: {
+                  tool_choice: "required",
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Replace `Qwen-Qwen2.5-Coder-32B-Instruct` with the exact id returned by:
+
+    ```bash
+    openclaw models list --provider vllm
+    ```
+
+    You can apply the same override from the CLI:
+
+    ```bash
+    openclaw config set agents.defaults.models '{"vllm/Qwen-Qwen2.5-Coder-32B-Instruct":{"params":{"extra_body":{"tool_choice":"required"}}}}' --strict-json --merge
+    ```
+
+    This is an opt-in compatibility workaround. It makes every model turn with
+    tools require a tool call, so use it only for a dedicated local model entry
+    where that behavior is acceptable. Do not use it as a global default for all
+    vLLM models, and do not use a proxy that blindly converts arbitrary
+    assistant text into executable tool calls.
 
   </Accordion>
 
@@ -256,7 +346,19 @@ Use explicit config when:
   </Accordion>
 
   <Accordion title="No models discovered">
-    Auto-discovery requires `VLLM_API_KEY` to be set **and** no explicit `models.providers.vllm` config entry. If you have defined the provider manually, OpenClaw skips discovery and uses only your declared models.
+    Auto-discovery requires `VLLM_API_KEY` to be set. If you have defined `models.providers.vllm`, OpenClaw uses only your declared models unless `agents.defaults.models` includes `"vllm/*": {}`.
+  </Accordion>
+
+  <Accordion title="Tools render as raw text">
+    If a Qwen model prints JSON/XML tool syntax instead of executing a skill,
+    check the Qwen guidance in Advanced configuration above. The usual fix is:
+
+    - start vLLM with the correct parser/template for that model
+    - confirm the exact model id with `openclaw models list --provider vllm`
+    - add a dedicated per-model `params.extra_body.tool_choice: "required"`
+      override only if `tool_choice: "auto"` still returns empty or text-only
+      tool calls
+
   </Accordion>
 </AccordionGroup>
 

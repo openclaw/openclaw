@@ -11,7 +11,7 @@ import {
   makeCfg,
   mockRunEmbeddedPiAgentOk,
   requireSessionStorePath,
-  runGreetingPromptForBareNewOrReset,
+  expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
@@ -92,10 +92,19 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-let getReplyFromConfig!: GetReplyFromConfig;
+let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
-  getReplyFromConfig = impl;
+  capturedGetReplyFromConfig = impl;
 });
+
+function getReplyFromConfig(
+  ...args: Parameters<GetReplyFromConfig>
+): ReturnType<GetReplyFromConfig> {
+  if (!capturedGetReplyFromConfig) {
+    throw new Error("Expected trigger handling reply harness to install getReplyFromConfig");
+  }
+  return capturedGetReplyFromConfig(...args);
+}
 
 const BASE_MESSAGE = {
   Body: "hello",
@@ -207,6 +216,21 @@ async function runAuthorizedSmsCommand(body: string, cfg: ReturnType<typeof make
   return await getReplyFromConfig(makeAuthorizedSmsCommandMessage(body), {}, cfg);
 }
 
+function firstMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call params`);
+  }
+  const arg = call[0];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected ${label} first argument`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 async function expectNextRunUsesTargetSession(
   params: {
     cfg: ReturnType<typeof makeCfg>;
@@ -224,9 +248,10 @@ async function expectNextRunUsesTargetSession(
   );
 
   expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(params.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-    expect.objectContaining(expected),
-  );
+  const runParams = firstMockCallArg(params.runEmbeddedPiAgentMock, "embedded PI agent");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(runParams[key]).toEqual(value);
+  }
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
@@ -375,7 +400,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("prepends runtime-loaded daily memory context on bare /new", async () => {
+  it("acknowledges bare /new without invoking the model or loading startup memory", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
       const nowMs = Date.now();
@@ -392,18 +417,12 @@ describe("trigger handling", () => {
 
       const res = await runAuthorizedSmsCommand("/new", cfg);
 
-      expect(maybeReplyText(res)).toBe("hello");
-      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-      expect(prompt).toContain("[Startup context loaded by runtime]");
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
-      expect(prompt).toContain("BEGIN_QUOTED_NOTES");
-      expect(prompt).toContain("today startup note");
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${yesterdayStamp}.md]`);
-      expect(prompt).toContain("yesterday startup note");
+      expect(maybeReplyText(res)).toBe("✅ New session started.");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
-  it("treats normalized /RESET as reset for startupContext.applyOn", async () => {
+  it("acknowledges normalized bare /RESET without invoking the model", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
       const nowMs = Date.now();
@@ -418,10 +437,8 @@ describe("trigger handling", () => {
 
       const res = await runAuthorizedSmsCommand("/RESET", cfg);
 
-      expect(maybeReplyText(res)).toBe("hello");
-      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
-      expect(prompt).toContain("reset startup note");
+      expect(maybeReplyText(res)).toBe("✅ Session reset.");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
@@ -466,7 +483,7 @@ describe("trigger handling", () => {
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedPiAgentMock, testCase.label).toHaveBeenCalledOnce();
         if (testCase.assertPrompt) {
-          const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+          const prompt = firstMockCallArg(runEmbeddedPiAgentMock, "embedded PI agent").prompt ?? "";
           expect(prompt).toContain("Give me the status");
           expect(prompt).not.toContain("/thinking high");
           expect(prompt).not.toContain("/think high");
@@ -508,7 +525,7 @@ describe("trigger handling", () => {
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
-        const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+        const call = firstMockCallArg(runEmbeddedPiAgentMock, "embedded PI agent");
         expect(call?.provider).toBe(testCase.expected.provider);
         expect(call?.model).toBe(testCase.expected.model);
       }
@@ -566,9 +583,9 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
-        join("agents", "worker1", "sessions"),
-      );
+      expect(
+        firstMockCallArg(getCompactEmbeddedPiSessionMock(), "embedded PI compaction").sessionFile,
+      ).toContain(join("agents", "worker1", "sessions"));
     });
   });
 
@@ -824,7 +841,7 @@ describe("trigger handling", () => {
 
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
-      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
+      await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
       await expectResetBlockedForNonOwner({ home });
       await expectInlineCommandHandledAndStripped({
         home,

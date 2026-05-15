@@ -1,14 +1,15 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   setGatewayNodesRuntime,
   setGatewaySubagentRuntime,
 } from "../plugins/runtime/gateway-bindings.js";
+import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
   createGatewayNodesRuntime,
@@ -24,6 +25,10 @@ type GatewayPluginBootstrapLog = {
   debug: (msg: string) => void;
 };
 
+type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+};
+
 type GatewayPluginBootstrapParams = {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -31,13 +36,14 @@ type GatewayPluginBootstrapParams = {
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
-  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  startupTrace?: GatewayStartupTrace;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
@@ -78,7 +84,13 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
   });
-  const resolvedConfig = autoEnabled.config;
+  const resolvedConfig =
+    activationSourceConfig === params.cfg
+      ? autoEnabled.config
+      : mergeActivationSectionsIntoRuntimeConfig({
+          runtimeConfig: params.cfg,
+          activationConfig: autoEnabled.config,
+        });
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
@@ -92,12 +104,15 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     ...(params.coreGatewayMethodNames !== undefined && {
       coreGatewayMethodNames: params.coreGatewayMethodNames,
     }),
+    ...(params.hostServices !== undefined && {
+      hostServices: params.hostServices,
+    }),
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
-    bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    startupTrace: params.startupTrace,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });

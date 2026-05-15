@@ -206,18 +206,18 @@ describe("cdp.helpers", () => {
   });
 
   it("does not add custom headers when none are required", () => {
-    expect(getHeadersWithAuth("http://127.0.0.1:19444/json/version")).toEqual({});
+    expect(getHeadersWithAuth("http://127.0.0.1:19444/json/version")).toStrictEqual({});
   });
 });
 
 describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
-  it("falls back to per-port bridge auth when config auth is not available", async () => {
+  it("falls back to per-port bridge auth when config auth is not available", () => {
     const port = 18765;
     const getBridgeAuthForPort = vi.fn((candidate: number) =>
       candidate === port ? { token: "registry-token" } : undefined,
     );
     const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
-      loadConfig: () => ({}),
+      getRuntimeConfig: () => ({}),
       resolveBrowserControlAuth: () => ({}),
       getBridgeAuthForPort,
     });

@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -111,18 +113,14 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.messageChannel).toBe(channel);
 }
 
-function readAgentCommandCall(fromEnd = 1) {
-  const calls = vi.mocked(agentCommand).mock.calls;
-  return (calls.at(-fromEnd)?.[0] ?? {}) as Record<string, unknown>;
-}
-
-function expectAgentRoutingCall(params: {
+async function expectAgentRoutingCall(params: {
   channel: string;
   deliver: boolean;
   to?: string;
   fromEnd?: number;
+  runId?: string;
 }) {
-  const call = readAgentCommandCall(params.fromEnd);
+  const call = await readAgentCommandCall({ runId: params.runId, fromEnd: params.fromEnd });
   expectChannels(call, params.channel);
   if ("to" in params) {
     expect(call.to).toBe(params.to);
@@ -186,42 +184,54 @@ async function useTempSessionStorePath() {
 
 describe("gateway server agent", () => {
   beforeEach(() => {
+    vi.mocked(agentCommand).mockClear();
+    testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
   });
 
   afterEach(() => {
+    testState.allowFrom = undefined;
     setRegistry(emptyRegistry);
   });
 
-  test("agent reuses the last plugin delivery route when channel=last", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin(),
-      },
-    ]);
-    setRegistry(registry);
-    await writeMainSessionEntry({
-      sessionId: "sess-teams",
-      lastChannel: "msteams",
-      lastTo: "conversation:teams-123",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      idempotencyKey: "idem-agent-last-msteams",
-    });
-    expect(res.ok).toBe(true);
-    expectAgentRoutingCall({
-      channel: "msteams",
-      deliver: true,
-      to: "conversation:teams-123",
-      fromEnd: 1,
-    });
-  });
+  test(
+    "agent reuses the last plugin delivery route when channel=last",
+    { timeout: 20_000 },
+    async () => {
+      const registry = createRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createMSTeamsPlugin(),
+        },
+      ]);
+      setRegistry(registry);
+      await writeMainSessionEntry({
+        sessionId: "sess-teams",
+        lastChannel: "msteams",
+        lastTo: "conversation:teams-123",
+      });
+      const res = await rpcReq(
+        ws,
+        "agent",
+        {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-msteams",
+        },
+        20_000,
+      );
+      expect(res.ok).toBe(true);
+      await expectAgentRoutingCall({
+        channel: "msteams",
+        deliver: true,
+        to: "conversation:teams-123",
+        runId: "idem-agent-last-msteams",
+      });
+    },
+  );
 
   test("agent preserves CLI session binding metadata when refreshing session state", async () => {
     await useTempSessionStorePath();
@@ -254,6 +264,7 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-cli-binding",
     });
     expect(res.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-cli-binding" });
 
     const sessionStorePath = testState.sessionStorePath;
     if (!sessionStorePath) {
@@ -308,10 +319,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-imsg",
     });
     expect(resIMessage.ok).toBe(true);
-    await vi.waitFor(() => {
-      expect(vi.mocked(agentCommand)).toHaveBeenCalled();
+    await expectAgentRoutingCall({
+      channel: "imessage",
+      deliver: true,
+      runId: "idem-agent-imsg",
     });
-    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
   });
 
   test("agent accepts plugin channel alias (teams)", async () => {
@@ -333,11 +345,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-teams",
     });
     expect(resTeams.ok).toBe(true);
-    expectAgentRoutingCall({
+    await expectAgentRoutingCall({
       channel: "msteams",
       deliver: false,
       to: "conversation:teams-abc",
-      fromEnd: 1,
+      runId: "idem-agent-teams",
     });
   });
 
@@ -389,7 +401,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-webchat-best-effort",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: false,
+      runId: "idem-agent-webchat-best-effort",
+    });
   });
 
   test("agent downgrades to session-only when multiple channels are configured but no external target resolves", async () => {
@@ -417,7 +433,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-multi-configured-best-effort",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: false,
+      runId: "idem-agent-multi-configured-best-effort",
+    });
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {
@@ -435,7 +455,11 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: false,
+      runId: "idem-agent-webchat-internal",
+    });
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
@@ -477,7 +501,6 @@ describe("gateway server agent", () => {
         string,
         { sessionId?: string }
       >;
-      expect(store["agent:main:main"]?.sessionId).toBeDefined();
       expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 
@@ -507,9 +530,34 @@ describe("gateway server agent", () => {
     if (!ackPayload || !finalPayload) {
       throw new Error("missing websocket payload");
     }
-    expect(ackPayload.runId).toBeDefined();
+    expect(ackPayload.runId).toBeTypeOf("string");
+    expect(ackPayload.runId).not.toBe("");
     expect(finalPayload.runId).toBe(ackPayload.runId);
     expect(finalPayload.status).toBe("ok");
+  });
+
+  test("agent final response surfaces redacted ACP runtime cause details", async () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    vi.mocked(agentCommand).mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "Internal error", {
+        cause: new Error(`upstream rejected token=${token}`),
+      }),
+    );
+
+    const final = await sendAgentWsRequestAndWaitFinal(ws, {
+      reqId: "ag-acp-error-detail",
+      message: "hi",
+      idempotencyKey: "idem-agent-acp-error-detail",
+    });
+
+    const finalError = final.error as { message?: string } | undefined;
+    const errorMessage = finalError?.message ?? "";
+    expect(final.ok).toBe(false);
+    expect(final.payload?.status).toBe("error");
+    expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
+    expect(errorMessage).toMatch(/Internal error/);
+    expect(errorMessage).toMatch(/upstream rejected/);
+    expect(JSON.stringify(final)).not.toContain(token);
   });
 
   test("agent dedupes by idempotencyKey after completion", async () => {

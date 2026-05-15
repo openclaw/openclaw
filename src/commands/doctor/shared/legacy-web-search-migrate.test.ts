@@ -1,30 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-
-vi.mock("../../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: [
-      {
-        id: "brave",
-        origin: "bundled",
-        contracts: { webSearchProviders: ["brave"] },
-      },
-      {
-        id: "xai",
-        origin: "bundled",
-        contracts: { webSearchProviders: ["grok"] },
-      },
-      {
-        id: "moonshot",
-        origin: "bundled",
-        contracts: { webSearchProviders: ["kimi"] },
-      },
-    ],
-  }),
-  resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
-    ({ brave: "brave", grok: "xai", kimi: "moonshot" })[value as "brave" | "grok" | "kimi"],
-}));
-
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,

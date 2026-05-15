@@ -1,5 +1,5 @@
 import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { clearGroupNameCache, handleFeishuMessage } from "./bot.js";
@@ -7,7 +7,7 @@ import { setFeishuRuntime } from "./runtime.js";
 
 const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgentRoute } =
   vi.hoisted(() => ({
-    mockCreateFeishuReplyDispatcher: vi.fn(() => ({
+    mockCreateFeishuReplyDispatcher: vi.fn((_params?: unknown) => ({
       dispatcher: {
         sendToolResult: vi.fn(),
         sendBlockReply: vi.fn(),
@@ -92,6 +92,7 @@ describe("broadcast dispatch", () => {
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+        recordInboundSession: vi.fn().mockResolvedValue(undefined),
       },
       reply: {
         resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
@@ -109,6 +110,61 @@ describe("broadcast dispatch", () => {
       media: {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
+      turn: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+          const input = await params.adapter.ingest(params.raw);
+          if (!input) {
+            return {
+              admission: { kind: "drop" as const, reason: "ingest-null" },
+              dispatched: false,
+            };
+          }
+          const eventClass = {
+            kind: "message" as const,
+            canStartAgentTurn: true,
+          };
+          const turn = await params.adapter.resolveTurn(input, eventClass, {});
+          if (!("runDispatch" in turn)) {
+            throw new Error("feishu broadcast test runtime only supports prepared turns");
+          }
+          await turn.recordInboundSession({
+            storePath: turn.storePath,
+            sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+            ctx: turn.ctxPayload,
+            groupResolution: turn.record?.groupResolution,
+            createIfMissing: turn.record?.createIfMissing,
+            updateLastRoute: turn.record?.updateLastRoute,
+            onRecordError: turn.record?.onRecordError ?? (() => undefined),
+          });
+          return {
+            admission: { kind: "dispatch" as const },
+            dispatched: true,
+            ctxPayload: turn.ctxPayload,
+            routeSessionKey: turn.routeSessionKey,
+            dispatchResult: await turn.runDispatch(),
+          };
+        }),
+        runPrepared: vi.fn(
+          async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+            await turn.recordInboundSession({
+              storePath: turn.storePath,
+              sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+              ctx: turn.ctxPayload,
+              groupResolution: turn.record?.groupResolution,
+              createIfMissing: turn.record?.createIfMissing,
+              updateLastRoute: turn.record?.updateLastRoute,
+              onRecordError: turn.record?.onRecordError ?? (() => undefined),
+            });
+            return {
+              admission: { kind: "dispatch" as const },
+              dispatched: true,
+              ctxPayload: turn.ctxPayload,
+              routeSessionKey: turn.routeSessionKey,
+              dispatchResult: await turn.runDispatch(),
+            };
+          },
+        ),
+      },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
         upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
@@ -119,6 +175,12 @@ describe("broadcast dispatch", () => {
       detectMime: vi.fn(async () => "application/octet-stream"),
     },
   } as unknown as PluginRuntime;
+
+  afterAll(() => {
+    vi.doUnmock("./reply-dispatcher.js");
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
 
   function createBroadcastConfig(): ClawdbotConfig {
     return {
@@ -218,18 +280,31 @@ describe("broadcast dispatch", () => {
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextCalls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          GroupSubject: "Broadcast Team",
-          ConversationLabel: "Broadcast Team",
-        }),
-      ]),
-    );
+    expect(
+      finalizeInboundContextCalls
+        .map((call) => ({
+          sessionKey: call.SessionKey,
+          groupSubject: call.GroupSubject,
+          conversationLabel: call.ConversationLabel,
+        }))
+        .toSorted((left, right) => String(left.sessionKey).localeCompare(String(right.sessionKey))),
+    ).toEqual([
+      {
+        sessionKey: "agent:main:feishu:group:oc-broadcast-group",
+        groupSubject: "Broadcast Team",
+        conversationLabel: "Broadcast Team",
+      },
+      {
+        sessionKey: "agent:susan:feishu:group:oc-broadcast-group",
+        groupSubject: "Broadcast Team",
+        conversationLabel: "Broadcast Team",
+      },
+    ]);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main" }),
-    );
+    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(0)?.[0] as
+      | { agentId?: string }
+      | undefined;
+    expect(dispatcherParams?.agentId).toBe("main");
   });
 
   it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {
@@ -303,13 +378,12 @@ describe("broadcast dispatch", () => {
 
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextCalls).toContainEqual(
-      expect.objectContaining({
-        SessionKey: "agent:main:feishu:group:oc-broadcast-group",
-        GroupSubject: "Broadcast Team",
-        ConversationLabel: "Broadcast Team",
-      }),
+    expect(finalizeInboundContextCalls).toHaveLength(1);
+    expect(finalizeInboundContextCalls[0]?.SessionKey).toBe(
+      "agent:main:feishu:group:oc-broadcast-group",
     );
+    expect(finalizeInboundContextCalls[0]?.GroupSubject).toBe("Broadcast Team");
+    expect(finalizeInboundContextCalls[0]?.ConversationLabel).toBe("Broadcast Team");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
   });
 

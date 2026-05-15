@@ -1,11 +1,14 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
-  captureCompactionCheckpointSnapshot,
+  captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
+  readSessionLeafIdFromTranscriptAsync,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
@@ -14,11 +17,14 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
+import {
+  maybeCompactAgentHarnessSession,
+  resolveAgentHarnessPolicy,
+} from "../harness/selection.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -27,9 +33,10 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
-  rotateTranscriptAfterCompaction,
+  rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -51,8 +58,16 @@ export async function compactEmbeddedPiSession(
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
-  const contextEngine = await resolveContextEngine(params.config);
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
+  const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+  const contextEngine = await resolveContextEngine(params.config, {
+    agentDir,
+    workspaceDir: resolvedWorkspaceDir,
+  });
   let contextTokenBudget = params.contextTokenBudget;
   if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
     const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -72,9 +87,19 @@ export async function compactEmbeddedPiSession(
       params.config,
     );
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+    const ceHarnessPolicy = resolveAgentHarnessPolicy({
+      provider: ceProvider,
+      modelId: ceModelId,
+      config: params.config,
+      agentId: agentIds.sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
     contextTokenBudget = resolveContextWindowInfo({
       cfg: params.config,
-      provider: ceProvider,
+      provider: resolveContextConfigProviderForRuntime({
+        provider: ceProvider,
+        runtimeId: ceHarnessPolicy.runtime,
+      }),
       modelId: ceModelId,
       modelContextTokens: readPiModelContextTokens(ceModel),
       modelContextWindow: ceRuntimeModel?.contextWindow,
@@ -85,6 +110,7 @@ export async function compactEmbeddedPiSession(
     params,
     agentDir,
     contextTokenBudget,
+    contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
@@ -111,8 +137,7 @@ export async function compactEmbeddedPiSession(
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
-          ? captureCompactionCheckpointSnapshot({
-              sessionManager: SessionManager.open(params.sessionFile),
+          ? await captureCompactionCheckpointSnapshotAsync({
               sessionFile: params.sessionFile,
             })
           : null;
@@ -129,7 +154,7 @@ export async function compactEmbeddedPiSession(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           sessionKey: hookSessionKey,
-          workspaceDir: resolveUserPath(params.workspaceDir),
+          workspaceDir: resolvedWorkspaceDir,
           messageProvider: resolvedMessageProvider,
         };
         const runtimeContext = contextEngineRuntimeContext;
@@ -173,8 +198,7 @@ export async function compactEmbeddedPiSession(
         if (result.ok && result.compacted) {
           if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
             try {
-              const rotation = await rotateTranscriptAfterCompaction({
-                sessionManager: SessionManager.open(params.sessionFile),
+              const rotation = await rotateTranscriptFileAfterCompaction({
                 sessionFile: params.sessionFile,
               });
               if (rotation.rotated) {
@@ -196,7 +220,7 @@ export async function compactEmbeddedPiSession(
             try {
               const postLeafId =
                 postCompactionLeafId ??
-                SessionManager.open(postCompactionSessionFile).getLeafId() ??
+                (await readSessionLeafIdFromTranscriptAsync(postCompactionSessionFile)) ??
                 undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
@@ -228,6 +252,7 @@ export async function compactEmbeddedPiSession(
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
+            config: params.config,
           });
         }
         if (engineOwnsCompaction && result.ok && result.compacted) {
@@ -296,8 +321,13 @@ export async function compactEmbeddedPiSession(
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedPiSessionParams;
   agentDir: string;
+  contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.params.sessionKey,
+    config: params.params.config,
+  });
   return {
     ...params.params,
     ...buildEmbeddedCompactionRuntimeContext({
@@ -317,11 +347,20 @@ function buildCompactionContextEngineRuntimeContext(params: {
       senderId: params.params.senderId,
       provider: params.params.provider,
       modelId: params.params.model,
+      modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
       reasoningLevel: params.params.reasoningLevel,
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,
+      sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.params.config,
+      sessionKey: params.params.sessionKey,
+      agentId: sessionAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.compaction",
     }),
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.params.currentTokenCount,

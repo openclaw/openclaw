@@ -22,13 +22,15 @@ import {
   laneWeight,
   lanesNeedE2eImageKind,
   lanesNeedOpenClawPackage,
+  normalizeReleaseProfile,
   parseLaneSelection,
   parseLiveMode,
   parseProfile,
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mjs";
 
-const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 const DEFAULT_LANE_START_STAGGER_MS = 2_000;
@@ -193,16 +195,38 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+function githubWorkflowRef() {
+  const explicit = process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
+  if (explicit) {
+    return explicit;
+  }
+  const refName = process.env.GITHUB_REF_NAME;
+  if (refName) {
+    return refName;
+  }
+  const ref = process.env.GITHUB_REF;
+  if (ref?.startsWith("refs/heads/")) {
+    return ref.slice("refs/heads/".length);
+  }
+  if (ref?.startsWith("refs/tags/")) {
+    return ref.slice("refs/tags/".length);
+  }
+  return undefined;
+}
+
 function githubWorkflowRerunCommand(laneNames, ref) {
+  const workflowRef = githubWorkflowRef();
+  const releasePath = process.env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
   const fields = [
     "gh workflow run",
     shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
+    ...(workflowRef ? ["--ref", shellQuote(workflowRef)] : []),
     "-f",
     `ref=${shellQuote(ref)}`,
     "-f",
     "include_repo_e2e=false",
     "-f",
-    "include_release_path_suites=false",
+    `include_release_path_suites=${releasePath ? "true" : "false"}`,
     "-f",
     "include_openwebui=false",
     "-f",
@@ -219,6 +243,24 @@ function githubWorkflowRerunCommand(laneNames, ref) {
       `package_artifact_name=${shellQuote(
         process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || "docker-e2e-package",
       )}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_scenarios=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
     );
   }
   if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
@@ -249,6 +291,9 @@ function buildLaneRerunCommand(name, baseEnv) {
     ["OPENCLAW_DOCKER_E2E_BARE_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE],
     ["OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE],
     ["OPENCLAW_CURRENT_PACKAGE_TGZ", baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ],
+    ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
   ];
   if (baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND) {
     env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);
@@ -265,6 +310,10 @@ function withResolvedPnpmCommand(command, env) {
     return command;
   }
   return command.replace(/(^|\s)pnpm(?=\s)/g, `$1${shellQuote(pnpmCommand)}`);
+}
+
+function liveDockerHarnessScriptCommand(script) {
+  return `bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
 }
 
 async function loadTimingStore(file, enabled) {
@@ -362,6 +411,7 @@ async function writeFailureIndex(logDir, summary) {
     lane: failure.name,
     logFile: failure.logFile,
     name: failure.name,
+    noOutputTimedOut: failure.noOutputTimedOut,
     rerunCommand: failure.rerunCommand,
     status: failure.status,
     timedOut: failure.timedOut,
@@ -436,43 +486,81 @@ function dockerPreflightContainerNames(raw) {
     );
 }
 
-function runShellCommand({ command, env, label, logFile, timeoutMs }) {
+function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
   return new Promise((resolve) => {
+    const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
       env,
-      stdio: logFile ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
     activeChildren.add(child);
     let timedOut = false;
+    let noOutputTimedOut = false;
     let killTimer;
+    let stream;
+    let noOutputTimer;
+    const terminateForTimeout = (message, options = {}) => {
+      if (timedOut) {
+        return;
+      }
+      timedOut = true;
+      noOutputTimedOut = options.noOutput === true;
+      if (stream) {
+        stream.write(`\n==> [${label}] ${message}; sending SIGTERM\n`);
+      } else {
+        console.error(`==> [${label}] ${message}; sending SIGTERM`);
+      }
+      terminateChild(child, "SIGTERM");
+      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+      killTimer.unref?.();
+    };
+    const resetNoOutputTimer = () => {
+      if (!noOutputTimeoutMs || noOutputTimeoutMs <= 0 || timedOut) {
+        return;
+      }
+      if (noOutputTimer) {
+        clearTimeout(noOutputTimer);
+      }
+      noOutputTimer = setTimeout(() => {
+        terminateForTimeout(`no output for ${noOutputTimeoutMs}ms`, { noOutput: true });
+      }, noOutputTimeoutMs);
+      noOutputTimer.unref?.();
+    };
     const timeoutTimer =
       timeoutMs > 0
         ? setTimeout(() => {
-            timedOut = true;
-            if (stream) {
-              stream.write(`\n==> [${label}] timeout after ${timeoutMs}ms; sending SIGTERM\n`);
-            }
-            terminateChild(child, "SIGTERM");
-            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
-            killTimer.unref?.();
+            terminateForTimeout(`timeout after ${timeoutMs}ms`);
           }, timeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
 
-    let stream;
     if (logFile) {
       stream = fs.createWriteStream(logFile, { flags: "a" });
       stream.write(`==> [${label}] command: ${command}\n`);
       stream.write(`==> [${label}] started: ${utcStamp()}\n`);
-      child.stdout.pipe(stream, { end: false });
-      child.stderr.pipe(stream, { end: false });
+    }
+    if (pipeOutput) {
+      const writeOutput = (target, chunk) => {
+        resetNoOutputTimer();
+        if (stream) {
+          stream.write(chunk);
+        } else {
+          target.write(chunk);
+        }
+      };
+      child.stdout.on("data", (chunk) => writeOutput(process.stdout, chunk));
+      child.stderr.on("data", (chunk) => writeOutput(process.stderr, chunk));
+      resetNoOutputTimer();
     }
 
     child.on("close", (status, signal) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
+      }
+      if (noOutputTimer) {
+        clearTimeout(noOutputTimer);
       }
       if (killTimer) {
         clearTimeout(killTimer);
@@ -480,10 +568,14 @@ function runShellCommand({ command, env, label, logFile, timeoutMs }) {
       activeChildren.delete(child);
       const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
       if (stream) {
-        stream.write(`\n==> [${label}] finished: ${utcStamp()} status=${exitCode}\n`);
+        stream.write(
+          `\n==> [${label}] finished: ${utcStamp()} status=${exitCode}${
+            noOutputTimedOut ? " noOutputTimedOut=true" : ""
+          }\n`,
+        );
         stream.end();
       }
-      resolve({ signal, status: exitCode, timedOut });
+      resolve({ signal, status: exitCode, timedOut, noOutputTimedOut });
     });
   });
 }
@@ -667,6 +759,7 @@ function laneEnv(poolLane, baseEnv, logDir, cacheKey) {
     ...baseEnv,
   };
   const name = poolLane.name;
+  env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
@@ -687,6 +780,7 @@ function laneEnv(poolLane, baseEnv, logDir, cacheKey) {
 async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
   const { name } = lane;
   const timeoutMs = lane.timeoutMs ?? fallbackTimeoutMs;
+  const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
   const env = laneEnv(lane, baseEnv, logDir, lane.cacheKey);
   const command = withResolvedPnpmCommand(lane.command, env);
@@ -698,6 +792,7 @@ async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
       `==> [${name}] cli tools dir: ${env.OPENCLAW_DOCKER_CLI_TOOLS_DIR}`,
       `==> [${name}] cache dir: ${env.OPENCLAW_DOCKER_CACHE_HOME_DIR}`,
       `==> [${name}] timeout: ${timeoutMs}ms`,
+      `==> [${name}] no output timeout: ${noOutputTimeoutMs ?? 0}ms`,
       `==> [${name}] retries: ${lane.retries ?? 0}`,
       `==> [${name}] e2e image kind: ${lane.e2eImageKind ?? "none"}`,
       `==> [${name}] e2e image: ${env.OPENCLAW_DOCKER_E2E_IMAGE ?? ""}`,
@@ -716,11 +811,19 @@ async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
       await fs.promises.appendFile(logFile, `\n==> [${name}] retry attempt ${attempt}\n`);
       console.log(`==> [${name}] retry ${attempt}/${maxAttempts}`);
     }
-    result = await runShellCommand({ command, env, label: name, logFile, timeoutMs });
+    result = await runShellCommand({
+      command,
+      env,
+      label: name,
+      logFile,
+      timeoutMs,
+      noOutputTimeoutMs,
+    });
     attempts.push({
       attempt,
       elapsedSeconds: phaseElapsedSeconds(attemptStartedAt),
       finishedAt: new Date().toISOString(),
+      noOutputTimedOut: result.noOutputTimedOut,
       startedAt: new Date(attemptStartedAt).toISOString(),
       status: result.status,
       timedOut: result.timedOut,
@@ -755,6 +858,7 @@ async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
     rerunCommand: buildLaneRerunCommand(name, baseEnv),
     startedAt: startedAtIso,
     status: result.status,
+    noOutputTimedOut: result.noOutputTimedOut,
     timedOut: result.timedOut,
   };
 }
@@ -1006,6 +1110,9 @@ async function main() {
     cliArgs.has("--plan-json") || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
+  const releaseProfile = normalizeReleaseProfile(
+    process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
+  );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";
   const includeOpenWebUI = parseBool(
     process.env.OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI ?? process.env.INCLUDE_OPENWEBUI,
@@ -1057,8 +1164,11 @@ async function main() {
     planReleaseAll: planJson && planReleaseAll,
     profile,
     releaseChunk,
+    releaseProfile,
     selectedLaneNames,
     timingStore,
+    upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
   });
 
   if (planJson) {
@@ -1069,6 +1179,9 @@ async function main() {
   await mkdir(logDir, { recursive: true });
   console.log(`==> Docker test logs: ${logDir}`);
   console.log(`==> Profile: ${profile}${releaseChunk ? ` chunk=${releaseChunk}` : ""}`);
+  if (profile === RELEASE_PATH_PROFILE) {
+    console.log(`==> Release profile: ${releaseProfile}`);
+  }
   console.log(`==> Parallelism: ${parallelism}`);
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
@@ -1093,7 +1206,7 @@ async function main() {
     console.log(`==> Selected lanes: ${selectedLaneNames.join(", ")}`);
   }
   console.log(`==> Docker lane timings: ${timingStore.enabled ? timingsFile : "disabled"}`);
-  console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
+  console.log(`==> Live-test bundled plugins: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
   const schedulerOptions = parseSchedulerOptions(process.env, parallelism);
   const tailSchedulerOptions = parseSchedulerOptions(process.env, tailParallelism);
   console.log(
@@ -1131,9 +1244,9 @@ async function main() {
 
   if (buildEnabled) {
     const buildEntries = [];
-    if (scheduledLanes.some((poolLane) => poolLane.live)) {
+    if (scheduledLanes.some((poolLane) => poolLane.needsLiveImage)) {
       buildEntries.push({
-        command: "pnpm test:docker:live-build",
+        command: liveDockerHarnessScriptCommand("test-live-build-docker.sh"),
         label: "shared live-test image once",
         phaseDetails: { imageKind: "live" },
         phases,

@@ -73,9 +73,10 @@ In JSON mode, the CLI emits `type`-tagged objects:
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
 
-If the local loopback Gateway asks for pairing, `openclaw logs` falls back to
-the configured local log file automatically. Explicit `--url` targets do not
-use this fallback.
+If the implicit local loopback Gateway asks for pairing, closes during connect,
+or times out before `logs.tail` answers, `openclaw logs` falls back to the
+configured Gateway file log automatically. Explicit `--url` targets do not use
+this fallback.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -85,8 +86,8 @@ openclaw doctor
 
 ### Control UI (web)
 
-The Control UI’s **Logs** tab tails the same file using `logs.tail`.
-See [/web/control-ui](/web/control-ui) for how to open it.
+The Control UI's **Logs** tab tails the same file using `logs.tail`.
+See [Control UI](/web/control-ui) for how to open it.
 
 ### Channel-only logs
 
@@ -114,6 +115,11 @@ available:
 
 OpenClaw preserves the original structured log arguments alongside these fields
 so existing parsers that read numbered tslog argument keys keep working.
+
+Talk, realtime voice, and managed-room activity emits bounded lifecycle log
+records through this same file-log pipeline. These records include event type,
+mode, transport, provider, and size/timing measurements when available, but omit
+transcript text, audio payloads, turn ids, call ids, and provider item ids.
 
 ### Console output
 
@@ -169,6 +175,39 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Targeted model transport diagnostics
+
+When debugging provider calls, use targeted environment flags instead of raising
+all logs to `debug`:
+
+```bash
+OPENCLAW_DEBUG_MODEL_TRANSPORT=1 openclaw gateway
+OPENCLAW_DEBUG_MODEL_PAYLOAD=tools OPENCLAW_DEBUG_SSE=events openclaw gateway
+```
+
+Available flags:
+
+- `OPENCLAW_DEBUG_MODEL_TRANSPORT=1`: emit request start, fetch response, SDK
+  headers, first streaming event, stream completion, and transport errors at
+  `info` level.
+- `OPENCLAW_DEBUG_MODEL_PAYLOAD=summary`: include a bounded request payload
+  summary in model request logs.
+- `OPENCLAW_DEBUG_MODEL_PAYLOAD=tools`: include all model-facing tool names in
+  the payload summary.
+- `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`: include a redacted, capped JSON
+  payload snapshot. Use only while debugging; secrets are redacted but prompts
+  and message text may still be present.
+- `OPENCLAW_DEBUG_SSE=events`: emit first-event and stream-completion timing.
+- `OPENCLAW_DEBUG_SSE=peek`: also emit the first five redacted SSE event
+  payloads, capped per event.
+- `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
+  including when native provider tools are hidden because code mode owns the
+  tool surface.
+
+These flags log through normal OpenClaw logging, so `openclaw logs --follow`
+and the Control UI Logs tab show them. Without the flags, the same diagnostics
+remain available at `debug` level.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -182,6 +221,9 @@ the request trace when they do not pass an explicit trace context. Agent run and
 model-call traces become children of the active request trace, so local logs,
 diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
 be joined by `traceId` without logging raw request or model content.
+
+Talk lifecycle log records also flow to OTLP logs when OpenTelemetry log export
+is enabled, using the same bounded attributes as file logs.
 
 ### Model call size and timing
 
@@ -207,15 +249,29 @@ OTEL model-call spans/metrics when diagnostics export is enabled.
 ### Redaction
 
 OpenClaw can redact sensitive tokens before they hit console output, file logs,
-OTLP log records, or persisted session transcript text:
+OTLP log records, persisted session transcript text, or Control UI tool
+event payloads (tool start args, partial/final result payloads, derived
+exec output, and patch summaries):
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
-- `logging.redactPatterns`: list of regex strings to override the default set
+- `logging.redactPatterns`: list of regex strings to override the default set. Custom patterns apply on top of the built-in defaults for Control UI tool payloads, so adding a pattern never weakens redaction of values already caught by the defaults.
 
 File logs and session transcripts stay JSONL, but matching secret values are
 masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+The built-in defaults cover common API credentials and payment-credential field
+names such as card number, CVC/CVV, shared payment token, and payment credential
+when they appear as JSON fields, URL parameters, CLI flags, or assignments.
+
+`logging.redactSensitive: "off"` only disables this general log/transcript
+policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI
+clients, support bundles, diagnostics observers, approval prompts, or agent
+tools. Examples include Control UI tool-call events, `sessions_history` output,
+diagnostics support exports, provider error observations, exec approval command
+display, and Gateway WebSocket protocol logs. Custom `logging.redactPatterns`
+can still add project-specific patterns on those surfaces.
 
 ## Diagnostics and OpenTelemetry
 

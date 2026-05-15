@@ -7,7 +7,7 @@ import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
-  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError"
+  "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
 >;
 
 export type CronPayloadOutcome = {
@@ -19,6 +19,7 @@ export type CronPayloadOutcome = {
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
   embeddedRunError?: string;
+  pendingPresentationWarningError?: string;
 };
 
 type CronDenialSignal = {
@@ -183,9 +184,7 @@ function isDeliverablePayload(payload: DeliveryPayload | null | undefined): bool
   if (!payload) {
     return false;
   }
-  const hasInteractive = (payload.interactive?.blocks?.length ?? 0) > 0;
-  const hasChannelData = Object.keys(payload.channelData ?? {}).length > 0;
-  return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
+  return hasOutboundReplyContent(payload, { trimText: true });
 }
 
 function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | undefined): boolean {
@@ -195,6 +194,7 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
   return (
     payload.mediaUrl !== undefined ||
     (payload.mediaUrls?.length ?? 0) > 0 ||
+    (payload.presentation?.blocks?.length ?? 0) > 0 ||
     (payload.interactive?.blocks?.length ?? 0) > 0 ||
     Object.keys(payload.channelData ?? {}).length > 0
   );
@@ -241,6 +241,14 @@ export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxCha
   return Math.max(0, raw);
 }
 
+function isCronMessagePresentationWarning(text: string | undefined): boolean {
+  const normalized = normalizeOptionalString(text)?.toLowerCase();
+  return (
+    normalized === "⚠️ ✉️ message failed" ||
+    normalized?.startsWith("⚠️ ✉️ message failed:") === true
+  );
+}
+
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
@@ -259,16 +267,33 @@ export function resolveCronPayloadOutcome(params: {
   const lastErrorPayloadIndex = params.payloads.findLastIndex(
     (payload) => payload?.isError === true,
   );
+  const lastErrorPayloadText = [...params.payloads]
+    .toReversed()
+    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
+    ?.text?.trim();
+  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
+    params.finalAssistantVisibleText,
+  );
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  const hasFatalStructuredErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
-  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
-    params.finalAssistantVisibleText,
-  );
+  const hasSuccessfulPayloadBeforeLastError =
+    !params.runLevelError &&
+    lastErrorPayloadIndex > 0 &&
+    params.payloads
+      .slice(0, lastErrorPayloadIndex)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+  const hasPendingPresentationWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    lastErrorPayloadIndex >= 0 &&
+    isCronMessagePresentationWarning(lastErrorPayloadText) &&
+    (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
+  const hasFatalStructuredErrorPayload =
+    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasPendingPresentationWarning;
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
   );
@@ -293,10 +318,6 @@ export function resolveCronPayloadOutcome(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  const lastErrorPayloadText = [...params.payloads]
-    .toReversed()
-    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
-    ?.text?.trim();
   const denialSignal = resolveCronDenialSignal([
     { field: "summary", text: summary },
     { field: "outputText", text: outputText },
@@ -347,5 +368,8 @@ export function resolveCronPayloadOutcome(params: {
         : denialSignal
           ? formatCronDenialSignal(denialSignal)
           : runLevelError,
+    pendingPresentationWarningError: hasPendingPresentationWarning
+      ? lastErrorPayloadText
+      : undefined,
   };
 }

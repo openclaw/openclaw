@@ -13,7 +13,7 @@ const genericCoreFixtureFiles = [
   "src/commands/auth-choice.apply.plugin-provider.test.ts",
   "src/plugins/contracts/memory-embedding-provider.contract.test.ts",
   "src/plugins/discovery.test.ts",
-  "test/helpers/plugins/tts-contract-suites.ts",
+  "src/plugins/contracts/tts-contract-suites.ts",
 ] as const;
 const forbiddenGenericFixtureTerms = [
   /\bOllama\b|\bollama\b/u,
@@ -48,7 +48,7 @@ describe("core extension facade boundary", () => {
   it("does not expose Ollama plugin facades from core plugin-sdk", () => {
     expect(
       forbiddenOllamaFacadeFiles.filter((file) => fs.existsSync(path.join(repoRoot, file))),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not import Ollama plugin facades from core code", () => {
@@ -63,7 +63,7 @@ describe("core extension facade boundary", () => {
       }
     }
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 
   it("keeps generic core fixtures free of bundled provider names", () => {
@@ -77,6 +77,6 @@ describe("core extension facade boundary", () => {
       }
     }
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 });

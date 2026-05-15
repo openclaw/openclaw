@@ -1,7 +1,7 @@
 import { Command } from "commander";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
+import { formatZonedTimestamp } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
@@ -22,7 +22,7 @@ const resolveMatrixAuthContextMock = vi.fn();
 const matrixSetupApplyAccountConfigMock = vi.fn();
 const matrixSetupValidateInputMock = vi.fn();
 const matrixRuntimeLoadConfigMock = vi.fn();
-const matrixRuntimeWriteConfigFileMock = vi.fn();
+const matrixRuntimeReplaceConfigFileMock = vi.fn();
 const resetMatrixRoomKeyBackupMock = vi.fn();
 const restoreMatrixRoomKeyBackupMock = vi.fn();
 const runMatrixSelfVerificationMock = vi.fn();
@@ -42,6 +42,30 @@ function mockRecoveryKeyStdin(value: string): void {
       return undefined;
     })(),
   );
+}
+
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
+  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function stdoutWriteArg(callIndex = -1) {
+  return mockCallArg(stdoutWriteMock, callIndex);
 }
 
 vi.mock("./matrix/actions/verification.js", () => ({
@@ -96,8 +120,8 @@ vi.mock("./setup-core.js", () => ({
 vi.mock("./runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
-      loadConfig: (...args: unknown[]) => matrixRuntimeLoadConfigMock(...args),
-      writeConfigFile: (...args: unknown[]) => matrixRuntimeWriteConfigFileMock(...args),
+      current: (...args: unknown[]) => matrixRuntimeLoadConfigMock(...args),
+      replaceConfigFile: (...args: unknown[]) => matrixRuntimeReplaceConfigFileMock(...args),
     },
   }),
 }));
@@ -180,7 +204,7 @@ describe("matrix CLI verification commands", () => {
     matrixSetupValidateInputMock.mockReturnValue(null);
     matrixSetupApplyAccountConfigMock.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
     matrixRuntimeLoadConfigMock.mockReturnValue({});
-    matrixRuntimeWriteConfigFileMock.mockResolvedValue(undefined);
+    matrixRuntimeReplaceConfigFileMock.mockResolvedValue(undefined);
     resolveMatrixAuthContextMock.mockImplementation(
       ({ cfg, accountId }: { cfg: unknown; accountId?: string | null }) => ({
         cfg,
@@ -345,15 +369,16 @@ describe("matrix CLI verification commands", () => {
       },
     );
 
-    expect(runMatrixSelfVerificationMock).toHaveBeenCalledWith({
+    const selfVerifyArg = mockCallArg(runMatrixSelfVerificationMock) as Record<string, unknown>;
+    expectRecordFields(selfVerifyArg, {
       accountId: "ops",
       cfg: {},
       timeoutMs: 5000,
-      onRequested: expect.any(Function),
-      onReady: expect.any(Function),
-      onSas: expect.any(Function),
-      confirmSas: expect.any(Function),
     });
+    expect(selfVerifyArg.onRequested).toBeTypeOf("function");
+    expect(selfVerifyArg.onReady).toBeTypeOf("function");
+    expect(selfVerifyArg.onSas).toBeTypeOf("function");
+    expect(selfVerifyArg.confirmSas).toBeTypeOf("function");
     expect(consoleLogMock).toHaveBeenCalledWith("Self-verification complete.");
     expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: yes");
     expect(consoleLogMock).toHaveBeenCalledWith("Cross-signing verified: yes");
@@ -781,11 +806,9 @@ describe("matrix CLI verification commands", () => {
       from: "user",
     });
 
-    expect(restoreMatrixRoomKeyBackupMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        recoveryKey: "stdin-recovery-key",
-      }),
-    );
+    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), {
+      recoveryKey: "stdin-recovery-key",
+    });
   });
 
   it("sets non-zero exit code for backup reset failures in JSON mode", async () => {
@@ -822,10 +845,9 @@ describe("matrix CLI verification commands", () => {
 
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
 
-    expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: fakeCfg }),
-    );
-    expect(getMatrixVerificationStatusMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("readiness");
+    const statusArg = mockCallArg(getMatrixVerificationStatusMock, -1);
+    expectRecordFields(statusArg, { cfg: fakeCfg });
+    expect(statusArg).not.toHaveProperty("readiness");
   });
 
   it("allows verify status to use degraded local-state diagnostics", async () => {
@@ -836,9 +858,7 @@ describe("matrix CLI verification commands", () => {
       from: "user",
     });
 
-    expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith(
-      expect.objectContaining({ readiness: "none" }),
-    );
+    expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), { readiness: "none" });
   });
 
   it("passes loaded cfg to all verify subcommands", async () => {
@@ -850,9 +870,7 @@ describe("matrix CLI verification commands", () => {
     await program1.parseAsync(["matrix", "verify", "bootstrap"], {
       from: "user",
     });
-    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: fakeCfg }),
-    );
+    expectRecordFields(mockCallArg(bootstrapMatrixVerificationMock), { cfg: fakeCfg });
 
     // verify device
     verifyMatrixRecoveryKeyMock.mockResolvedValue({ success: true });
@@ -860,10 +878,8 @@ describe("matrix CLI verification commands", () => {
     await program2.parseAsync(["matrix", "verify", "device", "test-key"], {
       from: "user",
     });
-    expect(verifyMatrixRecoveryKeyMock).toHaveBeenCalledWith(
-      "test-key",
-      expect.objectContaining({ cfg: fakeCfg }),
-    );
+    expect(mockCallArg(verifyMatrixRecoveryKeyMock)).toBe("test-key");
+    expectRecordFields(mockCallArg(verifyMatrixRecoveryKeyMock, 0, 1), { cfg: fakeCfg });
 
     // verify backup status
     getMatrixRoomKeyBackupStatusMock.mockResolvedValue({});
@@ -871,16 +887,12 @@ describe("matrix CLI verification commands", () => {
     await program3.parseAsync(["matrix", "verify", "backup", "status"], {
       from: "user",
     });
-    expect(getMatrixRoomKeyBackupStatusMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: fakeCfg }),
-    );
+    expectRecordFields(mockCallArg(getMatrixRoomKeyBackupStatusMock), { cfg: fakeCfg });
 
     // verify backup reset
     const program4 = buildProgram();
     await program4.parseAsync(["matrix", "verify", "backup", "reset", "--yes"], { from: "user" });
-    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: fakeCfg }),
-    );
+    expectRecordFields(mockCallArg(resetMatrixRoomKeyBackupMock), { cfg: fakeCfg });
 
     // verify backup restore
     restoreMatrixRoomKeyBackupMock.mockResolvedValue({
@@ -893,9 +905,7 @@ describe("matrix CLI verification commands", () => {
     await program5.parseAsync(["matrix", "verify", "backup", "restore"], {
       from: "user",
     });
-    expect(restoreMatrixRoomKeyBackupMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: fakeCfg }),
-    );
+    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), { cfg: fakeCfg });
   });
 
   it("lists matrix devices", async () => {
@@ -1008,29 +1018,21 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(matrixSetupValidateInputMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "ops",
-        input: expect.objectContaining({
-          homeserver: "https://matrix.example.org",
-          userId: "@ops:example.org",
-          password: "secret", // pragma: allowlist secret
-        }),
-      }),
+    const validateArg = mockCallArg(matrixSetupValidateInputMock) as Record<string, unknown>;
+    expect(validateArg.accountId).toBe("ops");
+    expectRecordFields(validateArg.input, {
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      password: "secret", // pragma: allowlist secret
+    });
+    const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
+      nextConfig?: CoreConfig;
+      afterWrite?: unknown;
+    };
+    expect(replaceArg.nextConfig?.channels?.matrix?.accounts?.ops?.homeserver).toBe(
+      "https://matrix.example.org",
     );
-    expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          matrix: {
-            accounts: {
-              ops: expect.objectContaining({
-                homeserver: "https://matrix.example.org",
-              }),
-            },
-          },
-        },
-      }),
-    );
+    expect(replaceArg.afterWrite).toEqual({ mode: "auto" });
     expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops");
     expect(console.log).toHaveBeenCalledWith(
       "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:ops",
@@ -1086,34 +1088,19 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          matrix: {
-            enabled: true,
-            accounts: {
-              ops: expect.objectContaining({
-                encryption: true,
-              }),
-            },
-          },
-        },
-      }),
-    );
-    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith({
-      accountId: "ops",
-      cfg: expect.objectContaining({
-        channels: {
-          matrix: expect.objectContaining({
-            accounts: expect.objectContaining({
-              ops: expect.objectContaining({
-                encryption: true,
-              }),
-            }),
-          }),
-        },
-      }),
-    });
+    const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
+      nextConfig?: CoreConfig;
+      afterWrite?: unknown;
+    };
+    expect(replaceArg.nextConfig?.channels?.matrix?.enabled).toBe(true);
+    expect(replaceArg.nextConfig?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
+    expect(replaceArg.afterWrite).toEqual({ mode: "auto" });
+    const bootstrapArg = mockCallArg(bootstrapMatrixVerificationMock) as {
+      accountId?: string;
+      cfg?: CoreConfig;
+    };
+    expect(bootstrapArg.accountId).toBe("ops");
+    expect(bootstrapArg.cfg?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
     expect(console.log).toHaveBeenCalledWith("Encryption: enabled");
     expect(console.log).toHaveBeenCalledWith("Matrix verification bootstrap: complete");
   });
@@ -1159,38 +1146,26 @@ describe("matrix CLI verification commands", () => {
       from: "user",
     });
 
-    expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          matrix: {
-            enabled: true,
-            accounts: {
-              ops: expect.objectContaining({
-                encryption: true,
-              }),
-            },
-          },
-        },
-      }),
-    );
-    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith({
-      accountId: "ops",
-      cfg: expect.objectContaining({
-        channels: expect.objectContaining({
-          matrix: expect.objectContaining({
-            accounts: expect.objectContaining({
-              ops: expect.objectContaining({ encryption: true }),
-            }),
-          }),
-        }),
-      }),
-      recoveryKey: undefined,
-      forceResetCrossSigning: false,
-    });
-    expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith({
-      accountId: "ops",
-      cfg: expect.any(Object),
-    });
+    const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
+      nextConfig?: CoreConfig;
+      afterWrite?: unknown;
+    };
+    expect(replaceArg.nextConfig?.channels?.matrix?.enabled).toBe(true);
+    expect(replaceArg.nextConfig?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
+    expect(replaceArg.afterWrite).toEqual({ mode: "auto" });
+    const bootstrapArg = mockCallArg(bootstrapMatrixVerificationMock) as {
+      accountId?: string;
+      cfg?: CoreConfig;
+      recoveryKey?: unknown;
+      forceResetCrossSigning?: boolean;
+    };
+    expect(bootstrapArg.accountId).toBe("ops");
+    expect(bootstrapArg.cfg?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
+    expect(bootstrapArg.recoveryKey).toBeUndefined();
+    expect(bootstrapArg.forceResetCrossSigning).toBe(false);
+    const statusArg = mockCallArg(getMatrixVerificationStatusMock) as Record<string, unknown>;
+    expect(statusArg.accountId).toBe("ops");
+    expect(statusArg.cfg).toBeTypeOf("object");
     expect(console.log).toHaveBeenCalledWith("Account: ops");
     expect(console.log).toHaveBeenCalledWith(
       "Encryption config: enabled at channels.matrix.accounts.ops",
@@ -1234,26 +1209,15 @@ describe("matrix CLI verification commands", () => {
 
     expect(bootstrapMatrixVerificationMock).not.toHaveBeenCalled();
     expect(getMatrixVerificationStatusMock).toHaveBeenCalledTimes(1);
-    expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith({
-      accountId: "ops",
-      cfg: expect.any(Object),
-      readiness: "none",
-    });
-    const jsonOutput = stdoutWriteMock.mock.calls.at(-1)?.[0];
+    const statusArg = mockCallArg(getMatrixVerificationStatusMock) as Record<string, unknown>;
+    expectRecordFields(statusArg, { accountId: "ops", readiness: "none" });
+    expect(statusArg.cfg).toBeTypeOf("object");
+    const jsonOutput = stdoutWriteArg();
     expect(typeof jsonOutput).toBe("string");
-    expect(JSON.parse(String(jsonOutput))).toEqual(
-      expect.objectContaining({
-        accountId: "ops",
-        encryptionChanged: false,
-        bootstrap: expect.objectContaining({
-          success: true,
-          cryptoBootstrap: null,
-        }),
-        status: expect.objectContaining({
-          verified: true,
-        }),
-      }),
-    );
+    const payload = JSON.parse(String(jsonOutput)) as Record<string, unknown>;
+    expectRecordFields(payload, { accountId: "ops", encryptionChanged: false });
+    expectRecordFields(payload.bootstrap, { success: true, cryptoBootstrap: null });
+    expectRecordFields(payload.status, { verified: true });
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {
@@ -1305,10 +1269,9 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith({
-      accountId: "ops",
-      cfg: expect.any(Object),
-    });
+    const bootstrapArg = mockCallArg(bootstrapMatrixVerificationMock) as Record<string, unknown>;
+    expect(bootstrapArg.accountId).toBe("ops");
+    expect(bootstrapArg.cfg).toBeTypeOf("object");
     expect(console.log).toHaveBeenCalledWith("Matrix verification bootstrap: complete");
     expect(console.log).toHaveBeenCalledWith(
       `Recovery key created at: ${formatExpectedLocalTimestamp("2026-03-09T06:00:00.000Z")}`,
@@ -1378,7 +1341,7 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
+    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
     expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops");
     expect(console.error).toHaveBeenCalledWith(
@@ -1408,20 +1371,17 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
+    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-    const jsonOutput = stdoutWriteMock.mock.calls.at(-1)?.[0];
+    const jsonOutput = stdoutWriteArg();
     expect(typeof jsonOutput).toBe("string");
-    expect(JSON.parse(String(jsonOutput))).toEqual(
-      expect.objectContaining({
-        accountId: "ops",
-        deviceHealth: expect.objectContaining({
-          currentDeviceId: null,
-          staleOpenClawDeviceIds: [],
-          error: "homeserver unavailable",
-        }),
-      }),
-    );
+    const payload = JSON.parse(String(jsonOutput)) as Record<string, unknown>;
+    expect(payload.accountId).toBe("ops");
+    expectRecordFields(payload.deviceHealth, {
+      currentDeviceId: null,
+      staleOpenClawDeviceIds: [],
+      error: "homeserver unavailable",
+    });
   });
 
   it("uses --name as fallback account id and prints account-scoped config path", async () => {
@@ -1445,20 +1405,15 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(matrixSetupValidateInputMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "main-bot",
-      }),
-    );
+    expectRecordFields(mockCallArg(matrixSetupValidateInputMock), { accountId: "main-bot" });
     expect(console.log).toHaveBeenCalledWith("Saved matrix account: main-bot");
     expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.main-bot");
-    expect(updateMatrixOwnProfileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.any(Object),
-        accountId: "main-bot",
-        displayName: "Main Bot",
-      }),
-    );
+    const profileArg = mockCallArg(updateMatrixOwnProfileMock) as Record<string, unknown>;
+    expect(profileArg.cfg).toBeTypeOf("object");
+    expectRecordFields(profileArg, {
+      accountId: "main-bot",
+      displayName: "Main Bot",
+    });
     expect(console.log).toHaveBeenCalledWith(
       "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:main-bot",
     );
@@ -1500,35 +1455,28 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(matrixSetupApplyAccountConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "ops-bot",
-        input: expect.objectContaining({
-          name: "Ops Bot",
-          homeserver: "https://matrix.example.org",
-          accessToken: "ops-token",
-          avatarUrl: "mxc://example/ops-avatar",
-        }),
-      }),
+    const applyArg = mockCallArg(matrixSetupApplyAccountConfigMock) as Record<string, unknown>;
+    expect(applyArg.accountId).toBe("ops-bot");
+    expectRecordFields(applyArg.input, {
+      name: "Ops Bot",
+      homeserver: "https://matrix.example.org",
+      accessToken: "ops-token",
+      avatarUrl: "mxc://example/ops-avatar",
+    });
+    const profileArg = mockCallArg(updateMatrixOwnProfileMock) as {
+      cfg?: CoreConfig;
+      accountId?: string;
+      displayName?: string;
+      avatarUrl?: string;
+    };
+    expect(profileArg.cfg?.channels?.matrix?.accounts?.["ops-bot"]?.homeserver).toBe(
+      "https://matrix.example.org",
     );
-    expect(updateMatrixOwnProfileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            matrix: expect.objectContaining({
-              accounts: expect.objectContaining({
-                "ops-bot": expect.objectContaining({
-                  homeserver: "https://matrix.example.org",
-                }),
-              }),
-            }),
-          }),
-        }),
-        accountId: "ops-bot",
-        displayName: "Ops Bot",
-        avatarUrl: "mxc://example/ops-avatar",
-      }),
-    );
+    expectRecordFields(profileArg, {
+      accountId: "ops-bot",
+      displayName: "Ops Bot",
+      avatarUrl: "mxc://example/ops-avatar",
+    });
     expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops-bot");
     expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.ops-bot");
   });
@@ -1551,14 +1499,12 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(updateMatrixOwnProfileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "alerts",
-        displayName: "Alerts Bot",
-        avatarUrl: "mxc://example/avatar",
-      }),
-    );
-    expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
+    expectRecordFields(mockCallArg(updateMatrixOwnProfileMock), {
+      accountId: "alerts",
+      displayName: "Alerts Bot",
+      avatarUrl: "mxc://example/avatar",
+    });
+    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
     expect(console.log).toHaveBeenCalledWith("Account: alerts");
     expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.alerts");
   });
@@ -1572,9 +1518,9 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
-    expect(stdoutWriteMock).toHaveBeenCalledWith(
-      expect.stringContaining('"error": "Matrix requires --homeserver"'),
-    );
+    expect(JSON.parse(String(stdoutWriteArg(0)))).toEqual({
+      error: "Matrix requires --homeserver",
+    });
   });
 
   it("keeps zero exit code for successful bootstrap in JSON mode", async () => {

@@ -1,5 +1,5 @@
 export { resolveSessionAgentId } from "../../agents/agent-scope.js";
-export { loadConfig } from "../../config/config.js";
+export { getRuntimeConfig } from "../../config/config.js";
 export {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -14,10 +14,10 @@ export {
 } from "../../gateway/server-methods/chat.js";
 export { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 export {
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
-  readSessionMessages,
+  readSessionMessagesAsync,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
 export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";

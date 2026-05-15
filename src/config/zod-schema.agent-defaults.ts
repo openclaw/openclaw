@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -9,6 +8,7 @@ import {
   AgentRuntimePolicySchema,
   AgentModelSchema,
   MemorySearchSchema,
+  AgentRunRetriesConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -18,11 +18,18 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
-export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),
   z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
+
+const OptionalBootstrapFileNameSchema = z.enum([
+  "SOUL.md",
+  "USER.md",
+  "HEARTBEAT.md",
+  "IDENTITY.md",
 ]);
 
 export const SilentReplyPolicyConfigSchema = z
@@ -64,6 +71,7 @@ export const AgentDefaultsSchema = z
             alias: z.string().optional(),
             /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
             params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
           })
@@ -90,6 +98,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     skipBootstrap: z.boolean().optional(),
+    skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
@@ -162,19 +171,6 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
-    llm: z
-      .object({
-        idleTimeoutSeconds: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe(
-            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
-          ),
-      })
-      .strict()
-      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
@@ -196,6 +192,12 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        midTurnPrecheck: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
@@ -203,6 +205,7 @@ export const AgentDefaultsSchema = z
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
+            model: z.string().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
             forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
             prompt: z.string().optional(),
@@ -216,6 +219,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedPi: z
       .object({
         projectSettingsPolicy: z
@@ -238,6 +242,8 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
+    reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
       .optional(),
@@ -255,6 +261,7 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z

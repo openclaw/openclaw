@@ -5,7 +5,7 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let diagnosticEventsModule = null;
-const jitiLoaders = new Map();
+const moduleLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
@@ -194,24 +194,22 @@ function buildPluginSdkAliasMap(useDist) {
   return aliasMap;
 }
 
-function getJiti(tryNative) {
-  const effectiveTryNative = process.platform === "win32" ? false : tryNative;
-
-  if (jitiLoaders.has(effectiveTryNative)) {
-    return jitiLoaders.get(effectiveTryNative);
+function getModuleLoader(tryNative) {
+  if (moduleLoaders.has(tryNative)) {
+    return moduleLoaders.get(tryNative);
   }
 
   const { createJiti } = require("jiti");
-  const jitiLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(effectiveTryNative),
+  const moduleLoader = createJiti(__filename, {
+    alias: buildPluginSdkAliasMap(tryNative),
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative: effectiveTryNative,
+    tryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  jitiLoaders.set(effectiveTryNative, jitiLoader);
-  return jitiLoader;
+  moduleLoaders.set(tryNative, moduleLoader);
+  return moduleLoader;
 }
 
 function loadMonolithicSdk() {
@@ -222,14 +220,16 @@ function loadMonolithicSdk() {
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
   if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = getJiti(true)(distCandidate);
+      monolithicSdk = getModuleLoader(true)(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
+  monolithicSdk = getModuleLoader(false)(
+    path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"),
+  );
   return monolithicSdk;
 }
 
@@ -252,7 +252,9 @@ function loadDiagnosticEventsModule() {
       findDistChunkByPrefix("diagnostic-events");
     if (distCandidate) {
       try {
-        diagnosticEventsModule = normalizeDiagnosticEventsModule(getJiti(true)(distCandidate));
+        diagnosticEventsModule = normalizeDiagnosticEventsModule(
+          getModuleLoader(true)(distCandidate),
+        );
         return diagnosticEventsModule;
       } catch {
         // Fall through to source path if dist is unavailable or stale.
@@ -261,7 +263,7 @@ function loadDiagnosticEventsModule() {
   }
 
   diagnosticEventsModule = normalizeDiagnosticEventsModule(
-    getJiti(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
+    getModuleLoader(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
   );
   return diagnosticEventsModule;
 }

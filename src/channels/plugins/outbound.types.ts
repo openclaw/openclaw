@@ -51,10 +51,28 @@ export type ChannelPresentationCapabilities = {
 
 export type ChannelDeliveryCapabilities = {
   pin?: boolean;
+  durableFinal?: {
+    text?: boolean;
+    media?: boolean;
+    payload?: boolean;
+    silent?: boolean;
+    replyTo?: boolean;
+    thread?: boolean;
+    nativeQuote?: boolean;
+    messageSendingHooks?: boolean;
+    batch?: boolean;
+    reconcileUnknownSend?: boolean;
+    afterSendSuccess?: boolean;
+    afterCommit?: boolean;
+  };
 };
 
 export type ChannelOutboundPayloadHint =
-  | { kind: "approval-pending"; approvalKind: "exec" | "plugin" }
+  | {
+      kind: "approval-pending";
+      approvalKind: "exec" | "plugin";
+      nativeRouteActive?: boolean;
+    }
   | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
 
 export type ChannelOutboundTargetRef = {
@@ -72,16 +90,26 @@ export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
+export type ChannelOutboundNormalizePayloadParams = {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
+  /** Lift remote Markdown image syntax in text into outbound media attachments. */
+  extractMarkdownImages?: boolean;
   textChunkLimit?: number;
   sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
   pollMaxOptions?: number;
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
-  normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
+  normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
+  sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;

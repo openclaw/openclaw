@@ -1,5 +1,9 @@
-import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
-import { applyCodexAppServerAuthProfile, bridgeCodexAppServerStartOptions } from "./auth-bridge.js";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  applyCodexAppServerAuthProfile,
+  bridgeCodexAppServerStartOptions,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
@@ -28,20 +32,34 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
 export async function getSharedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<CodexAppServerClient> {
   const state = getSharedCodexAppServerClientState();
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
+  const usesNativeAuth = options?.authProfileId === null;
+  const requestedAuthProfileId =
+    options?.authProfileId === null ? undefined : options?.authProfileId;
+  const authProfileId = usesNativeAuth
+    ? undefined
+    : resolveCodexAppServerAuthProfileIdForAgent({
+        authProfileId: requestedAuthProfileId,
+        agentDir,
+        config: options?.config,
+      });
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(requestedStartOptions);
   const startOptions = await bridgeCodexAppServerStartOptions({
     startOptions: managedStartOptions,
     agentDir,
-    authProfileId: options?.authProfileId,
+    authProfileId: usesNativeAuth ? null : authProfileId,
+    config: options?.config,
   });
   const key = codexAppServerStartOptionsKey(startOptions, {
-    authProfileId: options?.authProfileId,
+    authProfileId,
+    agentDir: usesNativeAuth ? undefined : agentDir,
   });
   if (state.key && state.key !== key) {
     clearSharedCodexAppServerClient();
@@ -58,7 +76,9 @@ export async function getSharedCodexAppServerClient(options?: {
         await applyCodexAppServerAuthProfile({
           client,
           agentDir,
-          authProfileId: options?.authProfileId,
+          authProfileId: usesNativeAuth ? null : authProfileId,
+          startOptions,
+          config: options?.config,
         });
         return client;
       } catch (error) {
@@ -85,16 +105,29 @@ export async function getSharedCodexAppServerClient(options?: {
 export async function createIsolatedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<CodexAppServerClient> {
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
+  const usesNativeAuth = options?.authProfileId === null;
+  const requestedAuthProfileId =
+    options?.authProfileId === null ? undefined : options?.authProfileId;
+  const authProfileId = usesNativeAuth
+    ? undefined
+    : resolveCodexAppServerAuthProfileIdForAgent({
+        authProfileId: requestedAuthProfileId,
+        agentDir,
+        config: options?.config,
+      });
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(requestedStartOptions);
   const startOptions = await bridgeCodexAppServerStartOptions({
     startOptions: managedStartOptions,
     agentDir,
-    authProfileId: options?.authProfileId,
+    authProfileId: usesNativeAuth ? null : authProfileId,
+    config: options?.config,
   });
   const client = CodexAppServerClient.start(startOptions);
   const initialize = client.initialize();
@@ -103,7 +136,9 @@ export async function createIsolatedCodexAppServerClient(options?: {
     await applyCodexAppServerAuthProfile({
       client,
       agentDir,
-      authProfileId: options?.authProfileId,
+      authProfileId: usesNativeAuth ? null : authProfileId,
+      startOptions,
+      config: options?.config,
     });
     return client;
   } catch (error) {
@@ -127,6 +162,23 @@ export function clearSharedCodexAppServerClient(): void {
   state.promise = undefined;
   state.key = undefined;
   client?.close();
+}
+
+export function clearSharedCodexAppServerClientIfCurrent(
+  client: CodexAppServerClient | undefined,
+): boolean {
+  if (!client) {
+    return false;
+  }
+  const state = getSharedCodexAppServerClientState();
+  if (state.client !== client) {
+    return false;
+  }
+  state.client = undefined;
+  state.promise = undefined;
+  state.key = undefined;
+  client.close();
+  return true;
 }
 
 export async function clearSharedCodexAppServerClientAndWait(options?: {

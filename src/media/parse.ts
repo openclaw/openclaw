@@ -26,12 +26,20 @@ export type ParsedMediaOutputSegment =
       url: string;
     };
 
+export type SplitMediaFromOutputOptions = {
+  extractMarkdownImages?: boolean;
+};
+
 export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
 
+const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:,]|$).*/s;
+
 function cleanCandidate(raw: string) {
-  return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
+  const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
+  const jsonSuffixMatch = TRAILING_SERIALIZED_JSON_AFTER_EXT_RE.exec(stripped);
+  return jsonSuffixMatch?.[1] ?? stripped;
 }
 
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
@@ -41,11 +49,15 @@ const HAS_FILE_EXT = /\.\w{1,10}$/;
 // Matches ".." as a standalone path segment (start, middle, or end).
 const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
 
-function hasTraversalOrHomeDirPrefix(candidate: string): boolean {
+function isSupportedHomeRelativePath(candidate: string): boolean {
+  return candidate.startsWith("~/") || candidate.startsWith("~\\");
+}
+
+function hasTraversalOrUnsupportedHomeDirPrefix(candidate: string): boolean {
   return (
     candidate.startsWith("../") ||
     candidate === ".." ||
-    candidate.startsWith("~") ||
+    (candidate.startsWith("~") && !isSupportedHomeRelativePath(candidate)) ||
     TRAVERSAL_SEGMENT_RE.test(candidate)
   );
 }
@@ -65,14 +77,15 @@ function looksLikeLocalFilePath(candidate: string): boolean {
 }
 
 // Recognize safe local file path patterns for media approval, rejecting
-// traversal and home-dir paths so they never reach downstream load/send logic.
+// traversal and unsupported home-dir paths so they never reach downstream load/send logic.
 function isLikelyLocalPath(candidate: string): boolean {
-  if (hasTraversalOrHomeDirPrefix(candidate)) {
+  if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
     return false;
   }
   return (
     candidate.startsWith("/") ||
     candidate.startsWith("./") ||
+    isSupportedHomeRelativePath(candidate) ||
     WINDOWS_DRIVE_RE.test(candidate) ||
     candidate.startsWith("\\\\") ||
     (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
@@ -163,9 +176,9 @@ function isValidMedia(
     return true;
   }
 
-  // Hard reject traversal/home-dir patterns before the bare-filename fallback
+  // Hard reject traversal/unsupported home-dir patterns before the bare-filename fallback
   // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
-  if (hasTraversalOrHomeDirPrefix(candidate)) {
+  if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
     return false;
   }
 
@@ -462,10 +475,14 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
-export function splitMediaFromOutput(raw: string): {
+export function splitMediaFromOutput(
+  raw: string,
+  options: SplitMediaFromOutputOptions = {},
+): {
   text: string;
   mediaUrls?: string[];
-  mediaUrl?: string; // legacy first item for backward compatibility
+  /** @deprecated Use mediaUrls[0]. */
+  mediaUrl?: string;
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -475,8 +492,9 @@ export function splitMediaFromOutput(raw: string): {
   if (!trimmedRaw.trim()) {
     return { text: "" };
   }
+  const extractMarkdownImages = options.extractMarkdownImages === true;
   const mayContainMediaToken = /media:/i.test(trimmedRaw);
-  const mayContainMarkdownImage = /!\[[^\]]*]\(/.test(trimmedRaw);
+  const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
     return { text: trimmedRaw };
@@ -518,7 +536,9 @@ export function splitMediaFromOutput(raw: string): {
 
     const trimmedStart = line.trimStart();
     if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
-      const markdownImageResult = collectMarkdownImageSegments({ line, media });
+      const markdownImageResult = extractMarkdownImages
+        ? collectMarkdownImageSegments({ line, media })
+        : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
         keptLines.push(line);
         pushTextSegment(line);

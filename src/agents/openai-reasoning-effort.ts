@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-export type OpenAIApiReasoningEffort = OpenAIReasoningEffort;
+export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});
 
 type OpenAIReasoningModel = {
   provider?: unknown;
@@ -11,15 +11,6 @@ type OpenAIReasoningModel = {
   baseUrl?: unknown;
   compat?: unknown;
 };
-
-const ALL_OPENAI_REASONING_EFFORTS = [
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const satisfies readonly OpenAIApiReasoningEffort[];
 
 const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 const GPT_51_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
@@ -35,6 +26,11 @@ function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
 
+export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return /^gpt-5\.4-mini(?:-|$)/u.test(id);
+}
+
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   return effort === "minimal" ? "minimal" : effort;
 }
@@ -47,10 +43,19 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const supported = raw.filter((value): value is OpenAIApiReasoningEffort =>
-    ALL_OPENAI_REASONING_EFFORTS.includes(value as OpenAIApiReasoningEffort),
-  );
+  const supported = [
+    ...new Set(
+      raw
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
   return supported.length > 0 ? supported : undefined;
+}
+
+function isDisabledReasoningEffort(effort: string): boolean {
+  return effort === "none" || effort === "off";
 }
 
 export function resolveOpenAISupportedReasoningEfforts(
@@ -113,7 +118,7 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
   }
-  if (requested === "none") {
+  if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;
   }
   if (requested === "minimal" && supported.includes("low")) {

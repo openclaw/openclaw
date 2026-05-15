@@ -22,6 +22,27 @@ orchestrate sub-agents.
 | `subagents`        | List, steer, or kill spawned sub-agents for this session                    |
 | `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
 
+These tools are still subject to the active tool profile and allow/deny
+policy. `tools.profile: "coding"` includes the full session orchestration
+set, including `sessions_spawn`, `sessions_yield`, and `subagents`.
+`tools.profile: "messaging"` includes cross-session messaging tools
+(`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but
+does not include sub-agent spawning. To keep a messaging profile and still
+allow native delegation, add:
+
+```json5
+{
+  tools: {
+    profile: "messaging",
+    alsoAllow: ["sessions_spawn", "sessions_yield", "subagents"],
+  },
+}
+```
+
+Group, provider, sandbox, and per-agent policies can still remove those tools
+after the profile stage. Use `/tools` from the affected session to inspect the
+effective tool list.
+
 ## Listing and reading sessions
 
 `sessions_list` returns sessions with their key, agentId, kind, channel, model,
@@ -72,8 +93,19 @@ the response:
   immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+Thread-scoped chat sessions, such as Slack or Discord keys ending in
+`:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel
+session key for inter-agent coordination so tool-routed messages do not appear
+inside an active human-facing thread.
+
+Messages and A2A follow-up replies are marked as inter-session data in the
+receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript
+provenance. The receiving agent should treat them as tool-routed data, not as a
+direct end-user-authored instruction.
+
 After the target responds, OpenClaw can run a **reply-back loop** where the
-agents alternate messages (up to 5 turns). The target agent can reply
+agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range
+0-20, default 5). The target agent can reply
 `REPLY_SKIP` to stop early.
 
 ## Status and orchestration helpers
@@ -82,7 +114,9 @@ agents alternate messages (up to 5 turns). The target agent can reply
 or another visible session. It reports usage, time, model/runtime state, and
 linked background-task context when present. Like `/status`, it can backfill
 sparse token/cache counters from the latest transcript usage entry, and
-`model=default` clears a per-session override.
+`model=default` clears a per-session override. Use `sessionKey="current"` for
+the caller's current session; visible client labels such as `openclaw-tui` are
+not session keys.
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when
@@ -100,7 +134,9 @@ sub-agents. It supports:
 
 `sessions_spawn` creates an isolated session for a background task by default.
 It is always non-blocking -- it returns immediately with a `runId` and
-`childSessionKey`.
+`childSessionKey`. Native sub-agent runs receive the delegated task in the
+child session's first visible `[Subagent Task]` message, while the system
+prompt carries only sub-agent runtime rules and routing context.
 
 Key options:
 
@@ -110,6 +146,8 @@ Key options:
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` for native sub-agents when the child needs the current
   requester transcript; omit it or use `context: "isolated"` for a clean child.
+  Thread-bound native sub-agents default to `context: "fork"` unless
+  `threadBindings.defaultSpawnContext` says otherwise.
 
 Default leaf sub-agents do not get session tools. When
 `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive

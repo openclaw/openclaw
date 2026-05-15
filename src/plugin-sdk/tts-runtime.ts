@@ -3,16 +3,13 @@ import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsRuntimeFacade,
-  TtsSynthesisResult,
-  TtsTelephonyResult,
-} from "./tts-runtime.types.js";
+import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
+export {
+  TtsAutoSchema,
+  TtsConfigSchema,
+  TtsModeSchema,
+  TtsProviderSchema,
+} from "../config/zod-schema.core.js";
 
 // Manual facade. Keep loader boundary explicit and avoid typing this public SDK
 // seam through the bundled speech-core runtime surface.
@@ -23,6 +20,10 @@ function loadFacadeModule(): FacadeModule {
     dirName: "speech-core",
     artifactBasename: "runtime-api.js",
   });
+}
+
+export function prewarmTtsRuntimeFacade(): void {
+  loadFacadeModule();
 }
 
 export const _test: FacadeModule["_test"] = createLazyFacadeObjectValue(
@@ -110,9 +111,17 @@ export const synthesizeSpeech: FacadeModule["synthesizeSpeech"] = createLazyFaca
   loadFacadeModule,
   "synthesizeSpeech",
 );
+export const streamSpeech: FacadeModule["streamSpeech"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "streamSpeech",
+);
 export const textToSpeech: FacadeModule["textToSpeech"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,
   "textToSpeech",
+);
+export const textToSpeechStream: FacadeModule["textToSpeechStream"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "textToSpeechStream",
 );
 export const textToSpeechTelephony: FacadeModule["textToSpeechTelephony"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "textToSpeechTelephony");
@@ -124,5 +133,7 @@ export type {
   TtsDirectiveParseResult,
   TtsResult,
   TtsSynthesisResult,
+  TtsSynthesisStreamResult,
+  TtsStreamResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";

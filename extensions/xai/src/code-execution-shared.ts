@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiResponsesToolBody,
@@ -5,39 +6,26 @@ import {
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
 import {
-  coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
 import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
-export const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
+const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
+const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
 
-export type XaiCodeExecutionConfig = {
-  apiKey?: unknown;
-  model?: unknown;
-  maxTurns?: unknown;
-};
-
-export type XaiCodeExecutionResponse = XaiWebSearchResponse & {
+type XaiCodeExecutionResponse = XaiWebSearchResponse & {
   output?: Array<{
     type?: string;
   }>;
 };
 
-export type XaiCodeExecutionResult = {
+type XaiCodeExecutionResult = {
   content: string;
   citations: string[];
   usedCodeExecution: boolean;
   outputTypes: string[];
 };
-
-export function resolveXaiCodeExecutionConfig(
-  config?: Record<string, unknown>,
-): XaiCodeExecutionConfig {
-  return coerceXaiToolConfig(config) as XaiCodeExecutionConfig;
-}
 
 export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
@@ -94,7 +82,10 @@ export async function requestXaiCodeExecution(params: {
       errorLabel: "xAI",
     },
     async (response) => {
-      const data = (await response.json()) as XaiCodeExecutionResponse;
+      const data = await readProviderJsonResponse<XaiCodeExecutionResponse>(
+        response,
+        "xAI code execution failed",
+      );
       const { content, citations } = resolveXaiResponseTextAndCitations(data);
       const outputTypes = Array.isArray(data.output)
         ? [
@@ -114,12 +105,3 @@ export async function requestXaiCodeExecution(params: {
     },
   );
 }
-
-export const __testing = {
-  buildXaiCodeExecutionPayload,
-  requestXaiCodeExecution,
-  resolveXaiCodeExecutionConfig,
-  resolveXaiCodeExecutionMaxTurns,
-  resolveXaiCodeExecutionModel,
-  XAI_DEFAULT_CODE_EXECUTION_MODEL,
-} as const;

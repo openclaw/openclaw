@@ -1,5 +1,5 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   parseReplyDirectives,
@@ -27,13 +27,13 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
+import { warnIfAssistantEmittedToolText } from "./pi-embedded-subscribe.tool-text-diagnostics.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
-  formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
@@ -530,15 +530,22 @@ export function handleMessageUpdate(
     (deliveryPhase === "final_answer"
       ? ""
       : ctx
-          .stripBlockTags(ctx.state.deltaBuffer, {
-            thinking: false,
-            final: false,
-            inlineCode: createInlineCodeState(),
-          })
+          .stripBlockTags(
+            ctx.state.deltaBuffer,
+            {
+              thinking: false,
+              final: false,
+              inlineCode: createInlineCodeState(),
+            },
+            { final: evtType === "text_end" },
+          )
           .trim());
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
-    const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    const visibleDelta =
+      chunk || evtType === "text_end"
+        ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: evtType === "text_end" })
+        : "";
     if (!wasThinking && ctx.state.partialBlockState.thinking) {
       openReasoningStream(ctx);
     }
@@ -636,7 +643,7 @@ export function handleMessageUpdate(
   ) {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
-      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true }))
       .catch((err) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
@@ -674,16 +681,17 @@ export function handleMessageEnd(
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
   });
+  warnIfAssistantEmittedToolText(ctx, assistantMessage);
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
+    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }, { final: true }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
-  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
@@ -698,6 +706,8 @@ export function handleMessageEnd(
     ctx.state.blockState.thinking = false;
     ctx.state.blockState.final = false;
     ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.blockState.pendingTagFragment = undefined;
+    ctx.state.partialBlockState.pendingTagFragment = undefined;
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;
     ctx.state.reasoningStreamOpen = false;
@@ -759,18 +769,18 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     ctx.state.includeReasoning &&
-    formattedReasoning &&
+    trimmedReasoning &&
     onBlockReply &&
-    formattedReasoning !== ctx.state.lastReasoningSent,
+    trimmedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning || !formattedReasoning) {
+    if (!shouldEmitReasoning || !trimmedReasoning) {
       return;
     }
-    ctx.state.lastReasoningSent = formattedReasoning;
-    ctx.emitBlockReply({ text: formattedReasoning, isReasoning: true });
+    ctx.state.lastReasoningSent = trimmedReasoning;
+    ctx.emitBlockReply({ text: trimmedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -818,8 +828,15 @@ export function handleMessageEnd(
       text !== ctx.state.lastBlockReplyText)
   ) {
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
+      const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+        final: true,
+      });
+      if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+        void flushBlockReplyBufferResult.catch((err) => {
+          ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
+        });
+      }
       // Final-flush the streaming directive accumulator so any partial
       // directive tail held back by splitTrailingDirective (for example a
       // trailing `MEDIA:<path>` that arrived without a closing newline)
@@ -854,6 +871,8 @@ export function handleMessageEnd(
           );
         } else {
           ctx.state.lastBlockReplyText = text;
+          ctx.state.lastDeliveredBlockReplyText = text;
+          ctx.state.toolExecutionSinceLastBlockReply = false;
           emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
         }
       }

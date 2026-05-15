@@ -1,7 +1,14 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
+import {
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayload,
+} from "../chat/attachment-payload-store.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
@@ -18,11 +25,12 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { InputHistory } from "../chat/input-history.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
+import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
@@ -34,8 +42,11 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
-import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
+import {
+  renderChatRunStatusIndicator,
+  renderCompactionIndicator,
+  renderFallbackIndicator,
+} from "../chat/status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -56,6 +67,7 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
+  runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
@@ -71,6 +83,17 @@ export type ChatProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkOptions?: {
+    provider: string;
+    model: string;
+    voice: string;
+    transport: string;
+    vadThreshold: string;
+    silenceDurationMs: string;
+    prefixPaddingMs: string;
+    reasoningEffort: string;
+  };
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -81,7 +104,7 @@ export type ChatProps = {
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
   splitRatio?: number;
-  canvasHostUrl?: string | null;
+  canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
@@ -100,9 +123,16 @@ export type ChatProps = {
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
+  onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
+  onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeTalkOptions?: () => void;
+  onRealtimeTalkOptionsChange?: (
+    next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
+  ) => void;
+  onDismissError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueSteer?: (id: string) => void;
@@ -124,14 +154,10 @@ export type ChatProps = {
   basePath?: string;
 };
 
-// Persistent instances keyed by session
-const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-function getInputHistory(sessionKey: string): InputHistory {
-  return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
-}
+const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
+const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -149,9 +175,111 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
   );
 }
 
+function renderRealtimeTalkOptions(props: ChatProps) {
+  const options = props.realtimeTalkOptions;
+  const onChange = props.onRealtimeTalkOptionsChange;
+  if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
+    return nothing;
+  }
+  const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
+    const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
+    onChange({ [key]: value });
+  };
+  return html`
+    <div class="agent-chat__talk-options" aria-label="Talk options">
+      <label>
+        <span>Provider</span>
+        <select .value=${options.provider} @change=${update("provider")}>
+          <option value="">Auto</option>
+          <option value="openai">OpenAI</option>
+          <option value="google">Google</option>
+        </select>
+      </label>
+      <label>
+        <span>Transport</span>
+        <select .value=${options.transport} @change=${update("transport")}>
+          <option value="">Auto</option>
+          <option value="webrtc">WebRTC</option>
+          <option value="gateway-relay">Gateway relay</option>
+          <option value="provider-websocket">Provider WebSocket</option>
+        </select>
+      </label>
+      <label>
+        <span>Model</span>
+        <input
+          .value=${options.model}
+          @input=${update("model")}
+          placeholder="gpt-realtime-2"
+          spellcheck="false"
+        />
+      </label>
+      <label>
+        <span>Voice</span>
+        <select .value=${options.voice} @change=${update("voice")}>
+          <option value="">Default</option>
+          ${[
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar",
+          ].map((voice) => html`<option value=${voice}>${voice}</option>`)}
+        </select>
+      </label>
+      <label>
+        <span>Reasoning</span>
+        <select .value=${options.reasoningEffort} @change=${update("reasoningEffort")}>
+          <option value="">Default</option>
+          <option value="minimal">Minimal</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+      <label>
+        <span>VAD</span>
+        <input
+          type="number"
+          min="0"
+          max="1"
+          step="0.05"
+          .value=${options.vadThreshold}
+          @input=${update("vadThreshold")}
+          placeholder="0.5"
+        />
+      </label>
+      <label>
+        <span>Silence ms</span>
+        <input
+          type="number"
+          min="1"
+          step="50"
+          .value=${options.silenceDurationMs}
+          @input=${update("silenceDurationMs")}
+          placeholder="500"
+        />
+      </label>
+      <label>
+        <span>Prefix ms</span>
+        <input
+          type="number"
+          min="0"
+          step="50"
+          .value=${options.prefixPaddingMs}
+          @input=${update("prefixPaddingMs")}
+          placeholder="300"
+        />
+      </label>
+    </div>
+  `;
+}
+
 interface ChatEphemeralState {
-  sttRecording: boolean;
-  sttInterimText: string;
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
@@ -166,8 +294,6 @@ interface ChatEphemeralState {
 
 function createChatEphemeralState(): ChatEphemeralState {
   return {
-    sttRecording: false,
-    sttInterimText: "",
     slashMenuOpen: false,
     slashMenuItems: [],
     slashMenuIndex: 0,
@@ -185,12 +311,9 @@ const vs = createChatEphemeralState();
 
 /**
  * Reset chat view ephemeral state when navigating away.
- * Stops STT recording and clears search/slash UI that should not survive navigation.
+ * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
-  if (vs.sttRecording) {
-    stopStt();
-  }
   Object.assign(vs, createChatEphemeralState());
 }
 
@@ -201,17 +324,30 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
+function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
+  requestAnimationFrame(() => {
+    if (document.activeElement !== target) {
+      return;
+    }
+    adjustTextareaHeight(target);
+    const caret = direction === "up" ? 0 : target.value.length;
+    target.selectionStart = caret;
+    target.selectionEnd = caret;
+  });
+}
+
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  return {
+  const attachment = {
     id: generateAttachmentId(),
-    dataUrl,
     mimeType: file.type || "application/octet-stream",
     fileName: file.name || undefined,
+    sizeBytes: file.size,
   };
+  return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
 function isImageAttachment(att: ChatAttachment): boolean {
@@ -319,8 +455,8 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
               .filter(Boolean)
               .join(" ")}
           >
-            ${isImageAttachment(att)
-              ? html`<img src=${att.dataUrl} alt="Attachment preview" />`
+            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
+              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
               : html`
                   <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
                     <span class="chat-attachment-file__icon">${icons.paperclip}</span>
@@ -335,6 +471,7 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
               aria-label="Remove attachment"
               @click=${() => {
                 const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                releaseChatAttachmentPayload(att.id);
                 props.onAttachmentsChange?.(next);
               }}
             >
@@ -471,6 +608,63 @@ function selectSlashArg(
   }
 }
 
+function slashOptionIdSegment(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "") || "item"
+  );
+}
+
+function getSlashCommandOptionId(cmd: SlashCommandDef): string {
+  return `chat-slash-option-command-${slashOptionIdSegment(cmd.name)}`;
+}
+
+function getSlashArgOptionId(commandName: string, arg: string): string {
+  return `chat-slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`;
+}
+
+function isSlashMenuVisible(): boolean {
+  if (!vs.slashMenuOpen) {
+    return false;
+  }
+  if (vs.slashMenuMode === "args") {
+    return Boolean(vs.slashMenuCommand && vs.slashMenuArgItems.length > 0);
+  }
+  return vs.slashMenuItems.length > 0;
+}
+
+function getActiveSlashMenuOptionId(): string | null {
+  if (!isSlashMenuVisible()) {
+    return null;
+  }
+  if (vs.slashMenuMode === "args") {
+    const commandName = vs.slashMenuCommand?.name;
+    const arg = vs.slashMenuArgItems[vs.slashMenuIndex];
+    return commandName && arg ? getSlashArgOptionId(commandName, arg) : null;
+  }
+  const cmd = vs.slashMenuItems[vs.slashMenuIndex];
+  return cmd ? getSlashCommandOptionId(cmd) : null;
+}
+
+function getActiveSlashMenuOptionLabel(): string {
+  if (!isSlashMenuVisible()) {
+    return "";
+  }
+  if (vs.slashMenuMode === "args") {
+    const commandName = vs.slashMenuCommand?.name;
+    const arg = vs.slashMenuArgItems[vs.slashMenuIndex];
+    return commandName && arg ? `/${commandName} ${arg}` : "";
+  }
+  const cmd = vs.slashMenuItems[vs.slashMenuIndex];
+  if (!cmd) {
+    return "";
+  }
+  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
+  return `${command} ${cmd.description}`;
+}
+
 function tokenEstimate(draft: string): string | null {
   if (draft.length < 100) {
     return null;
@@ -598,7 +792,12 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu" role="listbox" aria-label="Command arguments">
+      <div
+        id=${SLASH_MENU_LISTBOX_ID}
+        class="slash-menu"
+        role="listbox"
+        aria-label="Command arguments"
+      >
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
             /${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}
@@ -606,6 +805,7 @@ function renderSlashMenu(
           ${vs.slashMenuArgItems.map(
             (arg, i) => html`
               <div
+                id=${getSlashArgOptionId(vs.slashMenuCommand?.name ?? "", arg)}
                 class="slash-menu-item ${i === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
                 role="option"
                 aria-selected=${i === vs.slashMenuIndex}
@@ -659,6 +859,7 @@ function renderSlashMenu(
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
+              id=${getSlashCommandOptionId(cmd)}
               class="slash-menu-item ${globalIdx === vs.slashMenuIndex
                 ? "slash-menu-item--active"
                 : ""}"
@@ -689,7 +890,7 @@ function renderSlashMenu(
   const hiddenCount = vs.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div id=${SLASH_MENU_LISTBOX_ID} class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
       ${hiddenCount > 0
         ? html`<button
@@ -715,6 +916,7 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const composerRunStatus = canAbort ? { phase: "in-progress" as const } : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
@@ -726,19 +928,16 @@ export function renderChat(props: ChatProps) {
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
-  const inputHistory = getInputHistory(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
-    : "Connect to the gateway to start chatting...";
+      ? t("chat.composer.placeholderWithAttachments")
+      : t("chat.composer.placeholder", { name: props.assistantName || "agent" })
+    : t("chat.composer.placeholderDisconnected");
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const getDraft = props.getDraft ?? (() => props.draft);
-
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
 
@@ -835,10 +1034,35 @@ export function renderChat(props: ChatProps) {
           (item) => {
             if (item.kind === "divider") {
               return html`
-                <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
-                  <span class="chat-divider__line"></span>
-                  <span class="chat-divider__label">${item.label}</span>
-                  <span class="chat-divider__line"></span>
+                <div class="chat-divider" data-ts=${String(item.timestamp)}>
+                  <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
+                    <span class="chat-divider__line"></span>
+                    <span class="chat-divider__label">${item.label}</span>
+                    <span class="chat-divider__line"></span>
+                  </div>
+                  ${item.description || item.action
+                    ? html`
+                        <div class="chat-divider__details">
+                          ${item.description
+                            ? html`<span class="chat-divider__description">
+                                ${item.description}
+                              </span>`
+                            : nothing}
+                          ${item.action?.kind === "session-checkpoints" &&
+                          props.onOpenSessionCheckpoints
+                            ? html`
+                                <button
+                                  type="button"
+                                  class="btn btn--subtle btn--sm chat-divider__action"
+                                  @click=${() => props.onOpenSessionCheckpoints?.()}
+                                >
+                                  ${item.action.label}
+                                </button>
+                              `
+                            : nothing}
+                        </div>
+                      `
+                    : nothing}
                 </div>
               `;
             }
@@ -884,7 +1108,7 @@ export function renderChat(props: ChatProps) {
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                canvasHostUrl: props.canvasHostUrl,
+                canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 contextWindow:
@@ -971,20 +1195,27 @@ export function renderChat(props: ChatProps) {
       return;
     }
 
-    // Input history (only when input is empty)
-    if (!props.draft.trim()) {
-      if (e.key === "ArrowUp") {
-        const prev = inputHistory.up();
-        if (prev !== null) {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && props.onHistoryKeydown) {
+      const target = e.target as HTMLTextAreaElement;
+      const result = props.onHistoryKeydown({
+        key: e.key,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        valueLength: target.value.length,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        keyCode: e.keyCode,
+      });
+      if (result.handled) {
+        if (result.preventDefault) {
           e.preventDefault();
-          props.onDraftChange(prev);
         }
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        const next = inputHistory.down();
-        e.preventDefault();
-        props.onDraftChange(next ?? "");
+        if (result.restoreCaret) {
+          restoreHistoryCaret(target, result.restoreCaret);
+        }
         return;
       }
     }
@@ -1010,9 +1241,6 @@ export function renderChat(props: ChatProps) {
       }
       e.preventDefault();
       if (canCompose) {
-        if (props.draft.trim()) {
-          inputHistory.push(props.draft);
-        }
         props.onSend();
       }
     }
@@ -1022,9 +1250,11 @@ export function renderChat(props: ChatProps) {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
     updateSlashMenu(target.value, requestUpdate);
-    inputHistory.reset();
     props.onDraftChange(target.value);
   };
+  const slashMenuVisible = isSlashMenuVisible();
+  const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
+  const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
 
   return html`
     <section
@@ -1033,7 +1263,26 @@ export function renderChat(props: ChatProps) {
       @dragover=${(e: DragEvent) => e.preventDefault()}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${props.error
+        ? html`
+            <div class="callout danger callout--dismissible" role="alert">
+              <span class="callout__content">${props.error}</span>
+              ${props.onDismissError
+                ? html`
+                    <button
+                      class="callout__dismiss"
+                      type="button"
+                      @click=${props.onDismissError}
+                      aria-label="Dismiss error"
+                      title="Dismiss error"
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
       ${props.focusMode
         ? html`
             <button
@@ -1061,13 +1310,14 @@ export function renderChat(props: ChatProps) {
           ? html`
               <resizable-divider
                 .splitRatio=${splitRatio}
+                .label=${t("nav.resize")}
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
               <div class="chat-sidebar">
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,
-                  canvasHostUrl: props.canvasHostUrl,
+                  canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                   embedSandboxMode: props.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                   onClose: props.onCloseSidebar!,
@@ -1120,9 +1370,7 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        ${vs.sttRecording && vs.sttInterimText
-          ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
-          : nothing}
+        ${renderRealtimeTalkOptions(props)}
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">
@@ -1137,17 +1385,31 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
 
-        <textarea
-          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-          .value=${props.draft}
-          dir=${detectTextDirection(props.draft)}
-          ?disabled=${!props.connected}
-          @keydown=${handleKeyDown}
-          @input=${handleInput}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
-          rows="1"
-        ></textarea>
+        <div class="agent-chat__composer-combobox">
+          <textarea
+            ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+            .value=${props.draft}
+            dir=${detectTextDirection(props.draft)}
+            ?disabled=${!props.connected}
+            aria-autocomplete="list"
+            aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
+            aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+            aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            @keydown=${handleKeyDown}
+            @input=${handleInput}
+            @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+            placeholder=${placeholder}
+            rows="1"
+          ></textarea>
+          <span
+            id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            class="agent-chat__sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            >${activeSlashMenuOptionLabel}</span
+          >
+        </div>
 
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">
@@ -1156,67 +1418,13 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+              title=${t("chat.composer.attachFile")}
+              aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
             </button>
 
-            ${isSttSupported()
-              ? html`
-                  <button
-                    class="agent-chat__input-btn ${vs.sttRecording
-                      ? "agent-chat__input-btn--recording"
-                      : ""}"
-                    @click=${() => {
-                      if (vs.sttRecording) {
-                        stopStt();
-                        vs.sttRecording = false;
-                        vs.sttInterimText = "";
-                        requestUpdate();
-                      } else {
-                        const started = startStt({
-                          onTranscript: (text, isFinal) => {
-                            if (isFinal) {
-                              const current = getDraft();
-                              const sep = current && !current.endsWith(" ") ? " " : "";
-                              props.onDraftChange(current + sep + text);
-                              vs.sttInterimText = "";
-                            } else {
-                              vs.sttInterimText = text;
-                            }
-                            requestUpdate();
-                          },
-                          onStart: () => {
-                            vs.sttRecording = true;
-                            requestUpdate();
-                          },
-                          onEnd: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                          onError: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                        });
-                        if (started) {
-                          vs.sttRecording = true;
-                          requestUpdate();
-                        }
-                      }
-                    }}
-                    title=${vs.sttRecording ? "Stop recording" : "Voice input"}
-                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
-                    ?disabled=${!props.connected}
-                  >
-                    ${vs.sttRecording ? icons.micOff : icons.mic}
-                  </button>
-                `
-              : nothing}
             ${props.onToggleRealtimeTalk
               ? html`
                   <button
@@ -1224,15 +1432,31 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    title=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
+                    aria-label=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   </button>
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
+                      ? "agent-chat__input-btn--active"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalkOptions}
+                    title="Talk options"
+                    aria-label="Talk options"
+                    ?disabled=${!props.connected || props.realtimeTalkActive}
+                  >
+                    ${icons.settings}
+                  </button>
                 `
               : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+            ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
 
           ${renderChatRunControls({
@@ -1246,7 +1470,7 @@ export function renderChat(props: ChatProps) {
             onExport: () => exportMarkdown(props),
             onNewSession: props.onNewSession,
             onSend: props.onSend,
-            onStoreDraft: (draft) => inputHistory.push(draft),
+            onStoreDraft: () => {},
           })}
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
@@ -31,15 +31,19 @@ import {
 } from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  createMediaGenerateProviderListActionResult,
+  type MediaGenerateActionResult,
+} from "./media-generate-tool-actions-shared.js";
+import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
-  isCapabilityProviderConfigured,
+  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   resolveRemoteMediaSsrfPolicy,
@@ -48,7 +52,11 @@ import {
   resolveMediaToolLocalRoots,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -174,10 +182,6 @@ const ImageGenerateToolSchema = Type.Object({
   ),
 });
 
-function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
-  return getProviderEnvVars(providerId);
-}
-
 function formatImageGenerationAuthHint(provider: {
   id: string;
   authEnvVars: readonly string[];
@@ -191,16 +195,71 @@ function formatImageGenerationAuthHint(provider: {
   return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
 }
 
+function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
+  return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
+}
+
+function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
+  const caps: string[] = [];
+  if (provider.capabilities.edit.enabled) {
+    const maxRefs = provider.capabilities.edit.maxInputImages;
+    caps.push(
+      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
+    );
+  }
+  if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
+    caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
+  }
+  if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
+    caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
+  }
+  if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
+    caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
+  }
+  if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
+    caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
+  }
+  if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
+    caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
+  }
+  return caps.join("; ");
+}
+
+function createImageGenerateListActionResult(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+}): MediaGenerateActionResult {
+  const providers = listRuntimeImageGenerationProviders({ config: params.cfg });
+  return createMediaGenerateProviderListActionResult({
+    kind: "image_generation",
+    providers,
+    emptyText: "No image-generation providers are registered.",
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    listModes: listSupportedImageGenerationModes,
+    summarizeCapabilities: summarizeImageGenerationCapabilities,
+    formatAuthHint: formatImageGenerationAuthHint,
+  });
+}
+
 export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
-    providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.imageGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" {
@@ -562,21 +621,24 @@ async function inferResolutionFromInputImages(
 export function createImageGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
 }): AnyAgentTool | null {
-  const cfg = options?.config ?? loadConfig();
-  const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!imageGenerationModelConfig) {
+  const cfg = options?.config ?? getRuntimeConfig();
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      modelConfig: cfg.agents?.defaults?.imageGenerationModel,
+      providerKey: "imageGenerationProviders",
+    })
+  ) {
     return null;
   }
-  const effectiveCfg =
-    applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -596,67 +658,25 @@ export function createImageGenerateTool(options?: {
       const params = args as Record<string, unknown>;
       const action = resolveAction(params);
       if (action === "list") {
-        const runtimeProviders = listRuntimeImageGenerationProviders({ config: effectiveCfg });
-        const providers = runtimeProviders.map((provider) =>
-          Object.assign(
-            { id: provider.id },
-            provider.label ? { label: provider.label } : {},
-            provider.defaultModel ? { defaultModel: provider.defaultModel } : {},
-            {
-              models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-              configured: isCapabilityProviderConfigured({
-                providers: runtimeProviders,
-                provider,
-                cfg: effectiveCfg,
-                agentDir: options?.agentDir,
-              }),
-              authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
-              capabilities: provider.capabilities,
-            },
-          ),
-        );
-        const lines = providers.flatMap((provider) => {
-          const caps: string[] = [];
-          if (provider.capabilities.edit.enabled) {
-            const maxRefs = provider.capabilities.edit.maxInputImages;
-            caps.push(
-              `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
-            );
-          }
-          if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
-            caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
-          }
-          if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
-            caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
-          }
-          if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
-            caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
-          }
-          if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
-            caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
-          }
-          if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
-            caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
-          }
-          const modelLine =
-            provider.models.length > 0
-              ? `models: ${provider.models.join(", ")}`
-              : "models: unknown";
-          const authHint = formatImageGenerationAuthHint(provider);
-          return [
-            `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
-            `  ${modelLine}`,
-            `  configured: ${provider.configured ? "yes" : "no"}`,
-            ...(authHint ? [`  auth: ${authHint}`] : []),
-            ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
-          ];
+        return createImageGenerateListActionResult({
+          cfg,
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
         });
-        return {
-          content: [{ type: "text", text: lines.join("\n") }],
-          details: { providers },
-        };
       }
 
+      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+      });
+      if (!imageGenerationModelConfig) {
+        throw new ToolInputError("No image-generation model configured.");
+      }
+      const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
+      const effectiveCfg =
+        applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
@@ -711,6 +731,7 @@ export function createImageGenerateTool(options?: {
         prompt,
         agentDir: options?.agentDir,
         modelOverride: model,
+        autoProviderFallback: explicitModelConfig ? false : undefined,
         size,
         aspectRatio,
         resolution,
@@ -721,6 +742,7 @@ export function createImageGenerateTool(options?: {
         inputImages,
         timeoutMs,
         providerOptions,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const ignoredOverrides = result.ignoredOverrides ?? [];
       const displayProvider = sanitizeInlineDirectiveText(result.provider);

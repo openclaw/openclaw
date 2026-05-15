@@ -92,13 +92,13 @@ vi.mock("../infra/exec-approvals.js", () => ({
   })),
 }));
 
-vi.mock("../infra/exec-inline-eval.js", () => ({
+vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "inline-eval"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
 
 vi.mock("../infra/node-shell.js", () => ({
-  buildNodeShellCommand: vi.fn(() => ["bash", "-lc", "bun ./script.ts"]),
+  buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
 }));
 
 vi.mock("../infra/system-run-approval-context.js", () => ({
@@ -150,6 +150,71 @@ type MockNodeInvokeParams = {
   command?: string;
   params?: Record<string, unknown>;
 };
+
+type GatewayToolCall = {
+  method: string;
+  options: { timeoutMs?: number };
+  params?: MockNodeInvokeParams;
+  callOptions?: unknown;
+};
+
+function requireGatewayCall(index: number): GatewayToolCall {
+  const call = callGatewayToolMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected gateway call at index ${index}`);
+  }
+  const [method, options, params, callOptions] = call as [
+    string,
+    { timeoutMs?: number },
+    MockNodeInvokeParams | undefined,
+    unknown,
+  ];
+  return { method, options, params, callOptions };
+}
+
+function requireGatewayCommand(command: string): GatewayToolCall {
+  const call = callGatewayToolMock.mock.calls.find(
+    ([method, , params]) =>
+      method === "node.invoke" && (params as MockNodeInvokeParams | undefined)?.command === command,
+  );
+  if (!call) {
+    throw new Error(`expected gateway command ${command}`);
+  }
+  const [method, options, params, callOptions] = call as [
+    string,
+    { timeoutMs?: number },
+    MockNodeInvokeParams | undefined,
+    unknown,
+  ];
+  return { method, options, params, callOptions };
+}
+
+function requireRunParams(call: GatewayToolCall): Record<string, unknown> {
+  expect(call.method).toBe("node.invoke");
+  expect(call.params?.command).toBe("system.run");
+  const params = call.params?.params;
+  if (!params) {
+    throw new Error("expected system.run params");
+  }
+  return params;
+}
+
+function requireRegisteredApprovalRequest(): Record<string, unknown> {
+  const calls = registerExecApprovalRequestForHostOrThrowMock.mock.calls as unknown as [
+    Record<string, unknown>,
+  ][];
+  const firstCall = calls[0];
+  if (!firstCall) {
+    throw new Error("expected approval request registration");
+  }
+  return firstCall[0];
+}
+
+function expectSystemRunInvoke(params: { invokeTimeoutMs: number; runTimeoutMs: number }) {
+  const call = requireGatewayCommand("system.run");
+  expect(call.options.timeoutMs).toBe(params.invokeTimeoutMs);
+  expect(requireRunParams(call).timeoutMs).toBe(params.runTimeoutMs);
+}
 
 describe("executeNodeHostCommand", () => {
   beforeAll(async () => {
@@ -260,32 +325,31 @@ describe("executeNodeHostCommand", () => {
       warnings: [],
       agentId: "requested-agent",
       sessionKey: "requested-session",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:12345",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: "42",
     });
 
     expect(result.details?.status).toBe("approval-pending");
-    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        systemRunPlan: preparedPlan,
-      }),
-    );
+    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(preparedPlan);
 
     await vi.waitFor(() => {
       expect(callGatewayToolMock).toHaveBeenCalledTimes(3);
     });
 
-    expect(callGatewayToolMock).toHaveBeenNthCalledWith(
-      3,
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        command: "system.run",
-        params: expect.objectContaining({
-          approved: true,
-          approvalDecision: "allow-once",
-          systemRunPlan: preparedPlan,
-        }),
-      }),
-    );
+    const call = requireGatewayCall(2);
+    expect(call.options.timeoutMs).toBe(35_000);
+    expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+    const runParams = requireRunParams(call);
+    expect(runParams.approved).toBe(true);
+    expect(runParams.approvalDecision).toBe("allow-once");
+    expect(runParams.systemRunPlan).toEqual(preparedPlan);
+    expect(runParams.timeoutMs).toBe(30_000);
+    expect(runParams.turnSourceChannel).toBe("telegram");
+    expect(runParams.turnSourceTo).toBe("telegram:12345");
+    expect(runParams.turnSourceAccountId).toBe("work");
+    expect(runParams.turnSourceThreadId).toBe("42");
   });
 
   it("builds a local systemRunPlan when approval is required and the node omits prepare", async () => {
@@ -319,31 +383,21 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     expect(parsePreparedSystemRunPayloadMock).not.toHaveBeenCalled();
     const expectedPlan = {
-      argv: ["bash", "-lc", "bun ./script.ts"],
+      argv: ["/bin/sh", "-lc", "bun ./script.ts"],
       cwd: "/tmp/work",
-      commandText: 'bash -lc "bun ./script.ts"',
+      commandText: '/bin/sh -lc "bun ./script.ts"',
       commandPreview: "bun ./script.ts",
       agentId: "requested-agent",
       sessionKey: "requested-session",
     };
-    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        systemRunPlan: expectedPlan,
-      }),
-    );
+    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(expectedPlan);
 
     await vi.waitFor(() => {
-      expect(callGatewayToolMock).toHaveBeenCalledWith(
-        "node.invoke",
-        expect.anything(),
-        expect.objectContaining({
-          command: "system.run",
-          params: expect.objectContaining({
-            rawCommand: expectedPlan.commandText,
-            systemRunPlan: expectedPlan,
-          }),
-        }),
-      );
+      const call = requireGatewayCommand("system.run");
+      expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+      const runParams = requireRunParams(call);
+      expect(runParams.rawCommand).toBe(expectedPlan.commandText);
+      expect(runParams.systemRunPlan).toEqual(expectedPlan);
     });
   });
 
@@ -363,27 +417,123 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        command: "system.run",
-        params: expect.objectContaining({
-          command: ["bash", "-lc", "bun ./script.ts"],
-          rawCommand: "bun ./script.ts",
-          suppressNotifyOnExit: true,
-        }),
+    const call = requireGatewayCall(0);
+    expect(call.options.timeoutMs).toBe(35_000);
+    const runParams = requireRunParams(call);
+    expect(runParams.command).toEqual(["/bin/sh", "-lc", "bun ./script.ts"]);
+    expect(runParams.rawCommand).toBe("bun ./script.ts");
+    expect(typeof runParams.runId).toBe("string");
+    expect(runParams.suppressNotifyOnExit).toBe(true);
+    expect(runParams.timeoutMs).toBe(30_000);
+    expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
+  });
+
+  it("rejects disconnected node targets before invoking system.run", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: false,
+        platform: process.platform,
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "git log --oneline -5",
+        workdir: "/tmp/work",
+        env: {},
+        security: "allowlist",
+        ask: "off",
+        requestedNode: "node-1",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
       }),
+    ).rejects.toThrow(
+      "exec host=node requires a connected node (node-1 is currently disconnected)",
     );
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        params: expect.not.objectContaining({
-          systemRunPlan: expect.anything(),
-        }),
-      }),
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a non-empty placeholder for silent node exec results", async () => {
+    callGatewayToolMock.mockImplementationOnce(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: "",
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
     );
+
+    const result = await executeNodeHostCommand({
+      command: "mkdir /tmp/quiet",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
+    const details = result.details;
+    expect(details?.status).toBe("completed");
+    if (details?.status !== "completed") {
+      throw new Error(`expected completed details, got ${details?.status ?? "missing"}`);
+    }
+    expect(details.exitCode).toBe(0);
+    expect(details.aggregated).toBe("");
+    expect(details.cwd).toBe("/tmp/work");
+  });
+
+  it("forwards explicit timeouts to node system.run", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: 12,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({ invokeTimeoutMs: 17_000, runTimeoutMs: 12_000 });
+  });
+
+  it("forwards timeout zero to node system.run and keeps the invoke wait bounded", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: 0,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({ invokeTimeoutMs: 35_000, runTimeoutMs: 0 });
   });
 
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {

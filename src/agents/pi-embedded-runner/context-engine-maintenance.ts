@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
@@ -22,6 +24,7 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
@@ -45,6 +48,8 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
+  config?: OpenClawConfig;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -273,11 +278,22 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   allowDeferredCompactionExecution?: boolean;
   deferTranscriptRewriteToSessionLane?: boolean;
+  config?: OpenClawConfig;
+  purpose?: string;
+  contextEnginePluginId?: string;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
+    ...resolveContextEngineCapabilities({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: params.purpose ?? "context-engine.maintenance",
+    }),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
@@ -291,6 +307,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           sessionFile: params.sessionFile,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          config: params.config,
           request,
         });
       const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
@@ -313,7 +330,9 @@ async function executeContextEngineMaintenance(params: {
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   executionMode: "foreground" | "background";
+  config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
@@ -328,8 +347,12 @@ async function executeContextEngineMaintenance(params: {
       sessionFile: params.sessionFile,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
+      agentId: params.agentId,
       allowDeferredCompactionExecution: params.executionMode === "background",
       deferTranscriptRewriteToSessionLane: params.executionMode === "background",
+      config: params.config,
+      purpose: `context-engine.${params.reason}.maintenance`,
+      contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
     }),
   });
   if (result.changed) {
@@ -349,7 +372,9 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   runId: string;
+  config?: OpenClawConfig;
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -428,6 +453,8 @@ async function runDeferredTurnMaintenanceWorker(params: {
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      agentId: params.agentId,
+      config: params.config,
       executionMode: "background",
     });
     if (longRunningTimer) {
@@ -550,6 +577,8 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
+        agentId: params.agentId,
+        config: params.config,
         runId: task.runId!,
       }),
     );
@@ -605,7 +634,9 @@ export async function runContextEngineMaintenance(params: {
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   executionMode?: "foreground" | "background";
+  config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
     return undefined;
@@ -626,6 +657,8 @@ export async function runContextEngineMaintenance(params: {
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
+        agentId: params.agentId,
+        config: params.config,
       });
     } catch (err) {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
@@ -642,7 +675,9 @@ export async function runContextEngineMaintenance(params: {
       reason: params.reason,
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      agentId: params.agentId,
       executionMode,
+      config: params.config,
     });
   } catch (err) {
     log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);

@@ -13,6 +13,7 @@ import {
   buildDeliveryTarget,
   accountToCreds,
 } from "../messaging/sender.js";
+import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
@@ -20,9 +21,18 @@ import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
 export interface SlashCommandHandlerContext {
   account: GatewayAccount;
+  cfg?: unknown;
   log?: EngineLogger;
   getMessagePeerId: (msg: QueuedMessage) => string;
   getQueueSnapshot: (peerId: string) => QueueSnapshot;
+  resolveCommandAuthorized?: (params: {
+    isGroup: boolean;
+    senderId: string;
+    conversationId: string;
+    allowFrom?: Array<string | number>;
+    groupAllowFrom?: Array<string | number>;
+    commandsAllowFrom?: Array<string | number>;
+  }) => boolean | Promise<boolean>;
 }
 
 // ============ Constants ============
@@ -61,6 +71,24 @@ export async function trySlashCommand(
   // Normal slash command — try to match and execute.
   const receivedAt = Date.now();
   const peerId = ctx.getMessagePeerId(msg);
+  const isGroup = msg.type === "group" || msg.type === "guild";
+  const commandsAllowFrom = resolveQQBotCommandsAllowFrom(ctx.cfg);
+  const commandAuthorized = ctx.resolveCommandAuthorized
+    ? await ctx.resolveCommandAuthorized({
+        isGroup,
+        senderId: msg.senderId,
+        conversationId: msg.groupOpenid ?? msg.channelId ?? msg.senderId,
+        allowFrom: account.config?.allowFrom,
+        groupAllowFrom: account.config?.groupAllowFrom,
+        commandsAllowFrom,
+      })
+    : resolveSlashCommandAuth({
+        senderId: msg.senderId,
+        isGroup,
+        allowFrom: account.config?.allowFrom,
+        groupAllowFrom: account.config?.groupAllowFrom,
+        commandsAllowFrom,
+      });
   const cmdCtx: SlashCommandContext = {
     type: msg.type,
     senderId: msg.senderId,
@@ -75,7 +103,7 @@ export async function trySlashCommand(
     accountId: account.accountId,
     appId: account.appId,
     accountConfig: account.config,
-    commandAuthorized: true,
+    commandAuthorized,
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };
 
@@ -125,6 +153,7 @@ export async function trySlashCommand(
             replyToId: msg.messageId,
           },
           replyFile,
+          { allowQQBotDataDownloads: true },
         );
       } catch (fileErr) {
         log?.error(`Failed to send slash command file: ${String(fileErr)}`);

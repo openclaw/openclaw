@@ -173,6 +173,7 @@ export function createAcpReplyProjector(params: {
     payload: ReplyPayload,
     meta?: AcpProjectedDeliveryMeta,
   ) => Promise<boolean>;
+  onProgress?: () => void;
   provider?: string;
   accountId?: string;
 }): AcpReplyProjector {
@@ -203,6 +204,7 @@ export function createAcpReplyProjector(params: {
   let lastVisibleOutputTail: string | undefined;
   let pendingHiddenBoundary = false;
   let liveBufferText = "";
+  let finalOnlyOutputText = "";
   let liveIdleTimer: NodeJS.Timeout | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
@@ -271,6 +273,7 @@ export function createAcpReplyProjector(params: {
     lastVisibleOutputTail = undefined;
     pendingHiddenBoundary = false;
     liveBufferText = "";
+    finalOnlyOutputText = "";
     pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
   };
@@ -290,7 +293,15 @@ export function createAcpReplyProjector(params: {
       flushLiveBuffer({ force: true });
     }
     await flushBufferedToolDeliveries(force);
-    drainChunker(force);
+    if (settings.deliveryMode === "final_only") {
+      if (force && finalOnlyOutputText.trim().length > 0) {
+        const text = finalOnlyOutputText;
+        finalOnlyOutputText = "";
+        await params.deliver("final", { text });
+      }
+    } else {
+      drainChunker(force);
+    }
     await blockReplyPipeline.flush({ force });
   };
 
@@ -403,6 +414,7 @@ export function createAcpReplyProjector(params: {
   };
 
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
+    params.onProgress?.();
     if (event.type === "text_delta") {
       if (event.stream && event.stream !== "output") {
         return;
@@ -443,8 +455,7 @@ export function createAcpReplyProjector(params: {
             scheduleLiveIdleFlush();
           }
         } else {
-          chunker.append(accepted);
-          drainChunker(false);
+          finalOnlyOutputText += accepted;
         }
       }
       if (accepted.length < text.length) {

@@ -1,5 +1,5 @@
+import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
 import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
@@ -261,15 +261,30 @@ describe("ollama provider models", () => {
     expect(visionModel.input).toEqual(["text", "image"]);
     expect(visionModel.reasoning).toBe(true);
     expect(visionModel.compat?.supportsTools).toBe(true);
+    expect(visionModel.compat?.supportsUsageInStreaming).toBe(true);
 
     const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
     expect(textModel.reasoning).toBe(false);
     expect(textModel.compat?.supportsTools).toBe(true);
+    expect(textModel.compat?.supportsUsageInStreaming).toBe(true);
+
+    const deepseekCloudModel = buildOllamaModelDefinition("deepseek-v4-pro:cloud", 1048576, [
+      "completion",
+      "tools",
+    ]);
+    expect(deepseekCloudModel.reasoning).toBe(true);
+    expect(deepseekCloudModel.compat?.supportsTools).toBe(true);
+
+    const deepseekCloudModelWithoutCapabilities = buildOllamaModelDefinition(
+      "deepseek-v4-flash:cloud",
+      1048576,
+    );
+    expect(deepseekCloudModelWithoutCapabilities.reasoning).toBe(true);
 
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
-    expect(noCapabilities.compat).toBeUndefined();
+    expect(noCapabilities.compat?.supportsUsageInStreaming).toBe(true);
   });
 
   it("disables tool support when Ollama capabilities omit tools", () => {
@@ -277,6 +292,7 @@ describe("ollama provider models", () => {
 
     expect(model.reasoning).toBe(false);
     expect(model.compat?.supportsTools).toBe(false);
+    expect(model.compat?.supportsUsageInStreaming).toBe(true);
   });
 
   it("parses the last positive Modelfile num_ctx value", () => {

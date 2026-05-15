@@ -56,7 +56,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",
@@ -241,7 +241,6 @@ describe("CronService persists delivered status", () => {
       },
     });
 
-    expect(capturedEvent).toBeDefined();
     expect(capturedEvent?.delivered).toBe(true);
     expect(capturedEvent?.deliveryStatus).toBe("delivered");
   });

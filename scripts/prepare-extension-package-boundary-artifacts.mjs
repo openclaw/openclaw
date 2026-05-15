@@ -12,6 +12,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/auto-reply",
+  "packages/memory-host-sdk/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",
@@ -19,6 +20,9 @@ const PLUGIN_SDK_TYPE_INPUTS = [
 const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ROOT_DTS_REQUIRED_OUTPUTS = [
+  "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
+  "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
+  "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
@@ -32,6 +36,36 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/video-generation.d.ts",
 ];
+const QA_CHANNEL_DTS_INPUTS = [
+  "extensions/qa-channel/api.ts",
+  "extensions/qa-channel/runtime-api.ts",
+  "extensions/qa-channel/test-api.ts",
+  "extensions/qa-channel/src",
+  "extensions/qa-channel/tsconfig.json",
+];
+const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
+const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const DISCORD_DTS_INPUTS = [
+  "extensions/discord/api.ts",
+  "extensions/discord/src/api.ts",
+  "extensions/discord/tsconfig.json",
+];
+const DISCORD_DTS_STAMP = "dist/plugin-sdk/extensions/discord/.boundary-dts.stamp";
+const DISCORD_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/discord/api.d.ts"];
+const SLACK_DTS_INPUTS = [
+  "extensions/slack/api.ts",
+  "extensions/slack/src/client.ts",
+  "extensions/slack/tsconfig.json",
+];
+const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
+const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
+const WHATSAPP_DTS_INPUTS = [
+  "extensions/whatsapp/api.ts",
+  "extensions/whatsapp/src/qa-driver.runtime.ts",
+  "extensions/whatsapp/tsconfig.json",
+];
+const WHATSAPP_DTS_STAMP = "dist/plugin-sdk/extensions/whatsapp/.boundary-dts.stamp";
+const WHATSAPP_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/whatsapp/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
@@ -158,7 +192,7 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-export function runNodeStep(label, args, timeoutMs, params = {}) {
+function runNodeStep(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
@@ -248,7 +282,7 @@ export async function runNodeSteps(steps, env = process.env) {
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   try {
     const mode = parseMode(argv);
     const rootDtsFresh =
@@ -271,15 +305,40 @@ export async function main(argv = process.argv.slice(2)) {
       ],
       outputPaths: ["dist/plugin-sdk/.boundary-entry-shims.stamp"],
     });
+    const qaChannelDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: QA_CHANNEL_DTS_INPUTS,
+        outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const discordDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: DISCORD_DTS_INPUTS,
+        outputPaths: [DISCORD_DTS_STAMP, ...DISCORD_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(DISCORD_DTS_REQUIRED_OUTPUTS);
+    const slackDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: SLACK_DTS_INPUTS,
+        outputPaths: [SLACK_DTS_STAMP, ...SLACK_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(SLACK_DTS_REQUIRED_OUTPUTS);
+    const whatsappDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: WHATSAPP_DTS_INPUTS,
+        outputPaths: [WHATSAPP_DTS_STAMP, ...WHATSAPP_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(WHATSAPP_DTS_REQUIRED_OUTPUTS);
 
-    const pendingSteps = [];
+    const prerequisiteSteps = [];
+    const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
         removeIncrementalStateForMissingOutput({
           outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
         });
-        pendingSteps.push({
+        prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
           args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
@@ -295,7 +354,7 @@ export async function main(argv = process.argv.slice(2)) {
         outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
         tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
       });
-      pendingSteps.push({
+      prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
         args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
         env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
@@ -305,17 +364,143 @@ export async function main(argv = process.argv.slice(2)) {
     } else {
       process.stdout.write("[plugin-sdk package boundary dts] fresh; skipping\n");
     }
+    if (mode === "all") {
+      if (!qaChannelDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: QA_CHANNEL_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "qa-channel boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/qa-channel/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/qa-channel",
+            "--rootDir",
+            "extensions/qa-channel",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: QA_CHANNEL_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+      if (!discordDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: DISCORD_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "discord boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/discord/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/discord",
+            "--rootDir",
+            "extensions/discord",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: DISCORD_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[discord boundary dts] fresh; skipping\n");
+      }
+      if (!slackDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: SLACK_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "slack boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/slack/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/slack",
+            "--rootDir",
+            "extensions/slack",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: SLACK_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[slack boundary dts] fresh; skipping\n");
+      }
+      if (!whatsappDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: WHATSAPP_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "whatsapp boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/whatsapp/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/whatsapp",
+            "--rootDir",
+            "extensions/whatsapp",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: WHATSAPP_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
+      }
+    }
 
-    if (pendingSteps.length > 0) {
-      await runNodeSteps(pendingSteps);
-      for (const step of pendingSteps) {
+    if (prerequisiteSteps.length > 0) {
+      await runNodeSteps(prerequisiteSteps);
+      for (const step of prerequisiteSteps) {
         if (step.stampPath) {
           writeStampFile(step.stampPath);
         }
       }
     }
 
-    if (mode === "all" && (!entryShimsFresh || pendingSteps.length > 0)) {
+    if (mode === "all" && (!entryShimsFresh || prerequisiteSteps.length > 0)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
         ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
@@ -323,6 +508,15 @@ export async function main(argv = process.argv.slice(2)) {
       );
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");
+    }
+
+    if (dependentSteps.length > 0) {
+      await runNodeSteps(dependentSteps);
+      for (const step of dependentSteps) {
+        if (step.stampPath) {
+          writeStampFile(step.stampPath);
+        }
+      }
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

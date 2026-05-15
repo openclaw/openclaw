@@ -104,7 +104,7 @@ LM Studio is streaming-usage compatible. When it does not emit an OpenAI-shaped
 `usage` object, OpenClaw recovers token counts from llama.cpp-style
 `timings.prompt_n` / `timings.predicted_n` metadata instead.
 
-Same behavior applies to these OpenAI-compatible local backends:
+Same streaming usage behavior applies to these OpenAI-compatible local backends:
 
 - vLLM
 - SGLang
@@ -113,6 +113,17 @@ Same behavior applies to these OpenAI-compatible local backends:
 - Jan
 - TabbyAPI
 - text-generation-webui
+
+### Thinking compatibility
+
+When LM Studio's `/api/v1/models` discovery reports model-specific reasoning
+options, OpenClaw exposes the matching OpenAI-compatible `reasoning_effort`
+values in model compat metadata. Current LM Studio builds can advertise binary
+UI options such as `allowed_options: ["off", "on"]` while rejecting those values
+on `/v1/chat/completions`; OpenClaw normalizes that binary discovery shape to
+`none`, `minimal`, `low`, `medium`, `high`, and `xhigh` before sending requests.
+Older saved LM Studio config that contains `off`/`on` reasoning maps is
+normalized the same way when the catalog is loaded.
 
 ### Explicit configuration
 
@@ -168,7 +179,22 @@ If setup reports HTTP 401, verify your API key:
 
 ### Just-in-time model loading
 
-LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. Make sure you have this enabled to avoid 'Model not loaded' errors.
+LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. OpenClaw preloads models through LM Studio's native load endpoint by default, which helps when JIT is disabled. To let LM Studio's JIT, idle TTL, and auto-evict behavior own model lifecycle, disable OpenClaw's preload step:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        baseUrl: "http://localhost:1234/v1",
+        api: "openai-completions",
+        params: { preload: false },
+        models: [{ id: "qwen/qwen3.5-9b" }],
+      },
+    },
+  },
+}
+```
 
 ### LAN or tailnet LM Studio host
 
@@ -189,7 +215,7 @@ Use the LM Studio host's reachable address, keep `/v1`, and make sure LM Studio 
 }
 ```
 
-Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. If you use a custom provider id instead of `lmstudio`, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
+Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. Custom loopback provider IDs such as `localhost` or `127.0.0.1` are also trusted automatically; for LAN, tailnet, or private DNS custom provider IDs, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
 
 ## Related
 

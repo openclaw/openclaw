@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,8 +8,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -28,7 +28,10 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import {
@@ -40,6 +43,54 @@ import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
+
+const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
+const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
+const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
+const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
+
+function countMatches(text: string, re: RegExp): number {
+  re.lastIndex = 0;
+  return Array.from(text.matchAll(re)).length;
+}
+
+function maxCharacterFrequency(text: string): number {
+  const counts = new Map<string, number>();
+  let max = 0;
+  for (const char of text) {
+    const count = (counts.get(char) ?? 0) + 1;
+    counts.set(char, count);
+    max = Math.max(max, count);
+  }
+  return max;
+}
+
+function isKnownOllamaGarbledVisibleTextModel(modelId: string): boolean {
+  return GARBLED_VISIBLE_TEXT_MODEL_RE.test(modelId);
+}
+
+function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): boolean {
+  if (!isKnownOllamaGarbledVisibleTextModel(params.modelId)) {
+    return false;
+  }
+  const compact = params.text.replace(/\s+/g, "");
+  if (compact.length < GARBLED_VISIBLE_TEXT_MIN_CHARS) {
+    return false;
+  }
+
+  const letterOrDigitCount = countMatches(compact, LETTER_OR_DIGIT_RE);
+  const symbolCount = countMatches(compact, GARBLED_VISIBLE_TEXT_SYMBOL_RE);
+  const maxFrequency = maxCharacterFrequency(compact);
+  const letterOrDigitRatio = letterOrDigitCount / compact.length;
+  const symbolRatio = symbolCount / compact.length;
+  const dominantCharacterRatio = maxFrequency / compact.length;
+
+  return (
+    letterOrDigitRatio < 0.08 &&
+    symbolRatio > 0.6 &&
+    (dominantCharacterRatio > 0.22 || /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]{12,}/u.test(compact))
+  );
+}
 
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
@@ -242,6 +293,21 @@ function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   );
 }
 
+/**
+ * Resolves num_ctx for native /api/chat requests:
+ *  1. explicit `params.num_ctx` set on the model wins,
+ *  2. otherwise return undefined so Ollama's model, OLLAMA_CONTEXT_LENGTH,
+ *     VRAM, or Modelfile policy decides.
+ *
+ * This intentionally differs from `resolveOllamaNumCtx` by not falling back
+ * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
+ * the OpenAI-compat path, but native `/api/chat` should not force the full
+ * advertised catalog context for local models unless the operator opted in.
+ */
+function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
+  return resolveOllamaConfiguredNumCtx(model);
+}
+
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   const params = model.params;
@@ -255,7 +321,7 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
       }
     }
   }
-  const numCtx = resolveOllamaConfiguredNumCtx(model);
+  const numCtx = resolveOllamaNativeNumCtx(model);
   if (numCtx !== undefined) {
     options.num_ctx = numCtx;
   }
@@ -314,9 +380,16 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
   }
 
-  const ollamaThinkValue = isNativeOllamaTransport
+  const configuredThinkValue = model ? resolveOllamaThinkParamValue(model.params) : undefined;
+  const runtimeThinkValue = isNativeOllamaTransport
     ? resolveOllamaThinkValue(ctx.thinkingLevel)
     : undefined;
+  // "off" is also the implicit agent default. Preserve explicit native Ollama
+  // model config unless the active run requests a non-off thinking level.
+  const ollamaThinkValue =
+    runtimeThinkValue === false && configuredThinkValue !== undefined
+      ? undefined
+      : runtimeThinkValue;
   if (ollamaThinkValue !== undefined) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
@@ -332,8 +405,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-// Backward-compatible alias for existing imports/tests while the broader
-// Ollama compat wrapper now owns more than num_ctx injection.
+/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
 export function buildOllamaChatRequest(params: {
@@ -704,7 +776,14 @@ function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<stri
   return normalized;
 }
 
-function extractToolCalls(content: unknown): OllamaToolCall[] {
+type OllamaToolCallNameOptions = {
+  availableToolNames?: ReadonlySet<string>;
+};
+
+function extractToolCalls(
+  content: unknown,
+  options: OllamaToolCallNameOptions = {},
+): OllamaToolCall[] {
   if (!Array.isArray(content)) {
     return [];
   }
@@ -712,17 +791,69 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name, options),
+          arguments: ensureArgsObject(part.arguments),
+        },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name, options),
+          arguments: ensureArgsObject(part.input),
+        },
+      });
     }
   }
   return result;
 }
 
+function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> | undefined {
+  if (!tools || !Array.isArray(tools)) {
+    return undefined;
+  }
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (typeof tool.name === "string" && tool.name.trim()) {
+      names.add(tool.name.trim());
+    }
+  }
+  return names.size > 0 ? names : undefined;
+}
+
+function normalizeOllamaToolCallName(
+  rawName: string,
+  options: OllamaToolCallNameOptions = {},
+): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const availableToolNames = options.availableToolNames;
+  if (availableToolNames?.has(trimmed)) {
+    return trimmed;
+  }
+
+  const strippedAnySeparator = trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
+  if (
+    availableToolNames &&
+    strippedAnySeparator !== trimmed &&
+    availableToolNames.has(strippedAnySeparator)
+  ) {
+    return strippedAnySeparator;
+  }
+  if (availableToolNames) {
+    return trimmed;
+  }
+
+  return trimmed.replace(/^(?:functions?|tools?)[./]+/iu, "").trim();
+}
+
 export function convertToOllamaMessages(
   messages: Array<{ role: string; content: unknown }>,
   system?: string,
+  options: OllamaToolCallNameOptions = {},
 ): OllamaChatMessage[] {
   const result: OllamaChatMessage[] = [];
 
@@ -744,7 +875,7 @@ export function convertToOllamaMessages(
 
     if (msg.role === "assistant") {
       const text = extractTextContent(msg.content);
-      const toolCalls = extractToolCalls(msg.content);
+      const toolCalls = extractToolCalls(msg.content, options);
       result.push({
         role: "assistant",
         content: text,
@@ -795,6 +926,7 @@ export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: StreamModelDescriptor,
   usageFallback?: OllamaUsageFallback,
+  options: OllamaToolCallNameOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
   const thinking = response.message.thinking ?? response.message.reasoning ?? "";
@@ -812,7 +944,7 @@ export function buildAssistantMessage(
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: toolCall.function.name,
+        name: normalizeOllamaToolCallName(toolCall.function.name, options),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });
     }
@@ -883,10 +1015,12 @@ function resolveOllamaModelHeaders(model: {
 
 function resolveOllamaRequestTimeoutMs(
   model: object,
-  options: { requestTimeoutMs?: unknown } | undefined,
+  options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
 ): number | undefined {
   const raw =
-    options?.requestTimeoutMs ?? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+    options?.requestTimeoutMs ??
+    options?.timeoutMs ??
+    (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
@@ -902,9 +1036,14 @@ export function createOllamaStreamFn(
 
     const run = async () => {
       try {
+        const availableToolNames = buildOllamaToolNameSet(context.tools);
+        const toolCallNameOptions: OllamaToolCallNameOptions = availableToolNames
+          ? { availableToolNames }
+          : {};
         const ollamaMessages = convertToOllamaMessages(
           context.messages ?? [],
           context.systemPrompt,
+          toolCallNameOptions,
         );
         const ollamaTools = extractOllamaTools(context.tools);
 
@@ -944,12 +1083,12 @@ export function createOllamaStreamFn(
             method: "POST",
             headers,
             body: JSON.stringify(body),
-            signal: options?.signal,
           },
           policy: ssrfPolicy,
+          ...(options?.signal ? { signal: options.signal } : {}),
           timeoutMs: resolveOllamaRequestTimeoutMs(
             model,
-            options as { requestTimeoutMs?: unknown } | undefined,
+            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
           ),
           auditContext: "ollama-stream.chat",
         });
@@ -1122,6 +1261,12 @@ export function createOllamaStreamFn(
             throw new Error("Ollama API stream ended without a final response");
           }
 
+          if (isLikelyGarbledVisibleText({ text: accumulatedContent, modelId: model.id })) {
+            throw new Error(
+              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
+            );
+          }
+
           finalResponse.message.content = accumulatedContent;
           if (accumulatedThinking) {
             finalResponse.message.thinking = accumulatedThinking;
@@ -1134,7 +1279,12 @@ export function createOllamaStreamFn(
             input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
             output: estimateOllamaCompletionTokens(finalResponse),
           };
-          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback);
+          const assistantMessage = buildAssistantMessage(
+            finalResponse,
+            modelInfo,
+            usageFallback,
+            toolCallNameOptions,
+          );
           closeThinkingBlock();
           closeTextBlock();
 

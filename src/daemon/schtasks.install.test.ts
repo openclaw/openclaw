@@ -4,6 +4,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
+import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 
 const schtasksCalls: string[][] = [];
 const schtasksResponses: { code: number; stdout: string; stderr: string }[] = [];
@@ -102,7 +103,7 @@ describe("installScheduledTask", () => {
       expect(script).not.toContain("set OC_INJECT=");
 
       const parsed = await readScheduledTaskCommand(env);
-      expect(parsed).toMatchObject({
+      expect(parsed).toStrictEqual({
         programArguments: [
           "node",
           "gateway.js",
@@ -114,15 +115,22 @@ describe("installScheduledTask", () => {
           "!token!",
         ],
         workingDirectory: "C:\\temp\\poc&calc",
+        environment: {
+          OC_INJECT: "safe & whoami | calc",
+          OC_CARET: "a^b",
+          OC_PERCENT: "%TEMP%",
+          OC_BANG: "!token!",
+          OC_QUOTE: 'he said "hi"',
+        },
+        environmentValueSources: {
+          OC_INJECT: "inline",
+          OC_CARET: "inline",
+          OC_PERCENT: "inline",
+          OC_BANG: "inline",
+          OC_QUOTE: "inline",
+        },
+        sourcePath: scriptPath,
       });
-      expect(parsed?.environment).toMatchObject({
-        OC_INJECT: "safe & whoami | calc",
-        OC_CARET: "a^b",
-        OC_PERCENT: "%TEMP%",
-        OC_BANG: "!token!",
-        OC_QUOTE: 'he said "hi"',
-      });
-      expect(parsed?.environment).not.toHaveProperty("OC_EMPTY");
 
       expect(schtasksCalls[0]).toEqual(["/Query"]);
       expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
@@ -241,6 +249,44 @@ describe("installScheduledTask", () => {
       const script = await fs.readFile(scriptPath, "utf8");
       expect(script).not.toContain('set "PATH=');
       expect(script).toContain('set "OPENCLAW_GATEWAY_PORT=18789"');
+    });
+  });
+
+  it("exposes Windows task script env values as inline for managed-env drift audit", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const { scriptPath } = await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+          TAVILY_API_KEY: "old-inline-value",
+        },
+      });
+
+      const command = await readScheduledTaskCommand(env);
+      expect(command).toStrictEqual({
+        programArguments: ["node", "gateway.js"],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+          TAVILY_API_KEY: "old-inline-value",
+        },
+        environmentValueSources: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+          TAVILY_API_KEY: "inline",
+        },
+        sourcePath: scriptPath,
+      });
+
+      const audit = await auditGatewayServiceConfig({
+        env,
+        platform: "win32",
+        command,
+        expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
+      });
+      expect(
+        audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded),
+      ).toBe(true);
     });
   });
 });

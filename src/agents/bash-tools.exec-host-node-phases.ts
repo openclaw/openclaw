@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import {
+  describeInterpreterInlineEval,
+  type InterpreterInlineEvalHit,
+} from "../infra/command-analysis/inline-eval.js";
+import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   type ExecApprovalsFile,
   type ExecAsk,
@@ -9,29 +14,27 @@ import {
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
-import {
-  describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
-} from "../infra/exec-inline-eval.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
-export type NodeExecutionTarget = {
+type NodeExecutionTarget = {
   nodeId: string;
   platform?: string | null;
   argv: string[];
   env: Record<string, string> | undefined;
   invokeTimeoutMs: number;
+  runTimeoutSec: number;
   supportsSystemRunPrepare: boolean;
 };
 
-export type PreparedNodeRun = {
+type PreparedNodeRun = {
   plan: SystemRunApprovalPlan;
   argv: string[];
   rawCommand: string;
@@ -40,11 +43,11 @@ export type PreparedNodeRun = {
   sessionKey: string | undefined;
 };
 
-export type NodeApprovalAnalysis = {
+type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
-  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
+  inlineEvalHit: InterpreterInlineEvalHit | null;
 };
 
 export function shouldSkipNodeApprovalPrepare(params: {
@@ -77,7 +80,7 @@ export function formatNodeRunToolResult(params: {
     content: [
       {
         type: "text",
-        text: stdout || stderr || errorText || "",
+        text: renderExecOutputText(stdout || stderr || errorText),
       },
     ],
     details: {
@@ -116,6 +119,11 @@ export async function resolveNodeExecutionTarget(
     throw err;
   }
   const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
+  if (nodeInfo?.connected === false) {
+    throw new Error(
+      `exec host=node requires a connected node (${nodeId} is currently disconnected). Start or reconnect the companion app or node host, or select a connected node.`,
+    );
+  }
   const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
   const supportsSystemRun = declaredCommands.includes("system.run");
   if (!supportsSystemRun) {
@@ -124,17 +132,16 @@ export async function resolveNodeExecutionTarget(
     );
   }
 
+  const runTimeoutSec =
+    typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
+  const invokeBaseTimeoutSec = runTimeoutSec > 0 ? runTimeoutSec : params.defaultTimeoutSec;
   return {
     nodeId,
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: Math.max(
-      10_000,
-      (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) *
-        1000 +
-        5_000,
-    ),
+    invokeTimeoutMs: Math.max(10_000, invokeBaseTimeoutSec * 1000 + 5_000),
+    runTimeoutSec,
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
 }
@@ -144,9 +151,12 @@ export function buildNodeSystemRunInvoke(params: {
   command: string[];
   rawCommand: string;
   cwd: string | undefined;
-  timeoutSec: number | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
   runId?: string;
@@ -154,6 +164,9 @@ export function buildNodeSystemRunInvoke(params: {
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
+  const timeoutMs =
+    params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
+  const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
     command: "system.run",
@@ -163,12 +176,20 @@ export function buildNodeSystemRunInvoke(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       ...(params.cwd != null ? { cwd: params.cwd } : {}),
       env: params.target.env,
-      timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
+      timeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
+      ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
+      ...(params.turnSourceAccountId != null
+        ? { turnSourceAccountId: params.turnSourceAccountId }
+        : {}),
+      ...(params.turnSourceThreadId != null
+        ? { turnSourceThreadId: params.turnSourceThreadId }
+        : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
-      runId: params.runId ?? undefined,
+      runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
     },
@@ -189,7 +210,6 @@ export async function invokeNodeSystemRunDirect(params: {
       command: params.target.argv,
       rawCommand: params.request.command,
       cwd: params.request.workdir,
-      timeoutSec: params.request.timeoutSec,
       agentId: params.request.agentId,
       sessionKey: params.request.sessionKey,
       notifyOnExit: params.request.notifyOnExit,
@@ -240,9 +260,10 @@ function buildLocalPreparedNodeRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
 }): PreparedNodeRun {
+  const rawCommand = formatExecCommand(params.target.argv);
   const command = resolveSystemRunCommandRequest({
     command: params.target.argv,
-    rawCommand: params.request.command,
+    rawCommand,
   });
   if (!command.ok) {
     throw new Error(command.message);
@@ -251,7 +272,7 @@ function buildLocalPreparedNodeRun(params: {
     throw new Error("command required");
   }
   const commandText = formatExecCommand(command.argv);
-  const previewText = command.previewText?.trim();
+  const previewText = params.request.command.trim() || command.previewText?.trim();
   const commandPreview = previewText && previewText !== commandText ? previewText : null;
   const plan = {
     argv: [...command.argv],
@@ -292,11 +313,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let durableApprovalSatisfied = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
-      ? (baseAllowlistEval.segments
-          .map((segment) =>
-            detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
-          )
-          .find((entry) => entry !== null) ?? null)
+      ? detectPolicyInlineEval(baseAllowlistEval.segments)
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(

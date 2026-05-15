@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -38,9 +38,18 @@ function setStreamingSessionInternals(
 }
 
 describe("FeishuStreamingSession", () => {
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     fetchWithSsrFGuardMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   function mockFetches(updateBodies: string[]) {
@@ -102,8 +111,10 @@ describe("FeishuStreamingSession", () => {
     await vi.advanceTimersByTimeAsync(160);
 
     expect(updateBodies).toHaveLength(1);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toMatchObject({
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
       content: "hello small",
+      sequence: 2,
+      uuid: "s_card_1_2",
     });
   });
 
@@ -131,8 +142,10 @@ describe("FeishuStreamingSession", () => {
     await session.update("hello!");
 
     expect(updateBodies).toHaveLength(1);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toMatchObject({
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
       content: "hello!",
+      sequence: 2,
+      uuid: "s_card_2_2",
     });
   });
 });

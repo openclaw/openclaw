@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
@@ -14,6 +14,14 @@ const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
+
+async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
+  try {
+    return (await response.json()) as Record<string, string>;
+  } catch (cause) {
+    throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
+  }
+}
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
@@ -122,7 +130,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
     if (!response.ok) {
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
-    const certs = (await response.json()) as Record<string, string>;
+    const certs = await readGoogleChatCertsResponse(response);
     cachedCerts = { fetchedAt: now, certs };
     return certs;
   } finally {
@@ -198,8 +206,6 @@ export async function verifyGoogleChatRequest(params: {
 
   return { ok: false, reason: "unsupported audience type" };
 }
-
-export const GOOGLE_CHAT_SCOPE = CHAT_SCOPE;
 
 export const __testing = {
   resetGoogleChatAuthForTests(): void {

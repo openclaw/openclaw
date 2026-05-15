@@ -1,8 +1,3 @@
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
-import {
-  DEFAULT_COPILOT_API_BASE_URL,
-  resolveCopilotApiToken,
-} from "openclaw/plugin-sdk/github-copilot-token";
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
@@ -10,8 +5,11 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
+import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
 
@@ -26,8 +24,7 @@ const PREFERRED_MODELS = [
 
 const COPILOT_HEADERS_STATIC: Record<string, string> = {
   "Content-Type": "application/json",
-  "Editor-Version": "vscode/1.96.2",
-  "User-Agent": "GitHubCopilotChat/0.26.7",
+  ...buildCopilotIdeHeaders(),
 };
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {

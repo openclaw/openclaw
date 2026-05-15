@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import type {
   CronFieldErrors,
@@ -7,7 +8,9 @@ import type {
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../controllers/cron.ts";
+import { getCronJobPayload } from "../cron-payload.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
@@ -42,6 +45,7 @@ export type CronProps = {
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
   editingJobId: string | null;
+  cronFormCollapsed?: boolean;
   channels: string[];
   channelLabels?: Record<string, string>;
   channelMeta?: ChannelUiMetaEntry[];
@@ -68,6 +72,7 @@ export type CronProps = {
   onEdit: (job: CronJob) => void;
   onClone: (job: CronJob) => void;
   onCancelEdit: () => void;
+  onToggleFormCollapsed?: (collapsed: boolean) => void;
   onToggle: (job: CronJob, enabled: boolean) => void;
   onRun: (job: CronJob, mode?: "force" | "due") => void;
   onRemove: (job: CronJob) => void;
@@ -380,6 +385,9 @@ export function renderCron(props: CronProps) {
     props.form.sessionTarget !== "main" && props.form.payloadKind === "agentTurn";
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
+  const formCollapsed = props.cronFormCollapsed === true;
+  const formTitle = isEditing ? t("cron.form.editJob") : t("cron.form.newJob");
+  const toggleFormCollapsed = props.onToggleFormCollapsed;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
   const blockedByValidation = !props.busy && blockingFields.length > 0;
   const hasActiveJobsFilters =
@@ -434,7 +442,7 @@ export function renderCron(props: CronProps) {
       </div>
     </section>
 
-    <section class="cron-workspace">
+    <section class=${`cron-workspace ${formCollapsed ? "cron-workspace--form-collapsed" : ""}`}>
       <div class="cron-workspace-main">
         <section class="card">
           <div
@@ -704,12 +712,37 @@ export function renderCron(props: CronProps) {
         </section>
       </div>
 
-      <section class="card cron-workspace-form">
-        <div class="card-title">${isEditing ? t("cron.form.editJob") : t("cron.form.newJob")}</div>
-        <div class="card-sub">
-          ${isEditing ? t("cron.form.updateSubtitle") : t("cron.form.createSubtitle")}
+      <section
+        class=${`card cron-workspace-form ${formCollapsed ? "cron-workspace-form--collapsed" : ""}`}
+      >
+        <div class="cron-form-header">
+          <div class="cron-form-header__copy">
+            <div class="card-title">${formTitle}</div>
+            ${formCollapsed
+              ? nothing
+              : html`
+                  <div class="card-sub">
+                    ${isEditing ? t("cron.form.updateSubtitle") : t("cron.form.createSubtitle")}
+                  </div>
+                `}
+          </div>
+          ${toggleFormCollapsed
+            ? html`
+                <button
+                  type="button"
+                  class="btn cron-form-collapse-toggle"
+                  data-test-id="cron-form-collapse-toggle"
+                  title=${formCollapsed ? t("nav.expand") : t("nav.collapse")}
+                  aria-label=${formCollapsed ? t("nav.expand") : t("nav.collapse")}
+                  aria-expanded=${formCollapsed ? "false" : "true"}
+                  @click=${() => toggleFormCollapsed(!formCollapsed)}
+                >
+                  <span aria-hidden="true">${formCollapsed ? "<" : ">"}</span>
+                </button>
+              `
+            : nothing}
         </div>
-        <div class="cron-form">
+        <div class="cron-form" ?hidden=${formCollapsed}>
           <div class="cron-required-legend">
             <span class="cron-required-marker" aria-hidden="true">*</span> ${t(
               "cron.form.required",
@@ -1314,7 +1347,12 @@ export function renderCron(props: CronProps) {
         </div>
         ${blockedByValidation
           ? html`
-              <div class="cron-form-status" role="status" aria-live="polite">
+              <div
+                class="cron-form-status"
+                role="status"
+                aria-live="polite"
+                ?hidden=${formCollapsed}
+              >
                 <div class="cron-form-status__title">${t("cron.form.cantAddYet")}</div>
                 <div class="cron-help">${t("cron.form.fillRequired")}</div>
                 <ul class="cron-form-status__list">
@@ -1335,7 +1373,7 @@ export function renderCron(props: CronProps) {
               </div>
             `
           : nothing}
-        <div class="row cron-form-actions">
+        <div class="row cron-form-actions" ?hidden=${formCollapsed}>
           <button
             class="btn primary"
             ?disabled=${props.busy || !props.canSubmit}
@@ -1348,7 +1386,9 @@ export function renderCron(props: CronProps) {
                 : t("cron.form.addJob")}
           </button>
           ${submitDisabledReason
-            ? html`<div class="cron-submit-reason" aria-live="polite">${submitDisabledReason}</div>`
+            ? html`
+                <div class="cron-submit-reason" aria-live="polite">${submitDisabledReason}</div>
+              `
             : nothing}
           ${isEditing
             ? html`
@@ -1479,17 +1519,19 @@ function renderJob(job: CronJob, props: CronProps) {
   };
   return html`
     <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
-      <div class="list-main">
-        <div class="list-title">${job.name}</div>
-        <div class="list-sub">${formatCronSchedule(job)}</div>
-        ${renderJobPayload(job)}
-        ${job.agentId
-          ? html`<div class="muted cron-job-agent">
-              ${t("cron.jobDetail.agent")}: ${job.agentId}
-            </div>`
-          : nothing}
+      <div class="cron-job-header">
+        <div class="list-main">
+          <div class="list-title">${job.name}</div>
+          <div class="list-sub">${formatCronSchedule(job)}</div>
+          ${job.agentId
+            ? html`<div class="muted cron-job-agent">
+                ${t("cron.jobDetail.agent")}: ${job.agentId}
+              </div>`
+            : nothing}
+        </div>
+        <div class="list-meta">${renderJobState(job)}</div>
       </div>
-      <div class="list-meta">${renderJobState(job)}</div>
+      ${renderJobPayload(job)}
       <div class="cron-job-footer">
         <div class="chip-row cron-job-chips">
           <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
@@ -1576,10 +1618,14 @@ function renderJob(job: CronJob, props: CronProps) {
 }
 
 function renderJobPayload(job: CronJob) {
-  if (job.payload.kind === "systemEvent") {
+  const payload = getCronJobPayload(job);
+  if (!payload) {
+    return html``;
+  }
+  if (payload.kind === "systemEvent") {
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
-      <span class="muted cron-job-detail-value">${job.payload.text}</span>
+      <span class="muted cron-job-detail-value">${payload.text}</span>
     </div>`;
   }
 
@@ -1595,16 +1641,27 @@ function renderJobPayload(job: CronJob) {
 
   return html`
     <div class="cron-job-detail">
-      <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
-      <span class="muted cron-job-detail-value">${job.payload.message}</span>
+      <div class="cron-job-detail-section">
+        <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
+        <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
+          ${unsafeHTML(toSanitizedMarkdownHtml(payload.message))}
+        </div>
+      </div>
+      ${delivery
+        ? html`<div class="cron-job-detail-section">
+            <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
+            <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+          </div>`
+        : nothing}
     </div>
-    ${delivery
-      ? html`<div class="cron-job-detail">
-          <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
-          <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
-        </div>`
-      : nothing}
   `;
+}
+
+function stopPropagationForInteractive(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("a,button,input,textarea,select,summary,[role='button'],[role='link']")) {
+    event.stopPropagation();
+  }
 }
 
 function formatStateRelative(ms?: number) {
@@ -1708,59 +1765,63 @@ function renderRun(
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
+  const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
+  const showErrorInMeta = !!entry.error && !!entry.summary;
   return html`
     <div class="list-item cron-run-entry">
-      <div class="list-main cron-run-entry__main">
-        <div class="list-title cron-run-entry__title">
-          ${entry.jobName ?? entry.jobId}
-          <span class="muted"> · ${status}</span>
+      <div class="cron-run-entry__header">
+        <div class="list-main cron-run-entry__main">
+          <div class="list-title cron-run-entry__title">
+            ${entry.jobName ?? entry.jobId}
+            <span class="muted"> · ${status}</span>
+          </div>
+          <div class="chip-row" style="margin-top: 4px;">
+            <span class="chip">${delivery}</span>
+            ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
+            ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
+            ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
+          </div>
         </div>
-        <div class="list-sub cron-run-entry__summary">
-          ${entry.summary ?? entry.error ?? t("cron.runEntry.noSummary")}
-        </div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${delivery}</span>
-          ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
-          ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
-          ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
+        <div class="list-meta cron-run-entry__meta">
+          <div>${formatMs(entry.ts)}</div>
+          ${typeof entry.runAtMs === "number"
+            ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
+            : nothing}
+          <div class="muted">${entry.durationMs ?? 0}ms</div>
+          ${typeof entry.nextRunAtMs === "number"
+            ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
+            : nothing}
+          ${chatUrl
+            ? html`<div>
+                <a
+                  class="session-link"
+                  href=${chatUrl}
+                  @click=${(e: MouseEvent) => {
+                    if (
+                      e.defaultPrevented ||
+                      e.button !== 0 ||
+                      e.metaKey ||
+                      e.ctrlKey ||
+                      e.shiftKey ||
+                      e.altKey
+                    ) {
+                      return;
+                    }
+                    if (onNavigateToChat && entry.sessionKey) {
+                      e.preventDefault();
+                      onNavigateToChat(entry.sessionKey);
+                    }
+                  }}
+                  >${t("cron.runEntry.openRunChat")}</a
+                >
+              </div>`
+            : nothing}
+          ${showErrorInMeta ? html`<div class="muted">${entry.error}</div>` : nothing}
+          ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
         </div>
       </div>
-      <div class="list-meta cron-run-entry__meta">
-        <div>${formatMs(entry.ts)}</div>
-        ${typeof entry.runAtMs === "number"
-          ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
-          : nothing}
-        <div class="muted">${entry.durationMs ?? 0}ms</div>
-        ${typeof entry.nextRunAtMs === "number"
-          ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
-          : nothing}
-        ${chatUrl
-          ? html`<div>
-              <a
-                class="session-link"
-                href=${chatUrl}
-                @click=${(e: MouseEvent) => {
-                  if (
-                    e.defaultPrevented ||
-                    e.button !== 0 ||
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    e.shiftKey ||
-                    e.altKey
-                  ) {
-                    return;
-                  }
-                  if (onNavigateToChat && entry.sessionKey) {
-                    e.preventDefault();
-                    onNavigateToChat(entry.sessionKey);
-                  }
-                }}
-                >${t("cron.runEntry.openRunChat")}</a
-              >
-            </div>`
-          : nothing}
-        ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
-        ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
+      <div class="cron-run-entry__body chat-text">
+        ${unsafeHTML(toSanitizedMarkdownHtml(bodySource))}
       </div>
     </div>
   `;

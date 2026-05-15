@@ -22,6 +22,33 @@ import {
 
 setupRunCronIsolatedAgentTurnSuite();
 
+function lastEmbeddedAgentCall(): {
+  agentDir?: string;
+  bootstrapContextMode?: "full" | "lightweight";
+  prompt?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  sessionFile?: string;
+} {
+  const calls = runEmbeddedPiAgentMock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected runEmbeddedPiAgent call");
+  }
+  const value = call[0];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("expected runEmbeddedPiAgent call payload");
+  }
+  return value as {
+    agentDir?: string;
+    bootstrapContextMode?: "full" | "lightweight";
+    prompt?: string;
+    sessionKey?: string;
+    workspaceDir?: string;
+    sessionFile?: string;
+  };
+}
+
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
     vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
@@ -36,10 +63,8 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
-        agentDir?: string;
-      };
-      expect(call?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
+      const call = lastEmbeddedAgentCall();
+      expect(call.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
     });
   });
 
@@ -49,13 +74,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
 
-      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
-        prompt?: string;
-      };
-      const lines = call?.prompt?.split("\n") ?? [];
+      const call = lastEmbeddedAgentCall();
+      const lines = (call.prompt ?? "").split("\n");
       expect(lines[0]).toContain("[cron:job-1");
       expect(lines[0]).toContain("do it");
-      expect(lines[1]).toMatch(/^Current time: .+ \(.+\) \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/);
+      expect(lines[1]).toMatch(/^Current time: .+ \(.+\)$/);
+      expect(lines[2]).toMatch(/^Reference UTC: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/);
     });
   });
 
@@ -97,14 +121,10 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
-        sessionKey?: string;
-        workspaceDir?: string;
-        sessionFile?: string;
-      };
-      expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
-      expect(call?.workspaceDir).toBe(opsWorkspace);
-      expect(call?.sessionFile).toContain(path.join("agents", "ops"));
+      const call = lastEmbeddedAgentCall();
+      expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
+      expect(call.workspaceDir).toBe(opsWorkspace);
+      expect(call.sessionFile).toContain(path.join("agents", "ops"));
     });
   });
 
@@ -113,14 +133,49 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
-      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
-        sessionFile?: string;
-      };
+      const call = lastEmbeddedAgentCall();
 
-      expect(call?.sessionFile).toContain(
+      expect(call.sessionFile).toContain(
         path.join(home, ".openclaw", "agents", "main", "sessions"),
       );
-      expect(call?.sessionFile?.endsWith(".jsonl")).toBe(true);
+      expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
+    });
+  });
+
+  it("uses lightweight bootstrap context for command-style cron payloads", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "cd /srv/openclaw && ./scripts/nightly-report.sh",
+        },
+      });
+
+      expect(lastEmbeddedAgentCall().bootstrapContextMode).toBe("lightweight");
+    });
+  });
+
+  it("does not force lightweight bootstrap context for natural-language cron payloads", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: { kind: "agentTurn", message: "Prepare the nightly status summary" },
+      });
+
+      expect(lastEmbeddedAgentCall().bootstrapContextMode).toBeUndefined();
+    });
+  });
+
+  it("honors explicit full bootstrap context for command-style cron payloads", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "pnpm run nightly-report",
+          lightContext: false,
+        },
+      });
+
+      expect(lastEmbeddedAgentCall().bootstrapContextMode).toBeUndefined();
     });
   });
 
@@ -140,8 +195,8 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const first = (await runPingTurn()).res;
       const second = (await runPingTurn()).res;
 
-      expect(first.sessionId).toBeDefined();
-      expect(second.sessionId).toBeDefined();
+      expect(first.sessionId).toBeTypeOf("string");
+      expect(second.sessionId).toBeTypeOf("string");
       expect(second.sessionId).not.toBe(first.sessionId);
       expect(first.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
       expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);

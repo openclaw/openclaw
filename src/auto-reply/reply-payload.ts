@@ -16,7 +16,11 @@ export type ReplyPayload = {
   presentation?: MessagePresentation;
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
-  /** Internal legacy representation used by existing approval/reply helpers during migration. */
+  /**
+   * @deprecated Use presentation.
+   *
+   * Internal legacy representation used by existing approval/reply helpers during migration.
+   */
   interactive?: InteractiveReply;
   btw?: {
     question: string;
@@ -46,6 +50,26 @@ export type ReplyPayload = {
 
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /**
+   * Internal OpenClaw notices generated after a runtime/provider failure are
+   * not assistant source replies. Dispatch may deliver them even when normal
+   * assistant source replies are message-tool-only; sendPolicy deny still wins.
+   */
+  deliverDespiteSourceReplySuppression?: boolean;
+  /**
+   * A message-tool reply to the active internal UI source. The final payload is
+   * still the live delivery vehicle; this mirror makes the reply durable for
+   * chat.history and page reloads without turning the internal UI into an
+   * outbound channel.
+   */
+  sourceReplyTranscriptMirror?: {
+    sessionKey: string;
+    agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
+    idempotencyKey?: string;
+  };
+  beforeAgentRunBlocked?: boolean;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
@@ -61,4 +85,15 @@ export function setReplyPayloadMetadata<T extends object>(
 
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
+  const metadata = getReplyPayloadMetadata(source);
+  return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
+}
+
+export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
+  return setReplyPayloadMetadata(payload, {
+    deliverDespiteSourceReplySuppression: true,
+  });
 }

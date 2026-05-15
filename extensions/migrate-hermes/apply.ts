@@ -1,8 +1,9 @@
 import path from "node:path";
-import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
+import { markMigrationItemSkipped, summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
   copyMigrationFileItem,
+  withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
 import type {
@@ -18,6 +19,8 @@ import { buildHermesPlan } from "./plan.js";
 import { applySecretItem } from "./secrets.js";
 import { resolveTargets } from "./targets.js";
 
+const HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT = "blocked by earlier apply conflict";
+
 export async function applyHermesPlan(params: {
   ctx: MigrationProviderContext;
   plan?: MigrationPlan;
@@ -27,35 +30,45 @@ export async function applyHermesPlan(params: {
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
   const targets = resolveTargets(params.ctx);
   const items: MigrationItem[] = [];
+  const runtime = withCachedMigrationConfigRuntime(
+    params.ctx.runtime ?? params.runtime,
+    params.ctx.config,
+  );
+  const applyCtx = { ...params.ctx, runtime };
+  let blockedByApplyConflict = false;
   for (const item of plan.items) {
     if (item.status !== "planned") {
       items.push(item);
       continue;
     }
+    if (blockedByApplyConflict) {
+      items.push(markMigrationItemSkipped(item, HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT));
+      continue;
+    }
+    let appliedItem: MigrationItem;
     if (item.id === "config:default-model") {
-      items.push(
-        await applyModelItem(
-          { ...params.ctx, runtime: params.ctx.runtime ?? params.runtime },
-          item,
-        ),
-      );
+      appliedItem = await applyModelItem(applyCtx, item);
     } else if (item.kind === "config") {
-      items.push(
-        await applyConfigItem(
-          { ...params.ctx, runtime: params.ctx.runtime ?? params.runtime },
-          item,
-        ),
-      );
+      appliedItem = await applyConfigItem(applyCtx, item);
     } else if (item.kind === "manual") {
-      items.push(applyManualItem(item));
+      appliedItem = applyManualItem(item);
     } else if (item.action === "archive") {
-      items.push(await archiveMigrationItem(item, reportDir));
+      appliedItem = await archiveMigrationItem(item, reportDir);
     } else if (item.kind === "secret") {
-      items.push(await applySecretItem(params.ctx, item, targets));
+      appliedItem = await applySecretItem(params.ctx, item, targets);
     } else if (item.action === "append") {
-      items.push(await appendItem(item));
+      appliedItem = await appendItem(item);
     } else {
-      items.push(await copyMigrationFileItem(item, reportDir, { overwrite: params.ctx.overwrite }));
+      appliedItem = await copyMigrationFileItem(item, reportDir, {
+        overwrite: params.ctx.overwrite,
+      });
+    }
+    items.push(appliedItem);
+    if (
+      item.kind === "config" &&
+      (appliedItem.status === "conflict" || appliedItem.status === "error")
+    ) {
+      blockedByApplyConflict = true;
     }
   }
   const result: MigrationApplyResult = {

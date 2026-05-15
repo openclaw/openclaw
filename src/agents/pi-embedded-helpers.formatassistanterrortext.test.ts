@@ -1,5 +1,6 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
@@ -7,6 +8,7 @@ import {
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
+  sanitizeUserFacingText,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -62,6 +64,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
+  it("rewrites generic provider internal errors without support request ids", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment.",
+    );
+  });
+  it("rewrites request-id-only generic provider internal errors without exposing the id", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment.",
     );
   });
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
@@ -133,6 +151,16 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly billing message for flat JSON insufficient_balance payloads (#74079)", () => {
+    const msg = makeAssistantError(
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -253,6 +281,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an explicit re-authentication message for Codex app-server refresh failures", () => {
+    const msg = makeAssistantError(
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
     const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -339,6 +376,34 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: provider returned an invalid streaming response. Please try again.",
     );
   });
+
+  it("sanitizes transport-classified malformed streaming fragments (#59076)", () => {
+    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM streaming response contained a malformed fragment. Please try again.",
+    );
+  });
+
+  it("does not broadly rewrite non-streaming 'Unexpected token' JSON parse errors", () => {
+    const msg = makeAssistantError("Unexpected token < in JSON at position 0");
+    expect(formatAssistantErrorText(msg)).toBe("Unexpected token < in JSON at position 0");
+  });
+
+  it("does not rewrite non-streaming provider JSON request-validation diagnostics", () => {
+    const msg = makeAssistantError("Expected value in JSON at position 12 for messages.0.content");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Expected value in JSON at position 12 for messages.0.content",
+    );
+  });
+
+  it("keeps provider request-validation JSON diagnostics actionable", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -365,6 +430,14 @@ describe("formatRawAssistantErrorForUi", () => {
 
   it("formats colon-delimited HTTP status lines", () => {
     expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
+  });
+
+  it("formats plain provider internal errors without request ids", () => {
+    expect(
+      formatRawAssistantErrorForUi(
+        "An error occurred while processing your request. Please include the request ID synthetic-provider-request-001 in your message.",
+      ),
+    ).toBe("The AI service returned an internal error. Please try again in a moment.");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {
@@ -401,7 +474,35 @@ describe("raw API error payload helpers", () => {
       'Ollama API error: {"type":"error","error":{"type":"server_error","message":"Boom"},"request_id":"req_123"}';
 
     expect(isRawApiErrorPayload(raw)).toBe(true);
-    expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
-    expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
+    expect(getApiErrorPayloadFingerprint(raw)).toBe(
+      '{"error":{"message":"Boom","type":"server_error"},"request_id":"req_123","type":"error"}',
+    );
+  });
+
+  it("recognizes flat JSON payloads with string error code and message (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(formatRawAssistantErrorForUi(raw)).toBe(
+      "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
+    );
+  });
+});
+
+describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
+  it("rewrites transport-classified malformed streaming fragments in error context", () => {
+    const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+      errorContext: true,
+    });
+    expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+
+  it("does not rewrite JSON parse error when not in error context", () => {
+    // When not in error context, the text could be legitimate assistant content
+    // mentioning JSON errors. Don't rewrite.
+    const text =
+      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)";
+    const result = sanitizeUserFacingText(text, { errorContext: false });
+    expect(result).toBe(text);
   });
 });

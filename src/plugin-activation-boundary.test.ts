@@ -19,7 +19,7 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   }),
 );
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
   vi.fn(() => ({
     diagnostics: [],
     plugins: [
@@ -33,6 +33,21 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
           irc: ["IRC_HOST", "IRC_NICK"],
           slack: ["SLACK_BOT_TOKEN"],
           telegram: ["TELEGRAM_BOT_TOKEN"],
+        },
+        modelIdNormalization: {
+          providers: {
+            google: {
+              aliases: {
+                "gemini-3.1-pro": "gemini-3.1-pro-preview",
+                "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+              },
+            },
+            xai: {
+              aliases: {
+                "grok-4-fast-reasoning": "grok-4-fast",
+              },
+            },
+          },
         },
         skills: [],
         hooks: [],
@@ -64,8 +79,13 @@ const facadeMockHelpers = vi.hoisted(() => {
   return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
 });
 
-vi.mock("./plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("./plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
 }));
 
 vi.mock("./secrets/channel-env-vars.js", () => ({
@@ -117,6 +137,10 @@ describe("plugin activation boundary", () => {
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
     const staticNormalize = { allowPluginNormalization: false };
     expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(normalizeModelRef("google", "gemini-3-pro-preview", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });
