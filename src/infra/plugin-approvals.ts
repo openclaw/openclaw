@@ -1576,6 +1576,7 @@ function resolveCommandWords(segment: string): {
   const words = splitShellWords(segment);
   let usedSudo = false;
   while (words.length > 0) {
+    stripLeadingShellRedirectionWords(words);
     const first = cleanCommandName(basename(words[0] ?? ""));
     if (first === "sudo") {
       usedSudo = true;
@@ -1588,6 +1589,13 @@ function resolveCommandWords(segment: string): {
     }
     if (first === "!") {
       words.shift();
+      continue;
+    }
+    if (first === "time") {
+      words.shift();
+      if (words[0] === "-p") {
+        words.shift();
+      }
       continue;
     }
     if (first === "env") {
@@ -1618,6 +1626,31 @@ function resolveCommandWords(segment: string): {
     break;
   }
   return { words, usedSudo };
+}
+
+function stripLeadingShellRedirectionWords(words: string[]): void {
+  while (words.length > 0) {
+    const leading = parseLeadingShellRedirectionWord(words[0] ?? "");
+    if (!leading) {
+      return;
+    }
+    words.shift();
+    if (leading.consumesNext && words.length > 0) {
+      words.shift();
+    }
+  }
+}
+
+function parseLeadingShellRedirectionWord(word: string): { consumesNext: boolean } | null {
+  const token = stripShellWordQuotes(word);
+  const operator = String.raw`(?:<<<|<<|<&|<>|<|>&|>>?|&>>?)`;
+  if (new RegExp(`^\\d*${operator}$`).test(token)) {
+    return { consumesNext: true };
+  }
+  if (new RegExp(`^\\d*${operator}.+`).test(token)) {
+    return { consumesNext: false };
+  }
+  return null;
 }
 
 function stripEnvWrapperWords(words: readonly string[]): string[] | null {
