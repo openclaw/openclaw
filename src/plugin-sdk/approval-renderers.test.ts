@@ -430,6 +430,18 @@ describe("plugin-sdk/approval-renderers", () => {
       command: "cleanup() { rm -rf /tmp/x; }",
       id: "plugin-command-function-compound",
     },
+    {
+      command: "! (rm -rf /tmp/x)",
+      id: "plugin-command-negated-subshell-group",
+    },
+    {
+      command: "time (rm -rf /tmp/x)",
+      id: "plugin-command-timed-subshell-group",
+    },
+    {
+      command: 'time -p case "$target" in *) rm -rf /tmp/x ;; esac',
+      id: "plugin-command-timed-case-compound",
+    },
   ])("fails closed on unsupported shell compound syntax: $command", ({ command, id }) => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

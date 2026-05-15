@@ -1220,7 +1220,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
 }
 
 function hasUnsupportedShellCompoundSyntax(segment: string): boolean {
-  const trimmed = segment.trim();
+  const trimmed = stripShellCompoundPrefixes(segment.trim());
   return (
     /^\(/.test(trimmed) ||
     /^\{/.test(trimmed) ||
@@ -1229,6 +1229,26 @@ function hasUnsupportedShellCompoundSyntax(segment: string): boolean {
     /^function\b/i.test(trimmed) ||
     /^[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/.test(trimmed)
   );
+}
+
+function stripShellCompoundPrefixes(segment: string): string {
+  let trimmed = segment;
+  for (let count = 0; count < 4; count += 1) {
+    const withoutNegation = trimmed.replace(/^!\s+/, "").trimStart();
+    if (withoutNegation !== trimmed) {
+      trimmed = withoutNegation;
+      continue;
+    }
+
+    const withoutTime = trimmed.replace(/^time(?:\s+-p)?\s+/i, "").trimStart();
+    if (withoutTime !== trimmed) {
+      trimmed = withoutTime;
+      continue;
+    }
+
+    return trimmed;
+  }
+  return trimmed;
 }
 
 function summarizePackageManagerCommand(
