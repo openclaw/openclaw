@@ -308,6 +308,13 @@ const COMMAND_CASES: readonly CommandCase[] = [
   { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
   { id: "healthJson", name: "health --json", args: ["health", "--json"], presets: ["startup"] },
   {
+    id: "completionWriteStateZsh",
+    name: "completion --write-state --shell zsh",
+    args: ["completion", "--write-state", "--shell", "zsh"],
+    presets: ["startup"],
+    exitBudgetMs: 8_000,
+  },
+  {
     id: "statusJson",
     name: "status --json",
     args: ["status", "--json"],
