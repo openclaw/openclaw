@@ -4,7 +4,10 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "../../plugin-sdk/provider-stream-shared.js";
+import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createThinkingOnlyFinalTextWrapper,
+} from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   type ProviderRuntimePluginHandle,
@@ -762,6 +765,12 @@ function applyPostPluginStreamWrappers(
       thinkingLevel: ctx.thinkingLevel,
       shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
     });
+    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
+    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
+    ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
+    });
 
     // Guard Google-family payloads against invalid negative thinking budgets
     // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
@@ -848,6 +857,7 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
   "mimo-v2.5",
   "mimo-v2.5-pro",
 ]);
+const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
 function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
@@ -855,6 +865,17 @@ function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): b
     model.api === "openai-completions" &&
     normalizedModelId !== undefined &&
     MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
+  );
+}
+
+function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+  model: Parameters<StreamFn>[0],
+): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
   );
 }
 

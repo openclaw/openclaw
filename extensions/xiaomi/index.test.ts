@@ -1,3 +1,4 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
@@ -30,6 +31,10 @@ type ReplayToolCall = {
 };
 
 type RegisteredProvider = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+type FakeStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
 
 const emptyUsage = {
   input: 0,
@@ -139,6 +144,29 @@ function createPayloadCapturingStream(capture: PayloadCapture, model: OpenAIComp
     queueMicrotask(() => stream.end());
     return stream;
   };
+}
+
+function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): FakeStream {
+  return {
+    async result() {
+      return params.resultMessage;
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {
+        for (const event of params.events) {
+          yield event;
+        }
+      })();
+    },
+  };
+}
+
+function createResultStreamFn(params: { events?: unknown[]; resultMessage: unknown }): StreamFn {
+  return () =>
+    createFakeStream({
+      events: params.events ?? [],
+      resultMessage: params.resultMessage,
+    }) as ReturnType<StreamFn>;
 }
 
 function requireThinkingWrapper(
@@ -311,5 +339,100 @@ describe("xiaomi provider plugin", () => {
     expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );
+  });
+
+  it.each(["mimo-v2-pro", "mimo-v2-omni"] as const)(
+    "promotes reasoning-only terminal output to visible text for %s",
+    async (modelId) => {
+      const model = mimoReasoningModel(modelId);
+      const wrapped = requireThinkingWrapper(
+        createMiMoThinkingWrapper(
+          createResultStreamFn({
+            events: [
+              {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "thinking", thinking: "MiMo final answer" }],
+                  stopReason: "stop",
+                },
+              },
+            ],
+            resultMessage: {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "MiMo final answer" }],
+              stopReason: "stop",
+            },
+          }),
+          "high",
+        ),
+        modelId,
+      );
+
+      const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+      const events: unknown[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      expect(events).toEqual([
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "MiMo final answer" }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+      await expect(stream.result()).resolves.toEqual({
+        role: "assistant",
+        content: [{ type: "text", text: "MiMo final answer" }],
+        stopReason: "stop",
+      });
+    },
+  );
+
+  it("does not promote reasoning when the MiMo assistant turn also has text or tool calls", async () => {
+    const model = mimoReasoningModel("mimo-v2-pro");
+    const textMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "internal" },
+        { type: "text", text: "already visible" },
+      ],
+      stopReason: "stop",
+    };
+    const toolMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "call reasoning" }, readToolCall],
+      stopReason: "toolUse",
+    };
+
+    for (const resultMessage of [textMessage, toolMessage]) {
+      const wrapped = requireThinkingWrapper(
+        createMiMoThinkingWrapper(createResultStreamFn({ resultMessage }), "high"),
+        "mixed-content",
+      );
+      const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+
+      await expect(stream.result()).resolves.toEqual(resultMessage);
+    }
+  });
+
+  it("does not promote reasoning-only output for newer MiMo replay models", async () => {
+    const model = mimoReasoningModel("mimo-v2.5-pro");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "actual reasoning" }],
+      stopReason: "stop",
+    };
+    const wrapped = requireThinkingWrapper(
+      createMiMoThinkingWrapper(createResultStreamFn({ resultMessage }), "high"),
+      "mimo-v2.5-pro",
+    );
+    const stream = (await wrapped(model, { messages: [] } as Context, {})) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual(resultMessage);
   });
 });
