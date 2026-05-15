@@ -80,6 +80,11 @@ OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
 
+Codex app-server item notifications also provide async `after_tool_call`
+observations for native tool completions that are not already covered by the
+native `PostToolUse` relay. These observations are for telemetry and plugin
+compatibility only; they cannot block, delay, or mutate the native tool call.
+
 Compaction and LLM lifecycle projections come from Codex app-server
 notifications and OpenClaw adapter state, not native Codex hook commands.
 OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
@@ -145,13 +150,14 @@ requests fail closed.
 ## Queue steering
 
 Active-run queue steering maps onto Codex app-server `turn/steer`. With the
-default `messages.queue.mode: "steer"`, OpenClaw batches queued chat messages
-for the configured quiet window and sends them as one `turn/steer` request in
-arrival order. Legacy `queue` mode sends separate `turn/steer` requests.
+default `messages.queue.mode: "steer"`, OpenClaw batches steer-mode chat
+messages for the configured quiet window and sends them as one `turn/steer`
+request in arrival order.
 
 Codex review and manual compaction turns can reject same-turn steering. In that
-case, OpenClaw uses the follow-up queue when the selected mode allows fallback.
-See [Steering queue](/concepts/queue-steering).
+case, OpenClaw waits for the active run to finish before starting the prompt.
+Use `/queue followup` or `/queue collect` when messages should queue by default
+instead of steering. See [Steering queue](/concepts/queue-steering).
 
 ## Codex feedback upload
 

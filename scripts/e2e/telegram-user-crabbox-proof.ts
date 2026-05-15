@@ -417,9 +417,40 @@ function optionalString(source: JsonObject, key: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function childProcessBaseEnv() {
+  const keys = [
+    "CI",
+    "COREPACK_HOME",
+    "FORCE_COLOR",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "NODE_OPTIONS",
+    "OPENCLAW_BUILD_PRIVATE_QA",
+    "OPENCLAW_ENABLE_PRIVATE_QA_CLI",
+    "PATH",
+    "PNPM_HOME",
+    "SHELL",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+  ];
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
 function mockServerEnv(params: { mockPort: number; mockResponseText: string; requestLog: string }) {
   return {
-    ...process.env,
+    ...childProcessBaseEnv(),
     MOCK_PORT: String(params.mockPort),
     MOCK_REQUEST_LOG: params.requestLog,
     SUCCESS_MARKER: params.mockResponseText,
@@ -428,7 +459,7 @@ function mockServerEnv(params: { mockPort: number; mockResponseText: string; req
 
 function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: string }) {
   return {
-    ...process.env,
+    ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,
@@ -1171,12 +1202,17 @@ async function writeExecutable(filePath: string, content: string) {
   fs.chmodSync(filePath, 0o700);
 }
 
+function requireUserDriverScript(opts: Options) {
+  const userDriverScript = expandHome(opts.userDriverScript);
+  if (!fs.existsSync(userDriverScript)) {
+    throw new Error(`Missing user driver script: ${opts.userDriverScript}`);
+  }
+  return userDriverScript;
+}
+
 async function prepareRemoteState(params: { localRoot: string; opts: Options; root: string }) {
   const stateArchive = path.join(params.localRoot, "remote-state.tgz");
-  const userDriverScript = expandHome(params.opts.userDriverScript);
-  if (!fs.existsSync(userDriverScript)) {
-    throw new Error(`Missing user driver script: ${params.opts.userDriverScript}`);
-  }
+  const userDriverScript = requireUserDriverScript(params.opts);
   await runCommand({
     command: "cp",
     args: [userDriverScript, path.join(params.localRoot, "user-driver.py")],
@@ -1475,6 +1511,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
     };
   }
 
+  requireUserDriverScript(opts);
   const credential = await leaseCredential({ localRoot, opts, root });
   const sut = opts.sutUsername
     ? { id: "", username: opts.sutUsername }
@@ -1960,6 +1997,7 @@ async function main() {
       return;
     }
 
+    requireUserDriverScript(opts);
     credential = await leaseCredential({ localRoot, opts, root });
     const sut = opts.sutUsername
       ? { id: "", username: opts.sutUsername }

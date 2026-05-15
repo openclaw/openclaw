@@ -633,15 +633,17 @@ describe("applyAuthChoice", () => {
     });
   }
   function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-    expect(promptMessages(mock).some((message) => message.includes(expected))).toBe(true);
+    expect(promptMessages(mock).join("\n")).toContain(expected);
   }
   function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock)).toContain(expected);
   }
   function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     const call = mock.mock.calls[0];
-    expect(call).toBeDefined();
-    return call?.[0];
+    if (!call) {
+      throw new Error("Expected first mock call");
+    }
+    return call[0];
   }
 
   let defaultProviderPlugins: ProviderPlugin[] = [];

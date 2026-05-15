@@ -55,7 +55,6 @@ function expectOutboundAttachmentCall(
   mediaMaxBytes: number,
 ): Record<string, unknown> {
   const call = resolveOutboundAttachmentFromUrl.mock.calls[index] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing outbound attachment call ${index + 1}`);
   }
@@ -66,7 +65,6 @@ function expectOutboundAttachmentCall(
 
 function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
   const call = resolveAgentScopedOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("missing agent scoped media access call");
   }

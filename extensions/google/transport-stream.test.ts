@@ -73,6 +73,10 @@ function buildGoogleVertexModel(
 
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  return buildRawSseResponse(sse);
+}
+
+function buildRawSseResponse(sse: string): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -351,6 +355,28 @@ describe("google transport stream", () => {
     });
   });
 
+  it("wraps malformed Gemini SSE JSON", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse("data: {not json\n\n"));
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
+  });
+
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
@@ -398,13 +424,19 @@ describe("google transport stream", () => {
 
     expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
     expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-    const firstBody = JSON.parse(guardedFetchMock.mock.calls[0]?.[1]?.body as string);
-    const retryBody = JSON.parse(guardedFetchMock.mock.calls[1]?.[1]?.body as string);
-    expect(firstBody.generationConfig.thinkingConfig).toEqual({
+    const firstBody = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+    );
+    const retryBody = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+    );
+    const firstGenerationConfig = requireGenerationConfig(firstBody);
+    const retryGenerationConfig = requireGenerationConfig(retryBody);
+    expect(firstGenerationConfig.thinkingConfig).toEqual({
       includeThoughts: true,
       thinkingLevel: "HIGH",
     });
-    expect(retryBody.generationConfig.thinkingConfig).toEqual({
+    expect(retryGenerationConfig.thinkingConfig).toEqual({
       thinkingLevel: "LOW",
     });
     expect(retryBody.tools).toEqual(firstBody.tools);

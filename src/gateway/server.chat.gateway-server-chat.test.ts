@@ -131,9 +131,9 @@ describe("gateway server chat", () => {
       .filter((value): value is string => typeof value === "string");
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
-    expect(value).toBeDefined();
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected record");
+    }
     const actual = value as Record<string, unknown>;
     for (const [key, expectedValue] of Object.entries(expected)) {
       expect(actual[key]).toEqual(expectedValue);
@@ -243,6 +243,37 @@ describe("gateway server chat", () => {
       expect(res.payload?.runId).toBe("idem-sessions-send-1");
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
+    }
+  });
+
+  test("sessions.send creates a configured agent main session before sending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "orion" }],
+    };
+    try {
+      await writeSessionStore({ entries: {} });
+
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:orion:main",
+        message: "hello orion",
+        idempotencyKey: "idem-sessions-send-orion",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-orion");
+
+      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        {
+          sessionId?: string;
+        }
+      >;
+      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+    } finally {
+      testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
@@ -961,7 +992,7 @@ describe("gateway server chat", () => {
         await finalPromise;
 
         let assistantMessage: Record<string, unknown> | undefined;
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        await vi.waitFor(async () => {
           const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
             sessionKey: "main",
           });
@@ -973,15 +1004,10 @@ describe("gateway server chat", () => {
               message !== null &&
               (message as { role?: unknown }).role === "assistant",
           );
-          if (assistantMessage) {
-            break;
+          if (!assistantMessage) {
+            throw new Error("Expected assistant history message");
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        if (!assistantMessage) {
-          throw new Error("expected assistant history message");
-        }
+        });
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
         expect(assistantContent).toHaveLength(2);
         expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });

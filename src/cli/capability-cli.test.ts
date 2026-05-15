@@ -417,7 +417,8 @@ describe("capability cli", () => {
   };
 
   function firstGatewayCall() {
-    return mocks.callGateway.mock.calls[0]?.[0] as GatewayCall | undefined;
+    const calls = mocks.callGateway.mock.calls as unknown as Array<[GatewayCall]>;
+    return calls[0]?.[0];
   }
 
   function firstCompletionCall() {
@@ -435,7 +436,15 @@ describe("capability cli", () => {
   }
 
   function firstJsonOutput() {
-    return mocks.runtime.writeJson.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const calls = mocks.runtime.writeJson.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstRegisteredEmbeddingBootstrapArg() {
+    const calls = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls as unknown as Array<
+      [{ registerMemoryEmbeddingProvider?: unknown }]
+    >;
+    return calls[0]?.[0];
   }
 
   function imageDescribeCall(index = 0) {
@@ -496,7 +505,7 @@ describe("capability cli", () => {
   }
 
   function expectRuntimeErrorContains(expected: string): void {
-    expect(runtimeErrorMessages().some((message) => message.includes(expected))).toBe(true);
+    expect(runtimeErrorMessages().join("\n")).toContain(expected);
   }
 
   it("lists canonical capabilities", async () => {
@@ -505,7 +514,7 @@ describe("capability cli", () => {
       argv: ["capability", "list", "--json"],
     });
 
-    const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as Array<{ id: string }>;
+    const payload = (firstJsonOutput() as unknown as Array<{ id: string }> | undefined) ?? [];
     const ids = payload.map((entry) => entry.id);
     expect(ids).toContain("model.run");
     expect(ids).toContain("image.describe");
@@ -559,7 +568,9 @@ describe("capability cli", () => {
       [Record<string, unknown>]
     >;
     const params = calls[0]?.[0];
-    expect(params).toBeDefined();
+    if (!params) {
+      throw new Error("Expected simple completion model params");
+    }
     expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
   });
 
@@ -1134,9 +1145,9 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No description returned for image/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+    ]);
   });
 
   it("reports missing image understanding configuration for image describe", async () => {
@@ -1522,9 +1533,8 @@ describe("capability cli", () => {
     });
 
     const outputPath = `${outputBase}.mp4`;
-    const fetchCall = fetchMock.mock.calls[0] as unknown as
-      | [string, { signal?: unknown }]
-      | undefined;
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
+    const fetchCall = fetchCalls[0];
     expect(fetchCall?.[0]).toBe("https://example.com/generated-video.mp4");
     expect(fetchCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
@@ -1630,9 +1640,9 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No transcript returned for audio/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+    ]);
   });
 
   it("reports missing audio transcription configuration for audio transcribe", async () => {
@@ -1666,9 +1676,7 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/Audio transcription response missing text/),
-    );
+    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {
@@ -1872,7 +1880,9 @@ describe("capability cli", () => {
       argv: ["capability", "model", "auth", "logout", "--provider", "openai", "--json"],
     });
 
-    expect(updatedStore).not.toBeNull();
+    if (updatedStore === null) {
+      throw new Error("expected updated auth store");
+    }
     const storeSnapshot = updatedStore as unknown as Record<string, any>;
     expect(storeSnapshot.profiles).toEqual({
       "anthropic:default": { id: "anthropic:default" },
@@ -1980,9 +1990,7 @@ describe("capability cli", () => {
       argv: ["capability", "embedding", "providers", "--json"],
     });
 
-    const bootstrapArg = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls[0]?.[0] as
-      | { registerMemoryEmbeddingProvider?: unknown }
-      | undefined;
+    const bootstrapArg = firstRegisteredEmbeddingBootstrapArg();
     expect(typeof bootstrapArg?.registerMemoryEmbeddingProvider).toBe("function");
   });
 

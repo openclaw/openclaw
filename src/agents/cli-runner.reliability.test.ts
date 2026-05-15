@@ -147,6 +147,11 @@ function buildPreparedContext(params?: {
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
     modelId: "gpt-5.4",
     normalizedModel: "gpt-5.4",
+    contextWindowInfo: {
+      tokens: 150_000,
+      referenceTokens: 200_000,
+      source: "agentContextTokens",
+    },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
@@ -158,8 +163,9 @@ function buildPreparedContext(params?: {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -174,9 +180,22 @@ function callArg(
   argIndex: number,
   label: string,
 ) {
-  const call = mock.mock.calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function firstSystemEventCall(): Array<unknown> {
+  const call = enqueueSystemEventMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected system event call");
+  }
+  return call;
 }
 
 async function expectFailoverAttribution(
@@ -284,7 +303,7 @@ describe("runCliAgent reliability", () => {
     ).rejects.toThrow("produced no output");
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [notice, opts] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    const [notice, opts] = firstSystemEventCall();
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
     expect(requireRecord(opts, "system event options").sessionKey).toBe("agent:main:main");
@@ -651,13 +670,22 @@ describe("runCliAgent reliability", () => {
       expect(llmOutputEvent.sessionId).toBe("s1");
       expect(llmOutputEvent.provider).toBe("codex-cli");
       expect(llmOutputEvent.model).toBe("gpt-5.4");
+      expect(llmOutputEvent.contextTokenBudget).toBe(150_000);
+      expect(llmOutputEvent.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputEvent.contextWindowReferenceTokens).toBe(200_000);
       expect(llmOutputEvent.assistantTexts).toEqual(["hello from cli"]);
       const lastAssistant = requireRecord(llmOutputEvent.lastAssistant, "last assistant");
       expect(lastAssistant.role).toBe("assistant");
       expect(lastAssistant.content).toEqual([{ type: "text", text: "hello from cli" }]);
       expect(lastAssistant.provider).toBe("codex-cli");
       expect(lastAssistant.model).toBe("gpt-5.4");
-      expect(callArg(hookRunner.runLlmOutput, 0, 1, "llm_output context")).toBeTypeOf("object");
+      const llmOutputContext = requireRecord(
+        callArg(hookRunner.runLlmOutput, 0, 1, "llm_output context"),
+        "llm_output context",
+      );
+      expect(llmOutputContext.contextTokenBudget).toBe(150_000);
+      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
 
       const agentEndEvent = requireRecord(
         callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),

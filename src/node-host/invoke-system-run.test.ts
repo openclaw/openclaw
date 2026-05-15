@@ -133,33 +133,35 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     payloadJSON?: string;
     error?: { message?: string };
   } {
-    const result = sendInvokeResult.mock.calls[0]?.[0];
-    if (!result) {
-      throw new Error("expected sendInvokeResult payload");
-    }
+    const result = firstMockCallArg(sendInvokeResult, "sendInvokeResult", 0);
     return result as { ok?: boolean; payloadJSON?: string; error?: { message?: string } };
   }
 
   function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
-    const args = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
-    if (!args) {
-      throw new Error("expected runCommand args");
-    }
-    return args;
+    return firstMockCallArg(vi.mocked(runCommand), "runCommand", 0) as string[];
   }
 
   function requireMacExecHostCall(runViaMacAppExecHost: MockedRunViaMacAppExecHost): {
     approvals?: { agent?: { security?: string; ask?: string } };
     request?: { command?: string[]; rawCommand?: string; cwd?: string };
   } {
-    const call = runViaMacAppExecHost.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("expected runViaMacAppExecHost call");
-    }
+    const call = firstMockCallArg(runViaMacAppExecHost, "runViaMacAppExecHost", 0);
     return call as {
       approvals?: { agent?: { security?: string; ask?: string } };
       request?: { command?: string[]; rawCommand?: string; cwd?: string };
     };
+  }
+
+  function firstMockCallArg(
+    mock: { mock: { calls: readonly unknown[][] } },
+    label: string,
+    argIndex: number,
+  ): unknown {
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call[argIndex];
   }
 
   function expectExecDeniedEvent(sendNodeEvent: MockedSendNodeEvent): void {
@@ -553,7 +555,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     const shellWrapperCall = requireMacExecHostCall(shellWrapperInvoke.runViaMacAppExecHost);
-    expect(shellWrapperCall.approvals).toBeDefined();
+    if (shellWrapperCall.approvals === undefined) {
+      throw new Error("Expected shell-wrapper approvals");
+    }
     expect(shellWrapperCall.request?.command).toEqual([
       "/bin/sh",
       "-lc",
@@ -621,7 +625,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           const canonicalCwd = fs.realpathSync(tmp);
           expect(invoke.runCommand).not.toHaveBeenCalled();
           const macHostCall = requireMacExecHostCall(invoke.runViaMacAppExecHost);
-          expect(macHostCall.approvals).toBeDefined();
+          if (macHostCall.approvals === undefined) {
+            throw new Error("Expected Mac host approvals");
+          }
           expect(macHostCall.request?.command).toEqual(["env", "sh", "-c", "echo SAFE"]);
           expect(macHostCall.request?.rawCommand).toBe('env sh -c "echo SAFE"');
           expect(macHostCall.request?.cwd).toBe(canonicalCwd);
@@ -656,8 +662,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(transparent.runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
       } else {
+        const expectedTrPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/tr") ? "/usr/bin/tr" : "/bin/tr",
+        );
         expect(requireFirstRunCommandArgs(transparent.runCommand)).toEqual([
-          expect.stringMatching(/(^|[/\\])tr$/),
+          expectedTrPath,
           "a",
           "b",
         ]);
@@ -739,6 +748,164 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expectInvokeErrorMessage(sendInvokeResult, { message: testCase.message });
       }
     }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "denies safe-bin shell expansion carriers in allowlist mode",
+    async () => {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        ask: "off",
+        command: ["/bin/sh", "-lc", "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+        rawCommand: "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, { message: "allowlist miss" });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rewrites safe-bin shell payloads before execution in allowlist mode",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const expectedHeadPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/head") ? "/usr/bin/head" : "/bin/head",
+        );
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["/bin/sh", "-lc", "head -c 16"],
+          rawCommand: "head -c 16",
+        });
+
+        expect(requireFirstRunCommandArgs(runCommand)).toEqual([
+          "/bin/sh",
+          "-lc",
+          `'${expectedHeadPath}' '-c' '16'`,
+        ]);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rewrites nested safe-bin shell chains before execution in allowlist mode",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const expectedTrPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/tr") ? "/usr/bin/tr" : "/bin/tr",
+        );
+        const expectedHeadPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/head") ? "/usr/bin/head" : "/bin/head",
+        );
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["/bin/sh", "-lc", "sh -c 'tr a b && head -c 16'"],
+          rawCommand: "sh -c 'tr a b && head -c 16'",
+        });
+
+        const payload = requireFirstRunCommandArgs(runCommand)[2] ?? "";
+        expect(payload).not.toContain("tr a b && head -c 16");
+        expect(payload).toContain(expectedTrPath);
+        expect(payload).toContain(expectedHeadPath);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not apply POSIX safe-bin shell rewrites to PowerShell wrappers",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["pwsh", "-Command", "head -c 16"],
+        });
+
+        expect(requireFirstRunCommandArgs(runCommand)).toEqual(["pwsh", "-Command", "head -c 16"]);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it("denies abbreviated PowerShell encoded payloads even when the wrapper is allowlisted", async () => {
+    const binDir = createFixtureDir("openclaw-pwsh-allowlist-");
+    const executablePath = createTempExecutable({ dir: binDir, name: "pwsh" });
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals({
+        agents: {
+          main: {
+            allowlist: [{ pattern: executablePath }],
+          },
+        },
+      }),
+      run: async () => {
+        const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "on-miss",
+          command: [
+            executablePath,
+            "-win",
+            "hidden",
+            "-if",
+            "XML",
+            "-config",
+            "SomeConfig",
+            "/NoProfile",
+            "/ec",
+            "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+          ],
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+
+        const commandWithArgs = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "on-miss",
+          command: [executablePath, "-cwa", "Write-Output", "hi"],
+        });
+
+        expect(commandWithArgs.runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({
+          sendNodeEvent: commandWithArgs.sendNodeEvent,
+          sendInvokeResult: commandWithArgs.sendInvokeResult,
+        });
+      },
+    });
   });
 
   it.runIf(process.platform !== "win32")(
@@ -1176,7 +1343,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const passedEnv = runCommand.mock.calls[0]?.[2];
+    const passedEnv = firstMockCallArg(runCommand, "runCommand", 2);
     expect(passedEnv).toEqual({
       LANG: "C",
       LC_TIME: "C",
@@ -1529,12 +1696,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               },
             });
 
-            expect(seenArgv, testCase.name).toContainEqual([
-              "cmd.exe",
-              "/d",
-              "/s",
-              "/c",
-              `${scriptPath} --limit 5`,
+            expect(seenArgv, testCase.name).toEqual([
+              ["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
             ]);
             expect(invoke.runCommand, testCase.name).not.toHaveBeenCalled();
             expectApprovalRequiredDenied({

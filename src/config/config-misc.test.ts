@@ -48,7 +48,7 @@ function issueMessages(issues: Array<{ message: string }>): string[] {
 }
 
 function expectSomeIssueMessageContains(issues: Array<{ message: string }>, text: string): void {
-  expect(issueMessages(issues).some((message) => message.includes(text))).toBe(true);
+  expect(issueMessages(issues).join("\n")).toContain(text);
 }
 
 describe("boolean config validation", () => {
@@ -1105,6 +1105,26 @@ describe("config strict validation", () => {
       voiceId: "voice-1",
     });
     expect(raw.messages.tts).not.toHaveProperty("providers");
+  });
+
+  it("reports retired queue steering modes without read-time auto-migration", async () => {
+    const raw = {
+      messages: {
+        queue: {
+          mode: "queue",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
+    expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
+    expect(raw.messages.queue.mode).toBe("queue");
+    expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
   });
 
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {

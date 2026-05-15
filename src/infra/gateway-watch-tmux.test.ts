@@ -18,16 +18,28 @@ const createOutput = () => {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function spawnCall(mock: unknown, callIndex: number) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const call = calls.at(callIndex);
-  expect(call, `spawn call ${callIndex + 1}`).toBeDefined();
-  return call as Array<unknown>;
+  const call = calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected spawn call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function spawnShellCommand(mock: unknown, callIndex: number): string {
+  const call = spawnCall(mock, callIndex);
+  const args = call[1];
+  if (!Array.isArray(args) || typeof args[6] !== "string") {
+    throw new Error(`Expected spawn call ${callIndex + 1} shell command`);
+  }
+  return args[6];
 }
 
 function expectSpawn(mock: unknown, callIndex: number, command: string, args: Array<unknown>) {
@@ -107,7 +119,7 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
+    const command = spawnShellCommand(spawnSync, 1);
     expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
     expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
     expect(command).not.toContain("--benchmark");
@@ -139,7 +151,7 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
+    const command = spawnShellCommand(spawnSync, 1);
     expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=1'");
     expect(command).toContain(
       "'OPENCLAW_RUN_NODE_OUTPUT_LOG=.artifacts/gateway-watch-profiles/gateway-watch-output.log'",
@@ -171,7 +183,7 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
+    const command = spawnShellCommand(spawnSync, 1);
     expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
     expect(command).not.toContain("--benchmark-no-force");
     expect(command).toContain("'gateway'");

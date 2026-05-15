@@ -63,8 +63,10 @@ function preparedSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapsho
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0] as T;
 }
 
 describe("gateway startup config secret preflight", () => {
@@ -82,6 +84,41 @@ describe("gateway startup config secret preflight", () => {
     } else {
       process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
     }
+  });
+
+  it("measures startup auth subphases", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const measured: string[] = [];
+
+    await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot(gatewayTokenConfig({})),
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot: vi.fn(),
+      }),
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+    });
+
+    expect(measured).toEqual([
+      "config.auth.snapshot-validate",
+      "config.auth.runtime-overrides",
+      "config.auth.startup-overrides",
+      "config.auth.secret-surface",
+      "config.auth.secret-preflight",
+      "config.auth.preflight-override",
+      "config.auth.ensure",
+      "config.auth.runtime-startup-overrides",
+      "config.auth.secrets-activate",
+    ]);
   });
 
   it("wraps startup secret activation failures without emitting reload state events", async () => {

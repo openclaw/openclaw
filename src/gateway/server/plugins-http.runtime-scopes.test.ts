@@ -7,8 +7,10 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
-import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
+import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -122,7 +124,9 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.write"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "plugin http route failed (route): Error: missing scope: operator.write",
+    );
   });
 
   it("preserves write-capable runtime helpers on gateway-auth routes", async () => {
@@ -138,6 +142,47 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {
+    const manager = new ExecApprovalManager<{ command: string }>();
+    const record = manager.create({ command: "echo ok" }, 60_000, "route-hidden-approval");
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+    let observedApprovalRuntime: boolean | undefined;
+    let observedVisibility: boolean | undefined;
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-hook",
+            auth: "gateway",
+            handler: async () => {
+              const runtimeClient = getPluginRuntimeGatewayRequestScope()?.client;
+              observedApprovalRuntime = runtimeClient?.internal?.approvalRuntime;
+              observedVisibility = isApprovalRecordVisibleToClient({
+                record,
+                client: runtimeClient ?? null,
+              });
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createMockLogger(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/secure-hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.approvals"],
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedApprovalRuntime).not.toBe(true);
+    expect(observedVisibility).toBe(false);
+  });
+
   it("fails closed when gateway-auth route runtime scopes are missing", async () => {
     const { handled, res, log } = await invokeRoute({
       path: "/secure-hook",
@@ -148,7 +193,7 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(handled).toBe(false);
     expect(res.statusCode).toBe(200);
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("blocked without caller scope context"),
+      "plugin http route blocked without caller scope context (/secure-hook)",
     );
   });
 
@@ -164,7 +209,9 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.write"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "plugin http route failed (route): Error: missing scope: operator.write",
+    );
   });
 
   it("restores trusted-operator defaults for routes opting into trusted surface", async () => {
@@ -204,9 +251,7 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(200);
     expect(log.warn).not.toHaveBeenCalled();
-    expect(observedScopes).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observedScopes).toEqual(CLI_DEFAULT_OPERATOR_SCOPES);
   });
 
   it("scopes runtime privileges per matched route for exact/prefix overlap", async () => {
@@ -269,9 +314,7 @@ describe("plugin HTTP route runtime scopes", () => {
       scopes: ["operator.write"],
     });
     expect(observed[1]?.route).toBe("prefix");
-    expect(observed[1]?.scopes).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observed[1]?.scopes).toEqual(CLI_DEFAULT_OPERATOR_SCOPES);
   });
 
   it.each([

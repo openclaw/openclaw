@@ -27,7 +27,11 @@ function expectDiscordActionCall(params: {
   options?: unknown;
 }) {
   expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-  const [payload, cfg, options] = handleDiscordActionMock.mock.calls[0] ?? [];
+  const [call] = handleDiscordActionMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Discord action call");
+  }
+  const [payload, cfg, options] = call;
   expect(payload).toEqual(params.payload);
   expect(cfg).toBe(params.cfg);
   if ("options" in params) {
@@ -148,6 +152,40 @@ describe("handleDiscordMessageAction", () => {
         accountId: undefined,
         to: "channel:123",
         content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("forwards threadName on sends", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "channel:thread-1",
+        message: "hello",
+        threadName: "Renamed thread",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:thread-1",
+        content: "hello",
+        threadName: "Renamed thread",
         mediaUrl: undefined,
         filename: undefined,
         replyTo: undefined,

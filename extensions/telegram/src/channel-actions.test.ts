@@ -191,9 +191,8 @@ describe("telegramMessageActions", () => {
           cfg: testCase.cfg,
         })?.actions ?? [];
       if (testCase.expectSticker) {
-        expect(actions, testCase.name).toEqual(
-          expect.arrayContaining(["sticker", "sticker-search"]),
-        );
+        expect(actions, testCase.name).toContain("sticker");
+        expect(actions, testCase.name).toContain("sticker-search");
       } else {
         expect(actions, testCase.name).not.toContain("sticker");
         expect(actions, testCase.name).not.toContain("sticker-search");
@@ -298,7 +297,7 @@ describe("telegramMessageActions", () => {
         toolContext: "toolContext" in testCase ? testCase.toolContext : undefined,
       });
 
-      const call = handleTelegramActionMock.mock.calls[0]?.[0] as
+      const call = handleTelegramActionMock.mock.calls.at(0)?.[0] as
         | Record<string, unknown>
         | undefined;
       if (!call) {

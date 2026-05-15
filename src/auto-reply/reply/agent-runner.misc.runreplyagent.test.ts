@@ -16,6 +16,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -172,9 +173,24 @@ function expectReplyText(result: unknown, text: string): void {
   expectRecordFields(result, { text }, "reply result");
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
+  };
+};
+
+function firstMockCallArg(mock: MockCallSource, label: string): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} to have at least one call`);
+  }
+  return call[0];
+}
+
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
+  resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
@@ -209,6 +225,7 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
+  resetSystemEventsForTest();
   vi.useRealTimers();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -276,6 +293,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
     tmpPrefix: string;
+    workspaceDir?: string;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
     const storePath = path.join(tmp, "sessions.json");
@@ -304,6 +322,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
+      workspaceDir: params.workspaceDir,
     });
 
     try {
@@ -487,6 +506,44 @@ describe("runReplyAgent auto-compaction token update", () => {
       "usage diagnostic context",
     );
   });
+
+  it("reads post-compaction context from the queued workspace instead of process cwd", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
+    );
+    const cwdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-compaction-cwd-"));
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      [
+        "## Session Startup",
+        "Read the queued workspace startup file.",
+        "",
+        "## Red Lines",
+        "Never use the process cwd for this refresh.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+    try {
+      const { sessionKey } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-post-compaction-workspace-root-",
+        workspaceDir,
+        agentMeta: {
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const events = peekSystemEvents(sessionKey);
+        expect(events[0]).toContain("Post-compaction context refresh");
+        expect(events[0]).toContain("Read the queued workspace startup file.");
+      });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });
 
 describe("runReplyAgent block streaming", () => {
@@ -575,7 +632,7 @@ describe("runReplyAgent block streaming", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Hello");
+    expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
     expect(result).toBeUndefined();
   });
 
@@ -1064,6 +1121,22 @@ describe("runReplyAgent Active Memory inline debug", () => {
       "utf-8",
     );
 
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("anthropic", "claude"),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "LLM request timed out.",
+            reason: "timeout",
+            status: 408,
+          },
+        ],
+      }),
+    );
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Visible reply" }],
       meta: {
@@ -1075,16 +1148,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
           winnerProvider: "anthropic",
           winnerModel: "claude",
           runner: "embedded",
-          fallbackUsed: true,
+          fallbackUsed: false,
           attempts: [
-            {
-              provider: "minimax-portal",
-              model: "MiniMax-M2.5",
-              result: "timeout",
-              reason: "timeout",
-              stage: "assistant",
-              elapsedMs: 15000,
-            },
             {
               provider: "anthropic",
               model: "claude",
@@ -1193,9 +1258,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("attempts=2");
     expect(traceText).toContain("runner=embedded");
     expect(traceText).toContain("🔎 Fallback Chain:");
-    expect(traceText).toContain("1. minimax-portal/MiniMax-M2.5");
+    expect(traceText).toContain("1. openai/gpt-5.5");
     expect(traceText).toContain("result=timeout");
-    expect(traceText).toContain("elapsed=15.0s");
+    expect(traceText).toContain("status=408");
     expect(traceText).toContain("2. anthropic/claude");
     expect(traceText).toContain("result=success");
     expect(traceText).toContain("🔎 Request Shaping:");
@@ -1730,6 +1795,20 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
+        },
       },
     });
 
@@ -1835,6 +1914,7 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
+    expect(texts).toContain("fallbackUsed=no");
     expect(texts).not.toContain("secret hitl prompt");
   });
 
@@ -1919,7 +1999,7 @@ describe("runReplyAgent claude-cli routing", () => {
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expectRecordFields(
-      runCliAgentMock.mock.calls[0]?.[0],
+      firstMockCallArg(runCliAgentMock, "CLI run params"),
       { provider: "claude-cli" },
       "CLI run params",
     );
@@ -2363,8 +2443,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     await createRun();
 
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
-    expect(call?.enforceFinalTag).toBe(true);
+    const call = firstMockCallArg(runEmbeddedPiAgentMock, "PI run params") as EmbeddedPiAgentParams;
+    expect(call.enforceFinalTag).toBe(true);
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
@@ -2591,7 +2671,7 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
     expect(runtimeErrorMock).toHaveBeenCalledWith(
-      expect.stringContaining("Transient HTTP provider error before reply"),
+      'Transient HTTP provider error before reply (521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>). Retrying once in 2500ms.',
     );
 
     const payload = Array.isArray(result) ? result[0] : result;

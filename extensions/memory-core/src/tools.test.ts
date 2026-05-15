@@ -7,6 +7,7 @@ import {
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool } from "./tools.js";
+import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -31,6 +32,24 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
       store: sessionStore,
     })),
   };
+});
+
+describe("memory tool schemas", () => {
+  it("uses flat corpus enums for provider tool compatibility", () => {
+    const searchCorpus = MemorySearchSchema.properties.corpus as {
+      anyOf?: unknown;
+      enum?: unknown;
+    };
+    const getCorpus = MemoryGetSchema.properties.corpus as {
+      anyOf?: unknown;
+      enum?: unknown;
+    };
+
+    expect(searchCorpus.anyOf).toBeUndefined();
+    expect(searchCorpus.enum).toEqual(["memory", "wiki", "all", "sessions"]);
+    expect(getCorpus.anyOf).toBeUndefined();
+    expect(getCorpus.enum).toEqual(["memory", "wiki", "all"]);
+  });
 });
 
 describe("memory_search unavailable payloads", () => {
@@ -113,19 +132,24 @@ describe("memory_search unavailable payloads", () => {
       agentSessionKey: "agent:main:main:active-memory:debug",
     });
     const result = await tool.execute("debug", { query: "favorite food" });
-    expect(result.details).toMatchObject({
-      mode: "query",
-      debug: {
-        backend: "qmd",
-        configuredMode: "search",
-        effectiveMode: "query",
-        fallback: "unsupported-search-flags",
-        hits: 1,
-      },
-    });
-    expect(
-      (result.details as { debug?: { searchMs?: number } }).debug?.searchMs,
-    ).toBeGreaterThanOrEqual(0);
+    const details = result.details as {
+      mode?: unknown;
+      debug?: {
+        backend?: unknown;
+        configuredMode?: unknown;
+        effectiveMode?: unknown;
+        fallback?: unknown;
+        hits?: unknown;
+        searchMs?: number;
+      };
+    };
+    expect(details.mode).toBe("query");
+    expect(details.debug?.backend).toBe("qmd");
+    expect(details.debug?.configuredMode).toBe("search");
+    expect(details.debug?.effectiveMode).toBe("query");
+    expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect(details.debug?.hits).toBe(1);
+    expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
   });
 });
 

@@ -198,8 +198,10 @@ describe("gateway run option collisions", () => {
 
   function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
-    expect(call).toBeDefined();
-    return call?.[argIndex];
+    if (!call) {
+      throw new Error(`Expected mock call ${index}`);
+    }
+    return call[argIndex];
   }
 
   function gatewayStartOptions(index = 0) {
@@ -228,8 +230,8 @@ describe("gateway run option collisions", () => {
       "--force",
     ]);
 
-    expect(forceFreePortAndWait.mock.calls[0]?.[0]).toBe(18789);
-    expect(waitForPortBindable.mock.calls[0]?.[0]).toBe(18789);
+    expect(callArg(forceFreePortAndWait, 0, 0)).toBe(18789);
+    expect(callArg(waitForPortBindable, 0, 0)).toBe(18789);
     expect(
       callArg(waitForPortBindable, 0, 1) as { intervalMs?: number; timeoutMs?: number },
     ).toEqual({ intervalMs: 150, timeoutMs: 3000 });

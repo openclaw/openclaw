@@ -23,7 +23,7 @@ function warningLines(): string[] {
 }
 
 function expectNoMissingDefaultWarning() {
-  expect(warningLines().some((line) => line.includes("accounts.default is missing"))).toBe(false);
+  expect(warningLines().join("\n")).not.toContain("accounts.default is missing");
 }
 
 function resolveAccountWithEnv(
@@ -168,7 +168,9 @@ describe("resolveDefaultTelegramAccountId", () => {
 
     const result = resolveDefaultTelegramAccountId(cfg);
     expect(result).toBe("alerts");
-    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("accounts.default is missing"));
+    expect(warnMock).toHaveBeenCalledWith(
+      'channels.telegram: accounts.default is missing; falling back to "alerts". Set channels.telegram.defaultAccount or add channels.telegram.accounts.default to avoid routing surprises in multi-account setups.',
+    );
   });
 
   it("does not warn when accounts.default exists", () => {
@@ -524,6 +526,24 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
             groups: { "-100123": { requireMention: false } },
             accounts: {
               default: { botToken: "123:default" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("inherits channel-level groups when single-account explicitly sets `groups: {}` (regression: #79427)", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100123": { requireMention: false } },
+            accounts: {
+              default: { botToken: "123:default", groups: {} },
             },
           },
         },

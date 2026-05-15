@@ -71,6 +71,14 @@ afterAll(() => {
   vi.resetModules();
 });
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
@@ -127,7 +135,7 @@ describe("googlechat google auth runtime", () => {
       method: "POST",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -150,7 +158,7 @@ describe("googlechat google auth runtime", () => {
       (globalThis as Record<string, unknown>).fetch = originalFetch;
     }
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -352,10 +360,10 @@ describe("googlechat google auth runtime", () => {
       const responseInterceptorAdd = transport.interceptors.response.add as unknown as ReturnType<
         typeof vi.fn
       >;
-      const requestInterceptor = requestInterceptorAdd.mock.calls[0]?.[0] as
+      const requestInterceptor = mockCallArg(requestInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
-      const responseInterceptor = responseInterceptorAdd.mock.calls[0]?.[0] as
+      const responseInterceptor = mockCallArg(responseInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
 
@@ -447,19 +455,19 @@ describe("googlechat google auth runtime", () => {
         "utf8",
       );
 
-      await expect(
-        resolveValidatedGoogleChatCredentials({
-          accountId: "default",
-          config: {},
-          credentialSource: "file",
-          credentialsFile: credentialsPath,
-          enabled: true,
-        }),
-      ).resolves.toMatchObject({
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-        type: "service_account",
+      const credentials = await resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: credentialsPath,
+        enabled: true,
       });
+      if (!credentials) {
+        throw new Error("expected validated credentials");
+      }
+      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
+      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
+      expect(credentials.type).toBe("service_account");
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
@@ -492,19 +500,19 @@ describe("googlechat google auth runtime", () => {
         throw error;
       }
 
-      await expect(
-        resolveValidatedGoogleChatCredentials({
-          accountId: "default",
-          config: {},
-          credentialSource: "file",
-          credentialsFile: symlinkPath,
-          enabled: true,
-        }),
-      ).resolves.toMatchObject({
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-        type: "service_account",
+      const credentials = await resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: symlinkPath,
+        enabled: true,
       });
+      if (!credentials) {
+        throw new Error("expected validated credentials");
+      }
+      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
+      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
+      expect(credentials.type).toBe("service_account");
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }

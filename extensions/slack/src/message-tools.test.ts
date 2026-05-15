@@ -24,34 +24,34 @@ function requireSchemaProperty(
 
 describe("Slack message tools", () => {
   it("describes configured Slack message actions without loading channel runtime", () => {
-    expect(
-      describeSlackMessageTool({
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-            },
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
           },
         },
-      }),
-    ).toMatchObject({
-      actions: [
-        "send",
-        "react",
-        "reactions",
-        "read",
-        "edit",
-        "delete",
-        "download-file",
-        "upload-file",
-        "pin",
-        "unpin",
-        "list-pins",
-        "member-info",
-        "emoji-list",
-      ],
-      capabilities: ["presentation"],
+      },
     });
+
+    expect(Object.keys(discovery).toSorted()).toEqual(["actions", "capabilities", "schema"]);
+    expect(discovery.actions).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
+    expect(discovery.capabilities).toEqual(["presentation"]);
+    expect(Array.isArray(discovery.schema)).toBe(true);
   });
 
   it("honors account-scoped action gates", () => {
@@ -260,8 +260,9 @@ describe("Slack message tools", () => {
       : discovery.schema
         ? [discovery.schema]
         : [];
-    expect(schemas.some((entry) => "fileId" in entry.properties)).toBe(false);
-    expect(schemas.some((entry) => "messageId" in entry.properties)).toBe(false);
-    expect(schemas.some((entry) => "replyBroadcast" in entry.properties)).toBe(true);
+    const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
+    expect(propertyNames).not.toContain("fileId");
+    expect(propertyNames).not.toContain("messageId");
+    expect(propertyNames).toContain("replyBroadcast");
   });
 });

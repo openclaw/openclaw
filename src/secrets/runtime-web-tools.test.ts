@@ -191,22 +191,39 @@ function createTestProvider(params: {
     },
     getConfiguredCredentialValue: (config) => {
       const entryConfig = config?.plugins?.entries?.[params.pluginId]?.config;
-      return entryConfig && typeof entryConfig === "object"
-        ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+      const configuredValue =
+        entryConfig && typeof entryConfig === "object"
+          ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+          : undefined;
+      if (configuredValue !== undefined || params.provider !== "brave") {
+        return configuredValue;
+      }
+      const search = config?.tools?.web?.search;
+      return search && typeof search === "object"
+        ? (search as { apiKey?: unknown }).apiKey
         : undefined;
     },
-    getConfiguredCredentialFallback:
-      params.provider === "gemini"
-        ? (config) => {
-            const provider = config?.models?.providers?.google;
-            return provider && typeof provider === "object" && "apiKey" in provider
-              ? {
-                  path: "models.providers.google.apiKey",
-                  value: (provider as { apiKey?: unknown }).apiKey,
-                }
-              : undefined;
-          }
-        : undefined,
+    getConfiguredCredentialFallback: (config) => {
+      if (params.provider === "brave") {
+        const search = config?.tools?.web?.search;
+        return search && typeof search === "object" && "apiKey" in search
+          ? {
+              path: "tools.web.search.apiKey",
+              value: (search as { apiKey?: unknown }).apiKey,
+            }
+          : undefined;
+      }
+      if (params.provider === "gemini") {
+        const provider = config?.models?.providers?.google;
+        return provider && typeof provider === "object" && "apiKey" in provider
+          ? {
+              path: "models.providers.google.apiKey",
+              value: (provider as { apiKey?: unknown }).apiKey,
+            }
+          : undefined;
+      }
+      return undefined;
+    },
     setConfiguredCredentialValue: (configTarget, value) => {
       setConfiguredProviderKey(configTarget, params.pluginId, value);
     },
@@ -313,8 +330,9 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -332,10 +350,12 @@ function expectDiagnostic(
       candidate.code === fields.code &&
       (fields.path === undefined || candidate.path === fields.path),
   );
-  expect(diagnostic, `${fields.code}${fields.path ? ` ${fields.path}` : ""}`).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected diagnostic ${fields.code}${fields.path ? ` ${fields.path}` : ""}`);
+  }
   if (fields.messageIncludes) {
-    expect(typeof diagnostic?.message).toBe("string");
-    expect(diagnostic?.message).toContain(fields.messageIncludes);
+    expect(typeof diagnostic.message).toBe("string");
+    expect(diagnostic.message).toContain(fields.messageIncludes);
   }
 }
 
@@ -344,7 +364,11 @@ function expectNoDiagnosticCode(value: unknown, code: string) {
 }
 
 function firstMockArg(source: { mock: { calls: Array<Array<unknown>> } }) {
-  return requireRecord(source.mock.calls[0]?.[0], "mock call options");
+  const call = source.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock call options");
+  }
+  return requireRecord(call[0], "mock call options");
 }
 
 describe("runtime web tools resolution", () => {
@@ -1087,8 +1111,8 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("does not auto-detect from legacy top-level web search apiKey", async () => {
-    const { metadata } = await runRuntimeWebTools({
+  it("auto-detects Brave from legacy top-level web search apiKey", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
           web: {
@@ -1103,10 +1127,36 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(readProviderKey(resolvedConfig, "brave")).toBe("legacy-web-search-key");
     expect(resolveManifestContractPluginIdsByCompatibilityRuntimePathMock).not.toHaveBeenCalled();
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers legacy top-level web search apiKey over provider env fallback", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              apiKey: { source: "env", provider: "default", id: "LEGACY_WEB_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY: "ambient-brave-key",
+        LEGACY_WEB_SEARCH_REF: "legacy-web-search-key",
+      },
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(readProviderKey(resolvedConfig, "brave")).toBe("legacy-web-search-key");
   });
 
   it("does not resolve web fetch provider SecretRef when web fetch is inactive", async () => {

@@ -133,6 +133,7 @@ type ResolveApiKeyForProfileParams = {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  forceRefresh?: boolean;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -160,6 +161,19 @@ async function refreshOAuthCredential(
     [credential.provider]: credential,
   });
   return result?.newCredentials ?? null;
+}
+
+export async function refreshOAuthCredentialForRuntime(params: {
+  credential: OAuthCredential;
+}): Promise<OAuthCredential | null> {
+  const refreshed = await refreshOAuthCredential(params.credential);
+  return refreshed
+    ? {
+        ...params.credential,
+        ...refreshed,
+        type: "oauth",
+      }
+    : null;
 }
 
 const oauthManager = createOAuthManager({
@@ -202,6 +216,7 @@ async function tryResolveOAuthProfile(
     credential: cred,
     agentDir: params.agentDir,
     cfg,
+    forceRefresh: params.forceRefresh,
   });
   if (!resolved) {
     return null;
@@ -341,6 +356,7 @@ export async function resolveApiKeyForProfile(
       profileId,
       credential: cred,
       cfg,
+      forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
       return null;
@@ -374,6 +390,7 @@ export async function resolveApiKeyForProfile(
           store: refreshedStore,
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
+          forceRefresh: params.forceRefresh,
         });
         if (fallbackResolved) {
           return fallbackResolved;

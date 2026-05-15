@@ -22,7 +22,8 @@ function expectSendChatFields(
   sendChat: ReturnType<typeof vi.fn>,
   expected: { message: string; sessionId?: string; sessionKey?: string },
 ) {
-  const call = sendChat.mock.calls.at(-1);
+  const calls = sendChat.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected gateway sendChat call");
   }
@@ -34,6 +35,16 @@ function expectSendChatFields(
   if (expected.sessionKey !== undefined) {
     expect(payload.sessionKey).toBe(expected.sessionKey);
   }
+}
+
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
 }
 
 function createHarness(params?: {
@@ -245,7 +256,7 @@ describe("tui command handlers", () => {
     const { handleCommand, sendChat, openOverlay, closeOverlay } = createHarness();
 
     await handleCommand("/context");
-    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     selector?.onSelect?.({ value: "detail", label: "detail" });
     await flushAsyncSelect();
 
@@ -349,7 +360,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("hello");
 
-    const sentRunId = (sendChat.mock.calls[0]?.[0] as { runId: string }).runId;
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(typeof sentRunId).toBe("string");
     expect(sentRunId.length).toBeGreaterThan(0);
     expect(state.activeChatRunId).toBeNull();
@@ -413,9 +424,14 @@ describe("tui command handlers", () => {
 
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(setSessionMock).toHaveBeenCalledTimes(1);
-    expect(setSessionMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^tui-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
-    );
+    const newSessionKey = firstMockArg(setSessionMock, "setSession") as string | undefined;
+    if (!newSessionKey) {
+      throw new Error("expected /new to set a TUI session key");
+    }
+    expect(newSessionKey.startsWith("tui-")).toBe(true);
+    const uuidParts: string[] = newSessionKey.slice("tui-".length).split("-");
+    expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
+    expect(uuidParts.every((part) => /^[0-9a-f]+$/.test(part))).toBe(true);
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
     expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
@@ -556,7 +572,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/model");
 
-    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     expect(selector?.items?.[0]?.value).toBe("openrouter/auto");
     expect(selector?.items?.[0]?.label).toBe("openrouter/auto");
 

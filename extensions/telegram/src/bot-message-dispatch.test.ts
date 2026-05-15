@@ -52,7 +52,9 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
   })),
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
-const appendSessionTranscriptMessage = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1" })));
+const appendSessionTranscriptMessage = vi.hoisted(() =>
+  vi.fn(async (_params: { message?: unknown }) => ({ messageId: "m1" })),
+);
 const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
@@ -300,7 +302,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
   }
 
   function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-    expect(record).toBeDefined();
+    if (!record || typeof record !== "object") {
+      throw new Error("Expected record");
+    }
     const actual = record as Record<string, unknown>;
     for (const [key, value] of Object.entries(expected)) {
       expect(actual[key]).toEqual(value);
@@ -327,8 +331,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function expectDeliveredReply(index: number, expected: Record<string, unknown>, callIndex = 0) {
     const params = expectDeliverRepliesParams({}, callIndex);
     const replies = params.replies as Array<unknown> | undefined;
-    expect(replies).toBeDefined();
-    return expectRecordFields(replies?.[index], expected);
+    if (!Array.isArray(replies)) {
+      throw new Error("Expected delivered replies array");
+    }
+    return expectRecordFields(replies[index], expected);
   }
 
   function expectDispatchParams(expected: Record<string, unknown>) {
@@ -513,8 +519,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
     const delivery = expectDeliverRepliesParams({ thread: { id: 777, scope: "dm" } });
-    expect(delivery.mediaLocalRoots).toContainEqual(
-      expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/u),
+    const mediaLocalRoots = delivery.mediaLocalRoots as string[] | undefined;
+    expect(mediaLocalRoots?.some((root) => /[\\/]\.openclaw[\\/]workspace-work$/u.test(root))).toBe(
+      true,
     );
     const dispatchParams = expectDispatchParams({});
     expect(
@@ -540,7 +547,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), bot });
 
-    const streamParams = createTelegramDraftStream.mock.calls[0]?.[0] as Parameters<
+    const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
       NonNullable<TelegramBotDeps["createTelegramDraftStream"]>
     >[0];
     streamParams.onSupersededPreview?.({
@@ -748,7 +755,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyToMode: "off",
     });
 
-    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("replyQuoteByMessageId.1001");
+    expect(expectDeliverRepliesParams({})).not.toHaveProperty("replyQuoteByMessageId.1001");
   });
 
   it("keeps answer draft stream for selected quotes when reply mode is off", async () => {
@@ -954,6 +961,58 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("emits the redacted appended message in transcript updates", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    appendSessionTranscriptMessage.mockImplementationOnce(async ({ message }) => ({
+      messageId: "m1",
+      message: {
+        ...(message as Record<string, unknown>),
+        content: [{ type: "text", text: "Final sk-abc…0xyz" }],
+      },
+    }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final sk-abcdef1234567890xyz" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expectRecordFields(mockCallArg(emitSessionTranscriptUpdate), {
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:default:telegram:direct:123",
+      messageId: "m1",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final sk-abc…0xyz" }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          total: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          cache: {
+            read: 0,
+            write: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: "stop",
+        timestamp: expect.any(Number),
+      },
+    });
+  });
+
   it("streams block and final text through the same answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1065,7 +1124,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "partial" } },
     });
 
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, expect.stringMatching(/Exec/));
+    expect(mockCallArg(answerDraftStream.update)).toContain("Exec");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done ");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Done answer");
     expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
@@ -1113,6 +1172,53 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("rotates a tool-progress-only answer draft before streaming the final answer", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/`🛠️ Exec`$/),
+    );
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Branch is up to date");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(clearOrder).toBeLessThan(rotationOrder);
+    expect(rotationOrder).toBeLessThan(finalUpdateOrder);
+  });
+
+  it("rotates a verbose tool result draft before streaming the final answer", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "🛠️ Exec: pnpm test" }, { kind: "tool" });
+      await dispatcherOptions.deliver({ text: "Tests passed" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "🛠️ Exec: pnpm test");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tests passed");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(clearOrder).toBeLessThan(rotationOrder);
+    expect(rotationOrder).toBeLessThan(finalUpdateOrder);
+  });
+
   it("keeps progress updates in a draft and sends the final answer normally", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1135,9 +1241,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/`🛠️ git rev-parse --abbrev-ref HEAD`$/),
+      "Cracking...\n`🛠️ Exec`\n`🛠️ git rev-parse --abbrev-ref HEAD`",
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expect(editMessageTelegram).not.toHaveBeenCalled();
@@ -1198,7 +1305,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(draftStream.update).toHaveBeenCalledWith(expect.stringMatching(/^Shelling\n`🛠️ Exec`$/));
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n`🛠️ Exec`");
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
@@ -1257,9 +1364,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/^Shelling\n`🔎 Web Search: docs lookup`\n• `tests passed`$/),
+      "Shelling\n`🔎 Web Search: docs lookup`\n• `tests passed`",
     );
-    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.materialize).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expectDeliveredReply(0, { text: "Final after tool" });
@@ -1789,10 +1896,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(deliverReplies).toHaveBeenCalledTimes(1);
-    const replies = deliverReplies.mock.calls[0]?.[0]?.replies as
-      | Array<{ text?: string }>
-      | undefined;
-    expect(replies?.[0]?.text?.trim()).toBeTruthy();
+    const replies = expectDeliverRepliesParams({}).replies as Array<{ text?: string }> | undefined;
+    const replyText = replies?.[0]?.text?.trim();
+    if (!replyText) {
+      throw new Error("expected non-empty Telegram reply text");
+    }
     expect(replies?.[0]?.text).not.toBe("NO_REPLY");
   });
 

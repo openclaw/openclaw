@@ -683,9 +683,6 @@ export const th: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "ดูว่าโทเค็นถูกใช้ไปที่ไหน เซสชันพุ่งขึ้นเมื่อใด และอะไรเป็นตัวขับเคลื่อนค่าใช้จ่าย",
-    },
     common: {
       emptyValue: "—",
       unknown: "ไม่ทราบ",
@@ -1011,6 +1008,10 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "สลับโหมดโฟกัส (ซ่อนแถบด้านข้าง + ส่วนหัวหน้า)",
     hideCronSessions: "ซ่อนเซสชัน cron",
     showCronSessions: "แสดงเซสชัน cron",
@@ -1026,6 +1027,42 @@ export const th: TranslationMap = {
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "ส่งออก",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "กรองเซสชันตามเอเจนต์",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "อังกฤษ",

@@ -143,27 +143,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/chat-welcome.ts",
-      "text": "for commands"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/chat-welcome.ts",
-      "text": "Ready to chat"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/chat-welcome.ts",
-      "text": "Type a message below ·"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/chat/context-notice.ts",
@@ -252,90 +231,6 @@
       "name": "title",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Unknown date"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Export chat"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "New session"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Queue message"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Stop generating"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Export"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "New session"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Queue"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Stop"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Chat model"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Chat session"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Chat thinking level"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Filter sessions by agent"
     },
     {
       "count": 1,
@@ -1469,13 +1364,6 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Attach file"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "Close search"
     },
     {
@@ -1547,13 +1435,6 @@
       "name": "placeholder",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Search messages..."
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Attach file"
     },
     {
       "count": 1,
@@ -2463,6 +2344,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Browser enabled"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Choose a built-in profile to replace the current custom values."
     },
     {
@@ -2652,6 +2540,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Text size"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Theme"
     },
     {
@@ -2660,6 +2555,13 @@
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
       "text": "Thinking"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Tool profile"
     },
     {
       "count": 1,
@@ -2729,6 +2631,20 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "L"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "M"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "None"
     },
     {
@@ -2743,7 +2659,28 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "S"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Slight"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "XL"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "XXL"
     },
     {
       "count": 1,
@@ -2989,6 +2926,13 @@
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
       "text": "Subscribe to receive browser push notifications from your gateway."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config.ts",
+      "text": "Text size"
     },
     {
       "count": 1,

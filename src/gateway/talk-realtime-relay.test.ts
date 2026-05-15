@@ -39,6 +39,21 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
+    const bufferedAgentEvents = new Map([
+      [
+        "run-1:assistant",
+        {
+          payload: {
+            runId: "run-1",
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "pending", delta: "pending" },
+          },
+        },
+      ],
+    ]);
     const context = {
       broadcastToConnIds: vi.fn(),
       broadcast,
@@ -58,6 +73,9 @@ describe("talk realtime gateway relay", () => {
       chatRunBuffers: new Map([["run-1", "partial answer"]]),
       chatDeltaSentAt: new Map(),
       chatDeltaLastBroadcastLen: new Map(),
+      chatDeltaLastBroadcastText: new Map(),
+      agentDeltaSentAt,
+      bufferedAgentEvents,
       chatAbortedRuns: new Map(),
       removeChatRun,
       agentRunSeq: new Map(),
@@ -82,12 +100,16 @@ describe("talk realtime gateway relay", () => {
       broadcast,
       nodeSendToSession,
       removeChatRun,
+      agentDeltaSentAt,
+      bufferedAgentEvents,
       session,
     };
   }
 
   function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-    expect(record).toBeDefined();
+    if (!record || typeof record !== "object") {
+      throw new Error("Expected record");
+    }
     const actual = record as Record<string, unknown>;
     for (const [key, value] of Object.entries(expected)) {
       expect(actual[key]).toEqual(value);
@@ -484,8 +506,15 @@ describe("talk realtime gateway relay", () => {
   });
 
   it("aborts linked agent consult runs when the relay turn is cancelled", () => {
-    const { abortController, broadcast, nodeSendToSession, removeChatRun, session } =
-      createAbortableRelayRunFixture();
+    const {
+      abortController,
+      broadcast,
+      nodeSendToSession,
+      removeChatRun,
+      agentDeltaSentAt,
+      bufferedAgentEvents,
+      session,
+    } = createAbortableRelayRunFixture();
     cancelTalkRealtimeRelayTurn({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -494,16 +523,26 @@ describe("talk realtime gateway relay", () => {
 
     expect(abortController.signal.aborted).toBe(true);
     expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "main");
+    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
+    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
     expectChatAbortPayload(broadcast, "barge-in");
     expectNodeAbortPayload(nodeSendToSession);
   });
 
   it("aborts linked agent consult runs when the relay session closes", () => {
-    const { abortController, broadcast, nodeSendToSession, session } =
-      createAbortableRelayRunFixture();
+    const {
+      abortController,
+      broadcast,
+      nodeSendToSession,
+      agentDeltaSentAt,
+      bufferedAgentEvents,
+      session,
+    } = createAbortableRelayRunFixture();
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(abortController.signal.aborted).toBe(true);
+    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
+    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
     expectChatAbortPayload(broadcast, "relay-closed");
     expectNodeAbortPayload(nodeSendToSession);
   });
@@ -514,6 +553,21 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
+    const bufferedAgentEvents = new Map([
+      [
+        "run-1:assistant",
+        {
+          payload: {
+            runId: "run-1",
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "pending", delta: "pending" },
+          },
+        },
+      ],
+    ]);
     const provider: RealtimeVoiceProviderPlugin = {
       id: "relay-test",
       label: "Relay Test",
@@ -551,6 +605,9 @@ describe("talk realtime gateway relay", () => {
       chatRunBuffers: new Map([["run-1", "partial answer"]]),
       chatDeltaSentAt: new Map(),
       chatDeltaLastBroadcastLen: new Map(),
+      chatDeltaLastBroadcastText: new Map(),
+      agentDeltaSentAt,
+      bufferedAgentEvents,
       chatAbortedRuns: new Map(),
       removeChatRun,
       agentRunSeq: new Map(),
@@ -573,6 +630,8 @@ describe("talk realtime gateway relay", () => {
     bridgeRequest?.onClose?.("error");
 
     expect(abortController.signal.aborted).toBe(true);
+    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
+    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
     expectChatAbortPayload(broadcast, "relay-closed");
     expectNodeAbortPayload(nodeSendToSession);
   });

@@ -48,6 +48,14 @@ function resolveTestChannelIdForBinding(
   });
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -112,7 +120,7 @@ describe("resolveChannelIdForBinding", () => {
     });
 
     expect(resolved).toBe("123456789012345678");
-    const route = JSON.stringify(restGet.mock.calls[0]?.[0] ?? null);
+    const route = JSON.stringify(firstMockCall(restGet, "REST get")[0] ?? null);
     expect(route).toContain("123456789012345678");
     expect(route).not.toContain("channel:");
   });
@@ -148,9 +156,12 @@ describe("resolveChannelIdForBinding", () => {
       threadId: "thread-1",
     });
 
-    const createDiscordRestClientCalls = createDiscordRestClient.mock.calls as unknown[][];
     expect(
-      (createDiscordRestClientCalls[0]?.[0] as { cfg?: OpenClawConfig } | undefined)?.cfg,
+      (
+        firstMockCall(createDiscordRestClient, "createDiscordRestClient")[0] as
+          | { cfg?: OpenClawConfig }
+          | undefined
+      )?.cfg,
     ).toBe(cfg);
   });
 
@@ -223,13 +234,17 @@ describe("maybeSendBindingMessage", () => {
     });
 
     expect(sendWebhookMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(sendWebhookMessageDiscord.mock.calls[0]?.[1]).toMatchObject({
-      cfg,
-      webhookId: "wh_1",
-      webhookToken: "tok_1",
-      accountId: "default",
-      threadId: "thread-1",
-    });
+    expect(firstMockCall(sendWebhookMessageDiscord, "sendWebhookMessageDiscord")).toEqual([
+      "hello webhook",
+      {
+        cfg,
+        webhookId: "wh_1",
+        webhookToken: "tok_1",
+        accountId: "default",
+        threadId: "thread-1",
+        username: "⚙️ main",
+      },
+    ]);
     expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 });

@@ -69,8 +69,9 @@ function expectInputText(text: string) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -86,8 +87,10 @@ function callArg(
   label: string,
 ) {
   const call = mock.mock.calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
 }
 
 function expectDynamicSpec(
@@ -312,6 +315,37 @@ describe("createCodexDynamicToolBridge", () => {
         to: "chat-1",
         threadId: "thread-ts-1",
         text: "hello from Codex",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    ]);
+  });
+
+  it("records internal UI source replies separately from outbound messaging evidence", async () => {
+    const toolResult = textToolResult("Sent to current chat.", {
+      status: "ok",
+      deliveryStatus: "sent",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    });
+    const bridge = createBridgeWithToolResult("message", toolResult);
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "<think>private</think>visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent to current chat."));
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible reply",
+        mediaUrl: "/tmp/reply.png",
         mediaUrls: ["/tmp/reply.png"],
       },
     ]);

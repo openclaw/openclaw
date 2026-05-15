@@ -90,8 +90,9 @@ function findMessageWithIdempotencyKey(
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -110,6 +111,15 @@ function expectAbortPayloadContainsRunIds(payload: unknown, runIds: string[]) {
   for (const runId of runIds) {
     expect(actual.runIds as unknown[]).toContain(runId);
   }
+}
+
+function requireLastRespondCall(respond: ReturnType<typeof vi.fn>): unknown[] {
+  const calls = respond.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call;
 }
 
 function expectPersistedAbortMessage(
@@ -178,7 +188,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok1, payload1] = respond.mock.calls.at(-1) ?? [];
+    const [ok1, payload1] = requireLastRespondCall(respond);
     expect(ok1).toBe(true);
     expectAbortPayload(payload1, { runIds: [runId] });
 
@@ -232,7 +242,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayloadContainsRunIds(payload, ["run-a", "run-b"]);
 
@@ -275,7 +285,7 @@ describe("chat abort transcript persistence", () => {
       isWebchatConnect: () => false,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: ["run-stop-1"] });
 
@@ -308,7 +318,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: [runId] });
 

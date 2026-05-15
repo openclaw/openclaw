@@ -15,6 +15,14 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function requireFirstPostJsonRequest(): unknown {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected DeepInfra video request");
+  }
+  return call[0];
+}
+
 describe("deepinfra video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildDeepInfraVideoGenerationProvider());
@@ -66,7 +74,7 @@ describe("deepinfra video generation provider", () => {
       ],
     ]);
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const [postRequest] = postJsonRequestMock.mock.calls[0] ?? [];
+    const postRequest = requireFirstPostJsonRequest();
     const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
     expect(postRequestHeaders).toBeInstanceOf(Headers);
     expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
@@ -101,6 +109,29 @@ describe("deepinfra video generation provider", () => {
       seed: 42,
       status: "succeeded",
     });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports malformed native video JSON as a provider error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A bicycle weaving through a rainy neon street",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video generation failed: malformed JSON response");
     expect(release).toHaveBeenCalledOnce();
   });
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -42,7 +43,9 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -762,12 +765,13 @@ describe("exec approval handlers", () => {
     handlers: ExecApprovalHandlers;
     id: string;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalGetArgs["client"];
   }) {
     return params.handlers["exec.approval.get"]({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-get", type: "req", method: "exec.approval.get" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -776,12 +780,13 @@ describe("exec approval handlers", () => {
   async function listExecApprovals(params: {
     handlers: ExecApprovalHandlers;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.list"]({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-list", type: "req", method: "exec.approval.list" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -792,6 +797,7 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -835,7 +841,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -847,6 +853,7 @@ describe("exec approval handlers", () => {
     decision?: "allow-once" | "allow-always" | "deny";
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: {
@@ -855,18 +862,19 @@ describe("exec approval handlers", () => {
       } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
   }
 
-  function createExecApprovalFixture() {
+  function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const respond = vi.fn();
     const context = {
+      getRuntimeConfig: () => opts?.config ?? {},
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
       },
@@ -1001,6 +1009,31 @@ describe("exec approval handlers", () => {
     expectRecordFields(mockCallArg(respond, 0, 2), { message: "command is required" });
   });
 
+  it("rejects approval requests when the command display would be truncated", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "command exceeds exec approval display limit",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+    });
+    expect(broadcasts).toEqual([]);
+  });
+
   it("returns pending approval details for exec.approval.get", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -1114,6 +1147,83 @@ describe("exec approval handlers", () => {
       context,
     });
     await requestPromise;
+  });
+
+  it("lists and resolves only exec approvals owned by the caller", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+    const ownerClient = {
+      connId: "conn-owner",
+      connect: {
+        client: { id: "client-owner" },
+        device: { id: "device-owner" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+    const otherClient = {
+      connId: "conn-other",
+      connect: {
+        client: { id: "client-other" },
+        device: { id: "device-other" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+
+    const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
+    visible.requestedByDeviceId = "device-owner";
+    visible.requestedByConnId = "conn-owner";
+    visible.requestedByClientId = "client-owner";
+    void manager.register(visible, 60_000);
+
+    const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
+    hidden.requestedByDeviceId = "device-other";
+    hidden.requestedByConnId = "conn-other";
+    hidden.requestedByClientId = "client-other";
+    void manager.register(hidden, 60_000);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond: resolveRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const hiddenRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: hiddenRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(mockCallArg(hiddenRespond)).toBe(false);
+    expectRecordFields(mockCallArg(hiddenRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const otherRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: otherRespond,
+      context,
+      client: otherClient,
+    });
+    expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("returns not found for stale exec.approval.get ids", async () => {
@@ -1476,7 +1586,9 @@ describe("exec approval handlers", () => {
   });
 
   it("preserves command analysis and normalizes command spans", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -1503,8 +1615,52 @@ describe("exec approval handlers", () => {
     ]);
   });
 
-  it("drops command spans when command display sanitization changes offsets", async () => {
+  it("drops command spans by default", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command highlighting is disabled", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: false } } },
+    });
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -1897,6 +2053,57 @@ describe("exec approval handlers", () => {
 
     manager.resolve("approval-ios-push", "allow-once");
     await requestPromise;
+  });
+
+  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+    const iosPushDelivery = {
+      handleRequested: vi.fn(
+        async (
+          _request: unknown,
+          opts?: {
+            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+          },
+        ) =>
+          opts?.isTargetVisible?.({
+            deviceId: "device-other",
+            scopes: ["operator.approvals"],
+          }) ?? true,
+      ),
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
+      iosPushDelivery,
+    });
+    const expireSpy = vi.spyOn(manager, "expire");
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+          scopes: ["operator.approvals"],
+        },
+      } as unknown as ExecApprovalRequestArgs["client"],
+      params: {
+        timeoutMs: 60_000,
+        id: "approval-ios-hidden-push",
+        host: "gateway",
+      },
+    });
+
+    expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-ios-hidden-push",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("sends iOS cleanup delivery on resolve", async () => {
@@ -2303,13 +2510,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      modelPricing: {
-        state: "degraded",
-        detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-        sources: [{ source: "openrouter", state: "degraded", lastFailureAt: 123 }],
-      },
-    });
+    const payload = mockCallArg(respond, 0, 1) as
+      | {
+          modelPricing?: {
+            state?: string;
+            detail?: string;
+            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
+          };
+        }
+      | undefined;
+    expect(payload?.modelPricing?.state).toBe("degraded");
+    expect(payload?.modelPricing?.detail).toBe(
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+    );
+    expect(payload?.modelPricing?.sources).toHaveLength(1);
+    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
+    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
+    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
     expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,

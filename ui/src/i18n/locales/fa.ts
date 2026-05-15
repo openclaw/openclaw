@@ -693,10 +693,6 @@ export const fa: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "ببینید توکن‌ها کجا مصرف می‌شوند، نشست‌ها چه زمانی جهش می‌کنند و چه چیزی هزینه را افزایش می‌دهد.",
-    },
     common: {
       emptyValue: "—",
       unknown: "نامشخص",
@@ -1044,6 +1040,10 @@ export const fa: TranslationMap = {
     settings: "تنظیمات چت",
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "تغییر وضعیت حالت تمرکز (پنهان کردن نوار کناری + سرصفحه صفحه)",
     hideCronSessions: "پنهان کردن نشست‌های cron",
     showCronSessions: "نمایش نشست‌های cron",
@@ -1059,6 +1059,42 @@ export const fa: TranslationMap = {
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "خروجی گرفتن",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "فیلتر کردن نشست‌ها بر اساس عامل",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "English (انگلیسی)",

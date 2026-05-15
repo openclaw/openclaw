@@ -235,6 +235,19 @@ function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; d
   );
 }
 
+function mockAzureCliTokenRaw(stdout: string) {
+  execFileMock.mockImplementationOnce(
+    (
+      _file: unknown,
+      _args: unknown,
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, stdout, "");
+    },
+  );
+}
+
 function mockAzureCliLoginFailure(delayMs?: number) {
   execFileMock.mockImplementationOnce(
     (
@@ -304,6 +317,64 @@ describe("microsoft-foundry plugin", () => {
     });
 
     expect(config.auth?.order?.["microsoft-foundry"]).toEqual(["microsoft-foundry:default"]);
+  });
+
+  it("reports malformed Azure CLI token JSON with an owned error", async () => {
+    mockAzureCliTokenRaw("{not json");
+
+    await expect(getAccessTokenResultAsync()).rejects.toThrow(
+      "Azure CLI returned malformed access token JSON.",
+    );
+  });
+
+  it("fails clearly when the selected Azure subscription is not in the enabled list", async () => {
+    const provider = registerProvider();
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      const command = args.join(" ");
+      if (command === "version --output none") {
+        return "";
+      }
+      if (command === "account show --output json") {
+        return JSON.stringify({
+          id: "sub-one",
+          name: "Subscription One",
+          tenantId: "tenant-one",
+          state: "Enabled",
+          user: { name: "user@example.com" },
+        });
+      }
+      if (command === "account list --output json --all") {
+        return JSON.stringify([
+          {
+            id: "sub-one",
+            name: "Subscription One",
+            tenantId: "tenant-one",
+            state: "Enabled",
+          },
+          {
+            id: "sub-two",
+            name: "Subscription Two",
+            tenantId: "tenant-one",
+            state: "Enabled",
+          },
+        ]);
+      }
+      throw new Error(`unexpected az command: ${command}`);
+    });
+    const entraAuth = provider.auth.find((method: { id: string }) => method.id === "entra-id");
+
+    await expect(
+      entraAuth?.run({
+        config: {},
+        agentDir: defaultFoundryAgentDir,
+        opts: {},
+        prompter: {
+          confirm: vi.fn(async () => true),
+          select: vi.fn(async () => "missing-subscription"),
+          note: vi.fn(async () => undefined),
+        },
+      } as never),
+    ).rejects.toThrow("Selected subscription not found: missing-subscription");
   });
 
   it("preserves the model-derived base URL for Entra runtime auth refresh", async () => {

@@ -3,7 +3,6 @@ import os from "node:os";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
-  DefaultResourceLoader,
   estimateTokens,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -59,6 +58,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
+import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -69,6 +69,7 @@ import {
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
@@ -141,6 +142,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
@@ -646,9 +648,19 @@ async function compactEmbeddedPiSessionDirectOnce(
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
+    const runtimeHarnessPolicy = resolveAgentHarnessPolicy({
+      provider,
+      modelId,
+      config: params.config,
+      agentId: effectiveSkillAgentId,
+      sessionKey: params.sessionKey,
+    });
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
-      provider,
+      provider: resolveContextConfigProviderForRuntime({
+        provider,
+        runtimeId: runtimeHarnessPolicy.runtime,
+      }),
       modelId,
       modelContextTokens: readPiModelContextTokens(runtimeModel),
       modelContextWindow: runtimeModelWithContext.contextWindow,
@@ -996,7 +1008,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         modelId,
         model,
       });
-      const resourceLoader = new DefaultResourceLoader({
+      const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
         agentDir,
         settingsManager,
@@ -1371,7 +1383,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             await flushPendingToolResultsAfterIdle({
               agent: session?.agent,
               sessionManager,
-              clearPendingOnTimeout: true,
             });
           } catch {
             /* best-effort */

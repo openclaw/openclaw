@@ -230,6 +230,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Auto-Join",
     help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
   },
+  "voice.allowedChannels": {
+    label: "Discord Voice Allowed Channels",
+    help: "Optional voice channel residency allowlist. When set, /vc join, auto-join, and bot voice-state moves are restricted to these guildId/channelId entries. Leave unset to allow any voice channel.",
+  },
   "voice.daveEncryption": {
     label: "Discord Voice DAVE Encryption",
     help: "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
@@ -305,6 +309,26 @@ export const discordChannelConfigUiHints = {
   allowBots: {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+  },
+  botLoopProtection: {
+    label: "Discord Bot Loop Protection",
+    help: "Sliding-window guard for bot-to-bot Discord loops. Default is enabled whenever allowBots lets bot-authored messages reach dispatch.",
+  },
+  "botLoopProtection.enabled": {
+    label: "Discord Bot Loop Protection Enabled",
+    help: 'Enable the bot-pair loop guard. Defaults to true when allowBots is true or "mentions", and false when bot messages are ignored.',
+  },
+  "botLoopProtection.maxEventsPerWindow": {
+    label: "Discord Bot Pair Events Per Window",
+    help: "Maximum messages a single Discord bot pair may exchange in the configured window before suppression starts. Default: 20.",
+  },
+  "botLoopProtection.windowSeconds": {
+    label: "Discord Bot Loop Window Seconds",
+    help: "Sliding window length in seconds for Discord bot-pair loop budgets. Default: 60.",
+  },
+  "botLoopProtection.cooldownSeconds": {
+    label: "Discord Bot Loop Cooldown Seconds",
+    help: "Seconds to suppress a Discord bot pair after it exceeds the loop budget. Default: 60.",
   },
   mentionAliases: {
     label: "Discord Mention Aliases",

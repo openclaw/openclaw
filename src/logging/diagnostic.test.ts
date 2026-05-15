@@ -12,6 +12,7 @@ import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgressForTest,
+  markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
@@ -64,8 +65,6 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -94,7 +93,6 @@ function requireMatchingRecord(
     const record = item as Record<string, unknown>;
     return Object.entries(fields).every(([key, value]) => Object.is(record[key], value));
   });
-  expect(found).toBeDefined();
   if (!found) {
     throw new Error(`missing ${label}`);
   }
@@ -104,7 +102,6 @@ function requireMatchingRecord(
 function requireFirstMockCallArg(mock: unknown, label: string) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   const call = calls?.[0];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing ${label} call`);
   }
@@ -119,11 +116,11 @@ function loggerMessages(spy: unknown): string[] {
 }
 
 function expectLoggerMessageContaining(spy: unknown, text: string): void {
-  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(true);
+  expect(loggerMessages(spy).join("\n")).toContain(text);
 }
 
 function expectNoLoggerMessageContaining(spy: unknown, text: string): void {
-  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(false);
+  expect(loggerMessages(spy).join("\n")).not.toContain(text);
 }
 
 function expectRecoveryCall(
@@ -249,6 +246,32 @@ describe("diagnostic session activity aliases", () => {
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1" }).activeWorkKind).toBe(
       "embedded_run",
     );
+  });
+
+  it("keeps embedded diagnostic work active until every owner ends", () => {
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticEmbeddedRunStarted({
+      sessionId: "s1",
+      sessionKey: "main",
+      workKey: "reply:main",
+    });
+
+    markDiagnosticEmbeddedRunEnded({
+      sessionId: "s1",
+      sessionKey: "main",
+      workKey: "reply:main",
+      clearRunActivity: false,
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })).toEqual(
+      expect.objectContaining({ activeWorkKind: "embedded_run" }),
+    );
+
+    markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }).activeWorkKind,
+    ).toBeUndefined();
   });
 });
 
@@ -648,6 +671,47 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("clears queued diagnostic state after no-active-work recovery", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "noop",
+      action: "none",
+      reason: "no_active_work",
+      sessionId: "s1",
+      sessionKey: "main",
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      vi.advanceTimersByTime(61_000);
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    const state = getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" });
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+    requireMatchingRecord(
+      events,
+      { type: "session.state", state: "idle", reason: "stuck_recovery:noop", queueDepth: 0 },
+      "noop state clear event",
+    );
+  });
+
   it("does not mark a newer processing generation idle after a late recovery outcome", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockImplementation(async () => {
@@ -991,6 +1055,48 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("suppresses liveness warnings during startupGraceMs while still sampling", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: string[] = [];
+    const sampleLiveness = vi.fn(() => ({
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 1_500,
+      eventLoopDelayMaxMs: 2_000,
+    }));
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness,
+          startupGraceMs: 60_000,
+        },
+      );
+
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleLiveness).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
+      expect(events).not.toContain("diagnostic.liveness.warning");
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleLiveness).toHaveBeenCalledTimes(2);
+      expectLoggerMessageContaining(warnSpy, "liveness warning:");
+      expect(events).toContain("diagnostic.liveness.warning");
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("warns for liveness samples when diagnostic work is open", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -1116,7 +1222,7 @@ describe("stuck session diagnostics threshold", () => {
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
       {
         type: "diagnostic.liveness.warning",
-        level: "warning",
+        level: "info",
         active: 1,
         waiting: 0,
         queued: 0,

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolve as resolvePath } from "node:path";
+import fs from "node:fs/promises";
+import path, { resolve as resolvePath } from "node:path";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime as BaseAcpxRuntime,
@@ -15,7 +16,8 @@ import {
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
 } from "acpx/runtime";
-import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
 import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
@@ -53,6 +55,52 @@ type AcpxLaunchLeaseContext = {
   wrapperRoot: string;
   stableCommand?: string;
 };
+
+const CODEX_WRAPPER_STDERR_LOG_PREFIX = "codex-acp-wrapper.stderr";
+const CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS = 6_000;
+
+function safeDiagnosticFilePart(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "unknown";
+}
+
+function codexWrapperStderrLogFileName(leaseId: string): string {
+  return `${CODEX_WRAPPER_STDERR_LOG_PREFIX}.${safeDiagnosticFilePart(leaseId)}.log`;
+}
+
+function compactDiagnosticText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function isGenericInternalAcpErrorMessage(message: string): boolean {
+  return message.trim() === "Internal error";
+}
+
+function isGenericInternalAcpError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return isGenericInternalAcpErrorMessage(error.message);
+}
+
+async function readCodexWrapperStderrTail(params: {
+  wrapperRoot: string | undefined;
+  leaseId: string | undefined;
+}): Promise<string> {
+  if (!params.wrapperRoot || !params.leaseId) {
+    return "";
+  }
+  try {
+    const text = await fs.readFile(
+      path.join(params.wrapperRoot, codexWrapperStderrLogFileName(params.leaseId)),
+      "utf8",
+    );
+    return compactDiagnosticText(
+      redactSensitiveText(text.slice(-CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
+    );
+  } catch {
+    return "";
+  }
+}
 
 function readSessionRecordName(record: unknown): string {
   if (typeof record !== "object" || record === null) {
@@ -104,7 +152,7 @@ function readRecordAgentPid(record: unknown): number | undefined {
   return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
 }
 
-function readOpenClawLeaseIdFromRecord(record: AcpLoadedSessionRecord): string | undefined {
+function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
   if (typeof record !== "object" || record === null) {
     return undefined;
   }
@@ -349,6 +397,45 @@ function unwrapEnvCommand(parts: string[]): string[] {
   return parts.slice(index);
 }
 
+function matchesExecutableName(value: string, executableName: string): boolean {
+  const normalized = basename(value).toLowerCase();
+  return normalized === executableName || normalized === `${executableName}.exe`;
+}
+
+function matchesPackageSpec(value: string, packageName: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === packageName || normalized.startsWith(`${packageName}@`);
+}
+
+function stripModuleExtension(value: string): string {
+  return value.replace(/\.[cm]?js$/i, "").toLowerCase();
+}
+
+function isAcpCommand(
+  command: string | undefined,
+  params: { packageName: string; executableName: string },
+): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  if (parts.some((part) => matchesPackageSpec(part, params.packageName))) {
+    return true;
+  }
+  const commandName = basename(parts[0] ?? "");
+  if (matchesExecutableName(commandName, params.executableName)) {
+    return true;
+  }
+  if (!matchesExecutableName(commandName, "node")) {
+    return false;
+  }
+  const scriptName = stripModuleExtension(basename(parts[1] ?? ""));
+  return scriptName === params.executableName || scriptName === `${params.executableName}-wrapper`;
+}
+
 function isOpenClawBridgeCommand(command: string | undefined): boolean {
   if (!command) {
     return false;
@@ -364,30 +451,18 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
   return /^openclaw(?:\.[cm]?js)?$/i.test(scriptName) && parts[2] === OPENCLAW_BRIDGE_SUBCOMMAND;
 }
 
-function isCodexAcpPackageSpec(value: string): boolean {
-  return /^@zed-industries\/codex-acp(?:@.+)?$/i.test(value.trim());
+function isCodexAcpCommand(command: string | undefined): boolean {
+  return isAcpCommand(command, {
+    packageName: "@zed-industries/codex-acp",
+    executableName: "codex-acp",
+  });
 }
 
-function isCodexAcpCommand(command: string | undefined): boolean {
-  if (!command) {
-    return false;
-  }
-  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
-  if (!parts.length) {
-    return false;
-  }
-  if (parts.some(isCodexAcpPackageSpec)) {
-    return true;
-  }
-  const commandName = basename(parts[0] ?? "");
-  if (/^codex-acp(?:\.exe)?$/i.test(commandName)) {
-    return true;
-  }
-  if (commandName !== "node") {
-    return false;
-  }
-  const scriptName = basename(parts[1] ?? "");
-  return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
+function isClaudeAcpCommand(command: string | undefined): boolean {
+  return isAcpCommand(command, {
+    packageName: "@agentclientprotocol/claude-agent-acp",
+    executableName: "claude-agent-acp",
+  });
 }
 
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
@@ -403,6 +478,7 @@ function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never 
 // `SessionResumeRequiredError` on agent restart. Fail fast at this boundary instead.
 // See openclaw/openclaw#73071.
 const SUPPORTED_RUNTIME_SESSION_MODES = new Set(["persistent", "oneshot"] as const);
+const WIRE_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 
 function assertSupportedRuntimeSessionMode(
   mode: unknown,
@@ -739,6 +815,40 @@ export class AcpxRuntime implements AcpRuntime {
     return await this.launchLeaseScope.run(launch, params.run);
   }
 
+  private async withCodexWrapperDiagnostics<T>(params: {
+    command: string | undefined;
+    fallbackCode: AcpRuntimeErrorCode;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    try {
+      return await params.run();
+    } catch (error) {
+      if (!isCodexAcpCommand(params.command) || !isGenericInternalAcpError(error)) {
+        throw error;
+      }
+      const stderrTail = await readCodexWrapperStderrTail({
+        wrapperRoot: this.wrapperRoot,
+        leaseId: this.launchLeaseScope.getStore()?.leaseId,
+      });
+      if (!stderrTail) {
+        throw error;
+      }
+      throw new AcpRuntimeError(params.fallbackCode, `Internal error: ${stderrTail}`, {
+        cause: error,
+      });
+    }
+  }
+
+  private async readCodexTurnFailureStderr(params: { handle: AcpRuntimeHandle }): Promise<string> {
+    const record = await this.sessionStore.load(
+      params.handle.acpxRecordId ?? params.handle.sessionKey,
+    );
+    return readCodexWrapperStderrTail({
+      wrapperRoot: this.wrapperRoot,
+      leaseId: readOpenClawLeaseIdFromRecord(record),
+    });
+  }
+
   private async cleanupProcessTreeForRecord(
     handle: AcpRuntimeHandle,
     record: AcpLoadedSessionRecord,
@@ -842,7 +952,12 @@ export class AcpxRuntime implements AcpRuntime {
         sessionKey: input.sessionKey,
         command: stableLaunchCommand,
         enabled: shouldStartWithLease,
-        run: () => delegate.ensureSession(input),
+        run: () =>
+          this.withCodexWrapperDiagnostics({
+            command: stableLaunchCommand,
+            fallbackCode: "ACP_SESSION_INIT_FAILED",
+            run: () => delegate.ensureSession(input),
+          }),
       });
     }
 
@@ -858,13 +973,51 @@ export class AcpxRuntime implements AcpRuntime {
       enabled: shouldStartWithLease,
       run: () =>
         this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-          delegate.ensureSession(normalizedInput),
+          this.withCodexWrapperDiagnostics({
+            command: stableLaunchCommand,
+            fallbackCode: "ACP_SESSION_INIT_FAILED",
+            run: () => delegate.ensureSession(normalizedInput),
+          }),
         ),
     });
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
-    yield* (await this.resolveDelegateForHandle(input.handle)).runTurn(input);
+    const command = await this.resolveCommandForHandle(input.handle);
+    const delegate = await this.resolveDelegateForHandle(input.handle);
+    try {
+      for await (const event of delegate.runTurn(input)) {
+        if (
+          event.type !== "error" ||
+          !isCodexAcpCommand(command) ||
+          !isGenericInternalAcpErrorMessage(event.message)
+        ) {
+          yield event;
+          continue;
+        }
+        const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+        if (!stderrTail) {
+          yield event;
+          continue;
+        }
+        yield {
+          ...event,
+          code: "ACP_TURN_FAILED",
+          message: `Internal error: ${stderrTail}`,
+        };
+      }
+    } catch (error) {
+      if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+        throw error;
+      }
+      const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+      if (!stderrTail) {
+        throw error;
+      }
+      throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+        cause: error,
+      });
+    }
   }
 
   getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
@@ -889,10 +1042,11 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
-    if (isCodexAcpCommand(command)) {
-      if (key === "timeout" || key === "timeout_seconds") {
-        return;
-      }
+    const isCodexAcp = isCodexAcpCommand(command);
+    if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
+      return;
+    }
+    if (isCodexAcp) {
       if (
         key === "model" ||
         key === "thinking" ||
@@ -974,6 +1128,7 @@ export const __testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
+  isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeCodexAcpModelOverride,
 };

@@ -63,7 +63,11 @@ describe("ensureOggOpus", () => {
   }
 
   function readSingleCommandArgs(mock: typeof runFfprobeMock | typeof runFfmpegMock): string[] {
-    const args = mock.mock.calls[0]?.[0];
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error("missing command call");
+    }
+    const [args] = call;
     if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
       throw new Error("missing command args");
     }
@@ -302,8 +306,9 @@ describe("sendDiscordVoiceMessage", () => {
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
 
-    await expect(
-      sendDiscordVoiceMessage(
+    let error: unknown;
+    try {
+      await sendDiscordVoiceMessage(
         rest,
         "channel-1",
         Buffer.from("ogg"),
@@ -312,10 +317,16 @@ describe("sendDiscordVoiceMessage", () => {
         async (fn) => await fn(),
         false,
         "bot-token",
-      ),
-    ).rejects.toMatchObject({
-      name: "DiscordError",
-      status: 503,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("DiscordError");
+    expect((error as { status?: unknown }).status).toBe(503);
+    expect((error as { statusCode?: unknown }).statusCode).toBe(503);
+    expect((error as { rawBody?: unknown }).rawBody).toEqual({
+      message: "cdn unavailable",
     });
   });
 });

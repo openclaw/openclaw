@@ -50,8 +50,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -373,9 +374,16 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "text message options");
     expect(options.token).toBe("tok");
     expect(options.mediaUrl).toBeUndefined();
-    expect(result.content).toContainEqual({
-      type: "text",
-      text: expect.stringContaining('"ok": true'),
+    expect(result.content).toStrictEqual([
+      {
+        type: "text",
+        text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
+      },
+    ]);
+    expect(result.details).toStrictEqual({
+      ok: true,
+      messageId: "789",
+      chatId: "123",
     });
   });
 
@@ -1017,6 +1025,43 @@ describe("handleTelegramAction", () => {
         {
           text: "Option A",
           callback_data: "cmd:a",
+          style: "primary",
+        },
+      ],
+    ]);
+  });
+
+  it("forwards web app buttons from generic presentation", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "5232990709",
+        content: "Choose",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Launch",
+                  web_app: { url: "https://example.com/app" },
+                  style: "primary",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "dm" } }),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "inline keyboard web app");
+    expect(call[0]).toBe("5232990709");
+    expect(call[1]).toBe("Choose");
+    expect(requireRecord(call[2], "inline keyboard web app options").buttons).toEqual([
+      [
+        {
+          text: "Launch",
+          web_app: { url: "https://example.com/app" },
           style: "primary",
         },
       ],

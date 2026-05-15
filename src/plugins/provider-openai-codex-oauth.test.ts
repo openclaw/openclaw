@@ -65,8 +65,9 @@ function createCodexCredentials(extra: Record<string, unknown> = {}) {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -209,6 +210,24 @@ describe("loginOpenAICodexOAuth", () => {
       "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
       "OAuth help",
     );
+  });
+
+  it("describes remote OAuth paste first while noting automatic callback completion", async () => {
+    const creds = createCodexCredentials();
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { prompter } = await runCodexOAuth({ isRemote: true });
+    const noteCalls = (prompter.note as unknown as { mock?: { calls?: Array<Array<unknown>> } })
+      .mock?.calls;
+    const [message, title] = noteCalls?.[0] ?? [];
+
+    expect(title).toBe("OpenAI Codex OAuth");
+    expect(message).toContain("A URL will be shown for you to open in your LOCAL browser.");
+    expect(message).toContain("Open it, sign in, then paste the redirect URL here.");
+    expect(message).toContain(
+      "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
+    );
+    expect(message).not.toContain("After signing in, paste");
   });
 
   it("explains OpenAI unsupported region token exchange failures", async () => {

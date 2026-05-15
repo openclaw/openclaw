@@ -1,5 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -41,10 +42,14 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 
 let completeWithPreparedSimpleCompletionModel: typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
 let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
+let prepareSimpleCompletionModelForAgent: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent;
 
 beforeAll(async () => {
-  ({ completeWithPreparedSimpleCompletionModel, prepareSimpleCompletionModel } =
-    await import("./simple-completion-runtime.js"));
+  ({
+    completeWithPreparedSimpleCompletionModel,
+    prepareSimpleCompletionModel,
+    prepareSimpleCompletionModelForAgent,
+  } = await import("./simple-completion-runtime.js"));
 });
 
 beforeEach(() => {
@@ -102,8 +107,10 @@ function expectPreparedModelResult(
 
 function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
 }
 
 describe("prepareSimpleCompletionModel", () => {
@@ -352,7 +359,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "chat-local",
     });
 
-    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls[0];
+    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls.at(0);
     expect((overrideCall?.[0] as { provider?: string; id?: string } | undefined)?.provider).toBe(
       "local-openai",
     );
@@ -495,6 +502,50 @@ describe("prepareSimpleCompletionModel", () => {
         skipPiDiscovery: true,
       },
     );
+  });
+});
+
+describe("prepareSimpleCompletionModelForAgent", () => {
+  it("uses Codex auth provider for OpenAI model refs with Codex runtime policy", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+          models: {
+            "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "openai-codex",
+        id: "gpt-5.4-mini",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
+    const result = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId: "main",
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.selection.provider).toBe("openai");
+    expect(result.selection.modelId).toBe("gpt-5.4-mini");
+    expect(result.selection.runtimeProvider).toBe("openai-codex");
+    expect(hoisted.resolveModelMock).toHaveBeenCalledWith(
+      "openai-codex",
+      "gpt-5.4-mini",
+      expect.any(String),
+      cfg,
+    );
+    expect(
+      (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,
+    ).toBe("openai-codex");
   });
 });
 

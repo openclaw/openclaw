@@ -252,6 +252,9 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("keeps PI Tool Search controls when core OpenClaw tools are not materialized", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
     const tools = createOpenClawCodingTools({
       includeCoreTools: false,
       includeToolSearchControls: true,
@@ -270,11 +273,13 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
 
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
     expect(names.has("message")).toBe(false);
+    expect(names.has("exec")).toBe(false);
   });
 
   it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
@@ -445,10 +450,9 @@ describe("createOpenClawCodingTools", () => {
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
-      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options).toMatchObject({
-        modelProvider: "openrouter",
-        modelId: "openrouter/auto",
-      });
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      expect(pluginToolOptions?.modelProvider).toBe("openrouter");
+      expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -479,6 +483,56 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
+  });
+
+  it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const agentId = `inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-session-store-${agentId}-{agentId}.json`,
+    );
+    await writeSessionStore(storeTemplate, agentId, {
+      [`agent:${agentId}:subagent:limited`]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["custom_plugin_tool", "sessions_spawn"],
+      },
+    });
+
+    createOpenClawCodingTools({
+      sessionKey: `agent:${agentId}:subagent:limited`,
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolAllowlist, [
+      "custom_plugin_tool",
+      "sessions_spawn",
+    ]);
+  });
+
+  it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+    expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
   it("records core tool-prep stages for hot-path diagnostics", () => {
@@ -1054,13 +1108,7 @@ describe("createOpenClawCodingTools", () => {
         path: textPath,
       });
 
-      expect(textResult?.content?.some((block) => block.type === "image")).toBe(false);
-      const textBlocks = textResult?.content?.filter((block) => block.type === "text") as
-        | Array<{ text?: string }>
-        | undefined;
-      expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
-      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
-      expect(combinedText).toContain(contents);
+      expect(textResult?.content).toEqual([{ type: "text", text: contents }]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

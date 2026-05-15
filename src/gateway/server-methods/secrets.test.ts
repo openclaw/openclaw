@@ -43,9 +43,9 @@ async function invokeSecretsResolve(params: {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -53,7 +53,7 @@ function expectRespondError(
   respond: ReturnType<typeof vi.fn>,
   expected: { code: string; message?: string },
 ): void {
-  const call = respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   const error = requireRecord(call?.[2]);
@@ -64,7 +64,7 @@ function expectRespondError(
 }
 
 function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): void {
-  expect(warn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 describe("secrets handlers", () => {
