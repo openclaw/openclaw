@@ -3,6 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -28,6 +29,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -77,6 +79,38 @@ function isModelsBrowseVisibleProvider(provider: string): boolean {
 
 function usesUnfilteredCatalogModels(provider: string): boolean {
   return isCliRuntimeProvider(provider);
+}
+
+function normalizeRuntimeChoiceId(runtime: string | undefined): string {
+  const normalized = normalizeLowercaseStringOrEmpty(runtime);
+  if (!normalized || normalized === "auto" || normalized === "default") {
+    return "pi";
+  }
+  return normalized;
+}
+
+function buildDefaultRuntimeChoice(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId?: string;
+}): ModelsRuntimeChoice {
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  const id = normalizeRuntimeChoiceId(harnessPolicy.runtime);
+  const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
+  return {
+    id,
+    label,
+    description:
+      id === "pi"
+        ? "Use the built-in OpenClaw Pi runtime."
+        : `Use the ${label} runtime selected by the effective harness policy.`,
+  };
 }
 
 export async function buildModelsProviderData(
@@ -223,14 +257,23 @@ export async function buildModelsProviderData(
   for (const alias of listLegacyRuntimeModelProviderAliases()) {
     const provider = normalizeProviderId(alias.provider);
     const choices = runtimeChoicesByProvider.get(provider) ?? [
-      {
-        id: "pi",
-        label: "OpenClaw Pi Default",
-        description: "Use the built-in OpenClaw Pi runtime.",
-      },
+      buildDefaultRuntimeChoice({
+        cfg,
+        agentId,
+        provider,
+        modelId:
+          provider === normalizeProviderId(resolvedDefault.provider)
+            ? resolvedDefault.model
+            : undefined,
+      }),
     ];
+    const runtimeId = normalizeRuntimeChoiceId(alias.runtime);
+    if (choices.some((choice) => choice.id === runtimeId)) {
+      runtimeChoicesByProvider.set(provider, choices);
+      continue;
+    }
     choices.push({
-      id: alias.runtime,
+      id: runtimeId,
       label: alias.runtime,
       description: alias.cli
         ? `Run ${provider} models through ${alias.runtime}.`

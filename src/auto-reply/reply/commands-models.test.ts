@@ -379,11 +379,35 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
   });
 
-  it("labels the default runtime choice as OpenClaw Pi", async () => {
+  it("labels the OpenAI default runtime choice as Codex", async () => {
     const data = await buildModelsProviderData({
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "codex",
+      label: "OpenAI Codex",
+      description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+    });
+  });
+
+  it("keeps custom OpenAI-compatible provider runtime choices on OpenClaw Pi", async () => {
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://localhost:8080/v1",
+            models: [],
+          },
         },
       },
     } as OpenClawConfig);
