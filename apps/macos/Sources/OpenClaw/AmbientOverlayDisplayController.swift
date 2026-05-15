@@ -25,8 +25,9 @@ final class AmbientOverlayDisplayController {
     nonisolated static let workspaceWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
 
     private var ambientPanels: [String: AmbientPanelSurface] = [:]
-    private var workspacePanel: NSPanel?
-    private var workspaceHostingView: NSHostingView<AmbientWorkspaceSheetView>?
+    private var commandDockPanel: NSPanel?
+    private var commandDockHostingView: NSHostingView<AmbientCommandDockView>?
+    private var commandDockModel = AmbientCommandDockModel()
 
     func showAmbient(intensity: Double, displayScope: AmbientOverlayDisplayScope) {
         let plan = Self.displayPlan(
@@ -61,27 +62,29 @@ final class AmbientOverlayDisplayController {
             displays: Self.screenSnapshots(),
             mouseLocation: NSEvent.mouseLocation,
             scope: displayScope)
-        let frame = Self.workspaceFrame(for: plan.workspaceDisplay)
-        let panel = self.ensureWorkspacePanel(frame: frame, onDismiss: onDismiss)
+        let frame = Self.commandDockFrame(for: plan.workspaceDisplay)
+        let panel = self.ensureCommandDockPanel(frame: frame, onDismiss: onDismiss)
         panel.setFrame(frame, display: true)
         panel.level = Self.workspaceWindowLevel
         panel.ignoresMouseEvents = false
-        self.workspaceHostingView?.rootView = AmbientWorkspaceSheetView(onClose: onDismiss)
+        self.commandDockHostingView?.rootView = AmbientCommandDockView(
+            model: self.commandDockModel,
+            onDismiss: onDismiss)
         panel.orderFrontRegardless()
     }
 
     func hideWorkspace() {
-        self.workspacePanel?.orderOut(nil)
+        self.commandDockPanel?.orderOut(nil)
     }
 
     func close() {
         for surface in self.ambientPanels.values {
             surface.panel.close()
         }
-        self.workspacePanel?.close()
+        self.commandDockPanel?.close()
         self.ambientPanels = [:]
-        self.workspacePanel = nil
-        self.workspaceHostingView = nil
+        self.commandDockPanel = nil
+        self.commandDockHostingView = nil
     }
 
     nonisolated static func displayPlan(
@@ -129,23 +132,25 @@ final class AmbientOverlayDisplayController {
         return surface
     }
 
-    private func ensureWorkspacePanel(frame: NSRect, onDismiss: @escaping () -> Void) -> NSPanel {
-        if let workspacePanel {
-            return workspacePanel
+    private func ensureCommandDockPanel(frame: NSRect, onDismiss: @escaping () -> Void) -> NSPanel {
+        if let commandDockPanel {
+            return commandDockPanel
         }
 
         let panel = OverlayPanelFactory.makePanel(
             contentRect: frame,
             level: Self.workspaceWindowLevel,
-            hasShadow: true,
+            hasShadow: false,
             acceptsMouseMovedEvents: true)
         panel.ignoresMouseEvents = false
-        let host = NSHostingView(rootView: AmbientWorkspaceSheetView(onClose: onDismiss))
+        let host = NSHostingView(rootView: AmbientCommandDockView(
+            model: self.commandDockModel,
+            onDismiss: onDismiss))
         host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
-        self.workspaceHostingView = host
-        self.workspacePanel = panel
+        self.commandDockHostingView = host
+        self.commandDockPanel = panel
         return panel
     }
 
@@ -181,9 +186,10 @@ final class AmbientOverlayDisplayController {
         NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
     }
 
-    private static func workspaceFrame(for display: DisplaySnapshot?) -> NSRect {
-        let screen = display?.visibleFrame ?? NSScreen.main?.visibleFrame ?? Self.screenFrame()
-        let size = NSSize(width: 420, height: 86)
+    nonisolated static func commandDockFrame(for display: DisplaySnapshot?) -> NSRect {
+        let screen = display?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        let width = min(CGFloat(868), max(CGFloat(520), screen.width - 56))
+        let size = NSSize(width: width, height: 264)
         let origin = CGPoint(
             x: screen.midX - size.width / 2,
             y: screen.minY + 28)
