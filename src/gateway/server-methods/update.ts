@@ -6,6 +6,7 @@ import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/r
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
@@ -128,7 +129,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               status: "skipped",
               mode: installSurface.mode,
               root: installSurface.root,
-              reason: "managed-service-handoff-started",
+              reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
               ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
               steps: [
                 {

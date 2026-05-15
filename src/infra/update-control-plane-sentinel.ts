@@ -11,11 +11,45 @@ import {
 import type { UpdateRunResult } from "./update-runner.js";
 
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
+export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
+export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+
+const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
+  CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
+]);
 
 export type ControlPlaneUpdateSentinelMetaFile = {
   version: 1;
   meta: UpdateRestartSentinelMeta;
 };
+
+export function buildControlPlaneUpdateRestartHealthPendingResult(
+  result: UpdateRunResult,
+): UpdateRunResult {
+  return {
+    status: "skipped",
+    mode: result.mode,
+    ...(result.root ? { root: result.root } : {}),
+    reason: CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
+    ...(result.before ? { before: result.before } : {}),
+    ...(result.after ? { after: result.after } : {}),
+    steps: result.steps,
+    durationMs: result.durationMs,
+  };
+}
+
+export function isPendingControlPlaneUpdateRestartSentinel(
+  payload: RestartSentinelPayload,
+): boolean {
+  const reason = payload.stats?.reason;
+  return (
+    payload.kind === "update" &&
+    payload.status === "skipped" &&
+    typeof reason === "string" &&
+    CONTROL_PLANE_UPDATE_PENDING_REASONS.has(reason)
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

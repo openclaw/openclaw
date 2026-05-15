@@ -2146,6 +2146,85 @@ describe("update-cli", () => {
     ).toBe("1");
   });
 
+  it("runs package post-update doctor from the verified package root after a staged swap", async () => {
+    const tempDir = await createTrackedTempDir("openclaw-update-staged-doctor-");
+    const nodeModules = path.join(tempDir, "lib", "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (!Array.isArray(argv)) {
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
+        const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+        const stagePackageRoot = path.join(
+          requireValue(stagePrefix, "stage prefix"),
+          "lib",
+          "node_modules",
+          "openclaw",
+        );
+        const stageEntryPath = path.join(stagePackageRoot, "dist", "index.js");
+        await fs.mkdir(path.dirname(stageEntryPath), { recursive: true });
+        await fs.writeFile(
+          path.join(stagePackageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.5.14" }),
+          "utf-8",
+        );
+        await fs.writeFile(stageEntryPath, "export {};\n", "utf-8");
+        await writePackageDistInventory(stagePackageRoot);
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true });
+
+    const doctorCall = doctorCommandCall();
+    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
+    expect(doctorCall?.[1].cwd).toBe(pkgRoot);
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("stops a running managed gateway before package replacement", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
@@ -3176,7 +3255,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("writes the control-plane update sentinel before managed package restart", async () => {
+  it("writes the control-plane update sentinel after managed package restart health passes", async () => {
     const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
     const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
     const metaPath = path.join(metaDir, "meta.json");

@@ -49,6 +49,7 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  buildControlPlaneUpdateRestartHealthPendingResult,
   markControlPlaneUpdateRestartSentinelFailure,
   readControlPlaneUpdateSentinelMeta,
   writeControlPlaneUpdateRestartSentinel,
@@ -1046,6 +1047,7 @@ async function runPackageInstallUpdate(params: {
         return await runUpdateStep({
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
+          cwd: verifiedPackageRoot,
           env: {
             ...resolvePostInstallDoctorEnv({
               serviceEnv: params.managedServiceEnv,
@@ -2684,7 +2686,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: controlPlaneUpdateSentinelMeta,
-    result: resultWithPostUpdate,
+    result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
     jsonMode: Boolean(opts.json),
   });
 
@@ -2707,6 +2709,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.exit(1);
     return;
   }
+
+  await writeControlPlaneUpdateRestartSentinelBestEffort({
+    meta: controlPlaneUpdateSentinelMeta,
+    result: resultWithPostUpdate,
+    jsonMode: Boolean(opts.json),
+  });
 
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));

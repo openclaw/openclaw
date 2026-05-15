@@ -38,13 +38,24 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 describe("managed service update handoff", () => {
-  it("strips every supervisor hint before spawning the detached helper", async () => {
+  it("strips process supervisor hints while preserving service identity for the CLI handoff", async () => {
     const { startManagedServiceUpdateHandoff, stripSupervisorHintEnv } =
       await import("./update-managed-service-handoff.js");
+    const serviceIdentityEnv = {
+      OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-test.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway",
+    } satisfies NodeJS.ProcessEnv;
     const supervisorEnv = Object.fromEntries(
       SUPERVISOR_HINT_ENV_VARS.map((key) => [key, "supervised"]),
     ) as NodeJS.ProcessEnv;
-    expect(stripSupervisorHintEnv({ ...supervisorEnv, KEEP_ME: "1" })).toEqual({
+    const stripped = stripSupervisorHintEnv({
+      ...supervisorEnv,
+      ...serviceIdentityEnv,
+      KEEP_ME: "1",
+    });
+    expect(stripped).toEqual({
+      ...serviceIdentityEnv,
       KEEP_ME: "1",
     });
 
@@ -57,6 +68,7 @@ describe("managed service update handoff", () => {
       argv1: "/opt/openclaw/openclaw.mjs",
       env: {
         ...supervisorEnv,
+        ...serviceIdentityEnv,
         KEEP_ME: "1",
       },
       meta: {
@@ -79,7 +91,12 @@ describe("managed service update handoff", () => {
     expect(options.cwd).toBe("/tmp/openclaw");
     expect(options.detached).toBe(true);
     expect(options.env.KEEP_ME).toBe("1");
-    for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    for (const [key, value] of Object.entries(serviceIdentityEnv)) {
+      expect(options.env[key]).toBe(value);
+    }
+    for (const key of SUPERVISOR_HINT_ENV_VARS.filter(
+      (envKey) => !(envKey in serviceIdentityEnv),
+    )) {
       expect(options.env[key]).toBeUndefined();
     }
     expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");

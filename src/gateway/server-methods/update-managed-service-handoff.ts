@@ -11,6 +11,11 @@ import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "../../infra/update-m
 import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
 
 const PARENT_EXIT_GRACE_MS = 60_000;
+const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const);
 
 const HANDOFF_SCRIPT = String.raw`
 const { spawn } = require("node:child_process");
@@ -163,6 +168,9 @@ export function formatManagedServiceUpdateCommand(timeoutMs?: number): string {
 export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = { ...env };
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    if (SERVICE_IDENTITY_ENV_VARS.has(key)) {
+      continue;
+    }
     delete next[key];
   }
   return next;

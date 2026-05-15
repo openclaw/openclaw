@@ -154,7 +154,11 @@ from the CLI update that continues after the Gateway exits:
 
 The `sentinel` payload is still written before the Gateway exits, and the CLI
 handoff updates the same restart sentinel after the managed-service restart
-health checks complete. `update.status` returns the latest cached sentinel.
+health checks complete. During the handoff, the sentinel can carry
+`stats.reason: "restart-health-pending"` with no success continuation; the
+restarted Gateway keeps polling it and only fires the continuation after the CLI
+has verified service health and rewritten the sentinel with the final `ok`
+result. `update.status` returns the latest cached sentinel.
 
 ## Git checkout flow
 
