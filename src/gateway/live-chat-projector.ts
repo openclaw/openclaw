@@ -20,25 +20,6 @@ function capLiveAssistantBuffer(text: string): string {
   return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
-  }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
-}
-
 export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
@@ -47,8 +28,8 @@ export function resolveMergedAssistantText(params: {
 }): string {
   const { previousText, nextText, nextDelta, replace } = params;
 
-  if (replace) {
-    return capLiveAssistantBuffer(nextText || "");
+  if (replace && nextText) {
+    return capLiveAssistantBuffer(nextText);
   }
 
   if (nextText && previousText) {
@@ -60,7 +41,7 @@ export function resolveMergedAssistantText(params: {
     }
   }
   if (nextDelta) {
-    return capLiveAssistantBuffer(appendUniqueSuffix(previousText, nextDelta));
+    return capLiveAssistantBuffer(previousText + nextDelta);
   }
   if (nextText) {
     return capLiveAssistantBuffer(nextText);

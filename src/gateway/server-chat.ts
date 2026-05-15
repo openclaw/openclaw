@@ -485,7 +485,7 @@ export function createAgentEventHandler({
       nextDelta: cleaned.delta,
       replace,
     });
-    if (mergedRawText === "" && !replace) {
+    if (!mergedRawText) {
       return;
     }
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
