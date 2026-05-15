@@ -944,6 +944,7 @@ describe("zalouser monitor group mention gating", () => {
         sender: "Alice",
         body: "first unmentioned line",
         timestamp: 1700000000000,
+        messageId: "history-1",
       },
     ]);
     expect(firstDispatch?.ctx?.Body ?? "").toContain("first unmentioned line");

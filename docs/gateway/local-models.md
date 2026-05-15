@@ -173,9 +173,11 @@ endpoint and model ID:
 ```
 
 If `api` is omitted on a custom provider with a `baseUrl`, OpenClaw defaults to
-`openai-completions`. Loopback endpoints such as `127.0.0.1` are trusted
-automatically; LAN, tailnet, and private DNS endpoints still need
-`request.allowPrivateNetwork: true`.
+`openai-completions`. Custom/local provider entries trust their exact configured
+`baseUrl` origin for guarded model requests, including loopback, LAN, tailnet,
+and private DNS hosts. Requests to other private origins still need
+`request.allowPrivateNetwork: true`; metadata/link-local origins remain blocked
+without explicit opt-in. Set it to `false` to opt out of exact-origin trust.
 
 The `models.providers.<id>.models[].id` value is provider-local. Do not
 include the provider prefix there. For example, an MLX server started with

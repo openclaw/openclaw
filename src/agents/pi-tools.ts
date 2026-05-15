@@ -523,7 +523,9 @@ export function createOpenClawCodingTools(options?: {
     policy: TPolicy | undefined,
   ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
   const runtimeProfileAlsoAllow = [
-    ...(options?.forceMessageTool ? ["message"] : []),
+    ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
+      ? ["message"]
+      : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];

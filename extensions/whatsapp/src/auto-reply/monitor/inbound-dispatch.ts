@@ -2,8 +2,10 @@ import {
   DEFAULT_TIMING,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
+import type { CommandTurnContext } from "openclaw/plugin-sdk/channel-inbound";
 import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-message";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   type DeliverableWhatsAppOutboundPayload,
@@ -225,6 +227,8 @@ export function buildWhatsAppInboundContext(params: {
   combinedBody: string;
   commandBody?: string;
   commandAuthorized?: boolean;
+  commandTurn?: CommandTurnContext;
+  commandSource?: "text";
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
@@ -240,11 +244,15 @@ export function buildWhatsAppInboundContext(params: {
 }) {
   const inboundHistory =
     params.msg.chatType === "group"
-      ? (params.groupHistory ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? buildInboundHistoryFromEntries({
+          entries: (params.groupHistory ?? []).map((entry) => ({
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+            messageId: entry.id,
+          })),
+          limit: params.groupHistory?.length ?? 1,
+        })
       : undefined;
 
   const result = finalizeInboundContext({
@@ -279,6 +287,12 @@ export function buildWhatsAppInboundContext(params: {
     SenderId: params.sender.id ?? params.sender.e164,
     SenderE164: params.sender.e164,
     CommandAuthorized: params.commandAuthorized,
+    CommandTurn: params.commandTurn,
+    CommandSource:
+      params.commandSource ??
+      (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"
+        ? params.commandTurn.source
+        : undefined),
     ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
     GroupSystemPrompt: params.groupSystemPrompt,
@@ -290,6 +304,43 @@ export function buildWhatsAppInboundContext(params: {
     OriginatingTo: params.msg.from,
   });
   return result;
+}
+
+function normalizeCommandTurnFromContext(value: unknown): CommandTurnContext | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Partial<CommandTurnContext>;
+  const kind = record.kind;
+  const source = record.source;
+  if (kind === "native" && source === "native" && typeof record.authorized === "boolean") {
+    return {
+      kind: "native",
+      source: "native",
+      authorized: record.authorized,
+      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
+      body: typeof record.body === "string" ? record.body : undefined,
+    };
+  }
+  if (kind === "text-slash" && source === "text" && typeof record.authorized === "boolean") {
+    return {
+      kind: "text-slash",
+      source: "text",
+      authorized: record.authorized,
+      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
+      body: typeof record.body === "string" ? record.body : undefined,
+    };
+  }
+  if (kind === "normal" && source === "message") {
+    return {
+      kind: "normal",
+      source: "message",
+      authorized: false,
+      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
+      body: typeof record.body === "string" ? record.body : undefined,
+    };
+  }
+  return undefined;
 }
 
 export function resolveWhatsAppDmRouteTarget(params: {
@@ -421,13 +472,24 @@ export async function dispatchWhatsAppBufferedReply(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   const sourceReplyChatType =
     typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType;
+  const sourceReplyCommandSource =
+    params.context.CommandSource === "native" || params.context.CommandSource === "text"
+      ? params.context.CommandSource
+      : undefined;
+  const sourceReplyCommandTurn = normalizeCommandTurnFromContext(params.context.CommandTurn);
+  const sourceReplyCommandAuthorized =
+    typeof params.context.CommandAuthorized === "boolean"
+      ? params.context.CommandAuthorized
+      : undefined;
   const sourceReplyDeliveryMode =
     sourceReplyChatType === "group" || sourceReplyChatType === "channel"
       ? resolveChannelMessageSourceReplyDeliveryMode({
           cfg: params.cfg,
           ctx: {
             ChatType: sourceReplyChatType,
-            CommandSource: params.context.CommandSource === "native" ? "native" : undefined,
+            CommandTurn: sourceReplyCommandTurn,
+            CommandSource: sourceReplyCommandSource,
+            CommandAuthorized: sourceReplyCommandAuthorized,
           },
         })
       : undefined;

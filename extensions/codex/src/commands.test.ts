@@ -643,6 +643,51 @@ describe("codex command", () => {
     expectResultTextContains(accountResult, "Codex is available.");
   });
 
+  it("does not count empty Codex rate-limit buckets as returned limits", async () => {
+    const limits = {
+      ok: true as const,
+      value: {
+        rateLimitsByLimitId: {
+          premium: {
+            limitId: "premium",
+            limitName: "premium",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "pro",
+            rateLimitReachedType: null,
+          },
+        },
+      },
+    };
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: { ok: false as const, error: "offline" },
+        account: { ok: false as const, error: "offline" },
+        limits,
+        mcps: { ok: true as const, value: { data: [], nextCursor: null } },
+        skills: { ok: true as const, value: { data: [] } },
+      })),
+      safeCodexControlRequest: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true as const,
+          value: { account: { email: "codex@example.com" } },
+        })
+        .mockResolvedValueOnce(limits),
+    });
+
+    const statusResult = await handleCodexCommand(createContext("status"), { deps });
+    expectResultTextContains(statusResult, "Rate limits: none returned");
+    expect(statusResult.text).not.toContain("Rate limits: 1");
+    expect(statusResult.text).not.toContain("premium");
+
+    const accountResult = await handleCodexCommand(createContext("account"), { deps });
+    expectResultTextContains(accountResult, "Rate limits: none returned");
+    expect(accountResult.text).not.toContain("Rate limits: 1");
+    expect(accountResult.text).not.toContain("premium");
+  });
+
   it("rejects extra operands for read-only Codex commands", async () => {
     const readCodexStatusProbes = vi.fn();
     const listCodexAppServerModels = vi.fn();
