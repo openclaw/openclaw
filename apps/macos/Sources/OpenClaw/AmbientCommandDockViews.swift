@@ -160,7 +160,11 @@ struct AmbientCommandDockView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 16)
-        .onAppear { self.focused = true }
+        .onAppear {
+            DispatchQueue.main.async {
+                self.focused = true
+            }
+        }
     }
 
     private var header: some View {

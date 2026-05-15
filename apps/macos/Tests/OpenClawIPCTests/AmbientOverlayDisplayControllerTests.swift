@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Testing
 @testable import OpenClaw
@@ -19,6 +20,18 @@ struct AmbientOverlayDisplayControllerTests {
         #expect(frame.height == 264)
         #expect(frame.midX == display.visibleFrame.midX)
         #expect(frame.minY == display.visibleFrame.minY + 28)
+    }
+
+    @MainActor
+    @Test func `command dock panel can become key for typing`() {
+        let panel = AmbientCommandDockPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 120),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+
+        #expect(panel.canBecomeKey)
+        #expect(panel.canBecomeMain)
     }
 
     @Test func `current display plan targets mouse display for ambient and workspace`() {

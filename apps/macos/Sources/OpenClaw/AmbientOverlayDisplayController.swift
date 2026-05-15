@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+final class AmbientCommandDockPanel: NSPanel {
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        true
+    }
+}
+
 @MainActor
 final class AmbientOverlayDisplayController {
     struct DisplaySnapshot: Equatable {
@@ -70,7 +80,8 @@ final class AmbientOverlayDisplayController {
         self.commandDockHostingView?.rootView = AmbientCommandDockView(
             model: self.commandDockModel,
             onDismiss: onDismiss)
-        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func hideWorkspace() {
@@ -137,11 +148,23 @@ final class AmbientOverlayDisplayController {
             return commandDockPanel
         }
 
-        let panel = OverlayPanelFactory.makePanel(
+        let panel = AmbientCommandDockPanel(
             contentRect: frame,
-            level: Self.workspaceWindowLevel,
-            hasShadow: false,
-            acceptsMouseMovedEvents: true)
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = Self.workspaceWindowLevel
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.acceptsMouseMovedEvents = true
         panel.ignoresMouseEvents = false
         let host = NSHostingView(rootView: AmbientCommandDockView(
             model: self.commandDockModel,
