@@ -13,6 +13,11 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import {
+  getRuntimeChannelAccounts,
+  hasRuntimeCredentialAvailable,
+  markConfiguredUnavailableCredentialStatusesAvailable,
+} from "../../channels/status/read-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
@@ -43,63 +48,6 @@ type ResolvedChannelAccountRowParams = {
   sourceConfig: OpenClawConfig;
   accountId: string;
 };
-
-function getLiveChannelAccounts(params: {
-  liveChannelStatus: unknown;
-  channelId: string;
-}): Array<Record<string, unknown>> {
-  const payload = asRecord(params.liveChannelStatus);
-  const accountsByChannel = asRecord(payload.channelAccounts);
-  const raw = accountsByChannel[params.channelId];
-  return Array.isArray(raw) ? raw.map(asRecord) : [];
-}
-
-function getLiveAccountId(account: Record<string, unknown>): string {
-  return (
-    normalizeOptionalString(account.accountId) ??
-    normalizeOptionalString(account.id) ??
-    normalizeOptionalString(account.name) ??
-    "default"
-  );
-}
-
-function findLiveChannelAccount(params: {
-  liveAccounts: Array<Record<string, unknown>>;
-  accountId: string;
-}): Record<string, unknown> | null {
-  return (
-    params.liveAccounts.find((account) => getLiveAccountId(account) === params.accountId) ??
-    (params.accountId === "default" && params.liveAccounts.length === 1
-      ? (params.liveAccounts[0] ?? null)
-      : null)
-  );
-}
-
-function hasLiveCredentialAvailable(params: {
-  liveAccounts: Array<Record<string, unknown>>;
-  accountId: string;
-}): boolean {
-  const account = findLiveChannelAccount(params);
-  if (!account) {
-    return false;
-  }
-  if (hasConfiguredUnavailableCredentialStatus(account)) {
-    return false;
-  }
-  return account.running === true || account.connected === true;
-}
-
-function markConfiguredUnavailableCredentialStatusesAvailable(
-  account: unknown,
-): Record<string, unknown> {
-  const record = { ...asRecord(account) };
-  for (const key of ["tokenStatus", "botTokenStatus", "appTokenStatus", "signingSecretStatus"]) {
-    if (record[key] === "configured_unavailable") {
-      record[key] = "available";
-    }
-  }
-  return record;
-}
 
 function existsSyncMaybe(p: string | undefined): boolean | null {
   const path = normalizeOptionalString(p) ?? "";
@@ -298,8 +246,8 @@ export async function buildChannelsTable(
         }),
       );
     }
-    const liveAccounts = getLiveChannelAccounts({
-      liveChannelStatus: opts?.liveChannelStatus,
+    const liveAccounts = getRuntimeChannelAccounts({
+      payload: opts?.liveChannelStatus,
       channelId: plugin.id,
     });
 
@@ -309,11 +257,11 @@ export async function buildChannelsTable(
     const unavailableConfiguredAccounts = enabledAccounts.filter(
       (a) =>
         hasConfiguredUnavailableCredentialStatus(a.account) &&
-        !hasLiveCredentialAvailable({ liveAccounts, accountId: a.accountId }),
+        !hasRuntimeCredentialAvailable({ liveAccounts, accountId: a.accountId }),
     );
     const accountsForTokenSummary = accounts.map((entry) =>
       hasConfiguredUnavailableCredentialStatus(entry.account) &&
-      hasLiveCredentialAvailable({ liveAccounts, accountId: entry.accountId })
+      hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId })
         ? {
             ...entry,
             account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
@@ -462,7 +410,7 @@ export async function buildChannelsTable(
         title: `${label} accounts`,
         columns: ["Account", "Status", "Notes"],
         rows: configuredAccounts.map((entry) => {
-          const liveCredentialAvailable = hasLiveCredentialAvailable({
+          const liveCredentialAvailable = hasRuntimeCredentialAvailable({
             liveAccounts,
             accountId: entry.accountId,
           });
