@@ -4,7 +4,12 @@ import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
-import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
+import {
+  isFollowupRunAborted,
+  type FollowupRun,
+  type QueueDedupeMode,
+  type QueueSettings,
+} from "./types.js";
 
 /**
  * Keep queued message-id dedupe shared across bundled chunks so redeliveries
@@ -64,6 +69,9 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
 ): boolean {
+  if (isFollowupRunAborted(run)) {
+    return false;
+  }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {

@@ -16,3 +16,4 @@ export type {
   QueueMode,
   QueueSettings,
 } from "./queue/types.js";
+export { isFollowupRunAborted } from "./queue/types.js";

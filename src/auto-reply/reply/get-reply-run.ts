@@ -967,6 +967,7 @@ export async function runPreparedReply(
     transcriptPrompt: transcriptCommandBody,
     currentTurnKind: inboundTurnKind,
     currentTurnContext,
+    abortSignal: opts?.abortSignal,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),

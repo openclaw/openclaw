@@ -26,7 +26,7 @@ import {
 } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { isFollowupRunAborted, refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -196,6 +196,9 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    if (isFollowupRunAborted(queued)) {
+      return;
+    }
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
     queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
@@ -215,7 +218,7 @@ export function createFollowupRunner(params: {
       sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
       resetTriggered: false,
-      upstreamAbortSignal: opts?.abortSignal,
+      upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
     });
     try {
       const runId = crypto.randomUUID();
@@ -322,6 +325,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
+                abortSignal: queued.abortSignal ?? opts?.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

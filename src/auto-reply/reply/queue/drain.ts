@@ -13,7 +13,7 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -154,6 +154,14 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
   };
 }
 
+function dropAbortedFollowups(items: FollowupRun[]): void {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (isFollowupRunAborted(items[index]!)) {
+      items.splice(index, 1);
+    }
+  }
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -183,7 +191,15 @@ export function scheduleFollowupDrain(
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
+        dropAbortedFollowups(queue.items);
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         await waitForQueueDebounce(queue);
+        dropAbortedFollowups(queue.items);
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.

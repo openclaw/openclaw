@@ -31,6 +31,8 @@ export type FollowupRun = {
   currentTurnKind?: InboundTurnKind;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentTurnContext?: CurrentTurnPromptContext;
+  /** Abort signal for turns that are canceled by their source-channel admission fence. */
+  abortSignal?: AbortSignal;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -107,6 +109,10 @@ export type FollowupRun = {
     suppressTranscriptOnlyAssistantPersistence?: boolean;
   };
 };
+
+export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
+  return run.abortSignal?.aborted === true;
+}
 
 export type ResolveQueueSettingsParams = {
   cfg: OpenClawConfig;
