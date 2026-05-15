@@ -9,7 +9,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
-import { hashJson, safeFileSignature } from "./installed-plugin-index-hash.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
@@ -77,11 +77,13 @@ export type {
 } from "./plugin-metadata-snapshot.types.js";
 
 function fileFingerprint(filePath: string): unknown {
-  const signature = safeFileSignature(filePath);
-  if (!signature) {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
+    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
+  } catch {
     return [filePath, "missing"];
   }
-  return [filePath, signature.size, signature.mtimeMs, signature.ctimeMs];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
