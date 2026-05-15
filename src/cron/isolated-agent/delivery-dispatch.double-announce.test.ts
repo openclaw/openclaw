@@ -560,6 +560,39 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("fails explicitly before structured direct delivery when fresh descendants have no fallback text", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "placeholder",
+      runStartedAt: 1_000,
+      emptyOutputHadFreshDescendants: true,
+    });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [];
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      runStartedAt: 1_000,
+    });
+    expectResultFields(state.result, {
+      status: "error",
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect((state.result as { error?: string }).error).toContain(
+      "descendant follow-up did not recover a final reply",
+    );
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
   it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
     const params = makeBaseParams({
       synthesizedText: "Morning briefing complete.",

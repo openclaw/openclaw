@@ -1075,107 +1075,112 @@ export async function dispatchCronDelivery(
     }
   };
 
+  const finalizeDescendantOutputBeforeDelivery =
+    async (): Promise<RunCronAgentTurnResult | null> => {
+      const initialSynthesizedText = synthesizedText?.trim();
+      const expectedSubagentFollowup = initialSynthesizedText
+        ? expectsSubagentFollowup(initialSynthesizedText)
+        : false;
+      const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+      const subagentFollowupSessionKey = params.runSessionKey;
+      let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+        subagentFollowupSessionKey,
+      );
+      const shouldCheckCompletedDescendants =
+        activeSubagentRuns === 0 &&
+        (!initialSynthesizedText || isLikelyInterimCronMessage(initialSynthesizedText));
+      const needsSubagentFollowupRuntime =
+        shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
+      const subagentFollowupRuntime = needsSubagentFollowupRuntime
+        ? await loadSubagentFollowupRuntime()
+        : undefined;
+      // Also check for already-completed descendants. If the subagent finished
+      // before delivery-dispatch runs, activeSubagentRuns is 0 and
+      // expectedSubagentFollowup may be false (e.g. cron said "on it" which
+      // doesn't match the narrow hint list). We still need to use the
+      // descendant's output instead of the interim cron text.
+      const completedDescendantReply = shouldCheckCompletedDescendants
+        ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+            sessionKey: subagentFollowupSessionKey,
+            runStartedAt: params.runStartedAt,
+          })
+        : undefined;
+      const hadDescendants =
+        activeSubagentRuns > 0 ||
+        Boolean(completedDescendantReply) ||
+        params.emptyOutputHadFreshDescendants === true;
+      if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
+        let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
+          sessionKey: subagentFollowupSessionKey,
+          initialReply: initialSynthesizedText,
+          timeoutMs: params.timeoutMs,
+          observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        });
+        activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+          subagentFollowupSessionKey,
+        );
+        if (!finalReply && activeSubagentRuns === 0) {
+          finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+            sessionKey: subagentFollowupSessionKey,
+            runStartedAt: params.runStartedAt,
+          });
+        }
+        if (finalReply && activeSubagentRuns === 0) {
+          outputText = finalReply;
+          summary = pickSummaryFromOutput(finalReply) ?? summary;
+          synthesizedText = finalReply;
+          deliveryPayloads = [{ text: finalReply }];
+        }
+      } else if (completedDescendantReply) {
+        // Descendants already finished before we got here. Use their output
+        // directly instead of the cron agent's interim text.
+        outputText = completedDescendantReply;
+        summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
+        synthesizedText = completedDescendantReply;
+        deliveryPayloads = [{ text: completedDescendantReply }];
+      }
+      if (activeSubagentRuns > 0) {
+        // Parent orchestration is still in progress; avoid announcing a partial
+        // update to the main requester. Mark deliveryAttempted so the timer does
+        // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
+        deliveryAttempted = true;
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          ...params.telemetry,
+        });
+      }
+      if (
+        hadDescendants &&
+        synthesizedText?.trim() === initialSynthesizedText &&
+        initialSynthesizedText &&
+        isLikelyInterimCronMessage(initialSynthesizedText) &&
+        !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
+      ) {
+        // Descendants existed but no post-orchestration synthesis arrived AND
+        // no descendant fallback reply was available. Suppress stale parent
+        // text like "on it, pulling everything together". Mark deliveryAttempted
+        // so the timer does not fire a redundant enqueueSystemEvent fallback.
+        deliveryAttempted = true;
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          ...params.telemetry,
+        });
+      }
+      if (hadDescendants && !synthesizedText?.trim()) {
+        return await failEmptyDescendantFollowup();
+      }
+      return null;
+    };
+
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    const initialSynthesizedText = synthesizedText?.trim();
-    const expectedSubagentFollowup = initialSynthesizedText
-      ? expectsSubagentFollowup(initialSynthesizedText)
-      : false;
-    const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
-    const subagentFollowupSessionKey = params.runSessionKey;
-    let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-      subagentFollowupSessionKey,
-    );
-    const shouldCheckCompletedDescendants =
-      activeSubagentRuns === 0 &&
-      (!initialSynthesizedText || isLikelyInterimCronMessage(initialSynthesizedText));
-    const needsSubagentFollowupRuntime =
-      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
-    const subagentFollowupRuntime = needsSubagentFollowupRuntime
-      ? await loadSubagentFollowupRuntime()
-      : undefined;
-    // Also check for already-completed descendants. If the subagent finished
-    // before delivery-dispatch runs, activeSubagentRuns is 0 and
-    // expectedSubagentFollowup may be false (e.g. cron said "on it" which
-    // doesn't match the narrow hint list). We still need to use the
-    // descendant's output instead of the interim cron text.
-    const completedDescendantReply = shouldCheckCompletedDescendants
-      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
-          runStartedAt: params.runStartedAt,
-        })
-      : undefined;
-    const hadDescendants =
-      activeSubagentRuns > 0 ||
-      Boolean(completedDescendantReply) ||
-      params.emptyOutputHadFreshDescendants === true;
-    if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
-      let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
-        sessionKey: subagentFollowupSessionKey,
-        initialReply: initialSynthesizedText,
-        timeoutMs: params.timeoutMs,
-        observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
-      });
-      activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-        subagentFollowupSessionKey,
-      );
-      if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
-          runStartedAt: params.runStartedAt,
-        });
-      }
-      if (finalReply && activeSubagentRuns === 0) {
-        outputText = finalReply;
-        summary = pickSummaryFromOutput(finalReply) ?? summary;
-        synthesizedText = finalReply;
-        deliveryPayloads = [{ text: finalReply }];
-      }
-    } else if (completedDescendantReply) {
-      // Descendants already finished before we got here. Use their output
-      // directly instead of the cron agent's interim text.
-      outputText = completedDescendantReply;
-      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
-      synthesizedText = completedDescendantReply;
-      deliveryPayloads = [{ text: completedDescendantReply }];
-    }
-    if (activeSubagentRuns > 0) {
-      // Parent orchestration is still in progress; avoid announcing a partial
-      // update to the main requester. Mark deliveryAttempted so the timer does
-      // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
-      deliveryAttempted = true;
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        deliveryAttempted,
-        ...params.telemetry,
-      });
-    }
-    if (
-      hadDescendants &&
-      synthesizedText?.trim() === initialSynthesizedText &&
-      initialSynthesizedText &&
-      isLikelyInterimCronMessage(initialSynthesizedText) &&
-      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
-    ) {
-      // Descendants existed but no post-orchestration synthesis arrived AND
-      // no descendant fallback reply was available. Suppress stale parent
-      // text like "on it, pulling everything together". Mark deliveryAttempted
-      // so the timer does not fire a redundant enqueueSystemEvent fallback.
-      deliveryAttempted = true;
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        deliveryAttempted,
-        ...params.telemetry,
-      });
-    }
-    if (hadDescendants && !synthesizedText?.trim()) {
-      return await failEmptyDescendantFollowup();
-    }
     const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText);
     if (
       normalizedSynthesizedText.text === undefined ||
@@ -1230,6 +1235,18 @@ export async function dispatchCronDelivery(
     // Finalize descendant/subagent output first for text-only cron runs, then
     // send through the real outbound adapter so delivered=true always reflects
     // an actual channel send instead of internal announce routing.
+    const finalizedDescendantResult = await finalizeDescendantOutputBeforeDelivery();
+    if (finalizedDescendantResult) {
+      return {
+        result: finalizedDescendantResult,
+        delivered,
+        deliveryAttempted,
+        summary,
+        outputText,
+        synthesizedText,
+        deliveryPayloads,
+      };
+    }
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
