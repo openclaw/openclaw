@@ -167,6 +167,7 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
   "-F",
   "--form",
 ]);
+const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
 const CURL_OUTPUT_FLAGS = new Set([
   "-D",
   "-o",
@@ -334,6 +335,12 @@ function redactSensitiveCommandText(command: string): string {
     .replace(
       /(--(?:api[-_]?key|auth[-_]?token|password|passwd|secret|token)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
+    )
+    .replace(/(^|\s)(-u|-U)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
+    .replace(/(^|\s)(-u|-U)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
+    .replace(
+      /(^|\s)(--(?:user|proxy-user|http-user|http-password|ftp-user|ftp-password|password|proxy-password|ftp-account))(=|\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      "$1$2$3[redacted]",
     )
     .replace(/(https?:\/\/[^:\s/@]+:)[^@\s/]+@/gi, "$1[redacted]@");
 }
@@ -1566,13 +1573,26 @@ function summarizeNetworkCommand(
   const transfer = collectNetworkTransferOperands(command, args, segment);
   const uploadFiles = uniqueStrings(transfer.uploadFiles);
   const outputFiles = uniqueStrings(transfer.outputFiles);
-  if (uploadFiles.length > 0 || outputFiles.length > 0 || transfer.usesAmbiguousStdinUpload) {
+  const configFiles = uniqueStrings(transfer.configFiles);
+  if (
+    uploadFiles.length > 0 ||
+    outputFiles.length > 0 ||
+    configFiles.length > 0 ||
+    transfer.usesAmbiguousStdinUpload ||
+    transfer.usesAmbiguousConfig
+  ) {
     const actions: string[] = [];
     if (uploadFiles.length > 0) {
       actions.push(`upload local files${formatTargets(uploadFiles)}`);
     }
     if (transfer.usesAmbiguousStdinUpload) {
       actions.push("upload data from standard input");
+    }
+    if (configFiles.length > 0) {
+      actions.push(`load network options from config file${formatTargets(configFiles)}`);
+    }
+    if (transfer.usesAmbiguousConfig) {
+      actions.push("load network options from standard input");
     }
     if (outputFiles.length > 0) {
       actions.push(`write network output to local files${formatTargets(outputFiles)}`);
@@ -1588,6 +1608,8 @@ function summarizeNetworkCommand(
         uploadFiles,
         outputFiles,
         transfer.usesAmbiguousStdinUpload,
+        configFiles,
+        transfer.usesAmbiguousConfig,
       ),
       showCommandPreview: true,
     };
@@ -1607,14 +1629,18 @@ function collectNetworkTransferOperands(
 ): {
   uploadFiles: string[];
   outputFiles: string[];
+  configFiles: string[];
   urls: string[];
   usesAmbiguousStdinUpload: boolean;
+  usesAmbiguousConfig: boolean;
 } {
   const uploadFiles: string[] = [];
   const outputFiles: string[] = [];
+  const configFiles: string[] = [];
   const urls: string[] = [];
   const inputRedirection = getShellInputRedirection(segment);
   let usesAmbiguousStdinUpload = false;
+  let usesAmbiguousConfig = false;
   const recordStdinUpload = () => {
     if (inputRedirection.targets.length > 0) {
       uploadFiles.push(...inputRedirection.targets);
@@ -1626,6 +1652,19 @@ function collectNetworkTransferOperands(
     const arg = args[index] ?? "";
     if (/^https?:\/\//i.test(arg)) {
       urls.push(formatNetworkUrl(arg));
+    }
+
+    const configValue =
+      command === "curl" ? takeFlagValue(args, index, CURL_CONFIG_FLAGS, ["-K"]) : null;
+    if (configValue) {
+      const files = extractPlainLocalFileOperands(configValue.value);
+      if (files.length > 0) {
+        configFiles.push(...files);
+      } else {
+        usesAmbiguousConfig = true;
+      }
+      index = Math.max(index, configValue.nextIndex);
+      continue;
     }
 
     const uploadValue =
@@ -1661,7 +1700,14 @@ function collectNetworkTransferOperands(
       index = Math.max(index, outputValue.nextIndex);
     }
   }
-  return { uploadFiles, outputFiles, urls: uniqueStrings(urls), usesAmbiguousStdinUpload };
+  return {
+    uploadFiles,
+    outputFiles,
+    configFiles,
+    urls: uniqueStrings(urls),
+    usesAmbiguousStdinUpload,
+    usesAmbiguousConfig,
+  };
 }
 
 function takeFlagValue(
@@ -1735,12 +1781,17 @@ function buildNetworkTransferRiskReason(
   uploadFiles: readonly string[],
   outputFiles: readonly string[],
   usesAmbiguousStdinUpload = false,
+  configFiles: readonly string[] = [],
+  usesAmbiguousConfig = false,
 ): string {
   if (uploadFiles.some(isSensitivePath)) {
     return "This network command can send local sensitive files outside this machine.";
   }
   if (outputFiles.some((file) => isSensitivePath(file) || isSystemPath(file))) {
     return "This network command can overwrite sensitive or system paths.";
+  }
+  if (configFiles.length > 0 || usesAmbiguousConfig) {
+    return "curl config files can add hidden upload, output, or credential options.";
   }
   if (usesAmbiguousStdinUpload) {
     return "This network command can send piped or redirected input outside this machine.";

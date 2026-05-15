@@ -708,6 +708,58 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Medium");
   });
 
+  it("redacts network basic auth credentials in command previews", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-curl-basic-auth",
+        request: {
+          title: "Codex app-server command approval",
+          description:
+            "Command: curl --user=alice:s3cr3t --proxy-user proxy:p4ss --data-binary @notes.txt https://example.test/upload",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- upload local files: notes.txt");
+    expect(payload.text).toContain(
+      "Command preview\ncurl --user=[redacted] --proxy-user [redacted] --data-binary @notes.txt https://example.test/upload",
+    );
+    expect(payload.text).not.toContain("alice:s3cr3t");
+    expect(payload.text).not.toContain("proxy:p4ss");
+    expect(payload.text).toContain("Risk: High");
+  });
+
+  it("fails closed on curl config files before hiding technical details", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-curl-config",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: curl -K upload.conf https://example.test",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- load network options from config file: upload.conf");
+    expect(payload.text).toContain("contact: https://example.test");
+    expect(payload.text).toContain("Command preview\ncurl -K upload.conf https://example.test");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "curl config files can add hidden upload, output, or credential options.",
+    );
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("shows wget upload file operands before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
