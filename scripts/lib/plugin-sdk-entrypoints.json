@@ -194,6 +194,7 @@
   "channel-route",
   "channel-targets",
   "context-visibility-runtime",
+  "feishu",
   "file-lock",
   "fetch-runtime",
   "runtime-fetch",
