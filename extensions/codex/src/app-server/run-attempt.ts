@@ -19,6 +19,7 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
+  resolveContextEngineOwnerPluginId,
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
@@ -580,6 +581,7 @@ export async function runCodexAppServerAttempt(
     ...hookContextWindowFields,
   };
   if (activeContextEngine) {
+    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     await bootstrapHarnessContextEngine({
       hadSessionFile,
       contextEngine: activeContextEngine,
@@ -590,6 +592,8 @@ export async function runCodexAppServerAttempt(
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
         agentDir,
+        activeAgentId: sessionAgentId,
+        contextEnginePluginId: activeContextEnginePluginId,
         tokenBudget: params.contextTokenBudget,
       }),
       runMaintenance: runHarnessContextEngineMaintenance,
@@ -1775,6 +1779,7 @@ export async function runCodexAppServerAttempt(
       });
     }
     if (activeContextEngine) {
+      const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
         (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
@@ -1793,6 +1798,8 @@ export async function runCodexAppServerAttempt(
           attempt: runtimeParams,
           workspaceDir: effectiveWorkspace,
           agentDir,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginId,
           tokenBudget: params.contextTokenBudget,
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
