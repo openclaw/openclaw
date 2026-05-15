@@ -13,6 +13,8 @@ export type ResolvedModelRuntimePolicy = {
   source?: ModelRuntimePolicySource;
 };
 
+type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
+
 function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
   return Boolean(value?.id?.trim());
 }
@@ -63,30 +65,68 @@ function modelEntryMatches(params: {
   provider: string | undefined;
   modelId: string;
 }): boolean {
+  return modelEntryMatchKind(params) === "exact";
+}
+
+function modelEntryMatchKind(params: {
+  entry: Pick<ModelDefinitionConfig, "id">;
+  provider: string | undefined;
+  modelId: string;
+}): ModelEntryMatchKind {
   const entryId = params.entry.id.trim();
   if (entryId === params.modelId) {
-    return true;
+    return "exact";
   }
   const slash = entryId.indexOf("/");
   if (slash <= 0) {
-    return false;
+    return "none";
   }
-  return (
-    normalizeProviderId(entryId.slice(0, slash)) === normalizeProviderId(params.provider ?? "") &&
-    entryId.slice(slash + 1).trim() === params.modelId
-  );
+  if (normalizeProviderId(entryId.slice(0, slash)) !== normalizeProviderId(params.provider ?? "")) {
+    return "none";
+  }
+  const entryModelId = entryId.slice(slash + 1).trim();
+  if (entryModelId === params.modelId) {
+    return "exact";
+  }
+  if (entryModelId === "*") {
+    return "provider-wildcard";
+  }
+  return "none";
 }
 
-function modelKeyMatches(params: {
+function modelKeyMatchKind(params: {
   key: string;
   provider: string | undefined;
   modelId: string;
-}): boolean {
-  return modelEntryMatches({
+}): ModelEntryMatchKind {
+  return modelEntryMatchKind({
     entry: { id: params.key },
     provider: params.provider,
     modelId: params.modelId,
   });
+}
+
+function findRuntimePolicyInModelMap(
+  models: Record<string, AgentModelEntryConfig> | undefined,
+  params: {
+    provider?: string;
+    modelId: string;
+  },
+): AgentRuntimePolicyConfig | undefined {
+  let wildcardPolicy: AgentRuntimePolicyConfig | undefined;
+  for (const [key, entry] of Object.entries(models ?? {})) {
+    if (!hasRuntimePolicy(entry?.agentRuntime)) {
+      continue;
+    }
+    const match = modelKeyMatchKind({ key, provider: params.provider, modelId: params.modelId });
+    if (match === "exact") {
+      return entry.agentRuntime;
+    }
+    if (match === "provider-wildcard" && !wildcardPolicy) {
+      wildcardPolicy = entry.agentRuntime;
+    }
+  }
+  return wildcardPolicy;
 }
 
 function resolveAgentModelEntryRuntimePolicy(params: {
@@ -113,13 +153,12 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     params.config.agents?.defaults?.models,
   ];
   for (const models of modelMaps) {
-    for (const [key, entry] of Object.entries(models ?? {})) {
-      if (
-        modelKeyMatches({ key, provider: params.provider, modelId }) &&
-        hasRuntimePolicy(entry?.agentRuntime)
-      ) {
-        return { policy: entry.agentRuntime, source: "model" };
-      }
+    const policy = findRuntimePolicyInModelMap(models, {
+      provider: params.provider,
+      modelId,
+    });
+    if (policy) {
+      return { policy, source: "model" };
     }
   }
   return {};
