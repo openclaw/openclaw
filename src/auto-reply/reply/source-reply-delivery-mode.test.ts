@@ -213,6 +213,14 @@ describe("resolveSourceReplyDeliveryMode", () => {
         messageToolAvailable: false,
       }),
     ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "automatic",
+        strictMessageToolOnly: true,
+      }),
+    ).toBe("message_tool_only");
   });
 
   it("keeps message-tool-only delivery when message tool availability is unknown", () => {
@@ -432,6 +440,21 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         strictMessageToolOnly: true,
         sendPolicy: "allow",
         messageToolAvailable: false,
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+        deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "automatic",
+        strictMessageToolOnly: true,
+        sendPolicy: "allow",
       }),
       {
         sourceReplyDeliveryMode: "message_tool_only",

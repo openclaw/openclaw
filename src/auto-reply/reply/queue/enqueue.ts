@@ -5,7 +5,9 @@ import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import {
+  completeFollowupRunLifecycle,
   isFollowupRunAborted,
+  markFollowupRunEnqueued,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
@@ -95,12 +97,31 @@ export function enqueueFollowupRun(
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    onDrop: (dropped) => {
+      if (queue.dropPolicy === "summarize") {
+        queue.summarySources.push(...dropped);
+        return;
+      }
+      for (const item of dropped) {
+        completeFollowupRunLifecycle(item);
+      }
+    },
   });
+  if (queue.dropPolicy === "summarize") {
+    const overflow = queue.summarySources.length - queue.summaryLines.length;
+    if (overflow > 0) {
+      const removed = queue.summarySources.splice(0, overflow);
+      for (const item of removed) {
+        completeFollowupRunLifecycle(item);
+      }
+    }
+  }
   if (!shouldEnqueue) {
     return false;
   }
 
   queue.items.push(run);
+  markFollowupRunEnqueued(run);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

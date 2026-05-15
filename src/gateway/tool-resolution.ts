@@ -23,6 +23,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundTurnKind } from "../channels/turn/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -61,13 +62,18 @@ export function resolveGatewayScopedTools(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
+  const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
+    params.inboundTurnKind === "room_event" ? "message_tool_only" : undefined;
+  const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
     ...gatewayRequestedTools,
+    ...runtimeAlsoAllow,
   ]);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
     ...(providerProfileAlsoAllow ?? []),
     ...gatewayRequestedTools,
+    ...runtimeAlsoAllow,
   ]);
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
@@ -136,6 +142,7 @@ export function resolveGatewayScopedTools(params: {
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
     inboundTurnKind: params.inboundTurnKind,
+    sourceReplyDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,

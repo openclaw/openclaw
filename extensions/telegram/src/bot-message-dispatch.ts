@@ -237,7 +237,11 @@ function supersedeTelegramReplyFence(key: string): void {
   }
   state.generation += 1;
   abortTelegramReplyFenceControllers(state);
-  telegramReplyFenceByKey.set(key, state);
+  if (state.activeDispatches <= 0 && (state.abortControllers?.size ?? 0) === 0) {
+    telegramReplyFenceByKey.delete(key);
+  } else {
+    telegramReplyFenceByKey.set(key, state);
+  }
 }
 
 function isTelegramReplyFenceSuperseded(params: { key: string; generation: number }): boolean {
@@ -252,8 +256,25 @@ function endTelegramReplyFence(key: string, abortController?: AbortController): 
   if (abortController) {
     state.abortControllers?.delete(abortController);
   }
-  state.activeDispatches -= 1;
-  if (state.activeDispatches <= 0) {
+  state.activeDispatches = Math.max(0, state.activeDispatches - 1);
+  if (state.activeDispatches <= 0 && (state.abortControllers?.size ?? 0) === 0) {
+    telegramReplyFenceByKey.delete(key);
+  }
+}
+
+function releaseTelegramReplyFenceAbortController(
+  key: string,
+  abortController?: AbortController,
+): void {
+  if (!abortController) {
+    return;
+  }
+  const state = telegramReplyFenceByKey.get(key);
+  if (!state) {
+    return;
+  }
+  state.abortControllers?.delete(abortController);
+  if (state.activeDispatches <= 0 && (state.abortControllers?.size ?? 0) === 0) {
     telegramReplyFenceByKey.delete(key);
   }
 }
@@ -494,6 +515,7 @@ export const dispatchTelegramMessage = async ({
   });
   let replyFenceGeneration: number | undefined;
   const roomEventAbortController = isRoomEvent ? new AbortController() : undefined;
+  let roomEventAbortControllerQueued = false;
   let dispatchWasSuperseded = false;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
@@ -505,7 +527,10 @@ export const dispatchTelegramMessage = async ({
     if (replyFenceGeneration === undefined) {
       return;
     }
-    endTelegramReplyFence(replyFenceKey.activeKey, roomEventAbortController);
+    endTelegramReplyFence(
+      replyFenceKey.activeKey,
+      roomEventAbortControllerQueued ? undefined : roomEventAbortController,
+    );
     replyFenceGeneration = undefined;
   };
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -912,15 +937,6 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
-  const endTelegramInboundTurnDeliveryCorrelation = beginTelegramInboundTurnDeliveryCorrelation(
-    ctxPayload.SessionKey,
-    {
-      outboundTo: String(chatId),
-      outboundAccountId: route.accountId,
-      markInboundTurnDelivered: () => deliveryState.markDelivered(),
-    },
-    { inboundTurnKind: ctxPayload.InboundTurnKind },
-  );
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       createChannelHistoryWindow({ historyMap: groupHistories }).clear({
@@ -929,6 +945,22 @@ export const dispatchTelegramMessage = async ({
       });
     }
   };
+  const beginDeliveryCorrelation = () =>
+    beginTelegramInboundTurnDeliveryCorrelation(
+      ctxPayload.SessionKey,
+      {
+        outboundTo: historyKey || String(chatId),
+        outboundAccountId: route.accountId,
+        markInboundTurnDelivered: () => {
+          deliveryState.markDelivered();
+          if (isRoomEvent) {
+            clearGroupHistory();
+          }
+        },
+      },
+      { inboundTurnKind: ctxPayload.InboundTurnKind },
+    );
+  const endTelegramInboundTurnDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
   const deliveryBaseOptions = {
     chatId: String(chatId),
@@ -1483,6 +1515,24 @@ export const dispatchTelegramMessage = async ({
                   disableBlockStreaming,
                   abortSignal: roomEventAbortController?.signal,
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
+                  queuedDeliveryCorrelations: isRoomEvent
+                    ? [{ begin: beginDeliveryCorrelation }]
+                    : undefined,
+                  queuedFollowupLifecycle:
+                    isRoomEvent && roomEventAbortController
+                      ? {
+                          onEnqueued: () => {
+                            roomEventAbortControllerQueued = true;
+                          },
+                          onComplete: () => {
+                            roomEventAbortControllerQueued = false;
+                            releaseTelegramReplyFenceAbortController(
+                              replyFenceKey.activeKey,
+                              roomEventAbortController,
+                            );
+                          },
+                        }
+                      : undefined,
                   suppressTyping: isRoomEvent,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream

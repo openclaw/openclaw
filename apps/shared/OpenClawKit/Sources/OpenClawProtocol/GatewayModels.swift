@@ -541,6 +541,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let senderisowner: Bool?
     public let sessionkey: String?
     public let sessionid: String?
+    public let inboundturnkind: String?
     public let agentid: String?
     public let toolcontext: [String: AnyCodable]?
     public let idempotencykey: String
@@ -554,6 +555,7 @@ public struct MessageActionParams: Codable, Sendable {
         senderisowner: Bool?,
         sessionkey: String?,
         sessionid: String?,
+        inboundturnkind: String? = nil,
         agentid: String?,
         toolcontext: [String: AnyCodable]?,
         idempotencykey: String)
@@ -566,6 +568,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
         self.sessionid = sessionid
+        self.inboundturnkind = inboundturnkind
         self.agentid = agentid
         self.toolcontext = toolcontext
         self.idempotencykey = idempotencykey
@@ -580,6 +583,7 @@ public struct MessageActionParams: Codable, Sendable {
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
         case sessionid = "sessionId"
+        case inboundturnkind = "inboundTurnKind"
         case agentid = "agentId"
         case toolcontext = "toolContext"
         case idempotencykey = "idempotencyKey"

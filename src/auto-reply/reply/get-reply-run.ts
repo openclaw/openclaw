@@ -846,6 +846,7 @@ export async function runPreparedReply(
   const activeSessionIdForInterrupt = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
   if (
     activeRunQueueMode === "interrupt" &&
+    !isRoomEvent &&
     sessionLaneKey &&
     (laneSize > 0 || activeSessionIdForInterrupt)
   ) {
@@ -906,10 +907,12 @@ export async function runPreparedReply(
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const isHeartbeatRun = opts?.isHeartbeat === true;
-  const shouldSteer = !isHeartbeatRun && !effectiveResetTriggered && resolvedQueue.mode === "steer";
+  const shouldSteer =
+    !isRoomEvent && !isHeartbeatRun && !effectiveResetTriggered && resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    (resolvedQueue.mode === "steer" ||
+    ((isRoomEvent && isActive) ||
+      resolvedQueue.mode === "steer" ||
       resolvedQueue.mode === "followup" ||
       resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
@@ -968,6 +971,8 @@ export async function runPreparedReply(
     currentTurnKind: inboundTurnKind,
     currentTurnContext,
     abortSignal: opts?.abortSignal,
+    deliveryCorrelations: opts?.queuedDeliveryCorrelations,
+    queuedLifecycle: opts?.queuedFollowupLifecycle,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),

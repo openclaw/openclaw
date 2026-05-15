@@ -1,3 +1,5 @@
+import { stripTelegramInternalPrefixes } from "./targets.js";
+
 export type TelegramInboundTurnDeliveryEnd = () => void;
 export type TelegramInboundTurnDeliveryKind = "user_request" | "room_event";
 
@@ -10,14 +12,15 @@ type ActiveTurn = {
 const registry = new Map<string, ActiveTurn>();
 
 function normalizeTelegramDeliveryTarget(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^(telegram|tg):/u, "");
+  return stripTelegramInternalPrefixes(value).toLowerCase();
 }
 
 function stripTelegramTopicTarget(value: string): string {
   return value.replace(/:topic:\d+$/u, "");
+}
+
+function hasTelegramTopicTarget(value: string): boolean {
+  return /:topic:\d+$/u.test(value);
 }
 
 function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean {
@@ -25,6 +28,9 @@ function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean
   const actualTarget = normalizeTelegramDeliveryTarget(actual);
   if (expectedTarget === actualTarget) {
     return true;
+  }
+  if (hasTelegramTopicTarget(expectedTarget)) {
+    return false;
   }
   const expectedBase = stripTelegramTopicTarget(expectedTarget);
   const actualBase = stripTelegramTopicTarget(actualTarget);

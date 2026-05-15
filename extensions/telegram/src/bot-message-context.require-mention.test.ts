@@ -90,6 +90,21 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     expect(ctx?.ctxPayload.InboundTurnKind).toBe("room_event");
   });
 
+  it("keeps ambient abort phrases as user requests", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { ambientTurns: "room_event", mentionPatterns: [] } } },
+      message: { ...buildForumMessage(), text: "stop" },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundTurnKind).toBe("user_request");
+  });
+
   it("keeps room events as context for the next direct group request", async () => {
     const groupHistories = new Map();
     await buildTelegramMessageContextForTest({

@@ -7,7 +7,11 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { SourceReplyDeliveryMode } from "../../get-reply-options.types.js";
+import type {
+  QueuedReplyDeliveryCorrelation,
+  QueuedReplyLifecycle,
+  SourceReplyDeliveryMode,
+} from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
@@ -33,6 +37,8 @@ export type FollowupRun = {
   currentTurnContext?: CurrentTurnPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
+  deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
+  queuedLifecycle?: QueuedReplyLifecycle;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -112,6 +118,27 @@ export type FollowupRun = {
 
 export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
   return run.abortSignal?.aborted === true;
+}
+
+const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+const completedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+
+export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): void {
+  const lifecycle = run.queuedLifecycle;
+  if (!lifecycle || enqueuedFollowupLifecycles.has(lifecycle)) {
+    return;
+  }
+  enqueuedFollowupLifecycles.add(lifecycle);
+  lifecycle.onEnqueued?.();
+}
+
+export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifecycle">): void {
+  const lifecycle = run.queuedLifecycle;
+  if (!lifecycle || completedFollowupLifecycles.has(lifecycle)) {
+    return;
+  }
+  completedFollowupLifecycles.add(lifecycle);
+  lifecycle.onComplete?.();
 }
 
 export type ResolveQueueSettingsParams = {

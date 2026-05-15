@@ -7,6 +7,7 @@ import {
   toLocationContext,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -426,11 +427,15 @@ export async function buildTelegramInboundContextPayload(params: {
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
   const ambientGroupTurnKind = resolveAmbientGroupTurnKind(cfg, route.agentId);
+  const hasAbortRequest = isAbortRequestText(rawBody, {
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+  });
   const inboundTurnKind =
     ambientGroupTurnKind === "room_event" &&
     isGroup &&
     !effectiveWasMentioned &&
     !hasControlCommand &&
+    !hasAbortRequest &&
     commandSource !== "native"
       ? "room_event"
       : "user_request";

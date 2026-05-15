@@ -28,11 +28,12 @@ export function resolveSourceReplyDeliveryMode(params: {
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
+  if (params.strictMessageToolOnly === true) {
+    return "message_tool_only";
+  }
   if (
     params.requested &&
-    (params.requested !== "message_tool_only" ||
-      params.strictMessageToolOnly === true ||
-      params.messageToolAvailable !== false)
+    (params.requested !== "message_tool_only" || params.messageToolAvailable !== false)
   ) {
     return params.requested;
   }

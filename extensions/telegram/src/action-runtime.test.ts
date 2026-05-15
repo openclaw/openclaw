@@ -444,6 +444,61 @@ describe("handleTelegramAction", () => {
     endUserRequest();
   });
 
+  it("marks topic room-event delivery when send uses a separate thread id", async () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "-100123:topic:77",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "-100123",
+        threadId: 77,
+        content: "Hello from a room event topic",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+    );
+
+    expect(count).toBe(1);
+    end();
+  });
+
+  it("marks topic room-event delivery when send uses topic shorthand", async () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "-100123:topic:77",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "-100123:77",
+        content: "Hello from a room event topic",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+    );
+
+    expect(count).toBe(1);
+    end();
+  });
+
   it.each([
     {
       name: "poll",

@@ -119,10 +119,21 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
   return prefix ? `${prefix}: ${body}` : body;
 }
 
+function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
+  return (
+    normalizeOptionalString(params.ctx.BodyForCommands) ??
+    normalizeOptionalString(params.ctx.CommandBody) ??
+    normalizeOptionalString(params.ctx.RawBody) ??
+    normalizeOptionalString(params.sessionCtx.BodyForCommands) ??
+    normalizeOptionalString(params.sessionCtx.CommandBody) ??
+    normalizeOptionalString(params.sessionCtx.RawBody) ??
+    (params.hasUserBody ? params.baseBody.trim() : undefined) ??
+    "[User sent media without caption]"
+  );
+}
+
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
-  const roomEventBody = params.hasUserBody
-    ? params.baseBody.trim()
-    : "[User sent media without caption]";
+  const roomEventBody = resolveRoomEventBody(params);
   return [
     "[OpenClaw turn]",
     "kind: room_event",

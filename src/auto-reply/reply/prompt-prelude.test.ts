@@ -113,6 +113,38 @@ describe("buildReplyPromptEnvelope", () => {
     );
   });
 
+  it("uses the raw current body for room-event current event text", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "[Chat history]\nAlice: old context\n\nBob: current note",
+      BodyStripped: "[Chat history]\nAlice: old context\n\nBob: current note",
+      RawBody: "current note",
+      CommandBody: "current note",
+      Provider: "telegram",
+      ChatType: "group",
+      InboundTurnKind: "room_event",
+      MessageSid: "2002",
+      SenderName: "Bob",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: sessionCtx.Body ?? "",
+      hasUserBody: true,
+      inboundUserContext: "Chat history since last reply:\nAlice: old context",
+      isBareSessionReset: false,
+      startupAction: "new",
+      turnKind: "room_event",
+    });
+
+    expect(envelope.currentTurnContext?.text).toContain("Room context:");
+    expect(envelope.currentTurnContext?.text).toContain("Alice: old context");
+    expect(envelope.currentTurnContext?.text).toContain("Current event:\n#2002 Bob: current note");
+    expect(envelope.currentTurnContext?.text).not.toContain(
+      "Current event:\n#2002 Bob: [Chat history]",
+    );
+  });
+
   it("keeps media-only notes in ordinary user request transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",

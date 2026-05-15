@@ -82,6 +82,63 @@ describe("telegram inbound turn delivery", () => {
     end();
   });
 
+  it("matches legacy Telegram group targets for delivery correlation", () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "sess:legacy-group",
+      {
+        outboundTo: "-100123",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:legacy-group",
+      to: "telegram:group:-100123:topic:77",
+      inboundTurnKind: "room_event",
+    });
+
+    expect(count).toBe(1);
+    end();
+  });
+
+  it("keeps topic-scoped delivery correlations topic-specific", () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "sess:topic-specific",
+      {
+        outboundTo: "telegram:group:-100123:topic:77",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:topic-specific",
+      to: "telegram:group:-100123:topic:88",
+      inboundTurnKind: "room_event",
+    });
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:topic-specific",
+      to: "telegram:group:-100123",
+      inboundTurnKind: "room_event",
+    });
+
+    expect(count).toBe(0);
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:topic-specific",
+      to: "telegram:group:-100123:topic:77",
+      inboundTurnKind: "room_event",
+    });
+    expect(count).toBe(1);
+    end();
+  });
+
   it("keeps user-request and room-event delivery correlations separate", () => {
     let userRequestCount = 0;
     let roomEventCount = 0;

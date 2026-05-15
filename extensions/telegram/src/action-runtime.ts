@@ -42,6 +42,7 @@ import {
   sendStickerTelegram,
 } from "./send.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
+import { parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 
 export const telegramActionRuntime = {
@@ -117,6 +118,15 @@ function readTelegramThreadId(params: Record<string, unknown>) {
     readNumberParam(params, "messageThreadId", { integer: true }) ??
     readNumberParam(params, "threadId", { integer: true })
   );
+}
+
+function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
+  const parsed = parseTelegramTarget(to);
+  const topicId = parsed.messageThreadId ?? messageThreadId;
+  if (topicId == null) {
+    return to;
+  }
+  return `${parsed.chatId}:topic:${topicId}`;
 }
 
 function readTelegramReplyToMessageId(params: Record<string, unknown>) {
@@ -244,10 +254,10 @@ export async function handleTelegramAction(
     cfg,
     accountId,
   });
-  const notifyVisibleOutboundSuccess = (to: string) => {
+  const notifyVisibleOutboundSuccess = (to: string, messageThreadId?: number | null) => {
     notifyTelegramInboundTurnOutboundSuccess({
       sessionKey: options?.sessionKey ?? undefined,
-      to,
+      to: formatTelegramDeliveryTarget(to, messageThreadId),
       accountId,
       inboundTurnKind: options?.inboundTurnKind,
     });
@@ -408,7 +418,7 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     });
-    notifyVisibleOutboundSuccess(to);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     await maybePinTelegramActionSend({
       args: params,
       cfg,
@@ -486,7 +496,7 @@ export async function handleTelegramAction(
         silent: silent ?? undefined,
       },
     );
-    notifyVisibleOutboundSuccess(to);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
       messageId: result.messageId,
@@ -597,7 +607,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
     });
-    notifyVisibleOutboundSuccess(to);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
       messageId: result.messageId,

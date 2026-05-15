@@ -1377,6 +1377,105 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
+  it("queues active room events as followups instead of steering fake prompts", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.abortEmbeddedPiRun).mockClear();
+    vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockClear();
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundTurnKind: "room_event",
+          MessageSid: "992",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldSteer).toBe(false);
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.resolvedQueue.mode).toBe("steer");
+    expect(call.followupRun.prompt).toBe("[OpenClaw room event]");
+    expect(call.followupRun.currentTurnKind).toBe("room_event");
+    expect(call.followupRun.currentTurnContext?.text).toContain("Current event:");
+  });
+
+  it("queues active room events instead of interrupting active user requests", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "interrupt",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundTurnKind: "room_event",
+          MessageSid: "993",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldSteer).toBe(false);
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.resolvedQueue.mode).toBe("interrupt");
+    expect(piRuntime.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(piRuntime.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
+  });
+
   it("keeps room events tool-only when group replies are automatic", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
 

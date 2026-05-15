@@ -1723,6 +1723,88 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(groupHistories.get(historyKey)).toHaveLength(0);
   });
 
+  it("does not clear topic room-event history for a send to another topic", async () => {
+    const historyKey = "telegram:group:-100123:topic:77";
+    const groupHistories = new Map([
+      [historyKey, [{ sender: "Alice", body: "topic 77 context", timestamp: 1 }]],
+    ]);
+    let firstStarted: (() => void) | undefined;
+    const firstStartGate = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondStarted: (() => void) | undefined;
+    const secondStartGate = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async () => {
+        firstStarted?.();
+        await firstGate;
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        };
+      })
+      .mockImplementationOnce(async () => {
+        secondStarted?.();
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        };
+      });
+
+    const createRoomContext = (messageId: number, body: string) =>
+      createContext({
+        ctxPayload: {
+          InboundTurnKind: "room_event",
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup", is_forum: true },
+          message_id: messageId,
+          message_thread_id: 77,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: 77, scope: "forum" },
+      });
+
+    const firstPromise = dispatchWithContext({
+      context: createRoomContext(99, "ambient one"),
+      streamMode: "partial",
+    });
+    await firstStartGate;
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "agent:main:telegram:group:-100123",
+      to: "telegram:group:-100123:topic:88",
+      inboundTurnKind: "room_event",
+    });
+    const secondPromise = dispatchWithContext({
+      context: createRoomContext(100, "ambient two"),
+      streamMode: "partial",
+    });
+
+    await secondStartGate;
+    releaseFirst?.();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(groupHistories.get(historyKey)).toHaveLength(1);
+  });
+
   it("does not let room events supersede active user-request dispatch", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);
@@ -1892,6 +1974,73 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(deliveredTexts).toContain("fresh request answer");
     expect(deliveredTexts).not.toContain("stale ambient answer");
+  });
+
+  it("keeps queued room events abortable after their source dispatch returns", async () => {
+    const historyKey = "telegram:group:-100123";
+    const groupHistories = new Map([[historyKey, []]]);
+    let roomEventAbortSignal: AbortSignal | undefined;
+    let queuedLifecycle: { onEnqueued?: () => void; onComplete?: () => void } | undefined;
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        roomEventAbortSignal = replyOptions?.abortSignal;
+        queuedLifecycle = replyOptions?.queuedFollowupLifecycle;
+        queuedLifecycle?.onEnqueued?.();
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "fresh request answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      });
+
+    const createGroupContext = (
+      kind: "user_request" | "room_event",
+      messageId: number,
+      body: string,
+    ) =>
+      createContext({
+        ctxPayload: {
+          InboundTurnKind: kind,
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: messageId,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: undefined, scope: "none" },
+      });
+
+    await dispatchWithContext({
+      context: createGroupContext("room_event", 99, "ambient chatter"),
+      streamMode: "off",
+    });
+    expect(roomEventAbortSignal?.aborted).toBe(false);
+
+    await dispatchWithContext({
+      context: createGroupContext("user_request", 100, "@bot answer now"),
+      streamMode: "off",
+    });
+
+    expect(roomEventAbortSignal?.aborted).toBe(true);
+    queuedLifecycle?.onComplete?.();
   });
 
   it("does not send visible error fallbacks for room events", async () => {
