@@ -5,6 +5,8 @@ import { Readable } from "stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
+import { resolveSystemBin } from "../../../src/infra/resolve-system-bin.js";
+import { MEDIA_FFMPEG_TIMEOUT_MS } from "../../../src/media/ffmpeg-limits.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -22,30 +24,32 @@ const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
  * soft failure — the video can still be sent without a thumbnail.
  */
 async function extractVideoCover(videoBuffer: Buffer): Promise<Buffer | undefined> {
+  const ffmpegPath = resolveSystemBin("ffmpeg", { trust: "standard" });
+  if (!ffmpegPath) {
+    return undefined; // ffmpeg not found in trusted dirs
+  }
+
   return new Promise((resolve) => {
-    let ffmpeg: ReturnType<typeof spawn>;
-    try {
-      ffmpeg = spawn("ffmpeg", [
-        "-i",
-        "pipe:0", // read from stdin
-        "-vframes",
-        "1", // extract exactly one frame
-        "-f",
-        "image2", // output format: raw image
-        "-vcodec",
-        "mjpeg", // encode as JPEG
-        "-loglevel",
-        "error", // suppress progress noise
-        "pipe:1", // write to stdout
-      ]);
-    } catch {
-      // spawn() threw synchronously (e.g. invalid args); binary-not-found
-      // ENOENT is handled via the error event listener below
-      resolve(undefined);
-      return;
-    }
+    const ffmpeg = spawn(ffmpegPath, [
+      "-i",
+      "pipe:0", // read from stdin
+      "-vframes",
+      "1", // extract exactly one frame
+      "-f",
+      "image2", // output format: raw image
+      "-vcodec",
+      "mjpeg", // encode as JPEG
+      "-loglevel",
+      "error", // suppress progress noise
+      "pipe:1", // write to stdout
+    ]);
+
+    const timeout = setTimeout(() => {
+      ffmpeg.kill("SIGKILL");
+    }, MEDIA_FFMPEG_TIMEOUT_MS);
 
     if (!ffmpeg.stdout || !ffmpeg.stdin) {
+      clearTimeout(timeout);
       resolve(undefined);
       return;
     }
@@ -57,14 +61,13 @@ async function extractVideoCover(videoBuffer: Buffer): Promise<Buffer | undefine
     // (e.g., for malformed video inputs that fill the pipe buffer)
     ffmpeg.stderr?.on("data", () => {});
 
-    ffmpeg.on("error", () => resolve(undefined));
-    ffmpeg.on("close", (code) => {
-      if (code === 0 && chunks.length > 0) {
-        resolve(Buffer.concat(chunks));
-      } else {
-        resolve(undefined);
-      }
-    });
+    function finish() {
+      clearTimeout(timeout);
+      resolve(chunks.length > 0 ? Buffer.concat(chunks) : undefined);
+    }
+
+    ffmpeg.on("error", finish);
+    ffmpeg.on("close", finish);
 
     ffmpeg.stdin.on("error", () => {
       // stdin write error (e.g. broken pipe) — not fatal, wait for close event
