@@ -1,8 +1,10 @@
 export type {
+  AfterSourceReplyDeliveryCallback,
   BlockReplyContext,
   GetReplyOptions,
   PartialReplyPayload,
   ReplyThreadingPolicy,
+  SourceReplyDeliveryMode,
   TypingPolicy,
 } from "./get-reply-options.types.js";
 export {

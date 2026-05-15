@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { AgentConfig } from "../config/types.agents.js";
+
+type AgentConfigModelOverride = Pick<AgentConfig, "model" | "subagents">;
 
 const {
   loadModelCatalogMock,
@@ -44,7 +47,7 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
     agentConfigOverride,
   }: {
     cfg?: { agents?: { defaults?: { subagents?: { model?: unknown } } } };
-    agentConfigOverride?: { model?: unknown; subagents?: { model?: unknown } };
+    agentConfigOverride?: AgentConfigModelOverride;
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
@@ -71,12 +74,7 @@ type AgentTurnPayload = {
 
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
-  agentConfigOverride?: {
-    model?: unknown;
-    subagents?: {
-      model?: unknown;
-    };
-  };
+  agentConfigOverride?: AgentConfigModelOverride;
   payload?: AgentTurnPayload;
   sessionEntry?: {
     modelOverride?: string;

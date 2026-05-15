@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type {
+  AfterSourceReplyDeliveryCallback,
   QueuedReplyDeliveryCorrelation,
   QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
@@ -105,6 +106,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    afterSourceReplyDelivery?: (callback: AfterSourceReplyDeliveryCallback) => void;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     enforceFinalTag?: boolean;

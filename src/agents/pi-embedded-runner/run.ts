@@ -443,7 +443,6 @@ export async function runEmbeddedPiAgent(
           log.trace(message);
         }
       };
-      params.onExecutionStarted?.();
       notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -550,6 +549,10 @@ export async function runEmbeddedPiAgent(
         agentHarnessId: params.agentHarnessId,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
+      const harnessOwnsExecutionStartSignal = agentHarness.id === "codex";
+      if (!harnessOwnsExecutionStartSignal) {
+        params.onExecutionStarted?.();
+      }
       const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
@@ -3097,6 +3100,17 @@ export async function runEmbeddedPiAgent(
             await contextEngine.dispose?.();
           },
         });
+        if (params.cleanupCliLiveSessionOnRunEnd === true && agentHarness.dispose) {
+          await runAgentCleanupStep({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            step: "agent-harness-dispose",
+            log,
+            cleanup: async () => {
+              await agentHarness.dispose?.();
+            },
+          });
+        }
         if (params.cleanupBundleMcpOnRunEnd === true) {
           await runAgentCleanupStep({
             runId: params.runId,

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type {
+  AfterSourceReplyDeliveryCallback,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../../../auto-reply/get-reply-options.types.js";
@@ -221,10 +222,16 @@ export type RunEmbeddedPiAgentParams = {
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  afterSourceReplyDelivery?: (callback: AfterSourceReplyDeliveryCallback) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /**
+   * Dispose live CLI-style harness resources when the overall run ends. This is
+   * for one-shot CLI embedded/fallback runs that must release child processes.
+   */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
 };

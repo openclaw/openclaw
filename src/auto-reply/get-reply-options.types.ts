@@ -45,6 +45,8 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   replace?: true;
 };
 
+export type AfterSourceReplyDeliveryCallback = () => Promise<void> | void;
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -172,6 +174,12 @@ export type GetReplyOptions = {
   onCompactionStart?: () => Promise<void> | void;
   /** Called when context auto-compaction completes. */
   onCompactionEnd?: () => Promise<void> | void;
+  /**
+   * Registers work that must start only after the source reply dispatcher has
+   * drained. Use this for post-turn analysis hooks that must not race final
+   * user-visible delivery.
+   */
+  afterSourceReplyDelivery?: (callback: AfterSourceReplyDeliveryCallback) => void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

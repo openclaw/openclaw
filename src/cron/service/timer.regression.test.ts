@@ -206,6 +206,17 @@ describe("cron service timer regressions", () => {
     );
     expect(overloadedJob?.state.lastStatus).toBe("ok");
     expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+
+    const timedOutResult = await runRetryScenario({
+      id: "oneshot-timed-out-retry",
+      deleteAfterRun: false,
+      firstError: "cron: job execution timed out",
+    });
+    const timedOutJob = timedOutResult.state.store?.jobs.find(
+      (j) => j.id === "oneshot-timed-out-retry",
+    );
+    expect(timedOutJob?.state.lastStatus).toBe("ok");
+    expect(timedOutResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("#24355: one-shot job disabled after max transient retries", async () => {

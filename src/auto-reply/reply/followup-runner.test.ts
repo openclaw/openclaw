@@ -1268,6 +1268,104 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     };
   }
 
+  it("runs after-source-delivery callbacks after followup delivery", async () => {
+    const order: string[] = [];
+    let registerAfterDelivery:
+      | ((callback: () => void | Promise<void>) => void)
+      | undefined;
+    const onBlockReply = vi.fn(async () => {
+      order.push("onBlockReply");
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      order.push("runEmbeddedPiAgent");
+      registerAfterDelivery = (
+        params as {
+          afterSourceReplyDelivery?: (callback: () => void | Promise<void>) => void;
+        }
+      ).afterSourceReplyDelivery;
+      registerAfterDelivery?.(() => {
+        order.push("afterSourceReplyDelivery");
+      });
+      return {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["different message"],
+        meta: {},
+      };
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+    await runner(baseQueuedRun());
+    await Promise.resolve();
+
+    expect(registerAfterDelivery).toBeTypeOf("function");
+    expect(order).toEqual(["runEmbeddedPiAgent", "onBlockReply", "afterSourceReplyDelivery"]);
+  });
+
+  it("does not wait for after-source-delivery callbacks before followup cleanup", async () => {
+    const order: string[] = [];
+    const typing = createMockTypingController();
+    const onBlockReply = vi.fn(async () => {
+      order.push("onBlockReply");
+    });
+    const neverResolved = new Promise<void>(() => undefined);
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      (
+        params as {
+          afterSourceReplyDelivery?: (callback: () => void | Promise<void>) => void;
+        }
+      ).afterSourceReplyDelivery?.(() => {
+        order.push("afterSourceReplyDelivery");
+        return neverResolved;
+      });
+      return {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["different message"],
+        meta: {},
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(order).toEqual(["onBlockReply", "afterSourceReplyDelivery"]);
+  });
+
+  it("does not schedule after-source-delivery callbacks when followup delivery fails", async () => {
+    const afterSourceReplyDelivery = vi.fn();
+    const onBlockReply = vi.fn(async () => {
+      throw new Error("delivery failed");
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      (
+        params as {
+          afterSourceReplyDelivery?: (callback: () => void | Promise<void>) => void;
+        }
+      ).afterSourceReplyDelivery?.(afterSourceReplyDelivery);
+      return {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["different message"],
+        meta: {},
+      };
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await expect(runner(baseQueuedRun())).rejects.toThrow("delivery failed");
+    await Promise.resolve();
+
+    expect(afterSourceReplyDelivery).not.toHaveBeenCalled();
+  });
+
   it("persists usage even when replies are suppressed", async () => {
     const storePath = "/tmp/openclaw-followup-usage.json";
     const sessionKey = "main";

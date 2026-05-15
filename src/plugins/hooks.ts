@@ -6,6 +6,9 @@
  */
 
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
+import { runDurablePostTurnJob } from "../agents/post-turn/durable-job-runner.js";
+import { runIsolatedPostTurnPluginHook } from "../agents/post-turn/isolated-plugin-hook-runner.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
@@ -185,6 +188,11 @@ export type HookRunnerOptions = {
    * but the plugin's underlying work is not cancelled.
    */
   modifyingHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
+  /**
+   * Internal/test escape hatch for hook-runner unit tests that exercise timing
+   * semantics without the post-turn durable job wrapper.
+   */
+  durablePostTurnHooks?: boolean;
 };
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
@@ -194,6 +202,36 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   before_agent_run: 15_000,
   before_prompt_build: 15_000,
 };
+const DURABLE_POST_TURN_VOID_HOOKS = new Set<PluginHookName>(["agent_end", "llm_output"]);
+const DEFAULT_POST_TURN_WORKER_TIMEOUT_MS = 30_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function shouldUsePostTurnHookWorkerIsolation(): boolean {
+  if (process.env.OPENCLAW_POST_TURN_HOOK_WORKER_CHILD === "1") {
+    return false;
+  }
+  if (isVitestRuntimeEnv()) {
+    return false;
+  }
+  const configured = process.env.OPENCLAW_POST_TURN_HOOK_WORKER_ISOLATION?.trim().toLowerCase();
+  return configured !== "0" && configured !== "false" && configured !== "off";
+}
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   mergeResults?: (
@@ -273,6 +311,7 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
+  const durablePostTurnHooks = options.durablePostTurnHooks ?? true;
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
@@ -544,16 +583,80 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
+    const hookRegistrationOrdinals = new Map<PluginHookRegistration<K>, number>();
+    const hookRegistrationCountsByPlugin = new Map<string, number>();
+    for (const hook of hooks) {
+      const ordinal = hookRegistrationCountsByPlugin.get(hook.pluginId) ?? 0;
+      hookRegistrationOrdinals.set(hook, ordinal);
+      hookRegistrationCountsByPlugin.set(hook.pluginId, ordinal + 1);
+    }
+
+    const invokeHookHandler = async (hook: PluginHookRegistration<K>) => {
+      const promise = Promise.resolve(
+        (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
+      );
+      const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
+      if (timeoutMs) {
+        await withHookTimeout(promise, timeoutMs, { unref: true });
+      } else {
+        await promise;
+      }
+    };
+
+    const runIsolatedHandler = async (hook: PluginHookRegistration<K>) => {
+      const timeoutMs = getVoidHookTimeoutMs(hookName, hook) ?? DEFAULT_POST_TURN_WORKER_TIMEOUT_MS;
+      if (!shouldUsePostTurnHookWorkerIsolation()) {
+        await invokeHookHandler(hook);
+        return;
+      }
+      if (hookName === "agent_end") {
+        await runIsolatedPostTurnPluginHook({
+          request: {
+            hookName,
+            pluginId: hook.pluginId,
+            registrationOrdinal: hookRegistrationOrdinals.get(hook) ?? 0,
+            event: event as PluginHookAgentEndEvent,
+            ctx: ctx as PluginHookAgentContext,
+          },
+          timeoutMs,
+        });
+        return;
+      }
+      if (hookName === "llm_output") {
+        await runIsolatedPostTurnPluginHook({
+          request: {
+            hookName,
+            pluginId: hook.pluginId,
+            registrationOrdinal: hookRegistrationOrdinals.get(hook) ?? 0,
+            event: event as PluginHookLlmOutputEvent,
+            ctx: ctx as PluginHookAgentContext,
+          },
+          timeoutMs,
+        });
+        return;
+      }
+      await invokeHookHandler(hook);
+    };
+
     const promises = hooks.map(async (hook) => {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
-        );
-        const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
-        if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: true });
+        if (durablePostTurnHooks && DURABLE_POST_TURN_VOID_HOOKS.has(hookName)) {
+          const eventRecord: Record<string, unknown> = isRecord(event) ? event : {};
+          const ctxRecord: Record<string, unknown> = isRecord(ctx) ? ctx : {};
+          await runDurablePostTurnJob({
+            kind: "plugin_hook",
+            hookName,
+            pluginId: hook.pluginId,
+            label: `${hookName} hook`,
+            runId: firstString(eventRecord.runId, ctxRecord.runId),
+            sessionId: firstString(eventRecord.sessionId, ctxRecord.sessionId),
+            sessionKey: firstString(eventRecord.sessionKey, ctxRecord.sessionKey),
+            agentId: firstString(ctxRecord.agentId),
+            sourceChannel: firstString(ctxRecord.channelId, ctxRecord.messageProvider),
+            work: async () => await runIsolatedHandler(hook),
+          });
         } else {
-          await promise;
+          await invokeHookHandler(hook);
         }
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });

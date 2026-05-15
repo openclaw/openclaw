@@ -490,7 +490,7 @@ const TRANSIENT_PATTERNS: Record<string, RegExp> = {
   overloaded:
     /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network: /(network|econnreset|econnrefused|fetch failed|socket)/i,
-  timeout: /(timeout|etimedout)/i,
+  timeout: /(time[-_ ]?out|timed out|etimedout)/i,
   server_error: /\b5\d{2}\b/,
 };
 

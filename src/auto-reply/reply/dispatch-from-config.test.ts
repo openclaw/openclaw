@@ -4176,6 +4176,27 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("can send a hook reply and continue model dispatch when continueAgent is true", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({
+      handled: true,
+      text: "Save this?",
+      continueAgent: true,
+    });
+    const dispatcher = createDispatcher();
+    (dispatcher.sendFinalReply as Mock).mockImplementation((payload: ReplyPayload) => {
+      return payload.text === "Save this?";
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "model reply" }),
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Save this?" });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "model reply" });
+    expect(result.queuedFinal).toBe(true);
+  });
+
   it("silently short-circuits when hook returns handled without text", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();

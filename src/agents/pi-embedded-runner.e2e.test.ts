@@ -22,7 +22,9 @@ const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
   return undefined;
 });
+const disposeSelectedHarnessMock = vi.fn(async () => undefined);
 const resolveSessionKeyForRequestMock = vi.fn();
+let selectedHarnessOverride: { id: string; dispose?: () => unknown } | undefined;
 const resolveStoredSessionKeyForSessionIdMock = vi.fn();
 const resolveModelAsyncMock = vi.fn(async (provider: string, modelId: string) =>
   createResolvedEmbeddedRunnerModel(provider, modelId),
@@ -94,6 +96,7 @@ const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+    selectHarness: () => selectedHarnessOverride,
   });
   vi.doMock("./command/session.js", async () => {
     const actual =
@@ -180,6 +183,8 @@ beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   disposeSessionMcpRuntimeMock.mockReset();
+  selectedHarnessOverride = undefined;
+  disposeSelectedHarnessMock.mockReset();
   resolveSessionKeyForRequestMock.mockReset();
   resolveStoredSessionKeyForSessionIdMock.mockReset();
   resolveModelAsyncMock.mockReset();
@@ -532,6 +537,44 @@ describe("runEmbeddedPiAgent", () => {
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
+  });
+
+  it("disposes plugin harness resources for one-shot CLI embedded runs", async () => {
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "openai",
+          model: "mock-1",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    selectedHarnessOverride = {
+      id: "codex",
+      dispose: () => disposeSelectedHarnessMock(),
+    };
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey: nextSessionKey(),
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("harness-cleanup"),
+      enqueue: immediateEnqueue,
+      cleanupCliLiveSessionOnRunEnd: true,
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
+    expect(disposeSelectedHarnessMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves bundle MCP state across retries within one local run", async () => {

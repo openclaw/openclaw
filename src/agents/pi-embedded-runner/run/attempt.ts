@@ -4010,32 +4010,39 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Run agent_end hooks to allow plugins to analyze the conversation
-        // This is fire-and-forget, so we don't await
-        // Run even on compaction timeout so plugins can log/cleanup
+        // Run agent_end hooks only after source reply delivery drains. These
+        // hooks can perform heavy native work (SQLite/vector indexing); starting
+        // them before the final channel send can lose the user-visible answer if
+        // a native dependency crashes the process.
         if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
-              },
-              {
-                runId: params.runId,
-                trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                trigger: params.trigger,
-                ...buildAgentHookContextChannelFields(params),
-              },
-            )
-            .catch((err) => {
-              log.warn(`agent_end hook failed: ${err}`);
-            });
+          const runAgentEndHooks = () =>
+            hookRunner
+              .runAgentEnd(
+                {
+                  messages: messagesSnapshot,
+                  success: !aborted && !promptError,
+                  error: promptError ? formatErrorMessage(promptError) : undefined,
+                  durationMs: Date.now() - promptStartedAt,
+                },
+                {
+                  runId: params.runId,
+                  trace: freezeDiagnosticTraceContext(diagnosticTrace),
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  trigger: params.trigger,
+                  ...buildAgentHookContextChannelFields(params),
+                },
+              )
+              .catch((err) => {
+                log.warn(`agent_end hook failed: ${err}`);
+              });
+          if (params.afterSourceReplyDelivery) {
+            params.afterSourceReplyDelivery(runAgentEndHooks);
+          } else {
+            void runAgentEndHooks();
+          }
         }
       } finally {
         clearTimeout(abortTimer);
@@ -4115,55 +4122,61 @@ export async function runEmbeddedAttempt(
         hookRunner?.hasHooks("llm_output") &&
         shouldRunLlmOutputHooksForAttempt({ promptErrorSource })
       ) {
-        hookRunner
-          .runLlmOutput(
-            {
-              runId: params.runId,
-              sessionId: params.sessionId,
-              provider: params.provider,
-              model: params.modelId,
-              ...(params.contextWindowInfo?.tokens
-                ? { contextTokenBudget: params.contextWindowInfo.tokens }
-                : {}),
-              ...(params.contextWindowInfo?.source
-                ? { contextWindowSource: params.contextWindowInfo.source }
-                : {}),
-              ...(params.contextWindowInfo?.referenceTokens
-                ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
-                : {}),
-              resolvedRef:
-                params.runtimePlan?.observability.resolvedRef ??
-                `${params.provider}/${params.modelId}`,
-              ...(params.runtimePlan?.observability.harnessId
-                ? { harnessId: params.runtimePlan.observability.harnessId }
-                : {}),
-              assistantTexts,
-              lastAssistant,
-              usage: attemptUsage,
-            },
-            {
-              runId: params.runId,
-              trace: freezeDiagnosticTraceContext(diagnosticTrace),
-              agentId: hookAgentId,
-              sessionKey: params.sessionKey,
-              sessionId: params.sessionId,
-              workspaceDir: params.workspaceDir,
-              trigger: params.trigger,
-              ...(params.contextWindowInfo?.tokens
-                ? { contextTokenBudget: params.contextWindowInfo.tokens }
-                : {}),
-              ...(params.contextWindowInfo?.source
-                ? { contextWindowSource: params.contextWindowInfo.source }
-                : {}),
-              ...(params.contextWindowInfo?.referenceTokens
-                ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
-                : {}),
-              ...buildAgentHookContextChannelFields(params),
-            },
-          )
-          .catch((err) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+        const runLlmOutputHooks = () =>
+          hookRunner
+            .runLlmOutput(
+              {
+                runId: params.runId,
+                sessionId: params.sessionId,
+                provider: params.provider,
+                model: params.modelId,
+                ...(params.contextWindowInfo?.tokens
+                  ? { contextTokenBudget: params.contextWindowInfo.tokens }
+                  : {}),
+                ...(params.contextWindowInfo?.source
+                  ? { contextWindowSource: params.contextWindowInfo.source }
+                  : {}),
+                ...(params.contextWindowInfo?.referenceTokens
+                  ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+                  : {}),
+                resolvedRef:
+                  params.runtimePlan?.observability.resolvedRef ??
+                  `${params.provider}/${params.modelId}`,
+                ...(params.runtimePlan?.observability.harnessId
+                  ? { harnessId: params.runtimePlan.observability.harnessId }
+                  : {}),
+                assistantTexts,
+                lastAssistant,
+                usage: attemptUsage,
+              },
+              {
+                runId: params.runId,
+                trace: freezeDiagnosticTraceContext(diagnosticTrace),
+                agentId: hookAgentId,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                workspaceDir: params.workspaceDir,
+                trigger: params.trigger,
+                ...(params.contextWindowInfo?.tokens
+                  ? { contextTokenBudget: params.contextWindowInfo.tokens }
+                  : {}),
+                ...(params.contextWindowInfo?.source
+                  ? { contextWindowSource: params.contextWindowInfo.source }
+                  : {}),
+                ...(params.contextWindowInfo?.referenceTokens
+                  ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+                  : {}),
+                ...buildAgentHookContextChannelFields(params),
+              },
+            )
+            .catch((err) => {
+              log.warn(`llm_output hook failed: ${String(err)}`);
+            });
+        if (params.afterSourceReplyDelivery) {
+          params.afterSourceReplyDelivery(runLlmOutputHooks);
+        } else {
+          void runLlmOutputHooks();
+        }
       }
 
       const observedReplayMetadata = buildAttemptReplayMetadata({

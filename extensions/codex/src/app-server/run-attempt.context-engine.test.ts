@@ -525,6 +525,37 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(maintain).toHaveBeenCalledTimes(1);
   });
 
+  it("defers afterTurn and turn maintenance until source reply delivery drains", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const afterSourceReplyDeliveryCallbacks: Array<() => Promise<void> | void> = [];
+    const afterTurn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
+    );
+    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.afterSourceReplyDelivery = (callback) => {
+      afterSourceReplyDeliveryCallbacks.push(callback);
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
+    expect(afterSourceReplyDeliveryCallbacks).toHaveLength(1);
+
+    await afterSourceReplyDeliveryCallbacks[0]?.();
+
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(maintain).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

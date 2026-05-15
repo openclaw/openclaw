@@ -189,6 +189,30 @@ function recoverPendingSessionDeliveries(params: {
   timer.unref?.();
 }
 
+function recoverStalePostTurnJobs(params: { log: GatewayRuntimeServiceLogger }): void {
+  void (async () => {
+    const { recoverStaleRunningPostTurnJobs } = await import(
+      "../agents/post-turn/durable-job-state.js"
+    );
+    const { cleanupPostTurnWorkerRequestFiles } = await import(
+      "../agents/post-turn/worker-process.js"
+    );
+    const logRecovery = params.log.child("post-turn-recovery");
+    const result = await recoverStaleRunningPostTurnJobs();
+    const removedWorkerRequests = await cleanupPostTurnWorkerRequestFiles();
+    if (result.crashedJobIds.length > 0) {
+      logRecovery.warn(
+        `Recovered ${result.crashedJobIds.length} stale running post-turn job(s) as crashed; circuit breakers opened.`,
+      );
+    } else {
+      logRecovery.info("No stale running post-turn jobs found.");
+    }
+    if (removedWorkerRequests > 0) {
+      logRecovery.warn(`Removed ${removedWorkerRequests} stale post-turn worker request file(s).`);
+    }
+  })().catch((err) => params.log.error(`Post-turn job recovery failed: ${String(err)}`));
+}
+
 function startGatewayModelPricingRefreshOnDemand(params: {
   config: OpenClawConfig;
   pluginLookUpTable?: PluginMetadataRegistryView;
@@ -272,6 +296,7 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
+  recoverStalePostTurnJobs({ log: params.log });
   const stopModelPricingRefresh = !isVitestRuntimeEnv()
     ? startGatewayModelPricingRefreshOnDemand({
         config: params.cfgAtStart,

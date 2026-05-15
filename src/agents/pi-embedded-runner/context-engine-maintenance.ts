@@ -24,6 +24,7 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
+import { runDurablePostTurnJob } from "../post-turn/durable-job-runner.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -445,18 +446,44 @@ async function runDeferredTurnMaintenanceWorker(params: {
       }
     }, TURN_MAINTENANCE_LONG_WAIT_MS);
 
-    const result = await executeContextEngineMaintenance({
-      contextEngine: params.contextEngine,
+    const durableResult = await runDurablePostTurnJob({
+      kind: "context_engine_maintenance",
+      label: TURN_MAINTENANCE_TASK_LABEL,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      reason: "turn",
-      sessionManager: params.sessionManager,
-      runtimeContext: params.runtimeContext,
-      agentId: params.agentId,
-      config: params.config,
-      executionMode: "background",
+      runId: params.runId,
+      work: async () =>
+        await executeContextEngineMaintenance({
+          contextEngine: params.contextEngine,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          reason: "turn",
+          sessionManager: params.sessionManager,
+          runtimeContext: params.runtimeContext,
+          agentId: params.agentId,
+          config: params.config,
+          executionMode: "background",
+        }),
     });
+    if (durableResult.status === "skipped") {
+      if (longRunningTimer) {
+        clearTimeout(longRunningTimer);
+        longRunningTimer = null;
+      }
+      const endedAt = Date.now();
+      completeTaskRunByRunId({
+        runId: params.runId,
+        runtime: "acp",
+        sessionKey: params.sessionKey,
+        endedAt,
+        lastEventAt: endedAt,
+        progressSummary: "Deferred maintenance skipped.",
+        terminalSummary: durableResult.reason,
+      });
+      return;
+    }
+    const result = durableResult.result;
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
       longRunningTimer = null;

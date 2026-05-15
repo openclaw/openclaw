@@ -574,6 +574,7 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
+    __testing.resetCodexAppServerAttemptLanesForTests();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -583,6 +584,7 @@ describe("runCodexAppServerAttempt", () => {
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
     __testing.resetOpenClawCodingToolsFactoryForTests();
+    __testing.resetCodexAppServerAttemptLanesForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
@@ -681,6 +683,186 @@ describe("runCodexAppServerAttempt", () => {
     ]) {
       expect(dynamicToolNames).not.toContain(toolName);
     }
+  });
+
+  it("serializes concurrent app-server attempts for the same agent lane", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const firstParams = createParams(path.join(tempDir, "session-1.jsonl"), workspaceDir);
+    const secondParams = {
+      ...createParams(path.join(tempDir, "session-2.jsonl"), workspaceDir),
+      prompt: "second",
+      sessionId: "session-2",
+      sessionKey: "agent:main:session-2",
+      runId: "run-2",
+    } as EmbeddedRunAttemptParams;
+    const firstExecutionStarted = vi.fn();
+    const secondExecutionStarted = vi.fn();
+    firstParams.onExecutionStarted = firstExecutionStarted;
+    secondParams.onExecutionStarted = secondExecutionStarted;
+    const clients: Array<{
+      requests: Array<{ method: string; params: unknown }>;
+      notify: (notification: CodexServerNotification) => Promise<void>;
+    }> = [];
+
+    setCodexAppServerClientFactoryForTest(async () => {
+      const index = clients.length + 1;
+      const clientState = {
+        requests: [] as Array<{ method: string; params: unknown }>,
+        notify: async (_notification: CodexServerNotification) => undefined,
+      };
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        clientState.requests.push({ method, params });
+        if (method === "thread/start") {
+          return threadStartResult(`thread-${index}`);
+        }
+        if (method === "turn/start") {
+          return turnStartResult(`turn-${index}`);
+        }
+        return {};
+      });
+      clients.push(clientState);
+      return {
+        request,
+        addNotificationHandler: (handler: typeof clientState.notify) => {
+          clientState.notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      } as never;
+    });
+
+    const firstRun = runCodexAppServerAttempt(firstParams);
+    await vi.waitFor(() => {
+      expect(clients[0]?.requests.some((entry) => entry.method === "turn/start")).toBe(true);
+    });
+    expect(firstExecutionStarted).toHaveBeenCalledTimes(1);
+
+    const secondRun = runCodexAppServerAttempt(secondParams);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(clients).toHaveLength(1);
+    expect(secondExecutionStarted).not.toHaveBeenCalled();
+
+    await clients[0].notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await firstRun;
+
+    await vi.waitFor(() => {
+      expect(clients).toHaveLength(2);
+      expect(clients[1]?.requests.some((entry) => entry.method === "turn/start")).toBe(true);
+    });
+    expect(secondExecutionStarted).toHaveBeenCalledTimes(1);
+
+    await clients[1].notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed" },
+      },
+    });
+    await secondRun;
+  });
+
+  it("rejects a queued app-server attempt promptly when aborted before lane start", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const firstParams = createParams(path.join(tempDir, "session-1.jsonl"), workspaceDir);
+    const abortController = new AbortController();
+    const secondParams = {
+      ...createParams(path.join(tempDir, "session-2.jsonl"), workspaceDir),
+      abortSignal: abortController.signal,
+      prompt: "second",
+      sessionId: "session-2",
+      sessionKey: "agent:main:session-2",
+      runId: "run-2",
+    } as EmbeddedRunAttemptParams;
+    const thirdParams = {
+      ...createParams(path.join(tempDir, "session-3.jsonl"), workspaceDir),
+      prompt: "third",
+      sessionId: "session-3",
+      sessionKey: "agent:main:session-3",
+      runId: "run-3",
+    } as EmbeddedRunAttemptParams;
+    const clients: Array<{
+      requests: Array<{ method: string; params: unknown }>;
+      notify: (notification: CodexServerNotification) => Promise<void>;
+    }> = [];
+
+    setCodexAppServerClientFactoryForTest(async () => {
+      const index = clients.length + 1;
+      const clientState = {
+        requests: [] as Array<{ method: string; params: unknown }>,
+        notify: async (_notification: CodexServerNotification) => undefined,
+      };
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        clientState.requests.push({ method, params });
+        if (method === "thread/start") {
+          return threadStartResult(`thread-${index}`);
+        }
+        if (method === "turn/start") {
+          return turnStartResult(`turn-${index}`);
+        }
+        return {};
+      });
+      clients.push(clientState);
+      return {
+        request,
+        addNotificationHandler: (handler: typeof clientState.notify) => {
+          clientState.notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      } as never;
+    });
+
+    const firstRun = runCodexAppServerAttempt(firstParams);
+    await vi.waitFor(() => {
+      expect(clients[0]?.requests.some((entry) => entry.method === "turn/start")).toBe(true);
+    });
+
+    const secondRun = runCodexAppServerAttempt(secondParams);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(clients).toHaveLength(1);
+    abortController.abort();
+
+    await expect(secondRun).rejects.toThrow("codex app-server attempt aborted before lane start");
+    expect(clients).toHaveLength(1);
+
+    const thirdRun = runCodexAppServerAttempt(thirdParams);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(clients).toHaveLength(1);
+
+    await clients[0].notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await firstRun;
+
+    await vi.waitFor(() => {
+      expect(clients).toHaveLength(2);
+      expect(clients[1]?.requests.some((entry) => entry.method === "turn/start")).toBe(true);
+    });
+
+    await clients[1].notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed" },
+      },
+    });
+    await thirdRun;
   });
 
   it("passes MCP server config through to Codex thread/start", async () => {
@@ -2777,8 +2959,10 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.assistantTexts).toEqual(["hello back"]);
-    expect(llmOutput).toHaveBeenCalledTimes(1);
-    expect(agentEnd).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(llmOutput).toHaveBeenCalledTimes(1);
+      expect(agentEnd).toHaveBeenCalledTimes(1);
+    });
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
       data: {
         endedAt?: number;
@@ -2866,6 +3050,56 @@ describe("runCodexAppServerAttempt", () => {
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
     expect(agentEndContext.runId).toBe("run-1");
     expect(agentEndContext.sessionId).toBe("session-1");
+  });
+
+  it("defers llm_output and agent_end hooks until source reply delivery drains", async () => {
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    const afterSourceReplyDeliveryCallbacks: Array<() => Promise<void> | void> = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.afterSourceReplyDelivery = (callback) => {
+      afterSourceReplyDeliveryCallbacks.push(callback);
+    };
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
+
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-1",
+        delta: "hello after delivery",
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.assistantTexts).toEqual(["hello after delivery"]);
+    expect(llmOutput).not.toHaveBeenCalled();
+    expect(agentEnd).not.toHaveBeenCalled();
+    expect(afterSourceReplyDeliveryCallbacks).toHaveLength(1);
+
+    await afterSourceReplyDeliveryCallbacks[0]?.();
+
+    await vi.waitFor(() => {
+      expect(llmOutput).toHaveBeenCalledTimes(1);
+      expect(agentEnd).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
@@ -3445,7 +3679,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.promptError).toBe("codex exploded");
-    expect(agentEnd).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1));
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
       data: { endedAt?: number; error?: string; phase?: string; startedAt?: number };
       stream: string;
@@ -3509,8 +3743,10 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
 
     expect(llmInput).toHaveBeenCalledTimes(1);
-    expect(llmOutput).toHaveBeenCalledTimes(1);
-    expect(agentEnd).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(llmOutput).toHaveBeenCalledTimes(1);
+      expect(agentEnd).toHaveBeenCalledTimes(1);
+    });
     const [llmOutputPayload] = mockCall(llmOutput, "llm_output") as [
       {
         assistantTexts?: string[];
@@ -3580,7 +3816,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.aborted).toBe(true);
-    expect(agentEnd).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1));
     const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
     expect(agentEndPayload.success).toBe(false);
   });

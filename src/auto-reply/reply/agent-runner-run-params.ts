@@ -80,6 +80,7 @@ export function buildEmbeddedRunBaseParams(params: {
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    afterSourceReplyDelivery: params.run.afterSourceReplyDelivery,
     provider: params.provider,
     model: params.model,
     modelFallbacksOverride,

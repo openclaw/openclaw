@@ -164,6 +164,121 @@ const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
 const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
   CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
+const CODEX_APP_SERVER_ATTEMPT_ABORTED_BEFORE_START =
+  "codex app-server attempt aborted before lane start";
+
+type CodexAppServerAttemptLaneState = {
+  tail: Promise<void>;
+  depth: number;
+};
+
+const CODEX_APP_SERVER_ATTEMPT_LANES = Symbol.for("openclaw.codexAppServerAttemptLanes");
+
+function getCodexAppServerAttemptLanes(): Map<string, CodexAppServerAttemptLaneState> {
+  const globalState = globalThis as typeof globalThis & {
+    [CODEX_APP_SERVER_ATTEMPT_LANES]?: Map<string, CodexAppServerAttemptLaneState>;
+  };
+  globalState[CODEX_APP_SERVER_ATTEMPT_LANES] ??= new Map();
+  return globalState[CODEX_APP_SERVER_ATTEMPT_LANES];
+}
+
+function resolveCodexAppServerAttemptLaneKey(params: EmbeddedRunAttemptParams): string {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return `agent:${sessionAgentId}`;
+}
+
+function createCodexAppServerAttemptAbortedBeforeStartError(): Error {
+  return new Error(CODEX_APP_SERVER_ATTEMPT_ABORTED_BEFORE_START);
+}
+
+async function waitForCodexAppServerAttemptLaneTurn(
+  previous: Promise<void>,
+  abortSignal: AbortSignal | undefined,
+): Promise<void> {
+  if (!abortSignal) {
+    await previous;
+    return;
+  }
+  if (abortSignal.aborted) {
+    throw createCodexAppServerAttemptAbortedBeforeStartError();
+  }
+
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      reject(createCodexAppServerAttemptAbortedBeforeStartError());
+    };
+    abortSignal.addEventListener("abort", abortListener, { once: true });
+  });
+
+  try {
+    await Promise.race([previous, aborted]);
+  } finally {
+    if (abortListener) {
+      abortSignal.removeEventListener("abort", abortListener);
+    }
+  }
+  if (abortSignal.aborted) {
+    throw createCodexAppServerAttemptAbortedBeforeStartError();
+  }
+}
+
+async function withCodexAppServerAttemptLane<T>(
+  params: EmbeddedRunAttemptParams,
+  laneKey: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const lanes = getCodexAppServerAttemptLanes();
+  let state = lanes.get(laneKey);
+  if (!state) {
+    state = { tail: Promise.resolve(), depth: 0 };
+    lanes.set(laneKey, state);
+  }
+  const previous = state.tail.catch(() => undefined);
+  state.depth += 1;
+  const queuedBehind = Math.max(0, state.depth - 1);
+  if (queuedBehind > 0) {
+    embeddedAgentLog.debug("codex app-server attempt queued behind active agent lane", {
+      laneKey,
+      queuedBehind,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    });
+  }
+  const run = (async () => {
+    await waitForCodexAppServerAttemptLaneTurn(previous, params.abortSignal);
+    if (queuedBehind > 0) {
+      embeddedAgentLog.debug("codex app-server attempt starting after agent lane wait", {
+        laneKey,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+      });
+    }
+    params.onExecutionStarted?.();
+    return work();
+  })();
+  const tail = Promise.allSettled([previous, run])
+    .then(() => undefined)
+    .finally(() => {
+      state.depth = Math.max(0, state.depth - 1);
+      if (state.depth === 0 && state.tail === tail) {
+        lanes.delete(laneKey);
+      }
+    });
+  state.tail = tail;
+  return run;
+}
+
+function resetCodexAppServerAttemptLanesForTests(): void {
+  getCodexAppServerAttemptLanes().clear();
+}
+
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
@@ -215,6 +330,24 @@ function emitCodexAppServerEvent(
 
 function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
+}
+
+function scheduleCodexAppServerPostDeliveryWork(
+  params: EmbeddedRunAttemptParams,
+  work: () => Promise<void>,
+): Promise<void> | void {
+  if (!params.afterSourceReplyDelivery) {
+    return work();
+  }
+  params.afterSourceReplyDelivery(async () => {
+    try {
+      await work();
+    } catch (error) {
+      embeddedAgentLog.warn("codex app-server post-delivery work failed", {
+        error: formatErrorMessage(error),
+      });
+    }
+  });
 }
 
 type CodexSteeringQueueOptions = {
@@ -425,7 +558,31 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
   };
 }
 
-export async function runCodexAppServerAttempt(
+export function runCodexAppServerAttempt(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    pluginConfig?: unknown;
+    startupTimeoutFloorMs?: number;
+    nativeHookRelay?: {
+      enabled?: boolean;
+      events?: readonly NativeHookRelayEvent[];
+      ttlMs?: number;
+      gatewayTimeoutMs?: number;
+      hookTimeoutSec?: number;
+    };
+    turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
+    turnTerminalIdleTimeoutMs?: number;
+    clientFactory?: CodexAppServerClientFactory;
+  } = {},
+): Promise<EmbeddedRunAttemptResult> {
+  const laneKey = resolveCodexAppServerAttemptLaneKey(params);
+  return withCodexAppServerAttemptLane(params, laneKey, () =>
+    runCodexAppServerAttemptOnLane(params, options),
+  );
+}
+
+async function runCodexAppServerAttemptOnLane(
   params: EmbeddedRunAttemptParams,
   options: {
     pluginConfig?: unknown;
@@ -1791,64 +1948,69 @@ export async function runCodexAppServerAttempt(
         ...(finalAborted ? { aborted: true } : {}),
       });
     }
-    if (activeContextEngine) {
-      const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
-      const finalMessages =
-        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
-        historyMessages.concat(result.messagesSnapshot);
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: activeContextEngine,
-        promptError: Boolean(finalPromptError),
-        aborted: finalAborted,
-        yieldAborted: Boolean(result.yieldDetected),
-        sessionIdUsed: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        sessionFile: params.sessionFile,
-        messagesSnapshot: finalMessages,
-        prePromptMessageCount,
-        tokenBudget: params.contextTokenBudget,
-        runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
-          attempt: runtimeParams,
-          workspaceDir: effectiveWorkspace,
-          agentDir,
-          activeAgentId: sessionAgentId,
-          contextEnginePluginId: activeContextEnginePluginId,
+    const postDeliveryWork = scheduleCodexAppServerPostDeliveryWork(params, async () => {
+      if (activeContextEngine) {
+        const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
+        const finalMessages =
+          (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
+          historyMessages.concat(result.messagesSnapshot);
+        await finalizeHarnessContextEngineTurn({
+          contextEngine: activeContextEngine,
+          promptError: Boolean(finalPromptError),
+          aborted: finalAborted,
+          yieldAborted: Boolean(result.yieldDetected),
+          sessionIdUsed: params.sessionId,
+          sessionKey: sandboxSessionKey,
+          sessionFile: params.sessionFile,
+          messagesSnapshot: finalMessages,
+          prePromptMessageCount,
           tokenBudget: params.contextTokenBudget,
-          lastCallUsage: result.attemptUsage,
-          promptCache: result.promptCache,
-        }),
-        runMaintenance: runHarnessContextEngineMaintenance,
-        config: params.config,
-        warn: (message) => embeddedAgentLog.warn(message),
+          runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
+            attempt: runtimeParams,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: activeContextEnginePluginId,
+            tokenBudget: params.contextTokenBudget,
+            lastCallUsage: result.attemptUsage,
+            promptCache: result.promptCache,
+          }),
+          runMaintenance: runHarnessContextEngineMaintenance,
+          config: params.config,
+          warn: (message) => embeddedAgentLog.warn(message),
+        });
+      }
+      runAgentHarnessLlmOutputHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: params.modelId,
+          ...hookContextWindowFields,
+          resolvedRef:
+            params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+          ...(params.runtimePlan?.observability.harnessId
+            ? { harnessId: params.runtimePlan.observability.harnessId }
+            : {}),
+          assistantTexts: result.assistantTexts,
+          ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+          ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+        },
+        ctx: hookContext,
       });
+      runAgentHarnessAgentEndHook({
+        event: {
+          messages: result.messagesSnapshot,
+          success: !finalAborted && !finalPromptError,
+          ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+          durationMs: Date.now() - attemptStartedAt,
+        },
+        ctx: hookContext,
+      });
+    });
+    if (postDeliveryWork) {
+      await postDeliveryWork;
     }
-    runAgentHarnessLlmOutputHook({
-      event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: params.provider,
-        model: params.modelId,
-        ...hookContextWindowFields,
-        resolvedRef:
-          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
-        ...(params.runtimePlan?.observability.harnessId
-          ? { harnessId: params.runtimePlan.observability.harnessId }
-          : {}),
-        assistantTexts: result.assistantTexts,
-        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
-        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
-      },
-      ctx: hookContext,
-    });
-    runAgentHarnessAgentEndHook({
-      event: {
-        messages: result.messagesSnapshot,
-        success: !finalAborted && !finalPromptError,
-        ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
-        durationMs: Date.now() - attemptStartedAt,
-      },
-      ctx: hookContext,
-    });
     return {
       ...result,
       timedOut,
@@ -3286,6 +3448,7 @@ export const __testing = {
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resetCodexAppServerAttemptLanesForTests,
   remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
   restrictCodexAppServerSandboxForOpenClawSandbox,

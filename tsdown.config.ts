@@ -219,6 +219,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
+    "agents/post-turn/isolated-plugin-hook-worker-entry":
+      "src/agents/post-turn/isolated-plugin-hook-worker-entry.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",

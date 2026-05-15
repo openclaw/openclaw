@@ -1,11 +1,17 @@
 import { vi } from "vitest";
 
+type EmbeddedRunnerHarnessMock = {
+  id?: string;
+  dispose?: () => unknown;
+};
+
 type EmbeddedRunnerFastRunMockOptions = {
   runEmbeddedAttempt: (params: unknown) => unknown;
   prepareProviderRuntimeAuth?: (params: {
     provider: string;
     context: { apiKey: string };
   }) => unknown;
+  selectHarness?: (params: { provider?: string }) => EmbeddedRunnerHarnessMock | undefined;
 };
 
 type EmbeddedRunnerBackoffMockOptions = {
@@ -54,12 +60,17 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
   vi.doMock("../harness/selection.js", () => ({
-    selectAgentHarness: vi.fn((params: { provider?: string }) => ({
-      id: params.provider === "codex-cli" ? "codex" : "pi",
-      label: "Mock agent harness",
-      supports: vi.fn(() => ({ supported: false })),
-      runAttempt: vi.fn(),
-    })),
+    selectAgentHarness: vi.fn((params: { provider?: string }) => {
+      const harness = options.selectHarness?.(params);
+
+      return {
+        id: harness?.id ?? (params.provider === "codex-cli" ? "codex" : "pi"),
+        label: "Mock agent harness",
+        supports: vi.fn(() => ({ supported: false })),
+        runAttempt: vi.fn(),
+        ...(harness?.dispose ? { dispose: harness.dispose } : {}),
+      };
+    }),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
     runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
   }));

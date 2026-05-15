@@ -28,7 +28,7 @@ import {
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { GetReplyOptions, ReplyPayload } from "./types.js";
+import type { AfterSourceReplyDeliveryCallback, GetReplyOptions, ReplyPayload } from "./types.js";
 
 type ForegroundReplyFenceState = {
   generation: number;
@@ -101,7 +101,7 @@ function isForegroundReplyFenceSuperseded(
 ): boolean {
   return Boolean(
     snapshot &&
-    (foregroundReplyFenceByKey.get(snapshot.key)?.generation ?? 0) !== snapshot.generation,
+      (foregroundReplyFenceByKey.get(snapshot.key)?.generation ?? 0) !== snapshot.generation,
   );
 }
 
@@ -257,6 +257,23 @@ export async function dispatchInboundMessage(params: {
       attributes: buildDispatchTimelineAttributes(params.ctx),
     },
   );
+  const afterSourceReplyDeliveryCallbacks: AfterSourceReplyDeliveryCallback[] = [];
+  const upstreamAfterSourceReplyDelivery = params.replyOptions?.afterSourceReplyDelivery;
+  const runAfterSourceReplyDeliveryCallbacks = async () => {
+    for (const callback of afterSourceReplyDeliveryCallbacks) {
+      await callback();
+    }
+  };
+  const replyOptions = {
+    ...params.replyOptions,
+    afterSourceReplyDelivery: (callback: AfterSourceReplyDeliveryCallback) => {
+      if (upstreamAfterSourceReplyDelivery) {
+        upstreamAfterSourceReplyDelivery(callback);
+      } else {
+        afterSourceReplyDeliveryCallbacks.push(callback);
+      }
+    },
+  } satisfies Omit<GetReplyOptions, "onBlockReply">;
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
@@ -267,7 +284,7 @@ export async function dispatchInboundMessage(params: {
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
-            replyOptions: params.replyOptions,
+            replyOptions,
             replyResolver: params.replyResolver,
           }),
         {
@@ -276,6 +293,9 @@ export async function dispatchInboundMessage(params: {
           attributes: buildDispatchTimelineAttributes(finalized),
         },
       ),
+    onSettled: upstreamAfterSourceReplyDelivery
+      ? undefined
+      : runAfterSourceReplyDeliveryCallbacks,
   });
   return finalizeDispatchResult(result, params.dispatcher);
 }

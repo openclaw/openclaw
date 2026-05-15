@@ -154,6 +154,102 @@ describe("withReplyDispatcher", () => {
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
   });
 
+  it("runs after-source-delivery callbacks after dispatcher idle", async () => {
+    const order: string[] = [];
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => {
+        order.push("sendFinalReply");
+        return true;
+      },
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      markComplete: () => {
+        order.push("markComplete");
+      },
+      waitForIdle: async () => {
+        order.push("waitForIdle");
+      },
+    } satisfies ReplyDispatcher;
+    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ dispatcher, replyOptions }) => {
+        replyOptions?.afterSourceReplyDelivery?.(() => {
+          order.push("afterSourceReplyDelivery");
+        });
+        dispatcher.sendFinalReply({ text: "ok" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+
+    const result = await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
+    expect(order).toEqual([
+      "sendFinalReply",
+      "markComplete",
+      "waitForIdle",
+      "afterSourceReplyDelivery",
+    ]);
+  });
+
+  it("delegates after-source-delivery callbacks to caller-owned schedulers", async () => {
+    const order: string[] = [];
+    const registeredCallbacks: Array<() => void | Promise<void>> = [];
+    const neverResolvingCallback = vi.fn(() => new Promise<void>(() => undefined));
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => {
+        order.push("sendFinalReply");
+        return true;
+      },
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      markComplete: () => {
+        order.push("markComplete");
+      },
+      waitForIdle: async () => {
+        order.push("waitForIdle");
+      },
+    } satisfies ReplyDispatcher;
+    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ dispatcher, replyOptions }) => {
+        replyOptions?.afterSourceReplyDelivery?.(neverResolvingCallback);
+        dispatcher.sendFinalReply({ text: "ok" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+
+    const result = await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        afterSourceReplyDelivery: (callback) => {
+          order.push("registerAfterSourceReplyDelivery");
+          registeredCallbacks.push(callback);
+        },
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
+    expect(registeredCallbacks).toEqual([neverResolvingCallback]);
+    expect(neverResolvingCallback).not.toHaveBeenCalled();
+    expect(order).toEqual([
+      "registerAfterSourceReplyDelivery",
+      "sendFinalReply",
+      "markComplete",
+      "waitForIdle",
+    ]);
+  });
+
   it("always marks complete and waits for idle after success", async () => {
     const order: string[] = [];
     const dispatcher = createDispatcher(order);

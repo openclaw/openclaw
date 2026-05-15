@@ -486,6 +486,78 @@ describe("runAgentTurnWithFallback", () => {
     vi.clearAllMocks();
   });
 
+  it("passes source reply delivery callback into immediate embedded runs", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const afterSourceReplyDelivery = vi.fn();
+    const followupRun = createFollowupRun();
+    (
+      followupRun.run as FollowupRun["run"] & {
+        afterSourceReplyDelivery?: typeof afterSourceReplyDelivery;
+      }
+    ).afterSourceReplyDelivery = afterSourceReplyDelivery;
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      afterSourceReplyDelivery,
+    });
+  });
+
+  it("defers immediate embedded post-delivery callbacks until the source delivery drain", async () => {
+    const afterDeliveryCallbacks: Array<() => void | Promise<void>> = [];
+    const agentEndHook = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.run.afterSourceReplyDelivery = (callback) => {
+      afterDeliveryCallbacks.push(callback);
+    };
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      (
+        params as EmbeddedAgentParams & {
+          afterSourceReplyDelivery?: (callback: () => void | Promise<void>) => void;
+        }
+      ).afterSourceReplyDelivery?.(agentEndHook);
+      expect(agentEndHook).not.toHaveBeenCalled();
+      return {
+        payloads: [{ text: "final" }],
+        meta: {},
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(agentEndHook).not.toHaveBeenCalled();
+    expect(afterDeliveryCallbacks).toHaveLength(1);
+
+    await afterDeliveryCallbacks[0]?.();
+
+    expect(agentEndHook).toHaveBeenCalledOnce();
+  });
+
   it("forwards the static extra system prompt to CLI backends", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

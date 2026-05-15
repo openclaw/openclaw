@@ -71,6 +71,7 @@ describe("hook correlation fields", () => {
       const runner = createHookRunner(registry, {
         logger,
         voidHookTimeoutMsByHook: { agent_end: 5 },
+        durablePostTurnHooks: false,
       });
       const run = runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
 
@@ -109,6 +110,7 @@ describe("hook correlation fields", () => {
       const runner = createHookRunner(registry, {
         logger,
         voidHookTimeoutMsByHook: { agent_end: 5 },
+        durablePostTurnHooks: false,
       });
       const run = runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
 
