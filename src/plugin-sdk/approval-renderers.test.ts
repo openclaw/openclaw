@@ -894,14 +894,30 @@ describe("plugin-sdk/approval-renderers", () => {
 
   it.each([
     {
+      contact: "https://example.test/path",
       command: "curl https://user:s3cr3t@example.test/path",
       id: "plugin-command-curl-url-credentials",
+      redactedUrl: "https://[redacted]@example.test/path",
     },
     {
+      contact: "https://example.test/path",
       command: "wget https://token@example.test/path",
       id: "plugin-command-wget-url-credentials",
+      redactedUrl: "https://[redacted]@example.test/path",
     },
-  ])("fails closed on credential-bearing network URLs: $command", ({ command, id }) => {
+    {
+      contact: "https://example.test/upload",
+      command: "curl https://example.test/upload?access_token=s3cr3t",
+      id: "plugin-command-curl-query-token",
+      redactedUrl: "https://example.test/upload?access_token=[redacted]",
+    },
+    {
+      contact: "https://example.test/file",
+      command: "wget https://example.test/file?api_key=topsecret&mode=read",
+      id: "plugin-command-wget-query-api-key",
+      redactedUrl: "https://example.test/file?api_key=[redacted]&mode=read",
+    },
+  ])("fails closed on credential-bearing network URLs: $command", ({ command, contact, id, redactedUrl }) => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
         id,
@@ -918,11 +934,13 @@ describe("plugin-sdk/approval-renderers", () => {
     });
 
     expect(payload.text).toContain("- send network credentials embedded in URLs");
-    expect(payload.text).toContain("contact: https://example.test/path");
+    expect(payload.text).toContain(`contact: ${contact}`);
     expect(payload.text).toContain("Command preview");
-    expect(payload.text).toContain("https://[redacted]@example.test/path");
+    expect(payload.text).toContain(redactedUrl);
     expect(payload.text).not.toContain("user:s3cr3t");
     expect(payload.text).not.toContain("token@example.test");
+    expect(payload.text).not.toContain("access_token=s3cr3t");
+    expect(payload.text).not.toContain("api_key=topsecret");
     expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(
       "Network credential options can expose cookies, tokens, or login/password data.",

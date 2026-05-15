@@ -398,7 +398,7 @@ function redactQuotedCookieHeaderValues(command: string): string {
 }
 
 function redactSensitiveCommandText(command: string): string {
-  return redactQuotedCookieHeaderValues(command)
+  return redactSensitiveUrlQueryValues(redactQuotedCookieHeaderValues(command))
     .replace(
       /(authorization:\s*(?:(?:bearer|basic|token)\s+)?)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
@@ -432,6 +432,12 @@ function redactSensitiveCommandText(command: string): string {
     )
     .replace(/(^|\s)(--cookie)(=|\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
     .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[redacted]@");
+}
+
+function redactSensitiveUrlQueryValues(command: string): string {
+  return command.replace(/([?&])([^=\s&#]+)=([^&\s'"#]+)/gi, (match, separator, key) => {
+    return isSensitiveUrlQueryKey(String(key)) ? `${separator}${key}=[redacted]` : match;
+  });
 }
 
 function splitCommandSegments(command: string): string[] {
@@ -2531,9 +2537,36 @@ function hasNetworkUrlCredentials(arg: string): boolean {
   const value = stripShellWordQuotes(arg.trim());
   try {
     const url = new URL(value);
-    return url.username.length > 0 || url.password.length > 0;
+    return (
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      Array.from(url.searchParams.keys()).some(isSensitiveUrlQueryKey)
+    );
   } catch {
-    return /^https?:\/\/[^/\s@]+@/i.test(value);
+    if (/^https?:\/\/[^/\s@]+@/i.test(value)) {
+      return true;
+    }
+    for (const match of value.matchAll(/[?&]([^=\s&#]+)=/gi)) {
+      if (isSensitiveUrlQueryKey(match[1] ?? "")) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+function isSensitiveUrlQueryKey(key: string): boolean {
+  const normalized = decodeURIComponentSafe(key).toLowerCase();
+  return /(?:^|[-_.])(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|id[-_]?token|jwt|password|passwd|refresh[-_]?token|secret|session|signature|token)(?:$|[-_.])/i.test(
+    normalized,
+  );
+}
+
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
 }
 
