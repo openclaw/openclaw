@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-14 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-15 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,10 +17,10 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 5      | 40     | 45      | 0      | 45        |
-| Windows platform          | 62     | 33     | 95      | 0      | 95        |
-| WSL                       | 7      | 4      | 11      | 0      | 11        |
-| Azure                     | 6      | 6      | 12      | 0      | 12        |
+| MS Teams (channel plugin) | 5      | 41     | 46      | 0      | 46        |
+| Windows platform          | 61     | 33     | 94      | 0      | 94        |
+| WSL                       | 7      | 3      | 10      | 0      | 10        |
+| Azure                     | 7      | 6      | 13      | 0      | 13        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
 | **Total**                 | **80** | **83** | **163** | **0**  | **163**   |
 
@@ -54,6 +54,7 @@
 | [ ]       | P0       | #79970 | feat: expose durable session id match selection helpers                                              | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
+| [ ]       | P1       | #71856 | feat(tui): fetch startup conversation summary dynamically from Gateway API                           | M    |             |
 | [ ]       | P2       | #80645 | feat(wizard): add CLI onboarding i18n                                                                | XL   |             |
 | [ ]       | P2       | #80285 | fix: clear cross-run messaging-tool sent-text state after every compaction                           | XL   |             |
 | [ ]       | P2       | #80204 | fix: propagate gateway TLS fingerprints to bootstrap clients                                         | XL   |             |
@@ -96,69 +97,68 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                                                                     | Labels               | Assignee    |
-| --------- | -------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------- |
-| [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                    | `bug` `bug:crash`    |             |
-| [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                         |                      |             |
-| [ ]       | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                      | `bug` `bug:crash`    |             |
-| [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                            | `bug` `regression`   |             |
-| [ ]       | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                               |                      |             |
-| [ ]       | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                                | `bug` `regression`   |             |
-| [ ]       | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                   |                      |             |
-| [ ]       | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges    |                      |             |
-| [ ]       | P1       | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher                                                                        |                      |             |
-| [ ]       | P1       | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE)                            |                      | @vincentkoc |
-| [ ]       | P1       | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks   |                      |             |
-| [ ]       | P1       | #63257 | Windows Gateway Feishu API timeout 30s at startup                                                                                                         |                      |             |
-| [ ]       | P1       | #62099 | EPERM on auth-profiles.json causes full gateway failure cascade (Windows)                                                                                 |                      |             |
-| [ ]       | P1       | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack)                                        |                      |             |
-| [ ]       | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                              | `bug` `regression`   |             |
-| [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                        |                      |             |
-| [ ]       | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                          | `bug` `regression`   |             |
-| [ ]       | P2       | #81673 | Build official OpenClaw companion downloads for Windows and Linux                                                                                         |                      |             |
-| [ ]       | P2       | #81254 | [Bug]: Windows node Scheduled Task opens persistent cmd window at login                                                                                   | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #81020 | [Windows] scheduled task watchdog: repetition Duration=P1D expires after 1 day, loses auto-restart                                                        |                      |             |
-| [ ]       | P2       | #80650 | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                        | `bug`                |             |
-| [ ]       | P2       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                           |                      |             |
-| [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                             |                      |             |
-| [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                    |                      |             |
-| [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                        |                      |             |
-| [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                              |                      |             |
-| [ ]       | P2       | #78352 | [Bug]: 16 Telegram bots on Windows cause event loop starvation up to 65s — 100% ELU, 90%+ CPU, control-plane RPC >100s                                    |                      |             |
-| [ ]       | P2       | #77805 | telegram bundled channel setup fails on Windows: plugin module path escapes plugin root or fails alias checks                                             |                      |             |
-| [ ]       | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                           |                      |             |
-| [ ]       | P2       | #76884 | [Bug]: OpenClaw on native Windows getting notably slower and slower with each new version???                                                              | `bug`                |             |
-| [ ]       | P2       | #76702 | Windows + Feishu DM becomes very slow after upgrade to 2026.5.2; latency appears in agent/session processing, likely amplified by large session context   |                      |             |
-| [ ]       | P2       | #76553 | [Bug]: Windows: Claude Code not detected by OpenClaw, Gateway in restart loop after PATH workaround                                                       | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #73859 | [Bug]: Built-in plugins (minimax, google, talk-voice) fail with RangeError: Maximum call stack size exceeded on Windows                                   |                      |             |
-| [ ]       | P2       | #73323 | [Bug]: Gateway runtime degradation: pricing fetch 60s timeouts, Telegram polling stalls, slow RPC — chronic across 4.23/4.25/4.26 on Windows 11 + Node 24 | `bug`                |             |
-| [ ]       | P2       | #73059 | [Bug]: Windows linked source install can skip Control UI auto-build through junction-launched scripts/ui.js                                               |                      |             |
-| [ ]       | P2       | #72922 | [Bug]: Sluggish response time and unstable Web GUI and CLI on Windows Server 2022                                                                         | `bug`                |             |
-| [ ]       | P2       | #71717 | exec tool returns EPERM on Windows, all commands fail                                                                                                     | `bug`                |             |
-| [ ]       | P2       | #70451 | [Bug]: CLI hooks enable times out / SIGKILL on Windows                                                                                                    |                      |             |
-| [ ]       | P2       | #66746 | [Bug] Windows memory indexing falls back to FTS-only in 2026.4.14 even though direct node:sqlite + sqlite-vec works                                       |                      |             |
-| [ ]       | P2       | #66479 | Windows: skill not discovered due to UTF-8 BOM injected by PowerShell WriteAllText                                                                        |                      |             |
-| [ ]       | P2       | #64443 | OpenClaw chat interface causes very high WindowServer CPU on Intel Retina iMac                                                                            |                      |             |
-| [ ]       | P2       | #64253 | Gateway becomes unresponsive under subagent load on Windows - completion announcements timeout                                                            |                      |             |
-| [ ]       | P2       | #63491 | [Bug]: Windows Scheduled Task gateway restart/health becomes inconsistent after ready                                                                     |                      |             |
-| [ ]       | P2       | #59709 | Cron scheduled task delivery fails (v2026.3.31)                                                                                                           |                      |             |
-| [ ]       | P2       | #59281 | [Bug]: Windows plugin TS source-loading via jiti is pathologically slow in real production call sites                                                     | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #58433 | [Bug]: [Windows] Path character loss bug - "system" becomes "ystem" in file paths                                                                         | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #58139 | [Bug]: memory-lancedb plugin fails with Windows Docker bind mount                                                                                         | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #56284 | Windows: gateway restart does not wait for active tasks and loses session state                                                                           |                      |             |
-| [ ]       | P2       | #56106 | Transcript JSONL encoding corrupted on Windows (GBK/UTF-8 mix)                                                                                            |                      |             |
-| [ ]       | P2       | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix                                                                           | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #44559 | [Bug]: Windows： Gateway 关闭 PowerShell 窗口后断连                                                                                                       | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #44296 | Show the actual PowerShell profile path during onboarding shell-completion setup                                                                          |                      |             |
-| [ ]       | P2       | #44293 | Make `pnpm check:docs` work in native PowerShell                                                                                                          |                      |             |
-| [ ]       | P2       | #44291 | Add native PowerShell smoke coverage for contributor commands                                                                                             |                      |             |
-| [ ]       | P2       | #40694 | Browser-opened temporary tabs/windows should close automatically after task completion                                                                    |                      |             |
-| [ ]       | P2       | #40540 | [Bug]: `openclaw update` command fails with EBUSY error on Windows                                                                                        | `bug` `bug:behavior` |             |
+| Resolved? | Priority | #      | Title                                                                                                                                                   | Labels               | Assignee    |
+| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------- |
+| [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  | `bug` `bug:crash`    |             |
+| [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |                      |             |
+| [ ]       | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    | `bug` `bug:crash`    |             |
+| [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          | `bug` `regression`   |             |
+| [ ]       | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                             |                      |             |
+| [ ]       | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              | `bug` `regression`   |             |
+| [ ]       | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                 |                      |             |
+| [ ]       | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges  |                      |             |
+| [ ]       | P1       | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher                                                                      |                      |             |
+| [ ]       | P1       | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE)                          |                      | @vincentkoc |
+| [ ]       | P1       | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks |                      |             |
+| [ ]       | P1       | #63257 | Windows Gateway Feishu API timeout 30s at startup                                                                                                       |                      |             |
+| [ ]       | P1       | #62099 | EPERM on auth-profiles.json causes full gateway failure cascade (Windows)                                                                               |                      |             |
+| [ ]       | P1       | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack)                                      |                      |             |
+| [ ]       | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                            | `bug` `regression`   |             |
+| [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      |                      |             |
+| [ ]       | P2       | #81673 | Build official OpenClaw companion downloads for Windows and Linux                                                                                       |                      |             |
+| [ ]       | P2       | #81254 | [Bug]: Windows node Scheduled Task opens persistent cmd window at login                                                                                 | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #81020 | [Windows] scheduled task watchdog: repetition Duration=P1D expires after 1 day, loses auto-restart                                                      |                      |             |
+| [ ]       | P2       | #80650 | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                      | `bug`                |             |
+| [ ]       | P2       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                         |                      |             |
+| [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                           |                      |             |
+| [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                  |                      |             |
+| [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                      |                      |             |
+| [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                            |                      |             |
+| [ ]       | P2       | #78352 | [Bug]: 16 Telegram bots on Windows cause event loop starvation up to 65s — 100% ELU, 90%+ CPU, control-plane RPC >100s                                  |                      |             |
+| [ ]       | P2       | #77805 | telegram bundled channel setup fails on Windows: plugin module path escapes plugin root or fails alias checks                                           |                      |             |
+| [ ]       | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                         |                      |             |
+| [ ]       | P2       | #76884 | [Bug]: OpenClaw on native Windows getting notably slower and slower with each new version???                                                            | `bug`                |             |
+| [ ]       | P2       | #76702 | Windows + Feishu DM becomes very slow after upgrade to 2026.5.2; latency appears in agent/session processing, likely amplified by large session context |                      |             |
+| [ ]       | P2       | #76553 | [Bug]: Windows: Claude Code not detected by OpenClaw, Gateway in restart loop after PATH workaround                                                     | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #73859 | [Bug]: Built-in plugins (minimax, google, talk-voice) fail with RangeError: Maximum call stack size exceeded on Windows                                 |                      |             |
+| [ ]       | P2       | #73059 | [Bug]: Windows linked source install can skip Control UI auto-build through junction-launched scripts/ui.js                                             |                      |             |
+| [ ]       | P2       | #72922 | [Bug]: Sluggish response time and unstable Web GUI and CLI on Windows Server 2022                                                                       | `bug`                |             |
+| [ ]       | P2       | #71717 | exec tool returns EPERM on Windows, all commands fail                                                                                                   | `bug`                |             |
+| [ ]       | P2       | #70451 | [Bug]: CLI hooks enable times out / SIGKILL on Windows                                                                                                  |                      |             |
+| [ ]       | P2       | #66746 | [Bug] Windows memory indexing falls back to FTS-only in 2026.4.14 even though direct node:sqlite + sqlite-vec works                                     |                      |             |
+| [ ]       | P2       | #66479 | Windows: skill not discovered due to UTF-8 BOM injected by PowerShell WriteAllText                                                                      |                      |             |
+| [ ]       | P2       | #64443 | OpenClaw chat interface causes very high WindowServer CPU on Intel Retina iMac                                                                          |                      |             |
+| [ ]       | P2       | #64253 | Gateway becomes unresponsive under subagent load on Windows - completion announcements timeout                                                          |                      |             |
+| [ ]       | P2       | #63491 | [Bug]: Windows Scheduled Task gateway restart/health becomes inconsistent after ready                                                                   |                      |             |
+| [ ]       | P2       | #59709 | Cron scheduled task delivery fails (v2026.3.31)                                                                                                         |                      |             |
+| [ ]       | P2       | #59281 | [Bug]: Windows plugin TS source-loading via jiti is pathologically slow in real production call sites                                                   | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #58433 | [Bug]: [Windows] Path character loss bug - "system" becomes "ystem" in file paths                                                                       | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #58139 | [Bug]: memory-lancedb plugin fails with Windows Docker bind mount                                                                                       | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #56284 | Windows: gateway restart does not wait for active tasks and loses session state                                                                         |                      |             |
+| [ ]       | P2       | #56106 | Transcript JSONL encoding corrupted on Windows (GBK/UTF-8 mix)                                                                                          |                      |             |
+| [ ]       | P2       | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix                                                                         | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #44559 | [Bug]: Windows： Gateway 关闭 PowerShell 窗口后断连                                                                                                     | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #44296 | Show the actual PowerShell profile path during onboarding shell-completion setup                                                                        |                      |             |
+| [ ]       | P2       | #44293 | Make `pnpm check:docs` work in native PowerShell                                                                                                        |                      |             |
+| [ ]       | P2       | #44291 | Add native PowerShell smoke coverage for contributor commands                                                                                           |                      |             |
+| [ ]       | P2       | #40694 | Browser-opened temporary tabs/windows should close automatically after task completion                                                                  |                      |             |
+| [ ]       | P2       | #40540 | [Bug]: `openclaw update` command fails with EBUSY error on Windows                                                                                      | `bug` `bug:behavior` |             |
 
 ### Feature Requests
 
 | Resolved? | Priority | #      | Title                                                                                                                                     | Labels                      | Assignee |
 | --------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | -------- |
+| [ ]       | P1       | #82125 | [Feature] Windows: crash auto-restart parity with systemd Restart=always / launchd KeepAlive                                              |                             |          |
 | [ ]       | P2       | #72595 | [Feature]: Feishu channel needs per-channel proxy bypass for mixed Windows proxy setups                                                   | `enhancement`               |          |
 | [ ]       | P2       | #57775 | Windows headless node host supports exec approvals via CLI, but nodes describe / Control UI do not advertise system.execApprovals.get/set |                             |          |
 | [ ]       | P2       | #46590 | Feature Request: Add `cron` field to Agent configuration for Agent-owned scheduled tasks                                                  |                             |          |
@@ -212,15 +212,15 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                            | Labels               | Assignee |
-| --------- | -------- | ------ | ---------------------------------------------------------------------------------------------------------------- | -------------------- | -------- |
-| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                      | `bug` `bug:crash`    |          |
-| [ ]       | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome    | `bug` `regression`   |          |
-| [ ]       | P1       | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment) | `bug` `regression`   |          |
-| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                   | `bug` `bug:behavior` |          |
-| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                           |                      |          |
-| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                           |                      |          |
-| [ ]       | P2       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                | `bug`                |          |
+| Resolved? | Priority | #      | Title                                                                                                         | Labels               | Assignee |
+| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------- | -------------------- | -------- |
+| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                   | `bug` `bug:crash`    |          |
+| [ ]       | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome | `bug` `regression`   |          |
+| [ ]       | P2       | #81873 | Bug: browser user profile (existing-session / Chrome MCP) ignores cdpUrl config in WSL environment            |                      |          |
+| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                | `bug` `bug:behavior` |          |
+| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                        |                      |          |
+| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                        |                      |          |
+| [ ]       | P2       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                             | `bug`                |          |
 
 ### Feature Requests
 
@@ -230,12 +230,11 @@ _No currently open items found._
 
 ## 6. WSL (Windows Subsystem for Linux) — PRs
 
-| Resolved? | Priority | #      | Title                                                                                                               | Size | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------- | ---- | -------- |
-| [ ]       | P1       | #46698 | fix(auth): fix GitHub device flow polling and add --wait flag for WSL…                                              | S    |          |
-| [ ]       | P2       | #68400 | daemon/systemd: distinguish WSL user D-Bus socket missing from missing systemctl                                    | S    |          |
-| [ ]       | P2       | #59219 | fix[Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment) | M    |          |
-| [ ]       | P2       | #58853 | feat(doctor): add WSL environment diagnostics check [AI-assisted]                                                   | L    |          |
+| Resolved? | Priority | #      | Title                                                                            | Size | Assignee |
+| --------- | -------- | ------ | -------------------------------------------------------------------------------- | ---- | -------- |
+| [ ]       | P1       | #46698 | fix(auth): fix GitHub device flow polling and add --wait flag for WSL…           | S    |          |
+| [ ]       | P2       | #68400 | daemon/systemd: distinguish WSL user D-Bus socket missing from missing systemctl | S    |          |
+| [ ]       | P2       | #58853 | feat(doctor): add WSL environment diagnostics check [AI-assisted]                | L    |          |
 
 ---
 
@@ -253,9 +252,10 @@ _No currently open items found._
 
 ### Feature Requests
 
-| Resolved? | Priority | #      | Title                                                                         | Labels        | Assignee |
-| --------- | -------- | ------ | ----------------------------------------------------------------------------- | ------------- | -------- |
-| [ ]       | P2       | #71058 | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway | `enhancement` |          |
+| Resolved? | Priority | #      | Title                                                                                         | Labels        | Assignee |
+| --------- | -------- | ------ | --------------------------------------------------------------------------------------------- | ------------- | -------- |
+| [ ]       | P2       | #82025 | [Bug]: azure-openai-responses provider fails with 400 'API version not supported' for gpt-5.5 |               |          |
+| [ ]       | P2       | #71058 | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway                 | `enhancement` |          |
 
 ---
 
@@ -307,6 +307,8 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
 | MS Teams (channel plugin) | pr    | P1       | #77784 | Add Teams delegated auth for plugin tools                                                                                                               |
+| MS Teams (channel plugin) | pr    | P1       | #71856 | feat(tui): fetch startup conversation summary dynamically from Gateway API                                                                              |
+| Windows platform          | issue | P1       | #82125 | [Feature] Windows: crash auto-restart parity with systemd Restart=always / launchd KeepAlive                                                            |
 | Windows platform          | issue | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  |
 | Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |
 | Windows platform          | issue | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    |
@@ -323,10 +325,8 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack)                                      |
 | Windows platform          | issue | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                            |
 | Windows platform          | issue | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      |
-| Windows platform          | issue | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                        |
 | WSL                       | issue | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                             |
 | WSL                       | issue | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome                                           |
-| WSL                       | issue | P1       | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment)                                        |
 | WSL                       | pr    | P1       | #46698 | fix(auth): fix GitHub device flow polling and add --wait flag for WSL…                                                                                  |
 | Azure                     | pr    | P1       | #55395 | fix: centralize plugin command auth requirements                                                                                                        |
 
