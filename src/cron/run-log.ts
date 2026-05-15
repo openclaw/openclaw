@@ -14,6 +14,7 @@ import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronFailureNotificationDelivery,
   CronRunDiagnostics,
   CronRunStatus,
   CronRunTelemetry,
@@ -30,6 +31,7 @@ export type CronRunLogEntry = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
@@ -349,6 +351,29 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
       }
       if (typeof obj.deliveryError === "string") {
         entry.deliveryError = obj.deliveryError;
+      }
+      if (obj.failureNotificationDelivery && typeof obj.failureNotificationDelivery === "object") {
+        const failureNotificationDelivery = obj.failureNotificationDelivery as {
+          delivered?: unknown;
+          status?: unknown;
+          error?: unknown;
+        };
+        if (
+          failureNotificationDelivery.status === "delivered" ||
+          failureNotificationDelivery.status === "not-delivered" ||
+          failureNotificationDelivery.status === "unknown" ||
+          failureNotificationDelivery.status === "not-requested"
+        ) {
+          entry.failureNotificationDelivery = {
+            status: failureNotificationDelivery.status,
+            ...(typeof failureNotificationDelivery.delivered === "boolean"
+              ? { delivered: failureNotificationDelivery.delivered }
+              : {}),
+            ...(typeof failureNotificationDelivery.error === "string"
+              ? { error: failureNotificationDelivery.error }
+              : {}),
+          };
+        }
       }
       if (obj.delivery && typeof obj.delivery === "object") {
         entry.delivery = obj.delivery;
