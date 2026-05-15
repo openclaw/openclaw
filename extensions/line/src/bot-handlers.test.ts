@@ -54,6 +54,20 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   DEFAULT_GROUP_HISTORY_LIMIT: 20,
+  buildInboundHistoryFromMap: ({
+    historyMap,
+    historyKey,
+    limit,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+    limit: number;
+  }) => {
+    if (limit <= 0) {
+      return undefined;
+    }
+    return (historyMap.get(historyKey) ?? []).slice(-limit);
+  },
   clearHistoryEntriesIfEnabled: ({
     historyMap,
     historyKey,
