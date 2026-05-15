@@ -78,13 +78,13 @@ maybeDescribe("twitch live IRC lifecycle (skipped unless TWITCH_LIVE_TEST=1)", (
             log(`Disconnected (manual=${manually}, reason=${reason?.message ?? "n/a"})`);
           });
 
-          await chat.connect();
+          chat.connect();
 
           return {
             stop: () => {
               stopCalled = true;
               log(`stop() invoked`);
-              void chat.quit();
+              chat.quit();
             },
           };
         },
