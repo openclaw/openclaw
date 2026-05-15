@@ -74,6 +74,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return await this.runSessionStartupCatchup();
   }
 
+  async markStartupDirtyFiles(): Promise<string[]> {
+    return await this.markSessionStartupCatchupDirtyFiles();
+  }
+
   getDirtySessionFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
   }
@@ -154,6 +158,23 @@ describe("session startup catch-up", () => {
     expect(harness.getDirtySessionFiles()).toEqual([session.filePath]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+  });
+
+  it("can mark startup catch-up files without scheduling background sync", async () => {
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([
+      {
+        path: "sessions/main/thread.jsonl",
+        hash: "old-hash",
+        mtime: session.mtimeMs - 1000,
+        size: session.size,
+      },
+    ]);
+
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.filePath]);
+    expect(harness.getDirtySessionFiles()).toEqual([session.filePath]);
+    expect(harness.isSessionsDirty()).toBe(true);
+    expect(harness.syncCalls).toEqual([]);
   });
 
   it("leaves unchanged indexed session files clean", async () => {

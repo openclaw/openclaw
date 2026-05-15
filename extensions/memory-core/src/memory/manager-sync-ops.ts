@@ -504,7 +504,7 @@ export abstract class MemoryManagerSyncOps {
     });
   }
 
-  protected async runSessionStartupCatchup(): Promise<string[]> {
+  protected async markSessionStartupCatchupDirtyFiles(): Promise<string[]> {
     if (!this.sources.has("sessions") || this.closed) {
       return [];
     }
@@ -548,6 +548,14 @@ export abstract class MemoryManagerSyncOps {
       this.sessionsDirtyFiles.add(file);
     }
     this.sessionsDirty = true;
+    return dirtyFiles;
+  }
+
+  protected async runSessionStartupCatchup(): Promise<string[]> {
+    const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
+    if (dirtyFiles.length === 0 || this.closed) {
+      return dirtyFiles;
+    }
     void this.sync({ reason: "session-startup-catchup" }).catch((err) => {
       log.warn("memory sync failed (session-startup-catchup): " + String(err));
     });
@@ -1108,6 +1116,9 @@ export abstract class MemoryManagerSyncOps {
     });
     const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
     const hasTargetSessionFiles = targetSessionFiles !== null;
+    if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
+      await this.markSessionStartupCatchupDirtyFiles();
+    }
     const targetedSessionSync = await runMemoryTargetedSessionSync({
       hasSessionSource: this.sources.has("sessions"),
       targetSessionFiles,
