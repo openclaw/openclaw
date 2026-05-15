@@ -210,10 +210,9 @@ export async function buildDiscordMessageProcessContext(params: {
       totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
       abortSignal,
     });
-    if (isContextAborted(abortSignal)) {
-      return null;
+    if (!isContextAborted(abortSignal)) {
+      mediaListForContext.push(...referencedReplyMediaList);
     }
-    mediaListForContext.push(...referencedReplyMediaList);
   }
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;

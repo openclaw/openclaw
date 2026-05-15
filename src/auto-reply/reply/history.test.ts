@@ -37,4 +37,38 @@ describe("history media recording", () => {
       { sender: "Alice", body: "hello", messageId: "msg-1" },
     ]);
   });
+
+  it("records text history before async media resolution finishes", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+    let resolveMedia!: (media: HistoryEntry["media"]) => void;
+    const mediaPromise = new Promise<HistoryEntry["media"]>((resolve) => {
+      resolveMedia = resolve;
+    });
+
+    const pending = recordPendingHistoryEntryWithMedia({
+      historyMap,
+      historyKey: "channel-1",
+      limit: 5,
+      entry: { sender: "Alice", body: "<media:image>", messageId: "msg-1" },
+      media: async () => await mediaPromise,
+    });
+
+    expect(historyMap.get("channel-1")).toEqual([
+      { sender: "Alice", body: "<media:image>", messageId: "msg-1" },
+    ]);
+
+    resolveMedia([{ path: "/tmp/a.png", contentType: "image/png" }]);
+    await pending;
+
+    expect(historyMap.get("channel-1")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        messageId: "msg-1",
+        media: [
+          { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
+        ],
+      },
+    ]);
+  });
 });

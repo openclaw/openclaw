@@ -172,8 +172,34 @@ export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>
   if (params.shouldRecord && !params.shouldRecord()) {
     return [];
   }
-  const resolvedMedia =
-    typeof params.media === "function" ? await params.media() : (params.media ?? undefined);
+  if (typeof params.media === "function") {
+    const recordedEntry = params.entry;
+    const history = recordPendingHistoryEntry({
+      historyMap: params.historyMap,
+      historyKey: params.historyKey,
+      entry: recordedEntry,
+      limit: params.limit,
+    });
+    const resolvedMedia = await params.media();
+    if (params.shouldRecord && !params.shouldRecord()) {
+      return history;
+    }
+    const media = normalizeHistoryMediaEntries({
+      media: resolvedMedia,
+      limit: params.mediaLimit,
+      messageId: params.messageId ?? params.entry.messageId,
+    });
+    if (media.length === 0) {
+      return history;
+    }
+    const currentHistory = params.historyMap.get(params.historyKey);
+    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
+    if (currentHistory && entryIndex >= 0) {
+      currentHistory[entryIndex] = { ...recordedEntry, media } as T;
+    }
+    return history;
+  }
+  const resolvedMedia = params.media ?? undefined;
   if (params.shouldRecord && !params.shouldRecord()) {
     return [];
   }
