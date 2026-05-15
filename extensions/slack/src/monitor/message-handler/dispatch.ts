@@ -38,7 +38,7 @@ import {
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -1391,12 +1391,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       agentId: route.agentId,
     });
   }
+  const channelHistory = createChannelHistoryWindow({ historyMap: ctx.channelHistories });
 
   if (!anyReplyDelivered) {
     await draftStream?.clear();
     if (prepared.isRoomish && prepared.requireMention) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: ctx.channelHistories,
+      channelHistory.clear({
         historyKey: prepared.historyKey,
         limit: ctx.historyLimit,
       });
@@ -1438,8 +1438,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (prepared.isRoomish && prepared.requireMention) {
-    clearHistoryEntriesIfEnabled({
-      historyMap: ctx.channelHistories,
+    channelHistory.clear({
       historyKey: prepared.historyKey,
       limit: ctx.historyLimit,
     });

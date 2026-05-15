@@ -6,10 +6,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -154,6 +151,7 @@ export async function buildDiscordMessageProcessContext(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -167,8 +165,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
   if (shouldIncludeChannelHistory) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: guildHistories,
+    combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -316,8 +313,7 @@ export async function buildDiscordMessageProcessContext(params: {
   }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
   const inboundHistory = shouldIncludeChannelHistory
-    ? buildInboundHistoryFromMap({
-        historyMap: guildHistories,
+    ? channelHistory.buildInboundHistory({
         historyKey: messageChannelId,
         limit: historyLimit,
       })

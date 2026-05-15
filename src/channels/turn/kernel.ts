@@ -20,6 +20,8 @@ export {
   listTrackedChannelBotPairsForTests,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "./bot-loop-protection.js";
+export { createChannelHistoryWindow } from "./history-window.js";
+export type { ChannelHistoryWindow } from "./history-window.js";
 export type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 export {
   deliverDurableInboundReplyPayload,

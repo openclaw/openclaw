@@ -10,12 +10,9 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  buildInboundHistoryFromMap,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -489,6 +486,9 @@ async function processMessage(
     },
   });
   const historyKey = isGroup ? route.sessionKey : undefined;
+  const channelHistory = createChannelHistoryWindow({
+    historyMap: historyState.groupHistories,
+  });
 
   const requireMention = isGroup
     ? resolveGroupRequireMention({
@@ -538,8 +538,7 @@ async function processMessage(
     return;
   }
   if (isGroup && mentionDecision.shouldSkip) {
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: historyState.groupHistories,
+    channelHistory.record({
       historyKey: historyKey ?? "",
       limit: historyState.historyLimit,
       entry:
@@ -587,8 +586,7 @@ async function processMessage(
   });
   const combinedBody =
     isGroup && historyKey
-      ? buildPendingHistoryContextFromMap({
-          historyMap: historyState.groupHistories,
+      ? channelHistory.buildPendingContext({
           historyKey,
           limit: historyState.historyLimit,
           currentMessage: body,
@@ -606,8 +604,7 @@ async function processMessage(
       : body;
   const inboundHistory =
     isGroup && historyKey && historyState.historyLimit > 0
-      ? buildInboundHistoryFromMap({
-          historyMap: historyState.groupHistories,
+      ? channelHistory.buildInboundHistory({
           historyKey,
           limit: historyState.historyLimit,
         })
@@ -750,8 +747,7 @@ async function processMessage(
     },
   });
   if (isGroup && historyKey) {
-    clearHistoryEntriesIfEnabled({
-      historyMap: historyState.groupHistories,
+    channelHistory.clear({
       historyKey,
       limit: historyState.historyLimit,
     });

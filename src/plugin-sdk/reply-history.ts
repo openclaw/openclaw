@@ -1,6 +1,10 @@
 /** Shared reply-history helpers for plugins that keep short per-thread context windows. */
 export type { HistoryEntry, HistoryMediaEntry } from "../auto-reply/reply/history.types.js";
 export {
+  createChannelHistoryWindow,
+  type ChannelHistoryWindow,
+} from "../channels/turn/history-window.js";
+export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   HISTORY_CONTEXT_MARKER,
   buildHistoryContext,

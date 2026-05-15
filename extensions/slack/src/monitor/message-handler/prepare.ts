@@ -19,11 +19,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -974,6 +970,7 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
   });
+  const channelHistory = createChannelHistoryWindow({ historyMap: ctx.channelHistories });
   const dmHistoryLimit = isDirectMessage
     ? resolveSlackDmHistoryLimit({
         account,
@@ -1007,8 +1004,7 @@ export async function prepareSlackMessage(params: {
     combinedBody = `${dmHistoryContext.body}\n\n${combinedBody}`;
   }
   if (isRoomish && ctx.historyLimit > 0) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: ctx.channelHistories,
+    combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: ctx.historyLimit,
       currentMessage: combinedBody,
@@ -1064,8 +1060,7 @@ export async function prepareSlackMessage(params: {
 
   const inboundHistory =
     isRoomish && ctx.historyLimit > 0
-      ? buildInboundHistoryFromMap({
-          historyMap: ctx.channelHistories,
+      ? channelHistory.buildInboundHistory({
           historyKey,
           limit: ctx.historyLimit,
         })
@@ -1132,8 +1127,7 @@ export async function prepareSlackMessage(params: {
   }) satisfies FinalizedMsgContext;
 
   if (isRoomish && !shouldRequireMention) {
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: ctx.channelHistories,
+    channelHistory.record({
       historyKey,
       limit: ctx.historyLimit,
       entry: {
