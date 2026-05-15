@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/WebChat: focus the composer when users click the visible input chrome and restore larger, labeled desktop composer controls while preserving compact mobile taps. Fixes #45656. Thanks @BunsDev.
 - Memory search: stop using chokidar write-stability polling for memory and QMD watchers so large Markdown extraPath trees no longer build up regular file descriptors; changed files now settle through the existing debounced sync queue. Fixes #77327 and #78224. (#81802) Thanks @frankekn, @loyur, and @JanPlessow.
 
 ## 2026.5.14
