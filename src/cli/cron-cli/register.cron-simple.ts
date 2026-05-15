@@ -34,7 +34,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 function parseCronRunWaitDuration(raw: unknown, label: string): number {
-  const durationMs = parseDurationMs(String(raw ?? ""), { defaultUnit: "ms" });
+  const input =
+    typeof raw === "string" || typeof raw === "number" || typeof raw === "bigint"
+      ? String(raw)
+      : "";
+  const durationMs = parseDurationMs(input, { defaultUnit: "ms" });
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     throw new Error(`invalid ${label}`);
   }
