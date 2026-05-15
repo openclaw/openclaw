@@ -175,7 +175,7 @@ async function applyCodexPluginInstallItem(
           agentDir: resolveCodexMigrationTargets(ctx).agentDir,
           config: ctx.config,
           isolated: false,
-          waitForPluginName: policy.pluginName,
+          targetPluginName: policy.pluginName,
         }),
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
@@ -275,7 +275,7 @@ async function requestTargetCodexAppServerJson(params: {
   agentDir: string;
   config: MigrationProviderContext["config"];
   isolated?: boolean;
-  waitForPluginName?: string;
+  targetPluginName: string;
 }): Promise<unknown> {
   if (params.method !== "plugin/list") {
     return await requestCodexAppServerJson(params);
@@ -293,7 +293,7 @@ async function requestTargetCodexAppServerJson(params: {
       ...params,
       timeoutMs: remainingMs,
     });
-    if (hasRequestedOpenAiCuratedPlugin(lastResponse, params.waitForPluginName)) {
+    if (hasRequestedOpenAiCuratedPlugin(lastResponse, params.targetPluginName)) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -309,10 +309,7 @@ async function requestTargetCodexAppServerJson(params: {
   return lastResponse;
 }
 
-function hasRequestedOpenAiCuratedPlugin(
-  response: unknown,
-  pluginName: string | undefined,
-): boolean {
+function hasRequestedOpenAiCuratedPlugin(response: unknown, pluginName: string): boolean {
   if (!response || typeof response !== "object" || !("marketplaces" in response)) {
     return false;
   }
@@ -328,9 +325,6 @@ function hasRequestedOpenAiCuratedPlugin(
   );
   if (!marketplace || typeof marketplace !== "object") {
     return false;
-  }
-  if (!pluginName) {
-    return true;
   }
   const plugins = (marketplace as { plugins?: unknown }).plugins;
   return (
