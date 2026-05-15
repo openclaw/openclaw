@@ -166,6 +166,9 @@ function describeDiscordMessageTool({
 export const discordMessageActions: ChannelMessageActionAdapter = {
   resolveExecutionMode: ({ action }) =>
     action === "read" || action === "fetch" || action === "search" ? "gateway" : "local",
+  messageActionTargetAliases: {
+    fetch: { aliases: ["url"] },
+  },
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";

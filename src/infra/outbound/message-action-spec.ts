@@ -17,7 +17,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     react: "to",
     reactions: "to",
     read: "to",
-    fetch: "none",
+    fetch: "channelId",
     edit: "to",
     unsend: "to",
     reply: "to",
