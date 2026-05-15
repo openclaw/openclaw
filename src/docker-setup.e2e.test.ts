@@ -232,6 +232,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home"); // pragma: allowlist secret
     expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=");
+    expect(envFile).toContain("OPENCLAW_EXTENSIONS=discord feishu voice-call");
     const extraCompose = await readFile(
       join(activeSandbox.rootDir, "docker-compose.extra.yml"),
       "utf8",
@@ -241,6 +242,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+    expect(log).toContain("--build-arg OPENCLAW_EXTENSIONS=discord feishu voice-call");
     expect(log).toContain(
       "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
     );
@@ -248,6 +250,22 @@ describe("scripts/docker/setup.sh", () => {
       'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
+  });
+
+  it("honors an explicitly empty Docker bundled plugin list", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTENSIONS: "",
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_EXTENSIONS=");
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("--build-arg OPENCLAW_EXTENSIONS=");
+    expect(log).not.toContain("--build-arg OPENCLAW_EXTENSIONS=discord feishu voice-call");
   });
 
   it("persists explicit Docker Bonjour opt-in overrides", async () => {

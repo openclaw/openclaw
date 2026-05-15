@@ -109,12 +109,13 @@ describe("Dockerfile", () => {
       "for ext in $(printf '%s\\n' \"$OPENCLAW_EXTENSIONS\" | tr ',' ' '); do \\";
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
+    expect(dockerfile).toContain('ARG OPENCLAW_EXTENSIONS="discord feishu voice-call"');
     expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
     expect(dockerfile).toContain(
-      "Opt-in plugin dependencies at build time (space- or comma-separated directory names).",
+      "Bundled plugin dependencies included at build time (space- or comma-separated directory names).",
     );
     expect(dockerfile).toContain(
-      'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',
+      'Example: docker build --build-arg OPENCLAW_EXTENSIONS="discord,feishu,voice-call,diagnostics-otel" .',
     );
     expect(dockerfile.split(normalizedExtensionLoop).length - 1).toBe(2);
     expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");

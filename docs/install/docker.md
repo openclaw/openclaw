@@ -122,24 +122,24 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                                   | Purpose                                                         |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
-| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
-| `OPENCLAW_EXTENSIONS`                      | Include selected bundled plugin helpers at build time           |
-| `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
-| `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
-| `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
-| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`) |
-| `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
-| `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
-| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays               |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`              | Shared OTLP/HTTP collector endpoint for OpenTelemetry export    |
-| `OTEL_EXPORTER_OTLP_*_ENDPOINT`            | Signal-specific OTLP endpoints for traces, metrics, or logs     |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`              | OTLP protocol override. Only `http/protobuf` is supported today |
-| `OTEL_SERVICE_NAME`                        | Service name used for OpenTelemetry resources                   |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes         |
-| `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded  |
+| Variable                                   | Purpose                                                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                                                               |
+| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)                                                    |
+| `OPENCLAW_EXTENSIONS`                      | Include bundled plugin helpers at build time; defaults to `discord feishu voice-call` (set empty to disable) |
+| `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`)                                              |
+| `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                                                                |
+| `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                       |
+| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                              |
+| `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                                                                  |
+| `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)                                                |
+| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays                                                            |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`              | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                 |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT`            | Signal-specific OTLP endpoints for traces, metrics, or logs                                                  |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`              | OTLP protocol override. Only `http/protobuf` is supported today                                              |
+| `OTEL_SERVICE_NAME`                        | Service name used for OpenTelemetry resources                                                                |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes                                                      |
+| `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded                                               |
 
 Maintainers can test bundled plugin source against a packaged image by mounting
 one plugin source directory over its packaged source path, for example
@@ -155,7 +155,7 @@ locally and want the bundled OpenTelemetry exporter available inside the image,
 include its runtime dependencies:
 
 ```bash
-export OPENCLAW_EXTENSIONS="diagnostics-otel"
+export OPENCLAW_EXTENSIONS="discord feishu voice-call diagnostics-otel"
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"
 export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
@@ -164,8 +164,8 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 Install the official `@openclaw/diagnostics-otel` plugin from ClawHub in
 packaged Docker installs before enabling export. Custom source-built images can
 still include the local plugin source with
-`OPENCLAW_EXTENSIONS=diagnostics-otel`. To enable export, allow and enable the
-`diagnostics-otel` plugin in config, then set
+`OPENCLAW_EXTENSIONS="discord feishu voice-call diagnostics-otel"`. To enable
+export, allow and enable the `diagnostics-otel` plugin in config, then set
 `diagnostics.otel.enabled=true` or use the config example in [OpenTelemetry
 export](/gateway/opentelemetry). Collector auth headers are configured through
 `diagnostics.otel.headers`, not through Docker environment variables.
