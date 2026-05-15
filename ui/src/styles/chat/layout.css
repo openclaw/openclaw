@@ -1358,12 +1358,22 @@
     height: 44px;
   }
 
+  .agent-chat__input {
+    margin: 0 8px calc(14px + var(--safe-area-bottom));
+  }
+
   .agent-chat__suggestions {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .agent-chat__suggestion {
     min-height: 44px;
+  }
+}
+
+@media (display-mode: standalone) and (max-width: 768px) {
+  .agent-chat__input {
+    margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));
   }
 }
 

@@ -84,20 +84,6 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
-  it("classifies Anthropic account drift as non-cache provider state", () => {
-    expect(
-      __testing.isAnthropicAccountDrift(
-        new Error("Your credit balance is too low to access the Anthropic API."),
-      ),
-    ).toBe(true);
-    expect(
-      __testing.isAnthropicAccountDrift(
-        '401 {"error":{"message":"The API key you provided is invalid."}}',
-      ),
-    ).toBe(true);
-    expect(__testing.isAnthropicAccountDrift("anthropic:image cacheRead=0 < min=4500")).toBe(false);
-  });
-
   it("retries a cache probe twice when provider text misses the sentinel", () => {
     expect(
       __testing.shouldRetryCacheProbeText({
@@ -136,7 +122,7 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
-  it("keeps OpenAI cache probes above the reasoning output floor", () => {
+  it("keeps cache probes above the provider empty-output floor", () => {
     expect(
       __testing.resolveCacheProbeMaxTokens({
         maxTokens: 32,
@@ -154,40 +140,40 @@ describe("live cache regression runner", () => {
         maxTokens: 32,
         providerTag: "anthropic",
       }),
-    ).toBe(32);
+    ).toBe(1024);
   });
 
-  it("accepts empty OpenAI cache probe text only when usage is observable", () => {
+  it("accepts empty cache probe text only when usage is observable", () => {
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "",
         usage: { input: 5_000 },
       }),
     ).toBe(true);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "",
         usage: { cacheRead: 4_608 },
       }),
     ).toBe(true);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "wrong",
         usage: { input: 5_000 },
       }),
     ).toBe(false);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "anthropic",
         text: "",
         usage: { input: 5_000 },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "",
         usage: {},
