@@ -49,6 +49,11 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+// Truncation sentinels injected by tool-transcript truncation, bootstrap file
+// truncation, and session-history truncation.  They are internal scaffolding and
+// must not leak into user-visible final replies.
+const TRUNCATION_SENTINEL_LINE_RE =
+  /^[ \t]*(?:\.\.\.\(truncated\)\.\.\.|…\(truncated(?:\s[^)]*)?\)…|\[\.\.\.,?\s*\d+\s+more\s+characters?\s+truncated\]|\[…truncated\s[^\]]*\])[ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -340,6 +345,22 @@ function stripFinalTagsFromText(text: unknown): string {
   return stripFinalTags(normalized);
 }
 
+function stripStandaloneLinesByPattern(text: string, pattern: RegExp): string {
+  let result = "";
+  let start = 0;
+  while (start < text.length) {
+    const newlineIndex = text.indexOf("\n", start);
+    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const chunk = text.slice(start, end);
+    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
+    if (!pattern.test(line)) {
+      result += chunk;
+    }
+    start = end;
+  }
+  return result;
+}
+
 function stripToolCallsOmittedPlaceholderLines(text: string): string {
   let result = "";
   let start = 0;
@@ -413,7 +434,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // Replay repair may synthesize this placeholder to keep provider transcripts valid.
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutTruncationSentinels = stripStandaloneLinesByPattern(
+    withoutToolCallXml,
+    TRUNCATION_SENTINEL_LINE_RE,
+  );
+  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutTruncationSentinels);
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutPlaceholder),
   );
