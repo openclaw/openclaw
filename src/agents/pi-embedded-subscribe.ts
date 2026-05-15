@@ -10,6 +10,7 @@ import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -97,10 +98,11 @@ function collectPendingMediaFromInternalEvents(
   const pending: string[] = [];
   const seen = new Set<string>();
   for (const event of events) {
-    if (!Array.isArray(event.mediaUrls)) {
-      continue;
-    }
-    for (const mediaUrl of event.mediaUrls) {
+    const mediaUrls = [
+      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
+      ...mediaUrlsFromGeneratedAttachments(event.attachments),
+    ];
+    for (const mediaUrl of mediaUrls) {
       const normalized = normalizeOptionalString(mediaUrl) ?? "";
       if (!normalized || seen.has(normalized)) {
         continue;

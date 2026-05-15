@@ -96,6 +96,12 @@ describe("buildChannelTurnContext", () => {
           wasMentioned: true,
         },
       },
+      commandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        body: "/status",
+      },
       media: [
         {
           path: "/tmp/image.png",
@@ -163,6 +169,14 @@ describe("buildChannelTurnContext", () => {
       Surface: "test-surface",
       WasMentioned: true,
       CommandAuthorized: true,
+      CommandSource: "text",
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "status",
+        body: "/status",
+      },
       MessageThreadId: "thread-1",
       NativeChannelId: "native-room-1",
       OriginatingChannel: "test",
@@ -210,6 +224,72 @@ describe("buildChannelTurnContext", () => {
     );
 
     expect(ctx.CommandAuthorized).toBe(true);
+  });
+
+  it("derives command turns from normalized command facts", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        message: {
+          rawBody: "/status",
+          commandBody: "/status",
+          envelopeFrom: "User One",
+        },
+        command: {
+          kind: "text-slash",
+          name: "status",
+        },
+        access: {
+          commands: {
+            authorized: true,
+            allowTextCommands: true,
+            useAccessGroups: true,
+            authorizers: [],
+          },
+        },
+      }),
+    );
+
+    expect(ctx.CommandTurn).toEqual({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+    expect(ctx.CommandSource).toBe("text");
+    expect(ctx.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps explicit command turns ahead of normalized command facts", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        message: {
+          rawBody: "/status",
+          commandBody: "/status",
+          envelopeFrom: "User One",
+        },
+        command: {
+          kind: "native",
+          authorized: true,
+        },
+        commandTurn: {
+          kind: "normal",
+          source: "message",
+          authorized: false,
+          body: "hello",
+        },
+      }),
+    );
+
+    expect(ctx.CommandTurn).toEqual({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+      commandName: undefined,
+      body: "hello",
+    });
+    expect(ctx.CommandSource).toBeUndefined();
+    expect(ctx.CommandAuthorized).toBe(false);
   });
 
   it("filters supplemental context with channel visibility policy", () => {

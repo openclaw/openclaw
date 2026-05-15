@@ -1,3 +1,4 @@
+import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
@@ -184,6 +185,13 @@ export type MessageFacts = {
   inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
 };
 
+export type CommandFacts = {
+  kind: CommandTurnKind;
+  body?: string;
+  name?: string;
+  authorized?: boolean;
+};
+
 export type SupplementalContextFacts = {
   quote?: {
     id?: string;
@@ -224,6 +232,7 @@ export type InboundMediaFacts = {
 
 export type PreflightFacts = {
   admission?: ChannelTurnAdmission;
+  command?: CommandFacts;
   message?: Partial<MessageFacts>;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;

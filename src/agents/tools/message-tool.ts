@@ -188,6 +188,25 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     caption: Type.Optional(Type.String()),
     path: Type.Optional(Type.String()),
     filePath: Type.Optional(Type.String()),
+    attachments: Type.Optional(
+      Type.Array(
+        Type.Object({
+          type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
+          media: Type.Optional(Type.String()),
+          mediaUrl: Type.Optional(Type.String()),
+          path: Type.Optional(Type.String()),
+          filePath: Type.Optional(Type.String()),
+          fileUrl: Type.Optional(Type.String()),
+          url: Type.Optional(Type.String()),
+          name: Type.Optional(Type.String()),
+          mimeType: Type.Optional(Type.String()),
+        }),
+        {
+          description:
+            "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+        },
+      ),
+    ),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
