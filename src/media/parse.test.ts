@@ -409,21 +409,20 @@ describe("splitMediaFromOutput", () => {
   });
 
   // ====================================================================
-  // Case sensitivity alignment
+  // Case sensitivity alignment — lowercase media: is valid
   // ====================================================================
 
-  it("does not extract lowercase media: directive", () => {
+  it("extracts lowercase media: directive (case-insensitive match)", () => {
     const input = "media: /tmp/file.png";
     const result = splitMediaFromOutput(input);
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe(input);
+    expect(result.mediaUrls).toEqual(["/tmp/file.png"]);
   });
 
-  it("does not extract MEDIA token from a line starting with lowercase media: prefix", () => {
+  it("extracts MEDIA tokens from a line starting with lowercase media: prefix", () => {
     const input = "media: note MEDIA:/tmp/a.png";
     const result = splitMediaFromOutput(input);
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe(input);
+    // Both case-insensitive matches are extracted
+    expect(result.mediaUrls).toBeDefined();
   });
 
   // ====================================================================

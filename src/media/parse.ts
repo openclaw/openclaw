@@ -14,7 +14,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/g;
+export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 export type ParsedMediaOutputSegment =
   | {
@@ -570,7 +570,7 @@ export function splitMediaFromOutput(
     }
 
     const trimmedStart = line.trimStart();
-    if (!trimmedStart.startsWith("MEDIA:")) {
+    if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({ line, media })
         : { lineSegments: [], foundMedia: false };
