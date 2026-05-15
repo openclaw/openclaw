@@ -93,6 +93,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     phase,
     title: request.request.title,
     description: request.request.description ?? null,
+    longDescription: request.request.longDescription ?? null,
     metadata: buildPluginMetadata(request),
     agentId: request.request.agentId ?? null,
     pluginId: request.request.pluginId ?? null,

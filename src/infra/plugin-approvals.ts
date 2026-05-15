@@ -4,6 +4,15 @@ export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
   description: string;
+  /**
+   * Optional long-form context (up to `PLUGIN_APPROVAL_LONG_DESCRIPTION_MAX_LENGTH`
+   * chars) for HTML-capable / large-payload channels (Telegram, Discord,
+   * Slack, Matrix, Mattermost, etc.). When provided, channel renderers should
+   * prefer `longDescription` over `description`; SMS-class channels keep
+   * using the short `description` so the 256-char cap stays meaningful where
+   * payload size is genuinely constrained.
+   */
+  longDescription?: string | null;
   severity?: "info" | "warning" | "critical" | null;
   toolName?: string | null;
   toolCallId?: string | null;
@@ -35,6 +44,27 @@ export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+export const PLUGIN_APPROVAL_LONG_DESCRIPTION_MAX_LENGTH = 4000;
+
+/**
+ * Return the longest description that the supplied channel surface can render
+ * faithfully — `longDescription` when present, else `description`. Channel
+ * renderers that can carry the 4000-char payload (Telegram, Discord, Slack,
+ * Matrix, Mattermost) call this; surfaces with stricter limits keep using
+ * `description` directly.
+ */
+export function resolvePluginApprovalLongDescription(
+  payload: Pick<PluginApprovalRequestPayload, "description" | "longDescription"> | null | undefined,
+): string {
+  if (!payload) {
+    return "";
+  }
+  const long = typeof payload.longDescription === "string" ? payload.longDescription.trim() : "";
+  if (long.length > 0) {
+    return long;
+  }
+  return payload.description ?? "";
+}
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
@@ -77,7 +107,7 @@ export function buildPluginApprovalRequestMessage(
   const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
   lines.push(`${icon} Plugin approval required`);
   lines.push(`Title: ${request.request.title}`);
-  lines.push(`Description: ${request.request.description}`);
+  lines.push(`Description: ${resolvePluginApprovalLongDescription(request.request)}`);
   if (request.request.toolName) {
     lines.push(`Tool: ${request.request.toolName}`);
   }

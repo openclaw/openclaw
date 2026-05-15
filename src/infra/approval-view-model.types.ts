@@ -68,6 +68,11 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
   pluginId?: string | null;
   toolName?: string | null;
   severity: "info" | "warning" | "critical";
+  /**
+   * Long-form context (up to 4000 chars) for HTML-capable channels. Renderers
+   * should prefer this over `description` when present.
+   */
+  longDescription?: string | null;
 };
 
 export type PluginApprovalPendingView = PluginApprovalViewBase & {

@@ -207,4 +207,47 @@ describe("plugin-sdk/approval-renderers", () => {
       expect(payload.channelData).toEqual(channelDataExpected);
     }
   });
+
+  it("prefers longDescription over description when rendering the plugin pending text body", () => {
+    const longDescription =
+      "Verdict: high-risk file rewrite.\n\nDiff preview:\n```\n- safe line\n+ rewritten line that the short description has to truncate but the long form should keep verbatim so reviewers can see the whole verdict, payload, and action footer.\n```\n\nFooter: requires owner approval.";
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-approval-long",
+        request: {
+          title: "High-risk file rewrite",
+          description: "Short summary that should be replaced by longDescription.",
+          longDescription,
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+    if (payload.text === undefined) {
+      throw new Error("expected rendered approval text");
+    }
+    expect(payload.text).toContain(longDescription);
+    expect(payload.text).not.toContain("Short summary that should be replaced by longDescription.");
+  });
+
+  it("falls back to description when longDescription is empty or whitespace-only", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-approval-fallback",
+        request: {
+          title: "Standard approval",
+          description: "Concise approval summary.",
+          longDescription: "   \n  ",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+    if (payload.text === undefined) {
+      throw new Error("expected rendered approval text");
+    }
+    expect(payload.text).toContain("Concise approval summary.");
+  });
 });

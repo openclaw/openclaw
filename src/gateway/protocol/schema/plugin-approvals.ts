@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  PLUGIN_APPROVAL_LONG_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
 } from "../../../infra/plugin-approvals.js";
 import { NonEmptyString } from "./primitives.js";
@@ -11,6 +12,9 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     pluginId: Type.Optional(NonEmptyString),
     title: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_TITLE_MAX_LENGTH }),
     description: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH }),
+    longDescription: Type.Optional(
+      Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_LONG_DESCRIPTION_MAX_LENGTH }),
+    ),
     severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
     toolName: Type.Optional(Type.String()),
     toolCallId: Type.Optional(Type.String()),
