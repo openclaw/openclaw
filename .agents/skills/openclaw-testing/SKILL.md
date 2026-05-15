@@ -19,9 +19,13 @@ or validating a change without wasting hours.
 Prove the touched surface first. Do not reflexively run the whole suite.
 
 1. Inspect the diff and classify the touched surface:
-   - source: `pnpm changed:lanes --json`, then `pnpm check:changed`
-   - tests only: `pnpm test:changed`
-   - one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed`
+   - normal source checkout, tests only: `pnpm test:changed`
+   - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
+   - Codex worktree or linked/sparse checkout, changed gates or anything broad:
+     `node scripts/crabbox-wrapper.mjs run ... --shell -- "pnpm check:changed"`
+     and let `.crabbox.yaml` choose the provider
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -36,11 +40,19 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
-- For Blacksmith Testbox proof, use Crabbox first. `pnpm crabbox:run -- --provider
-blacksmith-testbox --timing-json -- <command...>` warms, claims, syncs, runs,
-  reports, and cleans up one-shot boxes. Reuse only an id/slug created in this
-  operator session; `blacksmith testbox list` is diagnostics only, not a shared
-  work queue.
+- In a Codex worktree or linked/sparse checkout, do not run direct local
+  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer` until
+  you have verified pnpm will not reconcile or reinstall dependencies. Use
+  `node scripts/run-vitest.mjs` for tiny local proof, `node
+scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
+  after the relevant remote or node-wrapper proof is already clean.
+- For remote proof, use Crabbox first and omit `--provider` unless a specific
+  provider is being tested. The repo Crabbox config routes normal broad proof to
+  brokered AWS. Blacksmith Testbox is explicit opt-in; if it queues, fails
+  capacity, or cannot allocate, retry once through the default Crabbox route or
+  report the Testbox blocker. Reuse only an id/slug created in this operator
+  session; `blacksmith testbox list` is diagnostics only, not a shared work
+  queue.
 
 ## Local Test Shortcuts
 
@@ -55,6 +67,14 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct.
+When the checkout is a Codex worktree, prefer the direct node harness instead:
+
+```bash
+node scripts/run-vitest.mjs <path-or-filter>
+```
+
+That keeps the test scoped without giving pnpm a chance to run dependency
+status checks or install reconciliation in a linked worktree.
 
 ## Command Semantics
 

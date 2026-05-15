@@ -1,4 +1,5 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import { formatEmbeddedAgentExecutionPhase } from "../../agents/pi-embedded-runner/execution-phase.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
@@ -13,7 +14,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import {
   createCronRunDiagnosticsFromError,
   normalizeCronRunDiagnostics,
@@ -22,10 +23,12 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
+  CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronFailureNotificationDelivery,
   CronJob,
   CronMessageChannel,
   CronRunOutcome,
@@ -108,6 +111,39 @@ type StartupCatchupPlan = {
   deferredJobs: StartupDeferredJob[];
 };
 
+type CronAgentWatchdogState =
+  | "waiting_for_runner"
+  | "waiting_for_execution"
+  | "executing"
+  | "timed_out"
+  | "disposed";
+
+type CronAgentPhaseWatchdogStage = "pre_execution" | "execution";
+
+const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
+  runner_entered: "pre_execution",
+  workspace: "pre_execution",
+  runtime_plugins: "pre_execution",
+  model_resolution: "pre_execution",
+  auth: "pre_execution",
+  context_engine: "pre_execution",
+  attempt_dispatch: "execution",
+  context_assembled: "execution",
+  turn_accepted: "execution",
+  process_spawned: "execution",
+  tool_execution_started: "execution",
+  assistant_output_started: "execution",
+  model_call_started: "execution",
+} as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
+
+type CronAgentWatchdog = {
+  start: () => void;
+  noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
+  notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
+  activeExecution: () => CronAgentExecutionStarted | undefined;
+  dispose: () => void;
+};
+
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
@@ -118,12 +154,6 @@ export async function executeJobCoreWithTimeout(
   }
 
   const runAbortController = new AbortController();
-  let timeoutId: NodeJS.Timeout | undefined;
-  let setupTimeoutId: NodeJS.Timeout | undefined;
-  let preExecutionTimeoutId: NodeJS.Timeout | undefined;
-  let activeExecution: CronAgentExecutionStarted | undefined;
-  let runnerStarted = false;
-  let executionStarted = false;
   let timeoutReason: string | undefined;
   const timeoutMarker = Symbol("cron-timeout");
   let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
@@ -141,75 +171,16 @@ export async function executeJobCoreWithTimeout(
     runAbortController.abort(reason);
     resolveTimeout?.(timeoutMarker);
   };
-  const startTimeout = () => {
-    if (!timeoutId) {
-      timeoutId = setTimeout(() => {
-        triggerTimeout(timeoutErrorMessage(activeExecution));
-      }, jobTimeoutMs);
-    }
-  };
-  const startSetupTimeout = () => {
-    if (setupTimeoutId || runnerStarted) {
-      return;
-    }
-    setupTimeoutId = setTimeout(() => {
-      if (!runnerStarted) {
-        triggerTimeout(setupTimeoutErrorMessage(activeExecution));
-      }
-    }, CRON_AGENT_SETUP_WATCHDOG_MS);
-  };
-  const clearSetupTimeout = () => {
-    if (!setupTimeoutId) {
-      return;
-    }
-    clearTimeout(setupTimeoutId);
-    setupTimeoutId = undefined;
-  };
-  const startPreExecutionTimeout = () => {
-    if (preExecutionTimeoutId || executionStarted) {
-      return;
-    }
-    preExecutionTimeoutId = setTimeout(() => {
-      if (!executionStarted) {
-        triggerTimeout(preExecutionTimeoutErrorMessage(activeExecution));
-      }
-    }, resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs));
-  };
-  const clearPreExecutionTimeout = () => {
-    if (!preExecutionTimeoutId) {
-      return;
-    }
-    clearTimeout(preExecutionTimeoutId);
-    preExecutionTimeoutId = undefined;
-  };
-  const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
-    if (info) {
-      activeExecution = { ...activeExecution, ...info };
-      if (isCronAgentExecutionStarted(info)) {
-        executionStarted = true;
-        clearPreExecutionTimeout();
-      }
-    }
-  };
-  const onExecutionStarted = (info?: CronAgentExecutionStarted) => {
-    runnerStarted = true;
-    noteExecutionProgress(info);
-    clearSetupTimeout();
-    startTimeout();
-    startPreExecutionTimeout();
-  };
-  const onExecutionPhase = (info: CronAgentExecutionPhaseUpdate) => {
-    noteExecutionProgress(info);
-  };
-  const corePromise = executeJobCore(state, job, runAbortController.signal, {
-    onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
-    onExecutionPhase: deferTimeoutUntilExecutionStart ? onExecutionPhase : undefined,
+  const watchdog = createCronAgentWatchdog({
+    deferUntilRunner: deferTimeoutUntilExecutionStart,
+    jobTimeoutMs,
+    triggerTimeout,
   });
-  if (!deferTimeoutUntilExecutionStart) {
-    startTimeout();
-  } else {
-    startSetupTimeout();
-  }
+  const corePromise = executeJobCore(state, job, runAbortController.signal, {
+    onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
+    onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
+  });
+  watchdog.start();
   void corePromise.catch((err) => {
     if (runAbortController.signal.aborted) {
       state.deps.log.warn(
@@ -223,6 +194,7 @@ export async function executeJobCoreWithTimeout(
     if (first !== timeoutMarker) {
       return first;
     }
+    const activeExecution = watchdog.activeExecution();
     await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
     const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
     return {
@@ -233,12 +205,111 @@ export async function executeJobCoreWithTimeout(
       }),
     };
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    clearSetupTimeout();
-    clearPreExecutionTimeout();
+    watchdog.dispose();
   }
+}
+
+function createCronAgentWatchdog(params: {
+  deferUntilRunner: boolean;
+  jobTimeoutMs: number;
+  triggerTimeout: (reason: string) => void;
+}): CronAgentWatchdog {
+  let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
+  let timeoutId: NodeJS.Timeout | undefined;
+  let setupTimeoutId: NodeJS.Timeout | undefined;
+  let preExecutionTimeoutId: NodeJS.Timeout | undefined;
+  let activeExecution: CronAgentExecutionStarted | undefined;
+
+  const setTimedOut = (reason: string) => {
+    if (state === "timed_out" || state === "disposed") {
+      return;
+    }
+    state = "timed_out";
+    params.triggerTimeout(reason);
+  };
+  const startTimeout = () => {
+    if (timeoutId || state === "disposed") {
+      return;
+    }
+    timeoutId = setTimeout(() => {
+      setTimedOut(timeoutErrorMessage(activeExecution));
+    }, params.jobTimeoutMs);
+  };
+  const clearSetupTimeout = () => {
+    if (!setupTimeoutId) {
+      return;
+    }
+    clearTimeout(setupTimeoutId);
+    setupTimeoutId = undefined;
+  };
+  const clearPreExecutionTimeout = () => {
+    if (!preExecutionTimeoutId) {
+      return;
+    }
+    clearTimeout(preExecutionTimeoutId);
+    preExecutionTimeoutId = undefined;
+  };
+  const startPreExecutionTimeout = () => {
+    if (preExecutionTimeoutId || state !== "waiting_for_execution") {
+      return;
+    }
+    preExecutionTimeoutId = setTimeout(() => {
+      if (state === "waiting_for_execution") {
+        setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
+      }
+    }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
+  };
+  const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
+    if (!info) {
+      return;
+    }
+    activeExecution = { ...activeExecution, ...info };
+    if (isCronAgentExecutionStarted(info)) {
+      state = "executing";
+      clearPreExecutionTimeout();
+    }
+  };
+
+  return {
+    start: () => {
+      if (params.deferUntilRunner) {
+        setupTimeoutId = setTimeout(() => {
+          if (state === "waiting_for_runner") {
+            setTimedOut(setupTimeoutErrorMessage(activeExecution));
+          }
+        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        return;
+      }
+      startTimeout();
+    },
+    noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
+      if (state === "disposed" || state === "timed_out") {
+        return;
+      }
+      clearSetupTimeout();
+      startTimeout();
+      if (state !== "executing") {
+        state = "waiting_for_execution";
+      }
+      noteExecutionProgress(info);
+      startPreExecutionTimeout();
+    },
+    notePhase: (info: CronAgentExecutionPhaseUpdate) => {
+      if (state === "disposed" || state === "timed_out") {
+        return;
+      }
+      noteExecutionProgress(info);
+    },
+    activeExecution: () => activeExecution,
+    dispose: () => {
+      state = "disposed";
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      clearSetupTimeout();
+      clearPreExecutionTimeout();
+    },
+  };
 }
 
 async function cleanupTimedOutCronAgentRun(
@@ -301,23 +372,14 @@ function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted):
 }
 
 function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
-  return execution?.phase?.replaceAll("_", "-");
+  return formatEmbeddedAgentExecutionPhase(execution?.phase);
 }
 
 function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
   if (info.firstModelCallStarted) {
     return true;
   }
-  switch (info.phase) {
-    case "turn_accepted":
-    case "process_spawned":
-    case "tool_execution_started":
-    case "assistant_output_started":
-    case "model_call_started":
-      return true;
-    default:
-      return false;
-  }
+  return info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] === "execution" : false;
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
@@ -478,20 +540,94 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
   };
 }
 
-function resolveDeliveryState(params: { job: CronJob; delivered?: boolean }): {
+function resolveDeliveryState(params: {
+  job: CronJob;
+  runStatus: CronRunStatus;
+  delivered?: boolean;
+  error?: string;
+  globalFailureDestination?: CronConfig["failureDestination"];
+}): {
   delivered?: boolean;
   status: CronDeliveryStatus;
+  error?: string;
+  failureNotification: CronFailureNotificationDelivery;
 } {
-  if (!resolveCronDeliveryPlan(params.job).requested) {
-    return { status: "not-requested" };
+  const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
+  const alternateFailureNotificationRequested =
+    params.runStatus === "error" &&
+    params.job.delivery?.bestEffort !== true &&
+    resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
+  if (!primaryDeliveryRequested) {
+    return {
+      status: "not-requested",
+      failureNotification: {
+        status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+      },
+    };
+  }
+  if (params.runStatus === "error") {
+    const failureNotification: CronFailureNotificationDelivery =
+      alternateFailureNotificationRequested ? { status: "unknown" } : { status: "delivered" };
+    if (params.delivered === true) {
+      return {
+        delivered: false,
+        status: "not-delivered",
+        error: params.error,
+        failureNotification: alternateFailureNotificationRequested
+          ? failureNotification
+          : { delivered: true, status: "delivered" },
+      };
+    }
+    if (params.delivered === false) {
+      return {
+        delivered: false,
+        status: "not-delivered",
+        error: params.error,
+        failureNotification: alternateFailureNotificationRequested
+          ? failureNotification
+          : {
+              delivered: false,
+              status: "not-delivered",
+              ...(params.error ? { error: params.error } : {}),
+            },
+      };
+    }
+    return {
+      status: "unknown",
+      error: params.error,
+      failureNotification: { status: "unknown" },
+    };
   }
   if (params.delivered === true) {
-    return { delivered: true, status: "delivered" };
+    return {
+      delivered: true,
+      status: "delivered",
+      failureNotification: { status: "not-requested" },
+    };
   }
   if (params.delivered === false) {
-    return { delivered: false, status: "not-delivered" };
+    return {
+      delivered: false,
+      status: "not-delivered",
+      error: params.error,
+      failureNotification: { status: "not-requested" },
+    };
   }
-  return { status: "unknown" };
+  return { status: "unknown", failureNotification: { status: "not-requested" } };
+}
+
+export function failureNotificationDeliveryFromJobState(
+  job: CronJob,
+): CronFailureNotificationDelivery | undefined {
+  const status = job.state.lastFailureNotificationDeliveryStatus;
+  if (!status || status === "not-requested") {
+    return undefined;
+  }
+  return {
+    delivered: job.state.lastFailureNotificationDelivered,
+    status,
+    error: job.state.lastFailureNotificationDeliveryError,
+  };
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
@@ -696,11 +832,22 @@ export function applyJobResult(
       "cron: job run returned error status",
     );
   }
-  const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
+  const deliveryState = resolveDeliveryState({
+    job,
+    runStatus: result.status,
+    delivered: result.delivered,
+    error: result.error,
+    globalFailureDestination: state.deps.cronConfig?.failureDestination,
+  });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
-    deliveryState.status === "not-delivered" && result.error ? result.error : undefined;
+    deliveryState.status === "not-delivered" && deliveryState.error
+      ? deliveryState.error
+      : undefined;
+  job.state.lastFailureNotificationDelivered = deliveryState.failureNotification.delivered;
+  job.state.lastFailureNotificationDeliveryStatus = deliveryState.failureNotification.status;
+  job.state.lastFailureNotificationDeliveryError = deliveryState.failureNotification.error;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
@@ -1764,9 +1911,10 @@ function emitJobFinished(
     error: result.error,
     summary: result.summary,
     diagnostics: result.diagnostics,
-    delivered: result.delivered,
+    delivered: job.state.lastDelivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
+    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
     delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,

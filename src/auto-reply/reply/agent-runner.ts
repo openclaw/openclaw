@@ -80,6 +80,7 @@ import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
@@ -405,11 +406,16 @@ function mergeExecutionTrace(params: {
   if (!winnerProvider && !winnerModel && attempts.length === 0) {
     return undefined;
   }
+  const fallbackAttemptCount = params.fallbackAttempts?.length ?? 0;
+  const traceFallbackUsed = params.executionTrace?.fallbackUsed;
   return {
     winnerProvider,
     winnerModel,
     attempts: attempts.length > 0 ? attempts : undefined,
-    fallbackUsed: params.executionTrace?.fallbackUsed ?? attempts.length > 1,
+    fallbackUsed:
+      traceFallbackUsed === true ||
+      fallbackAttemptCount > 0 ||
+      (traceFallbackUsed === undefined && attempts.length > 1),
     runner: params.executionTrace?.runner ?? params.runner,
   };
 }
@@ -917,11 +923,12 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
 }
 
 function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  return payloads
+  const text = payloads
     .filter((payload) => payload.isReasoning !== true)
     .map((payload) => payload.text)
     .filter((text): text is string => Boolean(text))
     .join("\n\n");
+  return sanitizePendingFinalDeliveryText(text);
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -2156,6 +2163,7 @@ export async function runReplyAgent(params: {
       err: error,
       sessionCtx,
       resolvedVerboseLevel,
+      cfg,
     });
     if (knownFailurePayload) {
       replyOperation.fail("run_failed", error);

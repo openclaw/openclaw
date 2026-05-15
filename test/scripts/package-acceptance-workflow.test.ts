@@ -115,7 +115,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("update-channel-switch skill-install update-corrupt-plugin");
     expect(workflow).toContain("update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
-    expect(workflow).toContain("published-upgrade-survivor root-managed-vps-upgrade update-restart-auth");
+    expect(workflow).toContain(
+      "published-upgrade-survivor root-managed-vps-upgrade update-restart-auth",
+    );
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
@@ -382,18 +384,24 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
     expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
-    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
+    expect(workflow).not.toContain('service_tier=\\"fast\\"');
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS=");
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=");
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
     expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
-    expect(workflow).toMatch(/validate_repo_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
-    expect(workflow).toMatch(/validate_special_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
     expect(workflow).toMatch(
-      /validate_live_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
+      /validate_repo_e2e:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+    );
+    expect(workflow).toMatch(
+      /validate_special_e2e:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+    );
+    expect(workflow).toMatch(
+      /validate_live_provider_suites:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
@@ -446,7 +454,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
     expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
+      /validate_live_media_provider_suites:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
     expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
     expect(workflow).toContain("ffmpeg -version | head -1");
@@ -837,7 +845,7 @@ describe("package artifact reuse", () => {
       "qa_live_telegram_release_checks",
     ]) {
       expect(releaseChecksWorkflow).toMatch(
-        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: ubuntu-24\\.04`, "u"),
       );
     }
 
@@ -859,6 +867,11 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("Write release validation manifest");
+    expect(workflow).toContain("Upload release validation manifest");
+    expect(workflow).toContain("Failed child detail: ${label}");
+    expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");
+    expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
     expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
     expect(workflow).toContain(
       'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
@@ -874,8 +887,18 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("timeout-minutes: 60");
     expect(workflow).toContain("Download OpenClaw npm preflight manifest");
     expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
+    expect(workflow).toContain("Download full release validation manifest");
+    expect(workflow).toContain("Validate full release validation manifest");
+    expect(workflow).toContain("full_release_validation_run_id");
+    expect(workflow).toContain(
+      "Full release validation must run rerun_group=all before npm publish",
+    );
     expect(workflow).toContain("preflight-manifest.json");
     expect(npmWorkflow).toContain("preflight-manifest.json");
+    expect(npmWorkflow).toContain("Verify full release validation run metadata");
+    expect(npmWorkflow).toContain("Verify full release validation target");
+    expect(npmWorkflow).toContain("full_release_validation_run_id");
+    expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
     expect(npmWorkflow).toContain("tarballSha256");
     expect(workflow).toContain("Checkout release SHA");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
@@ -894,6 +917,9 @@ describe("package artifact reuse", () => {
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
+    );
+    expect(packageJson.scripts?.["release:candidate"]).toBe(
+      "node scripts/release-candidate-checklist.mjs",
     );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",

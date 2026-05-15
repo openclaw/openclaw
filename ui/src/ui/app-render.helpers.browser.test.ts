@@ -44,6 +44,7 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
     },
     applySettings: () => undefined,
     chatMobileControlsOpen: false,
@@ -99,11 +100,12 @@ describe("chat header controls (browser)", () => {
       container.querySelectorAll<HTMLButtonElement>(".chat-controls .btn--icon[data-tooltip]"),
     );
 
-    expect(buttons).toHaveLength(5);
+    expect(buttons).toHaveLength(6);
 
     const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
     expect(labels).toEqual([
       t("chat.refreshTitle"),
+      `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
       t("chat.thinkingToggle"),
       t("chat.toolCallsToggle"),
       t("chat.focusToggle"),
@@ -161,7 +163,9 @@ describe("chat header controls (browser)", () => {
       container.querySelectorAll<HTMLButtonElement>(".chat-controls__thinking .btn--icon"),
     );
 
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
+    const autoScrollButton = requireButton(buttons.at(0), "auto-scroll mode");
+    expect(autoScrollButton.dataset.chatAutoScrollMode).toBe("near-bottom");
     const cronButton = requireButton(buttons.at(-1), "cron sessions");
     expect([...cronButton.classList]).toEqual(["btn", "btn--sm", "btn--icon", "active"]);
     expect(cronButton.getAttribute("aria-pressed")).toBe("true");
@@ -170,6 +174,32 @@ describe("chat header controls (browser)", () => {
     cronButton.click();
 
     expect(state.sessionsHideCron).toBe(false);
+  });
+
+  it("renders and applies the chat auto-scroll mode toggle", async () => {
+    const applySettings = vi.fn();
+    const state = createState({ applySettings });
+    const container = document.createElement("div");
+    render(renderChatControls(state), container);
+    await Promise.resolve();
+
+    const toggle = requireButton(
+      container.querySelector<HTMLButtonElement>('[data-chat-auto-scroll-toggle="true"]'),
+      "auto-scroll toggle",
+    );
+    expect(toggle.getAttribute("aria-label")).toBe(
+      `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
+    );
+    expect(toggle.getAttribute("data-tooltip")).toBe(toggle.getAttribute("aria-label"));
+    expect(toggle.dataset.chatAutoScrollMode).toBe("near-bottom");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+
+    toggle.click();
+
+    expect(applySettings).toHaveBeenCalledWith({
+      ...state.settings,
+      chatAutoScroll: "always",
+    });
   });
 
   it("uses the shared chat session controls in the mobile dropdown", async () => {
@@ -210,6 +240,11 @@ describe("chat header controls (browser)", () => {
     expect(selectDatasets[1]?.chatSessionSelect).toBe("true");
     expect(selectDatasets[2]?.chatModelSelect).toBe("true");
     expect(selectDatasets[3]?.chatThinkingSelect).toBe("true");
+    const autoScrollToggle = requireButton(
+      container.querySelector<HTMLButtonElement>('[data-chat-auto-scroll-toggle="true"]'),
+      "auto-scroll toggle",
+    );
+    expect(autoScrollToggle.dataset.chatAutoScrollMode).toBe("near-bottom");
   });
 
   it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {

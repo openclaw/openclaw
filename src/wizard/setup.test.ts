@@ -854,6 +854,47 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("forwards provider-specific auth flags to applyAuthChoice opts", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-codex-api-key",
+        openaiApiKey: "sk-flag-value",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        skipHooks: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai-codex auth choice");
+    const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
+    expect(opts.openaiApiKey).toBe("sk-flag-value");
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
@@ -1056,6 +1097,55 @@ describe("runSetupWizard", () => {
         call?.[1] === "QuickStart" &&
         typeof call?.[0] === "string" &&
         call[0].includes("Gateway port: 18791"),
+    );
+    expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
+  });
+
+  it("localizes the quickstart summary", async () => {
+    const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_GATEWAY_PORT = "18791";
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousPort;
+      }
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const matchingQuickStartNotes = calls.filter(
+      (call) =>
+        call?.[1] === "QuickStart" &&
+        typeof call?.[0] === "string" &&
+        call[0].includes("Gateway 端口：18791") &&
+        call[0].includes("Tailscale 暴露方式：关闭"),
     );
     expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
   });

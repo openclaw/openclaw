@@ -599,6 +599,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       internalRuntimeHandoffId?: string;
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
       timeout?: number;
       bestEffortDeliver?: boolean;
       cleanupBundleMcpOnRunEnd?: boolean;
@@ -1490,6 +1491,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
+            sourceReplyDeliveryMode: request.sourceReplyDeliveryMode,
             suppressPromptPersistence: shouldSuppressAgentPromptPersistence({
               inputProvenance,
               internalEvents: request.internalEvents,

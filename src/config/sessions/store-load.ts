@@ -9,6 +9,7 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -29,6 +30,10 @@ export type LoadSessionStoreOptions = {
 const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSessionEntryRecord(value: unknown): value is SessionEntry {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -83,7 +88,9 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
 export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
+    if (!isSessionEntryRecord(entry)) {
+      delete store[key];
+      changed = true;
       continue;
     }
     const normalized = stripPersistedSkillsCache(
@@ -156,13 +163,20 @@ export function loadSessionStore(
     let pruned = 0;
     let capped = 0;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+      });
       const countAfterPrune = Object.keys(store).length;
       capped = shouldRunSessionEntryMaintenance({
         entryCount: countAfterPrune,
         maxEntries: maintenance.maxEntries,
       })
-        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        ? capEntryCount(store, maintenance.maxEntries, {
+            log: false,
+            preserveKeys: preserveSessionKeys,
+          })
         : 0;
     }
     const afterCount = Object.keys(store).length;

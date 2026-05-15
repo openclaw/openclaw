@@ -8,6 +8,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
+import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
@@ -329,7 +330,7 @@ function toJpegFileName(fileName?: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
-  const trimmed = fileName.trim();
+  const trimmed = basenameFromAnyPath(fileName.trim());
   if (!trimmed) {
     return fileName;
   }
@@ -615,8 +616,8 @@ async function loadWebMediaInternal(
       buffer: data,
     });
   }
-  let fileName = path.basename(mediaUrl) || undefined;
-  if (fileName && !path.extname(fileName) && mime) {
+  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
       fileName = `${fileName}${ext}`;

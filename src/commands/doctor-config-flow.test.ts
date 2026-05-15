@@ -654,7 +654,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {

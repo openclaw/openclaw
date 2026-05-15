@@ -519,6 +519,8 @@ describe("stuck session diagnostics threshold", () => {
   it("aborts and drains embedded runs after an extended no-progress stall", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = resolveStuckSessionAbortMs(undefined, stuckSessionWarnMs);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -527,7 +529,8 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -535,10 +538,10 @@ describe("stuck session diagnostics threshold", () => {
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
-      vi.advanceTimersByTime(9 * 60_000);
+      vi.advanceTimersByTime(stuckSessionAbortMs - 30_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(2 * 60_000);
+      vi.advanceTimersByTime(30_000);
     } finally {
       unsubscribe();
     }
@@ -1055,6 +1058,48 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("suppresses liveness warnings during startupGraceMs while still sampling", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: string[] = [];
+    const sampleLiveness = vi.fn(() => ({
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 1_500,
+      eventLoopDelayMaxMs: 2_000,
+    }));
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness,
+          startupGraceMs: 60_000,
+        },
+      );
+
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleLiveness).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
+      expect(events).not.toContain("diagnostic.liveness.warning");
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleLiveness).toHaveBeenCalledTimes(2);
+      expectLoggerMessageContaining(warnSpy, "liveness warning:");
+      expect(events).toContain("diagnostic.liveness.warning");
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("warns for liveness samples when diagnostic work is open", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -1297,7 +1342,7 @@ describe("stuck session diagnostics threshold", () => {
         30_000,
       ),
     ).toBe(48 * 60 * 60_000);
-    expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(10 * 60_000);
+    expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(5 * 60_000);
   });
 });
 

@@ -95,7 +95,7 @@ Supported `appServer` fields:
 | `headers`                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                        |
 | `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                             |
 | `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                     |
-| `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                  |
+| `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                    |
 | `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                 |
 | `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                            |
 | `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume.                                                                                                                                      |
@@ -166,18 +166,23 @@ login instead of inherited child-process env. WebSocket app-server connections
 do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
 
-Stdio app-server launches inherit OpenClaw's process environment by default, but
-OpenClaw owns the Codex app-server account bridge and sets both `CODEX_HOME` and
-`HOME` to per-agent directories under that agent's OpenClaw state. Codex's own
-skill loader reads `$CODEX_HOME/skills` and `$HOME/.agents/skills`, so both
-values are isolated for local app-server launches. That keeps Codex-native
-skills, plugins, config, accounts, and thread state scoped to the OpenClaw agent
-instead of leaking in from the operator's personal Codex CLI home.
+Stdio app-server launches inherit OpenClaw's process environment by default.
+OpenClaw owns the Codex app-server account bridge and sets `CODEX_HOME` to a
+per-agent directory under that agent's OpenClaw state. That keeps Codex config,
+accounts, plugin cache/data, and thread state scoped to the OpenClaw agent
+instead of leaking in from the operator's personal `~/.codex` home.
+
+OpenClaw does not rewrite `HOME` for normal local app-server launches. Codex-run
+subprocesses such as `openclaw`, `gh`, `git`, cloud CLIs, and shell commands see
+the normal process home and can find user-home config and tokens. Codex may also
+discover `$HOME/.agents/skills` and `$HOME/.agents/plugins/marketplace.json`;
+that `.agents` discovery is intentionally shared with the operator home and is
+separate from isolated `~/.codex` state.
 
 OpenClaw plugins and OpenClaw skill snapshots still flow through OpenClaw's own
-plugin registry and skill loader. Personal Codex CLI assets do not. If you have
-useful Codex CLI skills or plugins that should become part of an OpenClaw agent,
-inventory them explicitly:
+plugin registry and skill loader. Personal Codex `~/.codex` assets do not. If
+you have useful Codex CLI skills or plugins from a Codex home that should become
+part of an OpenClaw agent, inventory them explicitly:
 
 ```bash
 openclaw migrate codex --dry-run
@@ -205,8 +210,9 @@ If a deployment needs additional environment isolation, add those variables to
 ```
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
-`CODEX_HOME` and `HOME` remain reserved for OpenClaw's per-agent Codex
-isolation on local launches.
+OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
+normalization: `CODEX_HOME` stays per-agent, and `HOME` stays inherited so
+subprocesses can use normal user-home state.
 
 ## Dynamic tools
 
@@ -247,12 +253,13 @@ Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
 tool signal where supported and returns a failed dynamic-tool response to Codex
 so the turn can continue instead of leaving the session in `processing`.
 
-After OpenClaw responds to a Codex turn-scoped app-server request, the harness
-also expects Codex to finish the native turn with `turn/completed`. If the
-app-server goes quiet for `appServer.turnCompletionIdleTimeoutMs` after that
-response, OpenClaw best-effort interrupts the Codex turn, records a diagnostic
-timeout, and releases the OpenClaw session lane so follow-up chat messages are
-not queued behind a stale native turn.
+After Codex accepts a turn, and after OpenClaw responds to a turn-scoped
+app-server request, the harness expects Codex to make current-turn progress and
+eventually finish the native turn with `turn/completed`. If the app-server goes
+quiet for `appServer.turnCompletionIdleTimeoutMs`, OpenClaw best-effort
+interrupts the Codex turn, records a diagnostic timeout, and releases the
+OpenClaw session lane so follow-up chat messages are not queued behind a stale
+native turn.
 
 Any non-terminal notification for the same turn, including
 `rawResponseItem/completed`, disarms that short watchdog because Codex has

@@ -601,6 +601,47 @@ describe("readRemoteMediaBuffer", () => {
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3]));
   });
 
+  it("normalizes Windows-style response filenames and caller hints on POSIX hosts", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: {
+            "content-disposition": String.raw`attachment; filename="C:\Users\Ada\Downloads\photo.png"`,
+            "content-type": "application/octet-stream",
+          },
+        }),
+    );
+
+    const savedFromHeader = await saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 8,
+    });
+
+    expect(savedFromHeader.fileName).toBe("photo.png");
+
+    const savedFromHint = await saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+            status: 200,
+            headers: { "content-type": "application/octet-stream" },
+          }),
+      ),
+      lookupFn: makeLookupFn(),
+      filePathHint: String.raw`C:\Users\Ada\Downloads\document.docx`,
+      maxBytes: 8,
+    });
+
+    expect(savedFromHint.fileName).toBe("document.docx");
+    expect(savedFromHint.contentType).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+  });
+
   it("does not let filename hints force stored extensions before byte sniffing", async () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
     const fetchImpl = vi.fn(
