@@ -196,7 +196,7 @@ describe("resolveModelRuntimePolicy", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(
       resolveModelRuntimePolicy({
@@ -228,7 +228,7 @@ describe("resolveModelRuntimePolicy", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(
       resolveModelRuntimePolicy({

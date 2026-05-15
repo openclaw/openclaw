@@ -14,6 +14,7 @@ import {
   isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftAssistantPreview,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
@@ -118,6 +119,17 @@ describe("channel-streaming", () => {
         streaming: { mode: "progress" },
       }),
     ).toBe(false);
+  });
+
+  it("defaults progress assistant preview off unless explicitly enabled", () => {
+    expect(resolveChannelProgressDraftAssistantPreview({ streaming: { mode: "progress" } })).toBe(
+      false,
+    );
+    expect(
+      resolveChannelProgressDraftAssistantPreview({
+        streaming: { mode: "progress", progress: { assistantPreview: true } },
+      }),
+    ).toBe(true);
   });
 
   it("falls back to legacy flat fields when the canonical object is absent", () => {
