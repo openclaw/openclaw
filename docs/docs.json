@@ -1478,6 +1478,7 @@
                     "pages": [
                       "gateway/configuration",
                       "gateway/configuration-reference",
+                      "gateway/configuration-internals",
                       "gateway/config-agents",
                       "gateway/config-channels",
                       "gateway/config-tools",
