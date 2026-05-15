@@ -1,6 +1,7 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatCronAlertEventTime } from "../cron/alert-time.js";
 import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
@@ -132,6 +133,7 @@ export async function sendGatewayCronFailureAlert(params: {
   webhookToken?: unknown;
   job: CronJob;
   text: string;
+  eventTimeMs?: number;
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";
@@ -158,6 +160,7 @@ export async function sendGatewayCronFailureAlert(params: {
           jobId: params.job.id,
           jobName: params.job.name,
           message: params.text,
+          eventTimeMs: params.eventTimeMs,
         },
         logContext: { jobId: params.job.id },
         blockedLog: "cron: failure alert webhook blocked by SSRF guard",
@@ -275,7 +278,13 @@ function dispatchCronFailureDestinationNotifications(params: {
     return;
   }
 
-  const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
+  const eventTime = formatCronAlertEventTime({
+    job: params.job,
+    eventTimeMs: params.evt.runAtMs,
+  });
+  const failureMessage = `Cron job "${params.job.name}" failed${
+    eventTime ? ` at ${eventTime}` : ""
+  }: ${params.evt.error ?? "unknown error"}`;
   const failureDest = resolveFailureDestination(params.job, params.globalFailureDestination);
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
 

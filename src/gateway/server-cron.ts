@@ -382,7 +382,7 @@ export function buildGatewayCronService(params: {
         "cron: cleaned up timed-out agent run",
       );
     },
-    sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
+    sendCronFailureAlert: async ({ job, text, eventTimeMs, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({
         deps: params.deps,
         logger: cronLogger,
@@ -390,6 +390,7 @@ export function buildGatewayCronService(params: {
         webhookToken: params.cfg.cron?.webhookToken,
         job,
         text,
+        eventTimeMs,
         channel,
         to,
         mode,
