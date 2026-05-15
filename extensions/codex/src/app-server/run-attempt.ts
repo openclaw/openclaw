@@ -1319,6 +1319,7 @@ export async function runCodexAppServerAttempt(
       isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
     const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
     try {
+      await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
     } catch (error) {
       embeddedAgentLog.debug("codex app-server projector notification threw", {
@@ -1342,6 +1343,11 @@ export async function runCodexAppServerAttempt(
     }
   };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
+    if (!projector || !turnId) {
+      userInputBridge?.handleNotification(notification);
+      pendingNotifications.push(notification);
+      return Promise.resolve();
+    }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
       () => handleNotification(notification),
@@ -3253,6 +3259,12 @@ function prependCurrentTurnContext(
 ): string {
   const text = context?.text.trim();
   return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+}
+
+function waitForCodexNotificationDispatchTurn(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function handleApprovalRequest(params: {

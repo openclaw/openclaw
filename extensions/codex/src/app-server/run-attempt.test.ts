@@ -39,7 +39,11 @@ import {
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
+import {
+  readRecentCodexRateLimits,
+  rememberCodexRateLimits,
+  resetCodexRateLimitCacheForTests,
+} from "./rate-limit-cache.js";
 import {
   runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
   __testing,
@@ -1982,6 +1986,29 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("yields a macrotask before processing queued app-server notifications", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 1_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const notification = rateLimitsUpdated(Date.now() + 60_000);
+    const processing = harness.notify(notification);
+    await Promise.resolve();
+
+    expect(readRecentCodexRateLimits()).toBeUndefined();
+    await processing;
+    expect(readRecentCodexRateLimits()).toEqual(notification.params);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
   it("releases the session when a completed agent message item goes quiet", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
@@ -3250,7 +3277,7 @@ describe("runCodexAppServerAttempt", () => {
         if (!harnessRef.current) {
           throw new Error("Expected Codex app-server harness to be initialized");
         }
-        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
+        void harnessRef.current.notify(rateLimitsUpdated(resetsAt));
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
