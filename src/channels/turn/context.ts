@@ -1,10 +1,15 @@
-import type { CommandTurnContext } from "../../auto-reply/command-turn-context.js";
+import {
+  commandTurnKindToSource,
+  createCommandTurnContext,
+  type CommandTurnContext,
+} from "../../auto-reply/command-turn-context.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type {
   AccessFacts,
+  CommandFacts,
   ConversationFacts,
   InboundMediaFacts,
   MessageFacts,
@@ -29,6 +34,7 @@ export type BuildChannelTurnContextParams = {
   reply: ReplyPlanFacts;
   message: MessageFacts;
   access?: AccessFacts;
+  command?: CommandFacts;
   commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
@@ -124,6 +130,30 @@ function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): b
     : commands?.authorizers?.some((entry) => entry.allowed);
 }
 
+function resolveChannelTurnCommandContext(params: {
+  command?: CommandFacts;
+  commandTurn?: CommandTurnContext;
+  message: MessageFacts;
+  access?: AccessFacts;
+}): CommandTurnContext | undefined {
+  if (params.commandTurn) {
+    return params.commandTurn;
+  }
+  const command = params.command;
+  if (!command) {
+    return undefined;
+  }
+  const body = command.body ?? params.message.commandBody ?? params.message.rawBody;
+  return createCommandTurnContext(commandTurnKindToSource(command.kind), {
+    authorized:
+      command.kind === "normal"
+        ? false
+        : (command.authorized ?? resolveAccessFactsCommandAuthorized(params.access) === true),
+    commandName: command.name,
+    body,
+  });
+}
+
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): BuiltChannelTurnContext {
@@ -133,6 +163,12 @@ export function buildChannelTurnContext(
     contextVisibility: params.contextVisibility,
   });
   const body = params.message.body ?? params.message.rawBody;
+  const commandTurn = resolveChannelTurnCommandContext({
+    command: params.command,
+    commandTurn: params.commandTurn,
+    message: params.message,
+    access: params.access,
+  });
 
   return finalizeInboundContext({
     Body: body,
@@ -184,7 +220,7 @@ export function buildChannelTurnContext(
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
     CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
-    CommandTurn: params.commandTurn,
+    CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     OriginatingChannel: params.channel,
