@@ -1070,6 +1070,52 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
+  it("does not fall back to recent history images when the current turn has non-image media", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-current-pdf-"));
+    const documentPath = path.join(tempDir, "current.pdf");
+    const historyPath = path.join(tempDir, "history.png");
+    const getBuffer = vi.fn();
+    try {
+      await fs.writeFile(documentPath, "current-pdf");
+      await fs.writeFile(historyPath, "history-image");
+      const result = await resolveAgentTurnAttachments({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          MediaPath: documentPath,
+          MediaType: "application/pdf",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              messageId: "msg-history",
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            async getBuffer(params: { attachmentIndex: number }) {
+              return getBuffer(params);
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(result).toEqual({ attachments: [], recentHistoryImages: [] });
+      expect(getBuffer).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to recent history images when current image attachments are unusable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-history-fallback-"));
     const historyPath = path.join(tempDir, "history.png");

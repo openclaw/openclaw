@@ -30,6 +30,10 @@ export type AgentTurnAttachmentRuntime = Pick<
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
+function isImageAgentTurnAttachment(attachment: MediaAttachment): boolean {
+  return attachment.mime?.startsWith("image/") === true;
+}
+
 function hasInboundHistoryMedia(ctx: FinalizedMsgContext): boolean {
   return (
     Array.isArray(ctx.InboundHistory) &&
@@ -86,7 +90,7 @@ export async function resolveAgentTurnAttachments(params: {
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
     const mediaType = attachment.mime ?? "application/octet-stream";
-    if (!mediaType.startsWith("image/")) {
+    if (!isImageAgentTurnAttachment(attachment)) {
       return false;
     }
     if (!normalizeOptionalString(attachment.path)) {
@@ -123,10 +127,12 @@ export async function resolveAgentTurnAttachments(params: {
   };
 
   let currentImageResolved = false;
+  const hasCurrentMedia = currentAttachments.length > 0;
+  const hasCurrentImageCandidate = currentAttachments.some(isImageAgentTurnAttachment);
   for (const attachment of currentAttachments) {
     currentImageResolved = (await resolveImageAttachment(attachment)) || currentImageResolved;
   }
-  if (!currentImageResolved) {
+  if (!currentImageResolved && (!hasCurrentMedia || hasCurrentImageCandidate)) {
     for (const attachment of historyAttachments) {
       await resolveImageAttachment(attachment);
     }
