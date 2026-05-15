@@ -37,6 +37,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private let nodesStore = NodesStore.shared
     #if DEBUG
     private var testControlChannelConnected: Bool?
+    private var testMainSessionKey: String?
     #endif
 
     func install(into statusItem: NSStatusItem) {
@@ -160,7 +161,12 @@ extension MenuSessionsInjector {
     // MARK: - Injection
 
     private var mainSessionKey: String {
-        WorkActivityStore.shared.mainSessionKey
+        #if DEBUG
+        if let testMainSessionKey {
+            return testMainSessionKey
+        }
+        #endif
+        return WorkActivityStore.shared.mainSessionKey
     }
 
     private func inject(into menu: NSMenu) {
@@ -1259,6 +1265,10 @@ extension MenuSessionsInjector {
 extension MenuSessionsInjector {
     func setTestingControlChannelConnected(_ connected: Bool?) {
         self.testControlChannelConnected = connected
+    }
+
+    func setTestingMainSessionKey(_ sessionKey: String?) {
+        self.testMainSessionKey = sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
 
     func setTestingSnapshot(_ snapshot: SessionStoreSnapshot?, errorText: String? = nil) {

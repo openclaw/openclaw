@@ -43,6 +43,7 @@ struct MenuSessionsInjectorTests {
     @Test func `injects session rows`() throws {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
+        injector.setTestingMainSessionKey("main")
 
         let defaults = SessionDefaults(model: "anthropic/claude-opus-4-6", contextTokens: 200_000)
         let rows = [

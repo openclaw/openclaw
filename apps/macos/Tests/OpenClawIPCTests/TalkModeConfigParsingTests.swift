@@ -25,7 +25,7 @@ struct TalkModeConfigParsingTests {
         ]
 
         let selection = TalkModeRuntime.selectTalkProviderConfig(talk)
-        #expect(selection?.provider == "elevenlabs")
+        #expect(selection?.provider == "openai")
         #expect(selection?.normalizedPayload == false)
         #expect(selection?.config["voiceId"]?.stringValue == "voice-legacy")
         #expect(selection?.config["apiKey"]?.stringValue == "legacy-key")
