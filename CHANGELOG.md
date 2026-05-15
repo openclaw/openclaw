@@ -10,7 +10,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Media/audio: force WAV muxing when `whisper-cli` transcodes through fs-safe staged temp paths, restoring STT for non-WAV voice messages. Fixes #82094. (#82110) Thanks @civiltox.
 - Memory search: stop using chokidar write-stability polling for memory and QMD watchers so large Markdown extraPath trees no longer build up regular file descriptors; changed files now settle through the existing debounced sync queue. Fixes #77327 and #78224. (#81802) Thanks @frankekn, @loyur, and @JanPlessow.
 
 ## 2026.5.14
@@ -64,7 +63,7 @@ Docs: https://docs.openclaw.ai
 - Discord: report unresolved configured bot-token SecretRefs during startup instead of treating the account as unconfigured. (#82009) Thanks @giodl73-repo.
 - Discord: pass an explicit Ogg muxer to ffmpeg when transcoding voice-message audio through staged temp files, restoring TTS voice-message delivery. Fixes #82074. Thanks @hwlbb.
 - Discord/Feishu: allow Discord voice uploads through RFC2544 fake-IP proxy DNS and pass Feishu's voice ffmpeg transcode through an explicit Ogg muxer. (#82088) Thanks @hwlbb and @6peng888.
-- Audio/STT: pass explicit WAV/Ogg muxers to ffmpeg for whisper-cli and WhatsApp staged temp outputs so `.part` filenames do not break transcription or voice-message delivery. Fixes #82094.
+- Audio/STT: pass explicit WAV/Ogg muxers to ffmpeg for whisper-cli and WhatsApp staged temp outputs so `.part` filenames do not break transcription or voice-message delivery. Fixes #82094. (#82110) Thanks @civiltox.
 - CLI/config: preserve numeric-looking object keys such as Discord guild IDs during `config patch` recursive merges. (#81999) Thanks @giodl73-repo.
 - Gateway/OpenAI-compatible HTTP: forward `response_format` from `/v1/chat/completions` requests through agent stream params to upstream Chat Completions and Responses transports, restoring structured-output support. Fixes #82003. (#82004) Thanks @Lellansin.
 - Control UI/WebChat: let sidebar markdown code-block Copy buttons use the same delegated clipboard handler as chat messages. (#58709) Thanks @tikitoki.
