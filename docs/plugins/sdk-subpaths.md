@@ -56,7 +56,7 @@ but new plugin code should use focused, actively consumed SDK subpaths instead:
 `agent-config-primitives`, `channel-config-schema-legacy`,
 `channel-reply-pipeline`, `channel-runtime`, `channel-secret-runtime`,
 `command-auth`, `compat`, `config-runtime`, `config-schema`, `discord`,
-`group-access`, `infra-runtime`, `matrix`, `mattermost`,
+`feishu`, `group-access`, `infra-runtime`, `matrix`, `mattermost`,
 `media-generation-runtime-shared`, `memory-core-engine-runtime`,
 `memory-core-host-multimodal`, `memory-core-host-query`,
 `music-generation-core`, `self-hosted-provider-setup`, `telegram-account`,
