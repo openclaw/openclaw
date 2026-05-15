@@ -484,18 +484,12 @@ function resolveExternalRunFailureTextForConversation(params: {
   if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
     return params.text;
   }
-  // Honor the documented `agents.defaults.silentReply` /
-  // `surfaces.<id>.silentReply` policy here so failure-fallback respects the
-  // same operator-visible knob that `route-reply.ts` already uses for
-  // `NO_REPLY`-style silent payloads. Defaults preserve the existing
-  // "groups/channels stay quiet on generic runner failure" behavior; opting
-  // into `silentReply.group: "disallow"` (or the per-surface override) lets
-  // the operator surface the failure copy in the chat instead.
-  // See docs/concepts/messages.md ("Silent replies") for the policy contract.
+  // Match normal reply routing: default group/channel failures stay silent,
+  // while explicit default or per-surface policy can surface the failure copy.
   const silentPolicy = resolveSilentReplyPolicy({
     cfg: params.cfg,
     sessionKey: params.sessionCtx.SessionKey,
-    surface: params.sessionCtx.Surface,
+    surface: params.sessionCtx.Surface ?? params.sessionCtx.Provider,
     conversationType: "group",
   });
   if (silentPolicy === "disallow") {

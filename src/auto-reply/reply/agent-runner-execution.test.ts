@@ -3151,6 +3151,46 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it("surfaces raw runner failure copy when per-surface silentReply.group is set to disallow", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          silentReply: { group: "allow" },
+        },
+      },
+      surfaces: {
+        discord: {
+          silentReply: { group: "disallow" },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          GroupSubject: "agent group",
+          GroupChannel: "#general",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
   it.each(["group", "channel"] as const)(
     "keeps default silent behavior in Discord %s chats when silentReply policy is unset",
     async (chatType) => {
