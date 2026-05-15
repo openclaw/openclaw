@@ -9,8 +9,10 @@ const mocks = vi.hoisted(() => ({
   getInstalledPluginRecord: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
+  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
+  repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
@@ -21,6 +23,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("../doctor-plugin-registry.js", () => ({
+  maybeRepairManagedNpmOpenClawPeerLinks: mocks.maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
 
@@ -116,6 +119,10 @@ vi.mock("./shared/stale-plugin-config.js", () => ({
   maybeRepairStalePluginConfig: mocks.maybeRepairStalePluginConfig,
 }));
 
+vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
+  repairStaleOAuthProfileShadows: mocks.repairStaleOAuthProfileShadows,
+}));
+
 vi.mock("./shared/invalid-plugin-config.js", () => ({
   maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
     config: cfg,
@@ -185,8 +192,13 @@ describe("doctor repair sequencing", () => {
     mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
+    mocks.maybeRepairManagedNpmOpenClawPeerLinks.mockResolvedValue(false);
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
+    mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
       changes: [],
       warnings: [],
     });
@@ -264,10 +276,14 @@ describe("doctor repair sequencing", () => {
     expect(result.warningNotes.join("\n")).not.toContain("\r");
   });
 
-  it("removes managed npm bundled-plugin shadows before missing plugin install repair", async () => {
+  it("repairs managed npm plugin drift before missing plugin install repair", async () => {
     const events: string[] = [];
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(() => {
-      events.push("cleanup");
+      events.push("bundled-shadow-cleanup");
+      return true;
+    });
+    mocks.maybeRepairManagedNpmOpenClawPeerLinks.mockImplementation(async () => {
+      events.push("openclaw-peer-links");
       return true;
     });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
@@ -297,11 +313,16 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual(["cleanup", "missing-installs"]);
+    expect(events).toEqual(["bundled-shadow-cleanup", "openclaw-peer-links", "missing-installs"]);
     expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledOnce();
     const cleanupCall = mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.calls[0]?.[0];
     expect(cleanupCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
+    expect(mocks.maybeRepairManagedNpmOpenClawPeerLinks).toHaveBeenCalledOnce();
+    const peerLinkCall = mocks.maybeRepairManagedNpmOpenClawPeerLinks.mock.calls[0]?.[0];
+    expect(peerLinkCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
+    expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
+    expect(peerLinkCall?.env).toBe(process.env);
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {

@@ -175,7 +175,7 @@ const PREFLIGHT_TEMP_PREFIX =
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
-const BUILD_MAX_OLD_SPACE_MB = 4096;
+const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_LOCAL_CHECK: "1",
   OPENCLAW_LOCAL_CHECK_MODE: "throttled",
@@ -526,6 +526,21 @@ function resolveBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined
   return {
     ...env,
     NODE_OPTIONS: nextNodeOptions,
+  };
+}
+
+function resolveInstallEnv(
+  manager: "pnpm" | "bun" | "npm",
+  env?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv | undefined {
+  if (manager !== "pnpm") {
+    return env;
+  }
+  return {
+    ...env,
+    PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
+    npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
+    pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
 }
 
@@ -1006,9 +1021,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           const depsStepName = preflightIgnoreScripts
             ? `preflight deps install (ignore scripts) (${shortSha})`
             : `preflight deps install (${shortSha})`;
-          const depsStep = await runStep(
-            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
-          );
+          const installEnv = resolveInstallEnv(manager.manager, manager.env);
+          const depsStep = await runStep(step(depsStepName, depsStepArgv, worktreeDir, installEnv));
           steps.push(depsStep);
           let finalDepsStep = depsStep;
           if (
@@ -1023,7 +1037,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
                   `preflight deps install (ignore scripts) (${shortSha})`,
                   retryArgv,
                   worktreeDir,
-                  manager.env,
+                  installEnv,
                 ),
               );
               steps.push(retryStep);
@@ -1200,6 +1214,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       };
     }
     try {
+      const installEnv = resolveInstallEnv(manager.manager, manager.env);
       const depsStep = await runStep(
         step(
           "deps install",
@@ -1207,7 +1222,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             compatFallback: manager.fallback && manager.manager === "npm",
           }),
           gitRoot,
-          manager.env,
+          installEnv,
         ),
       );
       steps.push(depsStep);
@@ -1216,7 +1231,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
         if (retryArgv) {
           const retryStep = await runStep(
-            step("deps install (ignore scripts)", retryArgv, gitRoot, manager.env),
+            step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
           );
           steps.push(retryStep);
           finalDepsStep = retryStep;

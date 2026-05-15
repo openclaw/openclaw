@@ -95,7 +95,7 @@ async function waitForAfterToolCall(hooks: {
   await vi.waitFor(() => {
     expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
   });
-  const call = hooks.afterToolCall.mock.calls[0];
+  const call = hooks.afterToolCall.mock.calls.at(0);
   if (!call) {
     throw new Error("Expected afterToolCall hook call");
   }

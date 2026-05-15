@@ -114,7 +114,7 @@ observation-only.
 
 - `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` - observe provider input (system prompt, prompt, history)
-- `llm_output` - observe provider output
+- `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
 
 **Tools**
 
@@ -147,6 +147,18 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** - inspect skill or plugin install scans and optionally block
+
+## Debug runtime hooks
+
+Use `before_model_resolve` when a plugin needs to switch the provider or model
+for an agent turn. It runs before model resolution; `llm_output` only runs after
+a model attempt produces assistant output.
+
+For proof of the effective session model, inspect runtime registrations, then
+use `openclaw sessions` or the Gateway session/status surfaces. When debugging
+provider payloads, start the Gateway with `--raw-stream` and
+`--raw-stream-path <path>`; those flags write raw model stream events to a jsonl
+file.
 
 ## Tool call policy
 
@@ -184,7 +196,7 @@ type BeforeToolCallResult = {
 };
 ```
 
-Rules:
+Hook guard behavior for typed lifecycle hooks:
 
 - `block: true` is terminal and skips lower-priority handlers.
 - `block: false` is treated as no decision.
@@ -275,7 +287,11 @@ that should not receive raw prompts, history, responses, headers, request
 bodies, or provider request IDs. These hooks include stable metadata such as
 `runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
-bounded provider request-id hash.
+bounded provider request-id hash. When the runtime has resolved context-window
+metadata, the hook event and context also include `contextTokenBudget`, the
+effective token budget after model/config/agent caps, plus
+`contextWindowSource` and `contextWindowReferenceTokens` when a lower cap was
+applied.
 
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not

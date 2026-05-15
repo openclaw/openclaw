@@ -14,6 +14,7 @@ import {
   __testing,
   filterRecallEntriesWithinLookback,
   runDreamingSweepPhases,
+  seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -84,11 +85,11 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 }
 
 function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.some((value) => value.includes(expected))).toBe(true);
+  expect(values.join("\n")).toContain(expected);
 }
 
 function expectNotIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.every((value) => !value.includes(expected))).toBe(true);
+  expect(values.join("\n")).not.toContain(expected);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -200,6 +201,14 @@ function createMockNarrativeSubagent(response = "The archive hummed softly.") {
   };
 }
 
+function firstNarrativeRun(subagent: ReturnType<typeof createMockNarrativeSubagent>) {
+  const firstRun = subagent.run.mock.calls[0]?.[0];
+  if (!firstRun) {
+    throw new Error("expected narrative subagent run");
+  }
+  return firstRun;
+}
+
 function setDreamingTestTime(offsetMinutes = 0) {
   vi.setSystemTime(new Date(DREAMING_TEST_BASE_TIME.getTime() + offsetMinutes * 60_000));
 }
@@ -219,6 +228,13 @@ async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<vo
     lines.join("\n"),
     "utf-8",
   );
+}
+
+function dailyCapStressLines(label: string): string[] {
+  return Array.from({ length: 8 }).flatMap((_, index) => [
+    `- ${label} durable memory item ${index + 1} has enough detail to create a chunk.`,
+    "",
+  ]);
 }
 
 async function createDreamingWorkspace(): Promise<string> {
@@ -617,6 +633,164 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.endLine).toBe(4);
     expect(after[0]?.snippet).toContain("Move backups to S3 Glacier.");
     expect(after[0]?.snippet).toContain("Keep retention at 365 days.");
+  });
+
+  it("ingests slugged daily memory files (YYYY-MM-DD-slug.md) alongside date-only files (#69536)", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05-vendor-pitch.md"),
+      [
+        "# 2026-04-05 vendor pitch",
+        "",
+        "- Vendor pitch: prefer the multi-year SLA.",
+        "- Quoted price assumes annual prepay.",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05-api-notes.md"),
+      ["# 2026-04-05 api notes", "", "- API notes: keep the webhook contract stable."].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after).toHaveLength(2);
+    expect(after.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining([
+        "memory/2026-04-05-api-notes.md",
+        "memory/2026-04-05-vendor-pitch.md",
+      ]),
+    );
+    expect(after.every((entry) => (entry.dailyCount ?? 0) > 0)).toBe(true);
+    expect(
+      after.some((entry) => entry.snippet.includes("Vendor pitch: prefer the multi-year SLA.")),
+    ).toBe(true);
+  });
+
+  it("prioritizes the date-only daily file before same-day slugged files when ingestion is capped", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      dailyCapStressLines("Canonical daily note").join("\n"),
+      "utf-8",
+    );
+    for (const slug of ["alpha", "beta", "gamma", "delta"]) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `2026-04-05-${slug}.md`),
+        dailyCapStressLines(`Slugged ${slug}`).join("\n"),
+        "utf-8",
+      );
+    }
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 1,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after.some((entry) => entry.path === "memory/2026-04-05.md")).toBe(true);
+    expect(after.some((entry) => entry.snippet.includes("Canonical daily note"))).toBe(true);
+  });
+
+  it("prioritizes the date-only daily file before same-day slugged files during historical seeding", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const canonicalPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.writeFile(
+      canonicalPath,
+      dailyCapStressLines("Canonical seeded note").join("\n"),
+      "utf-8",
+    );
+    const sluggedPaths: string[] = [];
+    for (const slug of ["alpha", "beta", "gamma", "delta"]) {
+      const sluggedPath = path.join(workspaceDir, "memory", `2026-04-05-${slug}.md`);
+      sluggedPaths.push(sluggedPath);
+      await fs.writeFile(
+        sluggedPath,
+        dailyCapStressLines(`Seeded slugged ${slug}`).join("\n"),
+        "utf-8",
+      );
+    }
+
+    await seedHistoricalDailyMemorySignals({
+      workspaceDir,
+      filePaths: [...sluggedPaths, canonicalPath],
+      limit: 1,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+      timezone: "UTC",
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after.some((entry) => entry.path === "memory/2026-04-05.md")).toBe(true);
+    expect(after.some((entry) => entry.snippet.includes("Canonical seeded note"))).toBe(true);
   });
 
   it("renders non-zero light-sleep confidence for dreaming-ingested candidates", async () => {
@@ -1595,11 +1769,7 @@ describe("memory-core dreaming phases", () => {
         { trigger: "heartbeat", workspaceDir },
       );
 
-      expect(
-        readFileSpy.mock.calls.some(
-          ([target]) => typeof target === "string" && target === transcriptPath,
-        ),
-      ).toBe(false);
+      expect(readFileSpy.mock.calls.filter(([target]) => target === transcriptPath)).toEqual([]);
       readFileSpy.mockRestore();
     } finally {
       vi.restoreAllMocks();
@@ -2498,10 +2668,10 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls[0]?.[0];
-    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
+    const firstRun = firstNarrativeRun(subagent);
+    expect(firstRun.message).toContain("Move backups to S3 Glacier.");
+    expect(firstRun.message).toContain("Keep retention at 365 days.");
+    expect(firstRun.model).toBe("anthropic/claude-sonnet-4-6");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
@@ -2561,10 +2731,10 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls[0]?.[0];
-    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    expect(firstRun?.model).toBe("xai/grok-4.1-fast");
+    const firstRun = firstNarrativeRun(subagent);
+    expect(firstRun.message).toContain("Move backups to S3 Glacier.");
+    expect(firstRun.message).toContain("Keep retention at 365 days.");
+    expect(firstRun.model).toBe("xai/grok-4.1-fast");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The traces braided themselves into a map.",
     );

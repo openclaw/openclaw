@@ -317,7 +317,8 @@ function mockCallArg<T>(
   argIndex: number,
   _type?: (value: unknown) => value is T,
 ): T {
-  const call = callIndex < 0 ? mock.mock.calls.at(callIndex) : mock.mock.calls[callIndex];
+  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
+  const call = mock.mock.calls[resolvedIndex];
   if (!call) {
     throw new Error(`Expected mock call at index ${callIndex}`);
   }
@@ -460,9 +461,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
-    const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
-      | { maxChars?: number }
-      | undefined;
+    const opts = lastMockCallArg<{ maxChars?: number }>(browserClientMocks.browserSnapshot, 1);
     expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
   });
 
@@ -566,10 +565,8 @@ describe("browser tool snapshot maxChars", () => {
     await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
-    const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
-      | { mode?: string }
-      | undefined;
-    expect(opts?.mode).toBeUndefined();
+    const opts = lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1);
+    expect(opts.mode).toBeUndefined();
   });
 
   it("does not apply config snapshot defaults to aria snapshots", async () => {
@@ -584,10 +581,8 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
-    const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
-      | { mode?: string }
-      | undefined;
-    expect(opts?.mode).toBeUndefined();
+    const opts = lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1);
+    expect(opts.mode).toBeUndefined();
   });
 
   it("keeps profile=user off the sandbox browser when no node is selected", async () => {
@@ -642,16 +637,14 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", target: "host", profile: "user" });
 
-    const snapshotOpts = lastMockCallArg<{ profile?: string }>(
-      browserClientMocks.browserSnapshot,
-      1,
-    );
+    const snapshotOpts = lastMockCallArg<{
+      format?: string;
+      maxChars?: number;
+      profile?: string;
+    }>(browserClientMocks.browserSnapshot, 1);
     expect(snapshotOpts.profile).toBe("user");
-    const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
-      | { format?: string; maxChars?: number }
-      | undefined;
-    expect(opts?.format).toBeUndefined();
-    expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
+    expect(snapshotOpts.format).toBeUndefined();
+    expect(Object.hasOwn(snapshotOpts, "maxChars")).toBe(false);
   });
 
   it("routes to node proxy when target=node", async () => {
@@ -664,6 +657,20 @@ describe("browser tool snapshot maxChars", () => {
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("fails node proxy calls cleanly when payloadJSON is malformed", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payloadJSON: "{not json",
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status", target: "node" })).rejects.toThrow(
+      "browser proxy failed",
+    );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 

@@ -118,7 +118,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     const result = await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
 
     expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
-    const [event, context] = runBeforeAgentReplyMock.mock.calls[0] ?? [];
+    const [event, context] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
     expect(event).toEqual({ cleanedBody: baseRunParams.prompt });
     const hookContext = context as Record<string, unknown> | undefined;
     expect(hookContext?.jobId).toBe("cron-job-123");

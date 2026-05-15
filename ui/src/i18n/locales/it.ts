@@ -695,10 +695,6 @@ export const it: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Scopri dove vanno i token, quando le sessioni hanno picchi e cosa determina i costi.",
-    },
     common: {
       emptyValue: "—",
       unknown: "sconosciuto",
@@ -1049,6 +1045,10 @@ export const it: TranslationMap = {
     settings: "Impostazioni chat",
     thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
     toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Attiva/disattiva modalità focus (nascondi barra laterale + intestazione pagina)",
     hideCronSessions: "Nascondi sessioni cron",
     showCronSessions: "Mostra sessioni cron",

@@ -697,10 +697,6 @@ export const fr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Voyez où vont les jetons, quand les sessions augmentent et ce qui génère les coûts.",
-    },
     common: {
       emptyValue: "—",
       unknown: "inconnu",
@@ -1055,6 +1051,10 @@ export const fr: TranslationMap = {
     settings: "Paramètres de chat",
     thinkingToggle: "Afficher/masquer la sortie de réflexion/travail de l’assistant",
     toolCallsToggle: "Afficher/masquer les appels d’outil et les résultats d’outil",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Activer/désactiver le mode focus (masquer la barre latérale + l’en-tête de page)",
     hideCronSessions: "Masquer les sessions cron",
     showCronSessions: "Afficher les sessions cron",

@@ -1,3 +1,7 @@
+import {
+  DEFAULT_TIMING,
+  type StatusReactionController,
+} from "openclaw/plugin-sdk/channel-feedback";
 import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-message";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -221,6 +225,7 @@ export function buildWhatsAppInboundContext(params: {
   combinedBody: string;
   commandBody?: string;
   commandAuthorized?: boolean;
+  commandSource?: "text";
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
@@ -275,6 +280,7 @@ export function buildWhatsAppInboundContext(params: {
     SenderId: params.sender.id ?? params.sender.e164,
     SenderE164: params.sender.e164,
     CommandAuthorized: params.commandAuthorized,
+    CommandSource: params.commandSource,
     ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
     GroupSystemPrompt: params.groupSystemPrompt,
@@ -399,7 +405,14 @@ export async function dispatchWhatsAppBufferedReply(params: {
   replyResolver: typeof getReplyFromConfig;
   route: ReturnType<typeof resolveAgentRoute>;
   shouldClearGroupHistory: boolean;
+  statusReactionController?: StatusReactionController | null;
 }) {
+  const statusReactionController = params.statusReactionController ?? null;
+  const statusReactionTiming = {
+    ...DEFAULT_TIMING,
+    ...params.cfg.messages?.statusReactions?.timing,
+  };
+  const removeAckAfterReply = params.cfg.messages?.removeAckAfterReply ?? false;
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
@@ -410,13 +423,22 @@ export async function dispatchWhatsAppBufferedReply(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   const sourceReplyChatType =
     typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType;
+  const sourceReplyCommandSource =
+    params.context.CommandSource === "native" || params.context.CommandSource === "text"
+      ? params.context.CommandSource
+      : undefined;
+  const sourceReplyCommandAuthorized =
+    typeof params.context.CommandAuthorized === "boolean"
+      ? params.context.CommandAuthorized
+      : undefined;
   const sourceReplyDeliveryMode =
     sourceReplyChatType === "group" || sourceReplyChatType === "channel"
       ? resolveChannelMessageSourceReplyDeliveryMode({
           cfg: params.cfg,
           ctx: {
             ChatType: sourceReplyChatType,
-            CommandSource: params.context.CommandSource === "native" ? "native" : undefined,
+            CommandSource: sourceReplyCommandSource,
+            CommandAuthorized: sourceReplyCommandAuthorized,
           },
         })
       : undefined;
@@ -483,6 +505,10 @@ export async function dispatchWhatsAppBufferedReply(params: {
       await deliverNormalizedPayload(pending.payload, pending.info);
     },
   });
+
+  if (statusReactionController) {
+    void statusReactionController.setThinking();
+  }
 
   const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.context,
@@ -563,6 +589,17 @@ export async function dispatchWhatsAppBufferedReply(params: {
         await deliverNormalizedPayload(normalizedDeliveryPayload, info);
       },
       onReplyStart: params.msg.sendComposing,
+      ...(statusReactionController
+        ? {
+            onCompactionStart: async () => {
+              await statusReactionController.setCompacting();
+            },
+            onCompactionEnd: async () => {
+              statusReactionController.cancelPending();
+              await statusReactionController.setThinking();
+            },
+          }
+        : {}),
       onError: (err, info) => {
         logWhatsAppReplyDeliveryError({
           err,
@@ -578,12 +615,31 @@ export async function dispatchWhatsAppBufferedReply(params: {
       disableBlockStreaming,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,
+      ...(statusReactionController
+        ? {
+            onToolStart: async (payload: { name?: string }) => {
+              const toolName = payload.name?.trim();
+              if (toolName) {
+                await statusReactionController.setTool(toolName);
+              }
+            },
+          }
+        : {}),
     },
   });
   logWhatsAppMediaOnlyFlushResult(await mediaOnlyCoalescer.flushAll());
 
   const didQueueVisibleReply = hasVisibleInboundReplyDispatch({ queuedFinal, counts });
   if (!didQueueVisibleReply) {
+    if (statusReactionController) {
+      void finalizeWhatsAppStatusReaction({
+        controller: statusReactionController,
+        outcome: "error",
+        hasFinalResponse: false,
+        removeAckAfterReply,
+        timing: statusReactionTiming,
+      });
+    }
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }
@@ -591,9 +647,52 @@ export async function dispatchWhatsAppBufferedReply(params: {
     return false;
   }
 
+  if (statusReactionController) {
+    void finalizeWhatsAppStatusReaction({
+      controller: statusReactionController,
+      outcome: didSendReply ? "done" : "error",
+      hasFinalResponse: didSendReply,
+      removeAckAfterReply,
+      timing: statusReactionTiming,
+    });
+  }
+
   if (params.shouldClearGroupHistory) {
     params.groupHistories.set(params.groupHistoryKey, []);
   }
 
   return didSendReply;
+}
+
+async function finalizeWhatsAppStatusReaction(params: {
+  controller: StatusReactionController;
+  outcome: "done" | "error";
+  hasFinalResponse: boolean;
+  removeAckAfterReply: boolean;
+  timing: typeof DEFAULT_TIMING;
+}): Promise<void> {
+  if (params.outcome === "done") {
+    await params.controller.setDone();
+    if (params.removeAckAfterReply) {
+      await new Promise<void>((resolve) => setTimeout(resolve, params.timing.doneHoldMs));
+      await params.controller.clear();
+    } else {
+      await params.controller.restoreInitial();
+    }
+    return;
+  }
+  await params.controller.setError();
+  if (params.hasFinalResponse) {
+    if (params.removeAckAfterReply) {
+      await new Promise<void>((resolve) => setTimeout(resolve, params.timing.errorHoldMs));
+      await params.controller.clear();
+    } else {
+      await params.controller.restoreInitial();
+    }
+    return;
+  }
+  if (params.removeAckAfterReply) {
+    await new Promise<void>((resolve) => setTimeout(resolve, params.timing.errorHoldMs));
+  }
+  await params.controller.restoreInitial();
 }
