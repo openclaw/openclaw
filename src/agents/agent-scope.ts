@@ -177,18 +177,6 @@ export function resolveSubagentModelConfigSelection(params: {
   agentId?: string;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
 }): AgentModelConfig | undefined {
-  return resolveSubagentModelConfigValue({
-    ...params,
-    select: (raw) => (resolvePrimaryStringValue(raw) ? raw : undefined),
-  });
-}
-
-function resolveSubagentModelConfigValue<T>(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
-  select: (raw: AgentModelConfig | undefined) => T | undefined;
-}): T | undefined {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
@@ -197,9 +185,8 @@ function resolveSubagentModelConfigValue<T>(params: {
     agentConfig?.model,
     params.cfg.agents?.defaults?.subagents?.model,
   ]) {
-    const selected = params.select(raw);
-    if (selected !== undefined) {
-      return selected;
+    if (resolvePrimaryStringValue(raw)) {
+      return raw;
     }
   }
   return undefined;
@@ -209,11 +196,9 @@ export function resolveSubagentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return resolveSubagentModelConfigValue({
-    cfg,
-    agentId,
-    select: resolveSelectedModelFallbacksOverride,
-  });
+  return resolveSelectedModelFallbacksOverride(
+    resolveSubagentModelConfigSelection({ cfg, agentId }),
+  );
 }
 
 export function resolveFallbackAgentId(params: {

@@ -361,14 +361,13 @@ function resetRunConfigMocks(): void {
         ? fallbacks.filter((entry) => typeof entry === "string")
         : undefined;
     };
-    return (
-      resolveOverride(agentConfig?.subagents?.model) ??
-      resolveOverride(agentConfig?.model) ??
-      resolveOverride(
-        (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
-          ?.subagents?.model,
-      )
-    );
+    const selectedConfig = [
+      agentConfig?.subagents?.model,
+      agentConfig?.model,
+      (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
+        ?.subagents?.model,
+    ].find((raw) => normalizeModelSelectionForTest(raw));
+    return resolveOverride(selectedConfig);
   });
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);

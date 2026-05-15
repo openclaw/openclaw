@@ -559,6 +559,12 @@ describe("resolveAgentConfig", () => {
             },
           },
           {
+            id: "fallback-only-agent-model",
+            model: {
+              fallbacks: ["google/gemini-3-pro"],
+            },
+          },
+          {
             id: "default-subagent",
           },
           {
@@ -580,6 +586,10 @@ describe("resolveAgentConfig", () => {
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "metadata-only-subagent")).toEqual([
       "google/gemini-3-pro",
+    ]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
+      "openai-codex/gpt-5.4",
+      "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
       "openai-codex/gpt-5.4",
