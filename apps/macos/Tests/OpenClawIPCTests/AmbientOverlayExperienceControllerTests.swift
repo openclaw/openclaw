@@ -20,6 +20,10 @@ struct AmbientOverlayExperienceControllerTests {
         #expect(closeCount == 1)
         #expect(hideCount == 1)
         #expect(ambientIntensities.isEmpty)
+        #expect(controller.showAmbient == nil)
+        #expect(controller.showWorkspace == nil)
+        #expect(controller.hideWorkspace == nil)
+        #expect(controller.closeSurfaces == nil)
     }
 
     @Test func `enabled controller toggles armed state`() {

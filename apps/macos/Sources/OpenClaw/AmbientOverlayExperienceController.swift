@@ -50,12 +50,10 @@ final class AmbientOverlayExperienceController {
             self.dismissInteractive(reason: .disabled)
             self.closeSurfaces?()
             self.displayController = nil
-            if self.enableUI {
-                self.showAmbient = nil
-                self.showWorkspace = nil
-                self.hideWorkspace = nil
-                self.closeSurfaces = nil
-            }
+            self.showAmbient = nil
+            self.showWorkspace = nil
+            self.hideWorkspace = nil
+            self.closeSurfaces = nil
             return
         }
 
