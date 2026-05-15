@@ -27,7 +27,7 @@ SenseAudio can transcribe inbound audio and voice-note attachments through OpenC
 | Default model | `senseaudio-asr-pro-1.5-260319` |
 | Default URL   | `https://api.senseaudio.cn/v1`  |
 
-### Getting started
+### Speech to text setup
 
 <Steps>
   <Step title="Set your API key">
@@ -55,7 +55,7 @@ SenseAudio can transcribe inbound audio and voice-note attachments through OpenC
   </Step>
 </Steps>
 
-### Options
+### Speech to text options
 
 | Option     | Path                                  | Description                         |
 | ---------- | ------------------------------------- | ----------------------------------- |
@@ -82,7 +82,7 @@ SenseAudio synthesizes Mandarin speech through `POST /v1/t2a_v2`. The provider r
 
 The full system voice catalog is available through `pnpm openclaw infer tts voices --provider senseaudio --json`.
 
-### Getting started
+### Text to speech setup
 
 <Steps>
   <Step title="Set your API key">
@@ -98,7 +98,7 @@ The full system voice catalog is available through `pnpm openclaw infer tts voic
   <Step title="Synthesize a clip">
     ```bash
     pnpm openclaw infer tts convert \
-      --text "你好，OpenClaw" \
+      --text "Hello，OpenClaw,this is senseaudio TTS provider" \
       --model senseaudio/senseaudio-tts-1.5-260319 \
       --voice female_0033_b \
       --output ./hello.mp3 --json
@@ -106,7 +106,7 @@ The full system voice catalog is available through `pnpm openclaw infer tts voic
   </Step>
 </Steps>
 
-### Options
+### Text to speech options
 
 | Option    | Path                                        | Description                                  |
 | --------- | ------------------------------------------- | -------------------------------------------- |
