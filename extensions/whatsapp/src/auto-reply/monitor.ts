@@ -165,7 +165,10 @@ export async function monitorWebChannel(
     // Watchdog to detect stuck message processing (e.g., event emitter died).
     // Tuning overrides are test-oriented; production defaults remain unchanged.
     const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? 30 * 60 * 1000; // 30m default
+    const TRANSPORT_TIMEOUT_MS = tuning.transportTimeoutMs ?? 10 * 60 * 1000; // 10m default
     const WATCHDOG_CHECK_MS = tuning.watchdogCheckMs ?? 60 * 1000; // 1m default
+    const HEALTHY_UPTIME_RESET_MS = tuning.healthyUptimeResetMs ?? 5 * 60 * 1000; // 5m default
+    let lastTransportActivityAt = Date.now();
 
     const onMessage = createWebOnMessageHandler({
       cfg,
@@ -212,6 +215,12 @@ export async function monitorWebChannel(
         await onMessage(msg);
       },
     });
+
+    if (typeof listener.onTransportActivity === "function") {
+      listener.onTransportActivity((at: number) => {
+        lastTransportActivityAt = at;
+      });
+    }
 
     statusController.noteConnected();
 
@@ -294,10 +303,42 @@ export async function monitorWebChannel(
       }, heartbeatSeconds * 1000);
 
       active.watchdogTimer = setInterval(() => {
+        const now = Date.now();
+
+        // Transport-level staleness: no socket activity at all (covers quiet accounts
+        // that never receive app-level messages but should still see transport frames).
+        const timeSinceTransport = now - lastTransportActivityAt;
+        if (timeSinceTransport > TRANSPORT_TIMEOUT_MS) {
+          const minutesSinceTransport = Math.floor(timeSinceTransport / 60000);
+          statusController.noteWatchdogStale();
+          heartbeatLogger.warn(
+            {
+              connectionId: active.connectionId,
+              minutesSinceTransport,
+              lastTransportActivityAt: new Date(lastTransportActivityAt),
+              messagesHandled: active.handledMessages,
+            },
+            "Transport timeout detected - forcing reconnect",
+          );
+          whatsappHeartbeatLog.warn(
+            `No transport activity in ${minutesSinceTransport}m - restarting connection`,
+          );
+          void closeListener().catch((err) => {
+            logVerbose(`Close listener failed: ${formatError(err)}`);
+          });
+          listener.signalClose?.({
+            status: 499,
+            isLoggedOut: false,
+            error: "watchdog-transport-timeout",
+          });
+          return;
+        }
+
+        // App-level staleness: messages were flowing but stopped.
         if (!active.lastInboundAt) {
           return;
         }
-        const timeSinceLastMessage = Date.now() - active.lastInboundAt;
+        const timeSinceLastMessage = now - active.lastInboundAt;
         if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
           return;
         }
@@ -346,8 +387,8 @@ export async function monitorWebChannel(
     ]);
 
     const uptimeMs = Date.now() - active.startedAt;
-    if (uptimeMs > heartbeatSeconds * 1000) {
-      reconnectAttempts = 0; // Healthy stretch; reset the backoff.
+    if (uptimeMs > HEALTHY_UPTIME_RESET_MS) {
+      reconnectAttempts = 0;
     }
     statusController.noteReconnectAttempts(reconnectAttempts);
 
@@ -423,11 +464,12 @@ export async function monitorWebChannel(
 
     reconnectAttempts += 1;
     if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+      const DEGRADED_RETRY_MS = tuning.degradedRetryMs ?? 5 * 60 * 1000; // 5m slow-poll
       statusController.noteClose({
         statusCode: numericStatusCode,
         error: errorStr,
         reconnectAttempts,
-        healthState: "stopped",
+        healthState: "reconnecting",
       });
       reconnectLogger.warn(
         {
@@ -435,14 +477,20 @@ export async function monitorWebChannel(
           status: statusCode,
           reconnectAttempts,
           maxAttempts: reconnectPolicy.maxAttempts,
+          degradedRetryMs: DEGRADED_RETRY_MS,
         },
-        "web reconnect: max attempts reached; continuing in degraded mode",
+        "web reconnect: max attempts reached; entering degraded slow-poll mode",
       );
       runtime.error(
-        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
+        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Retrying every ${formatDurationPrecise(DEGRADED_RETRY_MS)}…`,
       );
       await closeListener();
-      break;
+      try {
+        await sleep(DEGRADED_RETRY_MS, abortSignal);
+      } catch {
+        break;
+      }
+      continue;
     }
 
     statusController.noteClose({

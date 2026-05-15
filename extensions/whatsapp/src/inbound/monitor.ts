@@ -55,6 +55,13 @@ export async function monitorWebInbox(options: {
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
 
+  let lastTransportActivityAt = Date.now();
+  let onTransportActivityCallback: ((at: number) => void) | null = null;
+  const noteTransportActivity = () => {
+    lastTransportActivityAt = Date.now();
+    onTransportActivityCallback?.(lastTransportActivityAt);
+  };
+
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
     onCloseResolve = resolve;
@@ -460,6 +467,7 @@ export async function monitorWebInbox(options: {
   };
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
+    noteTransportActivity();
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
@@ -499,6 +507,7 @@ export async function monitorWebInbox(options: {
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
     try {
+      noteTransportActivity();
       if (update.connection === "close") {
         const status = getStatusCode(update.lastDisconnect?.error);
         resolveClose({
@@ -556,6 +565,7 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
+        onTransportActivityCallback = null;
         detachMessagesUpsert();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
@@ -566,6 +576,12 @@ export async function monitorWebInbox(options: {
     onClose,
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
+    },
+    get lastTransportActivityAt() {
+      return lastTransportActivityAt;
+    },
+    onTransportActivity(cb: (at: number) => void) {
+      onTransportActivityCallback = cb;
     },
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,

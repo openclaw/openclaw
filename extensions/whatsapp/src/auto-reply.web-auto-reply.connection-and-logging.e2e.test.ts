@@ -71,18 +71,18 @@ describe("web auto-reply connection", () => {
     expect(() => formatEnvelopeTimestamp(d, " America/Los_Angeles ")).not.toThrow();
   });
 
-  it("handles reconnect progress and max-attempt stop behavior", async () => {
+  it("handles reconnect progress and max-attempt degraded-mode behavior", async () => {
     for (const scenario of [
       {
         reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
         expectedCallsAfterFirstClose: 2,
-        closeTwiceAndFinish: false,
+        triggerDegradedMode: false,
         expectedError: "Retry 1",
       },
       {
         reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
         expectedCallsAfterFirstClose: 2,
-        closeTwiceAndFinish: true,
+        triggerDegradedMode: true,
         expectedError: "max attempts reached",
       },
     ]) {
@@ -106,8 +106,22 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      if (scenario.closeTwiceAndFinish) {
+      if (scenario.triggerDegradedMode) {
+        // After max attempts, monitor enters degraded slow-poll mode instead of stopping.
+        // Close the second listener to trigger the degraded retry, then abort.
         scripted.resolveClose(1);
+        await vi.waitFor(
+          () => {
+            expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(3);
+          },
+          { timeout: 250, interval: 2 },
+        );
+        controller.abort();
+        scripted.resolveClose(scripted.getListenerCount() - 1, {
+          status: 499,
+          isLoggedOut: false,
+          error: "aborted",
+        });
         await run;
       } else {
         controller.abort();
@@ -223,6 +237,82 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("forces reconnect on transport timeout for quiet accounts", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 60,
+        messageTimeoutMs: 60_000,
+        watchdogCheckMs: 5,
+      });
+
+      await Promise.resolve();
+      expect(scripted.getListenerCount()).toBe(1);
+
+      // Advance past transport timeout (10m default) without any messages or
+      // transport activity — the watchdog should detect the stale transport.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+      await Promise.resolve();
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      controller.abort();
+      scripted.resolveClose(scripted.getListenerCount() - 1, {
+        status: 499,
+        isLoggedOut: false,
+        error: "aborted",
+      });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("enters degraded slow-poll mode after max reconnect attempts and recovers", async () => {
+    const sleep = vi.fn(async () => {});
+    const scripted = createScriptedWebListenerFactory();
+    const { runtime, controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 1, factor: 1.1 },
+    });
+
+    await Promise.resolve();
+    expect(scripted.getListenerCount()).toBe(1);
+
+    // First close exhausts maxAttempts (1), entering degraded mode.
+    scripted.resolveClose(0);
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retrying every"));
+
+    // The monitor continues — a third listener was created after degraded sleep.
+    controller.abort();
+    scripted.resolveClose(scripted.getListenerCount() - 1, {
+      status: 499,
+      isLoggedOut: false,
+      error: "aborted",
+    });
+    await Promise.resolve();
+    await run;
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

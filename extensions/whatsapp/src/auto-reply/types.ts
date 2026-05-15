@@ -38,7 +38,13 @@ export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
   heartbeatSeconds?: number;
   messageTimeoutMs?: number;
+  /** Transport-level silence threshold before the watchdog forces a reconnect (ms). */
+  transportTimeoutMs?: number;
   watchdogCheckMs?: number;
+  /** Minimum uptime (ms) before the reconnect backoff counter resets. */
+  healthyUptimeResetMs?: number;
+  /** Slow-poll interval (ms) used after exponential backoff is exhausted. */
+  degradedRetryMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   statusSink?: (status: WebChannelStatus) => void;
   /** WhatsApp account id. Default: "default". */
