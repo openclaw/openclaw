@@ -204,14 +204,10 @@ function formatMatchHuman(match: OcMatch): string {
 }
 
 function splitDiffLines(s: string): readonly string[] {
-  const lines = s.split(/\r?\n/);
-  if (lines.at(-1) === "") {
-    lines.pop();
-  }
-  return lines;
+  return s === "" ? [] : s.split(/\r?\n/);
 }
 
-function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
+export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
   if (oldBytes === newBytes) {
     return "";
   }

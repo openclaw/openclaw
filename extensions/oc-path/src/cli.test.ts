@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type OutputRuntimeEnv,
+  formatUnifiedDiff,
   pathEmitCommand,
   pathFindCommand,
   pathResolveCommand,
@@ -170,6 +171,17 @@ describe("openclaw path CLI", () => {
       expect(out).toContain('-  "version": "1.0",');
       expect(out).toContain('+  "version": "2.0",');
       expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
+    it("CLI-S05b --dry-run --diff shows final newline-only byte changes", () => {
+      const out = formatUnifiedDiff(
+        "## Boundaries\n\n- timeout: 5\n",
+        "## Boundaries\n\n- timeout: 5",
+        "AGENTS.md",
+      );
+      expect(out).toContain("--- AGENTS.md");
+      expect(out).toContain("@@ -1,4 +1,3 @@");
+      expect(out).toContain("\n-\n");
     });
 
     it("CLI-S06 --dry-run --diff includes diff in JSON output", async () => {
