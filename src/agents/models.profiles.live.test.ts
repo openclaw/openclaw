@@ -53,6 +53,7 @@ import {
   isCloudflareOrHtmlErrorPage,
   isRateLimitErrorMessage,
 } from "./pi-embedded-helpers/errors.js";
+import { isAuthErrorMessage } from "./pi-embedded-helpers/failover-matches.js";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -392,6 +393,14 @@ describe("isUnsupportedPlanErrorMessage", () => {
     );
     expect(isUnsupportedPlanErrorMessage("your current token plan not support model")).toBe(true);
     expect(isUnsupportedPlanErrorMessage("model not found")).toBe(false);
+  });
+});
+
+describe("isAuthErrorMessage", () => {
+  it("matches provider API key drift", () => {
+    expect(
+      isAuthErrorMessage('401 {"error":{"message":"The API key you provided is invalid."}}'),
+    ).toBe(true);
   });
 });
 
@@ -1312,6 +1321,11 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (allowNotFoundSkip && isAuthErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (auth drift)`);
               break;
             }
             if (

@@ -22,8 +22,9 @@ export const LIVE_CACHE_TEST_ENABLED =
 const DEFAULT_HEARTBEAT_MS = 20_000;
 const DEFAULT_TIMEOUT_MS = 90_000;
 
-type LiveResolvedModel = {
+export type LiveResolvedModel = {
   apiKey: string;
+  apiKeys?: string[];
   model: Model<Api>;
 };
 
@@ -189,6 +190,7 @@ export async function resolveLiveDirectModel(params: {
     return {
       model: selectedModel,
       apiKey: liveKeys[0] ?? "",
+      apiKeys: liveKeys,
     };
   }
 
@@ -237,5 +239,6 @@ export async function resolveLiveDirectModel(params: {
   return {
     model: resolvedModel,
     apiKey,
+    apiKeys: [apiKey],
   };
 }

@@ -99,9 +99,11 @@ install method aligned:
 
 The Gateway core auto-updater (when enabled via config) launches the CLI update path
 outside the live Gateway request handler. Control-plane `update.run` package-manager
-updates force a non-deferred, no-cooldown update restart after the package swap,
-because the old Gateway process may still have in-memory chunks that point at
-files removed by the new package.
+updates also use a managed-service handoff instead of replacing the package tree
+inside the live Gateway process. The Gateway starts a detached helper, exits,
+and the helper runs the normal `openclaw update --yes --json` CLI path from
+outside the Gateway process tree. If that handoff is unavailable, `update.run`
+returns a structured response with the safe shell command to run manually.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
@@ -131,6 +133,32 @@ package rollback instructions. With `--no-restart`,
 package replacement still runs but the managed service is not stopped or
 restarted, so the running Gateway may keep old code until you restart it
 manually.
+
+### Control-plane response shape
+
+When `update.run` is invoked through the Gateway control plane on a
+package-manager install, the handler reports the handoff initiation separately
+from the CLI update that continues after the Gateway exits:
+
+- `ok: true`, `result.status: "skipped"`,
+  `result.reason: "managed-service-handoff-started"`, and
+  `handoff.status: "started"` mean the Gateway created the managed-service
+  handoff and scheduled its own restart so the detached helper can run
+  `openclaw update --yes --json` outside the live service process.
+- `ok: false`, `result.reason: "managed-service-handoff-unavailable"`, and
+  `handoff.status: "unavailable"` mean OpenClaw could not find a supervising
+  service boundary for a safe handoff. The response includes
+  `handoff.command`, the shell command to run from outside the Gateway.
+- `ok: false`, `result.reason: "managed-service-handoff-failed"` means the
+  Gateway tried to create the handoff but could not spawn the detached helper.
+
+The `sentinel` payload is still written before the Gateway exits, and the CLI
+handoff updates the same restart sentinel after the managed-service restart
+health checks complete. During the handoff, the sentinel can carry
+`stats.reason: "restart-health-pending"` with no success continuation; the
+restarted Gateway keeps polling it and only fires the continuation after the CLI
+has verified service health and rewritten the sentinel with the final `ok`
+result. `update.status` returns the latest cached sentinel.
 
 ## Git checkout flow
 
@@ -189,7 +217,11 @@ Post-update plugin sync failures that are scoped to a managed plugin and that th
 
 After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
 
-When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks.
+When the updated Gateway starts, plugin loading is verify-only: startup does not
+run package managers or mutate dependency trees. Package-manager `update.run`
+restarts are handed to the CLI managed-service path, so the package swap happens
+outside the old Gateway process and the service health checks decide whether the
+update can be reported as complete.
 
 If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 </Note>

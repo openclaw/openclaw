@@ -42,7 +42,10 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
-import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
+import {
+  isAuthErrorMessage,
+  isBillingErrorMessage,
+} from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
@@ -915,6 +918,14 @@ function isPromptProbeMiss(error: string): boolean {
   const msg = error.toLowerCase();
   return msg.includes("not meaningful:") || msg.includes("missing required keywords:");
 }
+
+describe("isAuthErrorMessage", () => {
+  it("matches provider API key drift", () => {
+    expect(
+      isAuthErrorMessage('401 {"error":{"message":"The API key you provided is invalid."}}'),
+    ).toBe(true);
+  });
+});
 
 function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (!modelKey) {
@@ -2455,6 +2466,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (isBillingErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (billing drift)`);
+            break;
+          }
+          if (isAuthErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (auth drift)`);
             break;
           }
           if (
