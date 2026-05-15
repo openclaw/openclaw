@@ -30,6 +30,7 @@ import {
   type ChannelProgressDraftLine,
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
+  resolveChannelProgressDraftAssistantPreview,
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -996,7 +997,11 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+  const createDraftLane = (
+    laneName: LaneName,
+    enabled: boolean,
+    options?: { minInitialChars?: number },
+  ): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
@@ -1005,7 +1010,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           richMessages: telegramCfg.richMessages,
-          minInitialChars: draftMinInitialChars,
+          minInitialChars: options?.minInitialChars ?? draftMinInitialChars,
           minInitialDelayMs: draftMinInitialChars > 0 ? DRAFT_MIN_INITIAL_DELAY_MS : undefined,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
@@ -1031,12 +1036,19 @@ export const dispatchTelegramMessage = async ({
       activeChunkIndex: 0,
     };
   };
+  const streamProgressAssistantPreview =
+    streamMode === "progress" && resolveChannelProgressDraftAssistantPreview(telegramCfg);
+  const canStreamProgressAssistantPreview = canStreamAnswerDraft && streamProgressAssistantPreview;
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
     reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
+    assistant: createDraftLane("assistant", canStreamProgressAssistantPreview, {
+      minInitialChars: DRAFT_MIN_INITIAL_CHARS,
+    }),
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const assistantLane = lanes.assistant;
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
   let activeAnswerBlockAssistantMessageIndex: number | undefined;
@@ -1398,14 +1410,18 @@ export const dispatchTelegramMessage = async ({
   ) => {
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
-      if (segment.lane === "answer") {
+      const targetLane =
+        segment.lane === "answer" && streamMode === "progress" && assistantLane.stream
+          ? assistantLane
+          : lanes[segment.lane];
+      if (segment.lane === "answer" && targetLane === answerLane) {
         await prepareAnswerLaneForText();
       }
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
       }
-      await updateDraftFromPartial(lanes[segment.lane], segment.update);
+      await updateDraftFromPartial(targetLane, segment.update);
     }
   };
   const flushDraftLane = async (lane: DraftLaneState) => {
@@ -1877,6 +1893,9 @@ export const dispatchTelegramMessage = async ({
       payload: ReplyPayload,
       text: string,
     ): Promise<LaneDeliveryResult> => {
+      await assistantLane.stream?.clear();
+      assistantLane.stream?.forceNewMessage();
+      resetDraftLaneState(assistantLane);
       if (activeAnswerDraftIsToolProgressOnly) {
         await rotateAnswerLaneAfterToolProgress();
       } else {
@@ -2389,6 +2408,11 @@ export const dispatchTelegramMessage = async ({
                           if (streamMode !== "progress") {
                             resetProgressDraftState();
                           }
+                          if (assistantLane.stream && assistantLane.hasStreamedMessage) {
+                            await assistantLane.stream.clear();
+                            assistantLane.stream.forceNewMessage();
+                            resetDraftLaneState(assistantLane);
+                          }
                           if (answerLane.finalized) {
                             await rotateLaneForNewMessage(answerLane);
                             rotateAnswerLaneWhenQueuedBlocksSettle = false;
@@ -2563,6 +2587,7 @@ export const dispatchTelegramMessage = async ({
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
         { laneName: "reasoning", lane: reasoningLane },
+        { laneName: "assistant", lane: assistantLane },
       ];
       for (const { lane } of lanesToCleanup) {
         const stream = lane.stream;
