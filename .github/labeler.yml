@@ -284,6 +284,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: skills-setup":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/skills-setup/**"
 "extensions: tokenjuice":
   - changed-files:
       - any-glob-to-any-file:
