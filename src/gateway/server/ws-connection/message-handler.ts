@@ -171,6 +171,8 @@ function resolveTrustedProxyControlUiScopes(params: {
 }
 
 function resolvePinnedClientMetadata(params: {
+  clientId?: string;
+  clientMode?: string;
   claimedPlatform?: string;
   claimedDeviceFamily?: string;
   pairedPlatform?: string;
@@ -181,18 +183,40 @@ function resolvePinnedClientMetadata(params: {
   pinnedPlatform?: string;
   pinnedDeviceFamily?: string;
 } {
+  function normalizeLegacyNodeHostPlatformPin(value: string): string {
+    switch (value) {
+      case "darwin":
+      case "macos":
+        return "macos";
+      case "win32":
+      case "windows":
+        return "windows";
+      default:
+        return value;
+    }
+  }
+
   const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
   const claimedDeviceFamily = normalizeDeviceMetadataForAuth(params.claimedDeviceFamily);
   const pairedPlatform = normalizeDeviceMetadataForAuth(params.pairedPlatform);
   const pairedDeviceFamily = normalizeDeviceMetadataForAuth(params.pairedDeviceFamily);
   const hasPinnedPlatform = pairedPlatform !== "";
   const hasPinnedDeviceFamily = pairedDeviceFamily !== "";
-  const platformMismatch = hasPinnedPlatform && claimedPlatform !== pairedPlatform;
+  const isLegacyNodeHostPlatformPin =
+    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    hasPinnedPlatform &&
+    claimedPlatform !== "" &&
+    normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
+      normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const platformMismatch =
+    hasPinnedPlatform && claimedPlatform !== pairedPlatform && !isLegacyNodeHostPlatformPin;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   return {
     platformMismatch,
     deviceFamilyMismatch,
-    pinnedPlatform: hasPinnedPlatform ? params.pairedPlatform : undefined,
+    pinnedPlatform:
+      hasPinnedPlatform && claimedPlatform === pairedPlatform ? params.pairedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
 }
@@ -956,8 +980,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           };
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (
@@ -1170,6 +1192,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const claimedDeviceFamily = connectParams.client.deviceFamily;
             const pairedDeviceFamily = paired.deviceFamily;
             const metadataPinning = resolvePinnedClientMetadata({
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
               claimedPlatform,
               claimedDeviceFamily,
               pairedPlatform,
