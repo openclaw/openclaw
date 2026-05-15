@@ -224,7 +224,6 @@ function expectLastProxylineBypassPolicy(): ProxylineBypassPolicy {
   return (request) => bypassPolicy(request);
 }
 
-
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
