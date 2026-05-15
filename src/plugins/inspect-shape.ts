@@ -104,7 +104,7 @@ export function buildPluginShapeSummary(params: {
   const toolCount = params.report.tools.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
-  const gatewayMethodCount = params.report.gatewayMethodDescriptors.filter(
+  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
     (descriptor) =>
       descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
   ).length;

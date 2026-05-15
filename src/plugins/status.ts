@@ -446,7 +446,7 @@ export function buildPluginInspectReport(params: {
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
-  const gatewayMethods = report.gatewayMethodDescriptors
+  const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
     .filter(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     )
