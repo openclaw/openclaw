@@ -22,6 +22,7 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
+  CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronDeliveryStatus,
@@ -304,21 +305,27 @@ function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): s
   return execution?.phase?.replaceAll("_", "-");
 }
 
+const CRON_AGENT_EXECUTION_STARTED_BY_PHASE = {
+  runner_entered: false,
+  workspace: false,
+  runtime_plugins: false,
+  model_resolution: false,
+  auth: false,
+  context_engine: false,
+  attempt_dispatch: true,
+  context_assembled: true,
+  turn_accepted: true,
+  process_spawned: true,
+  tool_execution_started: true,
+  assistant_output_started: true,
+  model_call_started: true,
+} as const satisfies Record<CronAgentExecutionPhase, boolean>;
+
 function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
   if (info.firstModelCallStarted) {
     return true;
   }
-  switch (info.phase) {
-    case "attempt_dispatch":
-    case "turn_accepted":
-    case "process_spawned":
-    case "tool_execution_started":
-    case "assistant_output_started":
-    case "model_call_started":
-      return true;
-    default:
-      return false;
-  }
+  return info.phase ? CRON_AGENT_EXECUTION_STARTED_BY_PHASE[info.phase] : false;
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
