@@ -31,6 +31,17 @@ struct OpenClawApp: App {
         HoverHUDController.shared.setSuppressed(self.isMenuPresented || self.isPanelVisible)
     }
 
+    @MainActor
+    private func applyAmbientOverlaySettings() {
+        let settings = AmbientOverlaySettings(
+            isEnabled: self.state.ambientOverlayEnabled,
+            displayScope: self.state.ambientOverlayDisplayScope,
+            intensity: self.state.ambientOverlayIntensity,
+            timeoutSeconds: self.state.ambientOverlayTimeoutSeconds)
+        AmbientOverlayExperienceController.shared.applySettings(settings)
+        AmbientOverlayHotkeyController.shared.setEnabled(settings.isEnabled)
+    }
+
     init() {
         OpenClawLogging.bootstrapIfNeeded()
 
@@ -50,6 +61,9 @@ struct OpenClawApp: App {
                 gatewayStatus: self.gatewayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState)
+                .task {
+                    self.applyAmbientOverlaySettings()
+                }
         }
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
             self.statusItem = item
@@ -76,6 +90,18 @@ struct OpenClawApp: App {
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+        }
+        .onChange(of: self.state.ambientOverlayEnabled) { _, _ in
+            self.applyAmbientOverlaySettings()
+        }
+        .onChange(of: self.state.ambientOverlayDisplayScope) { _, _ in
+            self.applyAmbientOverlaySettings()
+        }
+        .onChange(of: self.state.ambientOverlayIntensity) { _, _ in
+            self.applyAmbientOverlaySettings()
+        }
+        .onChange(of: self.state.ambientOverlayTimeoutSeconds) { _, _ in
+            self.applyAmbientOverlaySettings()
         }
 
         Settings {
@@ -294,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MacNodeModeCoordinator.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
+        AmbientOverlayHotkeyController.shared.setEnabled(false)
         WebChatManager.shared.close()
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }

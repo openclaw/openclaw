@@ -102,6 +102,13 @@ struct MenuContent: View {
                     CanvasManager.shared.hideAll()
                 }
             }
+            Toggle(
+                isOn: Binding(
+                    get: { self.state.ambientOverlayEnabled },
+                    set: { self.state.ambientOverlayEnabled = $0 }))
+            {
+                Label("Ambient Overlay", systemImage: "circle.lefthalf.filled")
+            }
             Toggle(isOn: self.voiceWakeBinding) {
                 Label("Voice Wake", systemImage: "mic.fill")
             }
@@ -143,6 +150,12 @@ struct MenuContent: View {
                         systemImage: "rectangle.inset.filled.on.rectangle")
                 }
             }
+            Button {
+                AmbientOverlayExperienceController.shared.arm()
+            } label: {
+                Label("Open Ambient Overlay", systemImage: "circle.dotted")
+            }
+            .disabled(!self.state.ambientOverlayEnabled)
             Button {
                 Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
             } label: {
