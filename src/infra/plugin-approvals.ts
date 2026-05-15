@@ -211,6 +211,7 @@ const CURL_AUTH_VALUE_FLAGS = new Set([
 const CURL_COOKIE_FLAGS = new Set(["-b", "--cookie"]);
 const CURL_COOKIE_JAR_FLAGS = new Set(["-c", "--cookie-jar"]);
 const CURL_HEADER_FLAGS = new Set(["-H", "--header", "--proxy-header"]);
+const CURL_URL_FLAGS = new Set(["--url"]);
 const CURL_URL_QUERY_FLAGS = new Set(["--url-query"]);
 const CURL_OUTPUT_FLAGS = new Set([
   "-D",
@@ -2113,7 +2114,11 @@ function summarizeNetworkCommand(
     };
   }
   return {
-    text: `make a network request or download data${formatNetworkTargets(args)}`,
+    text: `make a network request or download data${formatNetworkTargetList(
+      transfer.urls.length > 0
+        ? transfer.urls
+        : args.filter((arg) => isNetworkUrl(arg)).map((arg) => formatNetworkUrl(arg)),
+    )}`,
     risk: "medium",
     kind: "network",
     reason: "Network commands can send or fetch data outside this machine.",
@@ -2168,6 +2173,18 @@ function collectNetworkTransferOperands(
       if (hasNetworkUrlCredentials(arg)) {
         usesUrlCredentialSource = true;
       }
+    }
+
+    const urlValue = command === "curl" ? takeFlagValue(args, index, CURL_URL_FLAGS) : null;
+    if (urlValue) {
+      if (isNetworkUrl(urlValue.value)) {
+        urls.push(formatNetworkUrl(urlValue.value));
+        if (hasNetworkUrlCredentials(urlValue.value)) {
+          usesUrlCredentialSource = true;
+        }
+      }
+      index = Math.max(index, urlValue.nextIndex);
+      continue;
     }
 
     const configValue =
@@ -2761,12 +2778,6 @@ function formatTargets(args: readonly string[]): string {
   }
   const shown = targets.slice(0, 3).join(", ");
   return targets.length > 3 ? `: ${shown}, and ${targets.length - 3} more` : `: ${shown}`;
-}
-
-function formatNetworkTargets(args: readonly string[]): string {
-  return formatNetworkTargetList(
-    args.filter((arg) => isNetworkUrl(arg)).map((arg) => formatNetworkUrl(arg)),
-  );
 }
 
 function formatNetworkTargetList(targets: readonly string[]): string {

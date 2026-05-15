@@ -994,6 +994,18 @@ describe("plugin-sdk/approval-renderers", () => {
       redactedUrl: "https://example.test/upload?access_token=[redacted]",
     },
     {
+      contact: "https://example.test/path",
+      command: "curl --url=https://user:s3cr3t@example.test/path",
+      id: "plugin-command-curl-url-flag-credentials",
+      redactedUrl: "--url=https://[redacted]@example.test/path",
+    },
+    {
+      contact: "https://example.test/upload",
+      command: "curl --url https://example.test/upload?access_token=s3cr3t",
+      id: "plugin-command-curl-url-flag-query-token",
+      redactedUrl: "https://example.test/upload?access_token=[redacted]",
+    },
+    {
       contact: "https://example.test/",
       command: "curl --url-query access_token=s3cr3t https://example.test",
       id: "plugin-command-curl-url-query-token",
