@@ -243,8 +243,25 @@ function extractApprovalCommand(payload: PluginApprovalRequestPayload): string |
   if (!looksLikeCommandApproval) {
     return null;
   }
-  const match = /^Command:\s*(.+)$/m.exec(payload.description);
-  return match?.[1]?.trim() || null;
+  const lines = payload.description.split(/\r?\n/);
+  const commandStartIndex = lines.findIndex((line) => /^Command:\s*/.test(line));
+  if (commandStartIndex < 0) {
+    return null;
+  }
+  const commandLines = [lines[commandStartIndex]?.replace(/^Command:\s*/, "") ?? ""];
+  for (const line of lines.slice(commandStartIndex + 1)) {
+    if (isCommandApprovalMetadataLine(line)) {
+      break;
+    }
+    commandLines.push(line);
+  }
+  return commandLines.join("\n").trim() || null;
+}
+
+function isCommandApprovalMetadataLine(line: string): boolean {
+  return /^(?:Proposed exec policy|Session|Tool|Plugin|Agent|ID|Expires in|Reply with|Title|Description):\s*/i.test(
+    line.trim(),
+  );
 }
 
 function decodeBasicHtmlEntities(value: string): string {
@@ -327,7 +344,14 @@ function buildCommandPreview(command: string): string {
 
 function redactSensitiveCommandText(command: string): string {
   return command
-    .replace(/(authorization:\s*bearer\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1[redacted]")
+    .replace(
+      /(authorization:\s*(?:(?:bearer|basic|token)\s+)?)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /((?:x[-_])?(?:api[-_]?key|auth[-_]?token|access[-_]?token|private[-_]?token|password|passwd|secret|token)\s*:\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      "$1[redacted]",
+    )
     .replace(
       /(\b(?:api[-_]?key|auth[-_]?token|password|passwd|secret|token)\b\s*=\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
@@ -938,13 +962,18 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         sudoPrefix,
       );
     case "ssh":
+      return withSudo(summarizeRemoteCommand(args, targetText), sudoPrefix);
     case "scp":
       return withSudo(
         {
-          text: `connect to or copy data from another machine${targetText}`,
-          risk: "medium",
+          text: `copy data to or from another machine${targetText}`,
+          risk: sensitiveTarget || systemTarget ? "high" : "medium",
           kind: "remote",
-          reason: "Remote commands can read from or write to another host.",
+          reason:
+            sensitiveTarget || systemTarget
+              ? "Remote copy commands can transfer sensitive or system files."
+              : "Remote copy commands can read from or write to another host.",
+          showCommandPreview: sensitiveTarget || systemTarget,
         },
         sudoPrefix,
       );
@@ -964,9 +993,10 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       return withSudo(
         {
           text: `run code or a script${targetText}`,
-          risk: sensitiveTarget || systemTarget ? "high" : "medium",
+          risk: "high",
           kind: "unknown",
-          reason: "Scripts can do more than the command line shows directly.",
+          reason: "Interpreter commands can run arbitrary code or scripts.",
+          showCommandPreview: true,
         },
         sudoPrefix,
       );
@@ -1107,6 +1137,21 @@ function summarizeServiceCommand(command: string, args: readonly string[]): Comm
     risk: "medium",
     kind: "service",
     reason: "Service manager commands can affect background processes.",
+  };
+}
+
+function summarizeRemoteCommand(args: readonly string[], targetText: string): CommandActionSummary {
+  const remoteCommand = hasRemoteShellCommand(args);
+  return {
+    text: remoteCommand
+      ? `connect to another machine and run a remote command${targetText}`
+      : `connect to another machine${targetText}`,
+    risk: remoteCommand ? "high" : "medium",
+    kind: "remote",
+    reason: remoteCommand
+      ? "SSH can run commands on another host, including destructive commands."
+      : "Remote commands can read from or write to another host.",
+    showCommandPreview: remoteCommand,
   };
 }
 
@@ -1513,6 +1558,55 @@ function getSedInPlaceTargets(args: readonly string[]): string[] {
   return targets;
 }
 
+function hasRemoteShellCommand(args: readonly string[]): boolean {
+  let sawHost = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg) {
+      continue;
+    }
+    if (arg === "--") {
+      return sawHost && args.slice(index + 1).some((value) => Boolean(value));
+    }
+    if (!sawHost && arg.startsWith("-")) {
+      if (
+        [
+          "-b",
+          "-c",
+          "-D",
+          "-E",
+          "-e",
+          "-F",
+          "-I",
+          "-i",
+          "-J",
+          "-L",
+          "-l",
+          "-m",
+          "-O",
+          "-o",
+          "-p",
+          "-Q",
+          "-R",
+          "-S",
+          "-W",
+          "-w",
+        ].includes(arg) &&
+        args[index + 1]
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    if (!sawHost) {
+      sawHost = true;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 function getShellOutputRedirectionTargets(segment: string): string[] {
   const targets: string[] = [];
   for (const match of segment.matchAll(SHELL_OUTPUT_REDIRECTION_RE)) {
@@ -1635,7 +1729,7 @@ function collectNetworkTransferOperands(
   usesAmbiguousConfig: boolean;
 } {
   const uploadFiles: string[] = [];
-  const outputFiles: string[] = [];
+  const outputFiles: string[] = [...getShellOutputRedirectionTargets(segment)];
   const configFiles: string[] = [];
   const urls: string[] = [];
   const inputRedirection = getShellInputRedirection(segment);
