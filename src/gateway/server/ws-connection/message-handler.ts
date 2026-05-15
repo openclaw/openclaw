@@ -213,11 +213,12 @@ function resolvePinnedClientMetadata(params: {
   const platformMismatch =
     hasPinnedPlatform && claimedPlatform !== pairedPlatform && !isLegacyNodeHostPlatformPin;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
+  const shouldPinPlatform =
+    hasPinnedPlatform && (claimedPlatform === pairedPlatform || isLegacyNodeHostPlatformPin);
   return {
     platformMismatch,
     deviceFamilyMismatch,
-    pinnedPlatform:
-      hasPinnedPlatform && claimedPlatform === pairedPlatform ? params.pairedPlatform : undefined,
+    pinnedPlatform: shouldPinPlatform ? params.pairedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
 }
@@ -1717,3 +1718,7 @@ function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
     receiver._maxPayload = maxPayload;
   }
 }
+
+export const __testing = {
+  resolvePinnedClientMetadata,
+};
