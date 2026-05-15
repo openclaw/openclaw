@@ -363,7 +363,7 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 
 function checkpointCountLabel(count: number): string {
   if (count <= 0) {
-    return t("sessionsView.noCheckpoints");
+    return t("common.none");
   }
   return count === 1
     ? t("sessionsView.checkpoint", { count: String(count) })
@@ -423,7 +423,7 @@ function renderCheckpointSummary(params: {
   if (!params.hasCheckpoints) {
     return html`
       <div class="session-compaction-cell session-compaction-cell--empty">
-        <span class="session-compaction-empty">${t("sessionsView.noCheckpoints")}</span>
+        <span class="session-compaction-empty">${checkpointCountLabel(0)}</span>
       </div>
     `;
   }

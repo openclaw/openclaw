@@ -771,6 +771,7 @@ describe("sessions view", () => {
     if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
       throw new Error("Expected checkpoint toggle row controls");
     }
+    expect(rows[1].querySelector(".session-compaction-empty")?.textContent?.trim()).toBe("none");
     checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
