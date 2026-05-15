@@ -56,4 +56,7 @@ TENANT_WORKSPACE_DIR="$WORKSPACE_DIR" TENANT_LOG_DIR="$LOG_DIR" \
 export OPENCLAW_WORKSPACE_DIR="$WORKSPACE_DIR"
 export OPENCLAW_SKILLS_DIR="$SKILLS_DIR/skills"
 export PLATFORM_SKILLS_ROOT="$SKILLS_DIR"
-exec openclaw gateway --config "$RENDERED" --port "$TENANT_PORT"
+# `openclaw gateway` has no --config flag; resolveGatewayConfigPath
+# (src/config/paths.ts) reads OPENCLAW_CONFIG_PATH instead.
+export OPENCLAW_CONFIG_PATH="$RENDERED"
+exec openclaw gateway --port "$TENANT_PORT"
