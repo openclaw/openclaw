@@ -31,6 +31,7 @@ import type { SilentReplyConversationType } from "../../shared/silent-reply-poli
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
@@ -71,7 +72,7 @@ import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { drainFormattedSystemEventBlock } from "./session-system-events.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -81,15 +82,15 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 export function resolvePromptSilentReplyConversationType(params: {
-  ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "SessionKey">;
+  ctx: Pick<
+    MsgContext,
+    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
+  >;
   inboundSessionKey?: string;
 }): SilentReplyConversationType | undefined {
   const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
-  if (
-    params.ctx.CommandSource === "native" &&
-    params.ctx.CommandTargetSessionKey &&
-    params.ctx.CommandTargetSessionKey !== sourceSessionKey
-  ) {
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
+  if (commandTargetSessionKey && commandTargetSessionKey !== sourceSessionKey) {
     return undefined;
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
@@ -257,7 +258,6 @@ const sessionUpdatesRuntimeLoader = createLazyImportLoader(
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
 );
-const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
   return piEmbeddedRuntimeLoader.load();
@@ -695,15 +695,15 @@ export async function runPreparedReply(
     currentTurnContext?: typeof promptEnvelopeBase.currentTurnContext;
   }> => {
     if (!useFastReplyRuntime) {
-      const eventsBlock = await drainFormattedSystemEvents({
+      const eventsBlock = await drainFormattedSystemEventBlock({
         cfg,
         sessionKey,
         isMainSession,
         isNewSession,
       });
       if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
-        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
+        drainedSystemEventBlocks.push(eventsBlock.text);
+        if (eventsBlock.forceSenderIsOwnerFalse) {
           forceSenderIsOwnerFalseFromSystemEvents = true;
         }
       }

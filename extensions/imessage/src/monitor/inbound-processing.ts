@@ -21,6 +21,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
@@ -989,11 +990,11 @@ export function buildIMessageInboundContext(params: {
   const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
     decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? (params.groupHistories.get(decision.historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? buildInboundHistoryFromMap({
+          historyMap: params.groupHistories,
+          historyKey: decision.historyKey,
+          limit: params.historyLimit,
+        })
       : undefined;
 
   const ctxPayload = finalizeInboundContext({
