@@ -22,6 +22,8 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI Responses: clamp `input_tokens - cached_tokens` at zero and reconstruct `totalTokens` from input + output + cached components so Responses-API streams report consistent usage when providers under-report `input_tokens` relative to `cached_tokens`.
 - Plugins: reject malformed `package.json` `openclaw.extensions` metadata during install, discovery, and post-update payload smoke instead of silently dropping invalid entries.
 - Media/files: sniff `input_file` bytes before trusting declared MIME headers, rejecting spoofed image or zip payloads before they become agent-visible text.
+- Plugins/dependencies: scrub stale managed-root `openclaw` ownership metadata without deleting a linked active host package, preventing plugin installs from downgrading npm-global hosts. Fixes #79462. Thanks @lisandromachado.
+- Gateway/update: keep shutdown hook-runner imports on a stable dist entry and ship a legacy chunk alias so package swaps do not strand running gateways on missing shutdown chunks. Fixes #81819. Thanks @najef1979-code.
 - Config persistence: ignore malformed array/scalar auth profile, cron job state, and session store entries instead of hydrating them into numeric profile ids, crashed cron rows, or invalid session records.
 - Providers: reject malformed successful Runway, BytePlus, and Ollama embedding responses with provider-owned errors instead of raw parser/type failures, silent bad vectors, or long bogus polling.
 - Providers/images: reject malformed successful OpenAI-compatible, OpenAI, Google, fal, and OpenRouter image responses with provider-owned errors instead of raw shape failures, silent invalid base64 skips, or empty image results.

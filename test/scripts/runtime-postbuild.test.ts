@@ -688,10 +688,16 @@ describe("runtime postbuild static assets", () => {
   it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(path.join(distDir, "plugins"), { recursive: true });
     await fs.mkdir(distDir, { recursive: true });
     await fs.writeFile(
       path.join(distDir, "server-close.runtime.js"),
       'export * from "./server-close.runtime-NewHash.js";\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "plugins", "hook-runner-global.js"),
+      "export const runGlobalHook = true;\n",
       "utf8",
     );
 
@@ -702,6 +708,9 @@ describe("runtime postbuild static assets", () => {
     );
     expect(await fs.readFile(path.join(distDir, "server-close-DvAvfgr8.js"), "utf8")).toBe(
       'export * from "./server-close.runtime.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "hook-runner-global-B8rMIo8I.js"), "utf8")).toBe(
+      'export * from "./plugins/hook-runner-global.js";\n',
     );
   });
 
