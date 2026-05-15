@@ -149,12 +149,27 @@ async function resolveDiscordHistoryEntryForPendingRecord(params: {
   if (imageAttachments.length === 0 && stickers.length === 0) {
     return params.entry;
   }
+  const rawData = (() => {
+    try {
+      return params.message.rawData;
+    } catch {
+      return {};
+    }
+  })();
   const mediaMessage = Object.assign(
     Object.create(Object.getPrototypeOf(params.message)),
     params.message,
   ) as typeof params.message;
   Object.defineProperties(mediaMessage, {
     attachments: { value: imageAttachments },
+    rawData: {
+      value: {
+        ...rawData,
+        attachments: imageAttachments,
+        sticker_items: stickers,
+        stickers,
+      },
+    },
     stickers: { value: stickers },
   });
   const mediaList = await resolveMediaList(

@@ -1729,6 +1729,71 @@ describe("preflightDiscordMessage", () => {
     expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
   });
 
+  it("caps skipped history media before falling back to raw Discord stickers", async () => {
+    const channelId = "channel-history-cap";
+    const guildId = "guild-history-cap";
+    const guildHistories = new Map();
+    const sticker = {
+      id: "sticker-history-cap",
+      name: "history-cap-sticker",
+      format_type: 1,
+    };
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-history-cap",
+        channelId,
+        content: "",
+        attachments: Array.from({ length: 4 }, (_, index) => ({
+          id: `att-history-cap-${index}`,
+          url: `https://cdn.discordapp.com/attachments/1/history-${index}.png`,
+          filename: `history-${index}.png`,
+          content_type: "image/png",
+        })),
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "Alice",
+        },
+      }),
+      {
+        rawData: {
+          sticker_items: [sticker],
+        },
+        stickers: [sticker],
+      },
+    );
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(guildHistories.get(channelId)?.[0]?.media).toHaveLength(4);
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(4);
+  });
+
   it("does not drop @everyone messages when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-everyone";
     const guildId = "guild-other-mention-everyone";
