@@ -3417,6 +3417,60 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_tokens");
   });
 
+  it("uses model params max_completion_tokens for OpenAI completions params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: { max_completion_tokens: 64_000 },
+      } as Model<"openai-completions"> & { params: Record<string, unknown> },
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(64_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("lets runtime maxTokens override model params max_completion_tokens for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: { max_completion_tokens: 64_000 },
+      } as Model<"openai-completions"> & { params: Record<string, unknown> },
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 48_000 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(48_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
     const params = buildOpenAICompletionsParams(
       {

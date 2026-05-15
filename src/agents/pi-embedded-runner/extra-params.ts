@@ -48,6 +48,7 @@ const providerRuntimeDeps = {
 
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
 const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat"]);
+const MAX_TOKENS_EXTRA_PARAM_KEYS = ["maxTokens", "max_completion_tokens", "max_tokens"] as const;
 
 export const __testing = {
   setProviderRuntimeDepsForTest(
@@ -419,8 +420,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.topP === "number") {
     streamParams.topP = extraParams.topP;
   }
-  if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
+  const maxTokens = resolveMaxTokensExtraParam([extraParams]);
+  if (typeof maxTokens === "number") {
+    streamParams.maxTokens = maxTokens;
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],
@@ -515,6 +517,13 @@ function resolveAliasedParamValueFromKeys(
     }
   }
   return seen ? resolved : undefined;
+}
+
+function resolveMaxTokensExtraParam(
+  sources: Array<Record<string, unknown> | undefined>,
+): number | undefined {
+  const value = resolveAliasedParamValueFromKeys(sources, MAX_TOKENS_EXTRA_PARAM_KEYS);
+  return typeof value === "number" ? value : undefined;
 }
 
 function applyCanonicalAliasedParamValue(params: {

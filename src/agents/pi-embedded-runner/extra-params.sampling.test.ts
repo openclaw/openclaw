@@ -63,6 +63,36 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.maxTokens).toBe(512);
   });
 
+  it("forwards max_completion_tokens from resolved params into the underlying streamFn options", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "dashscope", "kimi-k2.6", {
+      max_completion_tokens: 64_000,
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      { id: "kimi-k2.6", api: "openai-completions", provider: "dashscope" } as never,
+      { messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    expect(underlying).toHaveBeenCalledTimes(1);
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as { maxTokens?: number } | undefined;
+    expect(callOptions?.maxTokens).toBe(64_000);
+  });
+
   it("lets runtime options override the wrapper sampling defaults", () => {
     const underlying = vi.fn(() => ({
       push: vi.fn(),

@@ -72,6 +72,11 @@ const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
+const OPENAI_COMPLETIONS_MAX_TOKENS_PARAM_KEYS = [
+  "maxTokens",
+  "max_completion_tokens",
+  "max_tokens",
+] as const;
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -2223,6 +2228,21 @@ function getCompat(model: OpenAIModeModel): {
   };
 }
 
+function resolveModelConfiguredMaxTokens(model: Model<"openai-completions">): number | undefined {
+  const rawParams = (model as { params?: unknown }).params;
+  if (!rawParams || typeof rawParams !== "object" || Array.isArray(rawParams)) {
+    return undefined;
+  }
+  const params = rawParams as Record<string, unknown>;
+  for (const key of OPENAI_COMPLETIONS_MAX_TOKENS_PARAM_KEYS) {
+    const value = params[key];
+    if (typeof value === "number") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
@@ -2592,7 +2612,8 @@ export function buildOpenAICompletionsParams(
     params.prompt_cache_key = options.sessionId;
   }
   {
-    const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+    const effectiveMaxTokens =
+      options?.maxTokens ?? resolveModelConfiguredMaxTokens(model) ?? model.maxTokens;
     if (effectiveMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = effectiveMaxTokens;
