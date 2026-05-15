@@ -110,6 +110,7 @@ function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   proxylineHandle = null;
   restoreProxyEnv(snapshot);
   forceResetGlobalDispatcher();
+  ensureInheritedManagedProxyRoutingActive();
 }
 
 function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): void {

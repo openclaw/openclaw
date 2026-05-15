@@ -23,7 +23,7 @@ export let _globalUndiciStreamTimeoutMs: number | undefined;
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrap = false;
 
-type DispatcherKind = "agent" | "env-proxy" | "unsupported";
+type DispatcherKind = "agent" | "env-proxy" | "proxyline-managed" | "unsupported";
 
 function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
@@ -32,6 +32,9 @@ function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
   }
   if (ctorName.includes("EnvHttpProxyAgent")) {
     return "env-proxy";
+  }
+  if (ctorName.includes("ManagedUndiciDispatcher")) {
+    return "proxyline-managed";
   }
   if (ctorName.includes("ProxyAgent")) {
     return "unsupported";
@@ -82,7 +85,8 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   const runtime = loadUndiciGlobalDispatcherDeps();
   const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
   if (lastAppliedProxyBootstrap) {
-    if (resolveCurrentDispatcherKind(runtime) === "env-proxy") {
+    const currentKind = resolveCurrentDispatcherKind(runtime);
+    if (currentKind === "env-proxy" || currentKind === "proxyline-managed") {
       return;
     }
     lastAppliedProxyBootstrap = false;
@@ -91,7 +95,7 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   if (currentKind === null) {
     return;
   }
-  if (currentKind === "env-proxy") {
+  if (currentKind === "env-proxy" || currentKind === "proxyline-managed") {
     lastAppliedProxyBootstrap = true;
     return;
   }
@@ -122,7 +126,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
 
   const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
-    if (kind === "env-proxy") {
+    if (kind === "env-proxy" || kind === "proxyline-managed") {
       const proxyOptions = {
         ...resolveEnvHttpProxyAgentOptions(),
         bodyTimeout: timeoutMs,
@@ -162,7 +166,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   if (kind === null) {
     return;
   }
-  if (kind !== "env-proxy") {
+  if (kind !== "env-proxy" && kind !== "proxyline-managed") {
     return;
   }
 

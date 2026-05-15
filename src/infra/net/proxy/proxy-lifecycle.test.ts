@@ -309,6 +309,14 @@ describe("startProxy", () => {
     expect(proxylineStopMock).toHaveBeenCalledTimes(2);
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3111");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
+    expect(installGlobalProxyMock).toHaveBeenCalledTimes(3);
+    expect(installCalls[2]?.[0]).toEqual(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3111",
+        bypassPolicy: expect.any(Function),
+      }),
+    );
   });
 
   it("restores previous proxy env and stops Proxyline on stop", async () => {

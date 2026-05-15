@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const {
   Agent,
   EnvHttpProxyAgent,
+  ManagedUndiciDispatcher,
   ProxyAgent,
   setGlobalDispatcher,
   setCurrentDispatcher,
@@ -24,6 +25,10 @@ const {
 
   class ProxyAgent {
     constructor(public readonly url: string) {}
+  }
+
+  class ManagedUndiciDispatcher {
+    constructor(public readonly options?: Record<string, unknown>) {}
   }
 
   let currentDispatcher: unknown = new Agent();
@@ -47,6 +52,7 @@ const {
   return {
     Agent,
     EnvHttpProxyAgent,
+    ManagedUndiciDispatcher,
     ProxyAgent,
     getGlobalDispatcher,
     setGlobalDispatcher,
@@ -221,6 +227,27 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(undiciGlobalDispatcherModule._globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
+  it("replaces Proxyline managed dispatcher with a timed env proxy dispatcher", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://proxyline.example:3128",
+      httpsProxy: "http://proxyline.example:3128",
+    });
+    setCurrentDispatcher(new ManagedUndiciDispatcher());
+
+    ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options).toEqual({
+      httpProxy: "http://proxyline.example:3128",
+      httpsProxy: "http://proxyline.example:3128",
+      bodyTimeout: 1_900_000,
+      headersTimeout: 1_900_000,
+    });
+  });
+
   it("is idempotent for unchanged dispatcher kind and network policy", () => {
     getDefaultAutoSelectFamily.mockReturnValue(true);
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
@@ -330,6 +357,15 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
   it("does not override unsupported custom proxy dispatcher types", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
+
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("treats Proxyline managed dispatchers as already proxy-backed during bootstrap", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    setCurrentDispatcher(new ManagedUndiciDispatcher());
 
     ensureGlobalUndiciEnvProxyDispatcher();
 
