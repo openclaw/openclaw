@@ -203,28 +203,35 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   },
   createReplyDispatcherWithTyping: (opts: {
     deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
+    onError?: (err: unknown, info: { kind: string }) => void;
     onReplyStart?: () => Promise<void> | void;
-  }) => ({
-    dispatcher: {
-      sendToolResult: vi.fn(() => true),
-      sendBlockReply: vi.fn((payload: unknown) => {
-        void opts.deliver(payload, { kind: "block" });
-        return true;
-      }),
-      sendFinalReply: vi.fn((payload: unknown) => {
-        void opts.deliver(payload, { kind: "final" });
-        return true;
-      }),
-      waitForIdle: vi.fn(async () => {}),
-      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-      markComplete: vi.fn(),
-    },
-    replyOptions: {
-      onReplyStart: opts.onReplyStart,
-    },
-    markDispatchIdle: vi.fn(),
-    markRunComplete: vi.fn(),
-  }),
+  }) => {
+    const pendingDeliveries: Promise<void>[] = [];
+    const enqueueDelivery = (payload: unknown, info: { kind: string }) => {
+      const delivery = Promise.resolve()
+        .then(() => opts.deliver(payload, info))
+        .catch((err: unknown) => opts.onError?.(err, info));
+      pendingDeliveries.push(delivery);
+      return true;
+    };
+    return {
+      dispatcher: {
+        sendToolResult: vi.fn(() => true),
+        sendBlockReply: vi.fn((payload: unknown) => enqueueDelivery(payload, { kind: "block" })),
+        sendFinalReply: vi.fn((payload: unknown) => enqueueDelivery(payload, { kind: "final" })),
+        waitForIdle: vi.fn(async () => {
+          await Promise.all(pendingDeliveries);
+        }),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {
+        onReplyStart: opts.onReplyStart,
+      },
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    };
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
@@ -1471,6 +1478,31 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears partial preview drafts when fallback final delivery fails", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    deliverDiscordReply.mockRejectedValueOnce(new Error("durable send failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "Partial answer..." });
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return {
+        queuedFinal: true,
+        counts: { final: 1, tool: 0, block: 0 },
+        failedCounts: { final: 1 },
+      };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 1 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.messageId()).toBeUndefined();
   });
 
   it("uses root discord maxLinesPerMessage for preview finalization when runtime config omits it", async () => {

@@ -140,6 +140,62 @@ describe("message lifecycle primitives", () => {
     expect(liveState.canFinalizeInPlace).toBe(false);
   });
 
+  it("clears live preview fallback drafts when normal delivery fails", async () => {
+    const discardPending = vi.fn(async () => undefined);
+    const clear = vi.fn(async () => undefined);
+    const deliveryError = new Error("send failed");
+
+    await expect(
+      deliverFinalizableLivePreview({
+        kind: "final",
+        payload: { text: "with media" },
+        draft: {
+          flush: vi.fn(async () => undefined),
+          id: () => "preview-failed-fallback",
+          discardPending,
+          clear,
+        },
+        buildFinalEdit: () => undefined,
+        editFinal: vi.fn(async () => undefined),
+        deliverNormally: vi.fn(async () => {
+          throw deliveryError;
+        }),
+      }),
+    ).rejects.toThrow(deliveryError);
+
+    expect(discardPending).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves live preview fallback delivery errors when draft cleanup also fails", async () => {
+    const discardPending = vi.fn(async () => undefined);
+    const deliveryError = new Error("send failed");
+    const clear = vi.fn(async () => {
+      throw new Error("clear failed");
+    });
+
+    await expect(
+      deliverFinalizableLivePreview({
+        kind: "final",
+        payload: { text: "with media" },
+        draft: {
+          flush: vi.fn(async () => undefined),
+          id: () => "preview-failed-cleanup",
+          discardPending,
+          clear,
+        },
+        buildFinalEdit: () => undefined,
+        editFinal: vi.fn(async () => undefined),
+        deliverNormally: vi.fn(async () => {
+          throw deliveryError;
+        }),
+      }),
+    ).rejects.toBe(deliveryError);
+
+    expect(discardPending).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
   it("delivers through finalizable live preview adapters", async () => {
     const editFinal = vi.fn(async () => undefined);
     const adapter = defineFinalizableLivePreviewAdapter({

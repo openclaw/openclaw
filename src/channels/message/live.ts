@@ -191,16 +191,28 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
   liveState = markLiveMessageCancelled(liveState);
 
   let delivered = false;
+  let deliveryFailed = false;
+  let deliveryError: unknown;
   try {
     const result = await params.deliverNormally(params.payload);
     delivered = result !== false;
     if (delivered) {
       await params.onNormalDelivered?.();
     }
-  } finally {
-    if (delivered) {
-      await params.draft.clear();
+  } catch (err) {
+    deliveryFailed = true;
+    deliveryError = err;
+  }
+
+  try {
+    await params.draft.clear();
+  } catch (err) {
+    if (!deliveryFailed) {
+      throw err;
     }
+  }
+  if (deliveryFailed) {
+    throw deliveryError;
   }
 
   return { kind: delivered ? "normal-delivered" : "normal-skipped", liveState };

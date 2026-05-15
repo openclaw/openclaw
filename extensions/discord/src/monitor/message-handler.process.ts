@@ -462,7 +462,6 @@ export async function processDiscordMessage(
           isFinal &&
           (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
         ) {
-          draftPreview.markFinalDeliveryHandled();
           const reply = resolveSendableOutboundReplyParts(payload);
           const hasMedia = reply.hasMedia;
           const finalText = payload.text;
@@ -546,6 +545,7 @@ export async function processDiscordMessage(
             },
           });
           if (result.kind !== "normal-skipped") {
+            draftPreview.markFinalDeliveryHandled();
             return;
           }
         }
