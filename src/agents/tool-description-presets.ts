@@ -5,6 +5,8 @@ export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY =
   "List visible sessions with mailbox filters and optional previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
   "Read sanitized message history for a visible session.";
+export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY =
+  "Search visible session transcripts with exact text matching.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY =
   "Send a message to another visible session or configured agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
@@ -23,6 +25,14 @@ export function describeSessionsHistoryTool(): string {
   return [
     "Fetch sanitized message history for a visible session.",
     "Supports limits and optional tool messages; use this to inspect another session before replying, debugging, or resuming work.",
+  ].join(" ");
+}
+
+export function describeSessionsSearchTool(): string {
+  return [
+    "Search visible session transcripts with exact, case-insensitive text matching.",
+    "Uses the same visibility boundary as sessions_list before reading transcript files.",
+    "Returns matching sessions with short previews; use sessions_history for bounded follow-up reading.",
   ].join(" ");
 }
 

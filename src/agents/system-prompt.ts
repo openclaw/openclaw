@@ -739,6 +739,7 @@ export function buildAgentSystemPrompt(params: {
       : "List OpenClaw agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
+    sessions_search: "Search visible session transcripts by exact text",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
       ? 'Spawn a sub-agent or ACP coding session; defaults to isolated, native subagents may use context="fork" when current transcript context is required (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
@@ -773,6 +774,7 @@ export function buildAgentSystemPrompt(params: {
     "agents_list",
     "sessions_list",
     "sessions_history",
+    "sessions_search",
     "sessions_send",
     "sessions_spawn",
     "sessions_yield",
@@ -1005,6 +1007,7 @@ export function buildAgentSystemPrompt(params: {
             "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
             "- sessions_list: list sessions",
             "- sessions_history: fetch session history",
+            "- sessions_search: search visible session transcripts",
             "- sessions_send: send to another session",
             "- sessions_spawn: spawn an isolated sub-agent session",
             "- sessions_yield: end this turn and wait for sub-agent completion events",

@@ -318,10 +318,11 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
-  it("depth-2 leaf denies sessions_list and sessions_history", () => {
+  it("depth-2 leaf denies session discovery tools", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
     expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_search", policy)).toBe(false);
   });
 
   it("depth-1 leaf (maxSpawnDepth=1) denies sessions_spawn", () => {
@@ -332,6 +333,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   it("depth-1 leaf (maxSpawnDepth=1) denies sessions_list", () => {
     const policy = resolveSubagentToolPolicy(leafCfg, 1);
     expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_search", policy)).toBe(false);
   });
 
   it("uses stored leaf role for flat depth-1 session keys", () => {

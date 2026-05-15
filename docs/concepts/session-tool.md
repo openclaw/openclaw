@@ -16,6 +16,7 @@ orchestrate sub-agents.
 | ------------------ | --------------------------------------------------------------------------- |
 | `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview)  |
 | `sessions_history` | Read the transcript of a specific session                                   |
+| `sessions_search`  | Search visible session transcripts with exact text matching                 |
 | `sessions_send`    | Send a message to another session and optionally wait                       |
 | `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
 | `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
@@ -83,6 +84,12 @@ from a previous list call.
 
 If you need the exact byte-for-byte transcript, inspect the transcript file on
 disk instead of treating `sessions_history` as a raw dump.
+
+`sessions_search` searches transcript files for an exact, case-insensitive text
+query after applying the same session visibility boundary as `sessions_list`.
+It does not build an index and does not perform semantic search. Results include
+matching session keys, optional labels/session ids, and short previews only; use
+`sessions_history` for a bounded follow-up read of a matched session.
 
 ## Sending cross-session messages
 

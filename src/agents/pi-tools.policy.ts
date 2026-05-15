@@ -58,6 +58,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_spawn",
 ];
 
@@ -65,7 +66,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
  * Build the deny list for a sub-agent at a given depth.
  *
  * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn,
- *   subagents, sessions_list, sessions_history so it can manage its children.
+ *   subagents, sessions_list, sessions_history, sessions_search so it can manage its children.
  * - Depth >= maxSpawnDepth (leaf): denied subagents, sessions_spawn, and
  *   session management tools.
  */
@@ -75,7 +76,7 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
     return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
   }
   // Orchestrator sub-agent: only deny the always-denied tools.
-  // sessions_spawn, subagents, sessions_list, sessions_history are allowed.
+  // sessions_spawn, subagents, sessions_list, sessions_history, sessions_search are allowed.
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 

@@ -24,25 +24,25 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status` only                                                                                                           |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                       |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_search`, `sessions_send`, `session_status`                    |
 | `full`      | No restriction (same as unset)                                                                                                  |
 
 ### Tool groups
 
-| Group              | Tools                                                                                                                   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                                                                           |
-| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
-| `group:ui`         | `browser`, `canvas`                                                                                                     |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                  |
-| `group:messaging`  | `message`                                                                                                               |
-| `group:nodes`      | `nodes`                                                                                                                 |
-| `group:agents`     | `agents_list`, `update_plan`                                                                                            |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
-| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
+| Group              | Tools                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                            |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                     |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_search`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                                              |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                      |
+| `group:ui`         | `browser`, `canvas`                                                                                                                        |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                     |
+| `group:messaging`  | `message`                                                                                                                                  |
+| `group:nodes`      | `nodes`                                                                                                                                    |
+| `group:agents`     | `agents_list`, `update_plan`                                                                                                               |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                       |
+| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                                             |
 
 ### `tools.allow` / `tools.deny`
 
@@ -303,7 +303,7 @@ Configures inbound media understanding (image/audio/video):
 
 ### `tools.sessions`
 
-Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
+Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_search`, `sessions_send`).
 
 Default: `tree` (current session + sessions spawned by it, such as subagents).
 

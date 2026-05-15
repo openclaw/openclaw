@@ -309,6 +309,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Session History",
       detailKeys: ["sessionKey", "limit", "includeTools"],
     },
+    sessions_search: {
+      emoji: "🔎",
+      title: "Session Search",
+      detailKeys: ["query", "limit", "maxMatchesPerSession", "contextChars", "agentId"],
+    },
     sessions_spawn: {
       emoji: "🧑‍🔧",
       title: "Sub-agent",
