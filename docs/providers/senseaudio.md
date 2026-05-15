@@ -98,7 +98,7 @@ The full system voice catalog is available through `pnpm openclaw infer tts voic
   <Step title="Synthesize a clip">
     ```bash
     pnpm openclaw infer tts convert \
-      --text "Hello，OpenClaw,this is senseaudio TTS provider" \
+      --text "Hello, OpenClaw, this is senseaudio TTS provider" \
       --model senseaudio/senseaudio-tts-1.5-260319 \
       --voice female_0033_b \
       --output ./hello.mp3 --json
