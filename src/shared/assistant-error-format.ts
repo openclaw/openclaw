@@ -9,6 +9,8 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
   `^(?:http\\s*)?(\\d{3})(?:${HTTP_STATUS_DELIMITER_RE.source}([\\s\\S]+))?$`,
   "i",
 );
+// Match Google API error format: "Google Generative AI API error (429): Resource has been exhausted"
+const GOOGLE_API_ERROR_STATUS_RE = /\((\d{3})\)\s*[:\s-]+(.+)$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
@@ -93,15 +95,25 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
 }
 
 export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
+  // Try standard HTTP status code prefix first
   const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
-  if (!match) {
-    return null;
+  if (match) {
+    const code = Number(match[1]);
+    if (Number.isFinite(code)) {
+      return { code, rest: (match[2] ?? "").trim() };
+    }
   }
-  const code = Number(match[1]);
-  if (!Number.isFinite(code)) {
-    return null;
+  
+  // Try Google API error format: "Google Generative AI API error (429): Resource has been exhausted"
+  const googleMatch = raw.match(GOOGLE_API_ERROR_STATUS_RE);
+  if (googleMatch) {
+    const code = Number(googleMatch[1]);
+    if (Number.isFinite(code)) {
+      return { code, rest: (googleMatch[2] ?? "").trim() };
+    }
   }
-  return { code, rest: (match[2] ?? "").trim() };
+  
+  return null;
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
