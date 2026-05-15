@@ -811,6 +811,51 @@ describe("runCodexAppServerAttempt", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
   });
 
+  it("does not expose OpenClaw Tool Search controls through Codex dynamic tools", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("tool_search_code"),
+      createRuntimeDynamicTool("tool_search"),
+      createRuntimeDynamicTool("tool_describe"),
+      createRuntimeDynamicTool("tool_call"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        toolSearch: true,
+      },
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "searchable",
+    });
+    const dynamicToolNames = bridge.specs.map((tool) => tool.name);
+
+    expect(dynamicToolNames).toContain("message");
+    for (const toolName of ["tool_search_code", "tool_search", "tool_describe", "tool_call"]) {
+      expect(dynamicToolNames).not.toContain(toolName);
+    }
+  });
   it("passes auth profiles into Codex dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
