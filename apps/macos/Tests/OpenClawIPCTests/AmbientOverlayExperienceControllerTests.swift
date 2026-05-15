@@ -65,6 +65,29 @@ struct AmbientOverlayExperienceControllerTests {
         #expect(controller.overlayState == .armed)
     }
 
+    @Test func `enabled controller keeps hooks as observer callbacks during tests`() {
+        let controller = AmbientOverlayExperienceController(enableUI: true)
+        var events: [String] = []
+        controller.showAmbient = { _ in events.append("ambient") }
+        controller.showWorkspace = { close in
+            events.append("workspace")
+            close()
+        }
+        controller.hideWorkspace = { events.append("hide") }
+        controller.closeSurfaces = { events.append("close") }
+
+        controller.setEnabled(true)
+        controller.arm()
+        #expect(controller.hasDisplayControllerForTesting == false)
+        controller.setEnabled(false)
+
+        #expect(events == ["ambient", "ambient", "workspace", "hide", "hide", "close"])
+        #expect(controller.showAmbient == nil)
+        #expect(controller.showWorkspace == nil)
+        #expect(controller.hideWorkspace == nil)
+        #expect(controller.closeSurfaces == nil)
+    }
+
     @Test func `escape dismiss returns to idle`() {
         let controller = AmbientOverlayExperienceController(enableUI: false)
         var hideCount = 0

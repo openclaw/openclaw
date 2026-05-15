@@ -27,6 +27,7 @@ final class AmbientOverlayExperienceController {
     private(set) var settings: AmbientOverlaySettings = .defaults
 
     var isEnabled: Bool { self.settings.isEnabled }
+    var hasDisplayControllerForTesting: Bool { self.displayController != nil }
 
     init(enableUI: Bool = true) {
         self.enableUI = enableUI
@@ -40,6 +41,7 @@ final class AmbientOverlayExperienceController {
         self.settings = settings
         self.setEnabled(settings.isEnabled)
         if settings.isEnabled {
+            self.showAmbientSurface(intensity: settings.intensity)
             self.showAmbient?(settings.intensity)
         }
     }
@@ -48,6 +50,7 @@ final class AmbientOverlayExperienceController {
         self.settings.isEnabled = isEnabled
         if !isEnabled {
             self.dismissInteractive(reason: .disabled)
+            self.closeSurfacesSurface()
             self.closeSurfaces?()
             self.displayController = nil
             self.showAmbient = nil
@@ -85,51 +88,66 @@ final class AmbientOverlayExperienceController {
         self.overlayState = .arming
         self.showAmbientIfNeeded()
         self.overlayState = .armed
-        self.showWorkspace? { [weak self] in
-            self?.dismissInteractive(reason: .closeButton)
+        let onDismiss = { [weak self] in
+            guard let self else { return }
+            self.dismissInteractive(reason: .closeButton)
         }
+        self.showWorkspaceSurface(onDismiss: onDismiss)
+        self.showWorkspace?(onDismiss)
         self.scheduleTimeout()
     }
 
     func dismissInteractive(reason _: DismissReason) {
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
+        self.hideWorkspaceSurface()
         self.hideWorkspace?()
         self.overlayState = .idle
     }
 
     func showAmbientIfNeeded() {
         guard self.enableUI else { return }
-        if self.displayController == nil {
-            self.installDisplayController()
-        }
+        self.showAmbientSurface(intensity: self.settings.intensity)
         self.showAmbient?(self.settings.intensity)
     }
 
-    private func installDisplayController() {
-        let displayController = AmbientOverlayDisplayController()
-        let existingShowAmbient = self.showAmbient
-        let existingShowWorkspace = self.showWorkspace
-        let existingHideWorkspace = self.hideWorkspace
-        let existingCloseSurfaces = self.closeSurfaces
+    private func showAmbientSurface(intensity: Double) {
+        self.displayControllerIfNeeded()?.showAmbient(intensity: intensity)
+    }
 
-        self.displayController = displayController
-        self.showAmbient = { intensity in
-            displayController.showAmbient(intensity: intensity)
-            existingShowAmbient?(intensity)
+    private func showWorkspaceSurface(onDismiss: @escaping () -> Void) {
+        self.displayControllerIfNeeded()?.showWorkspace(onDismiss: onDismiss)
+    }
+
+    private func hideWorkspaceSurface() {
+        self.displayController?.hideWorkspace()
+    }
+
+    private func closeSurfacesSurface() {
+        self.displayController?.close()
+        self.displayController = nil
+    }
+
+    private func displayControllerIfNeeded() -> AmbientOverlayDisplayController? {
+        guard self.enableUI, !Self.isRunningTests else { return nil }
+        if self.displayController == nil {
+            self.displayController = AmbientOverlayDisplayController()
         }
-        self.showWorkspace = { onDismiss in
-            displayController.showWorkspace(onDismiss: onDismiss)
-            existingShowWorkspace?(onDismiss)
-        }
-        self.hideWorkspace = {
-            displayController.hideWorkspace()
-            existingHideWorkspace?()
-        }
-        self.closeSurfaces = {
-            displayController.close()
-            existingCloseSurfaces?()
-        }
+        return self.displayController
+    }
+
+    private nonisolated static var isRunningTests: Bool {
+        let processName = ProcessInfo.processInfo.processName
+        let mainBundlePath = Bundle.main.bundleURL.path
+        let executableName = Bundle.main.executableURL?.lastPathComponent
+        return ProcessInfo.processInfo.isRunningTests
+            || processName.hasSuffix("PackageTests")
+            || processName.hasSuffix("Tests")
+            || processName == "swiftpm-testing-helper"
+            || mainBundlePath.contains(".xctest")
+            || executableName?.hasSuffix("PackageTests") == true
+            || executableName?.hasSuffix("Tests") == true
+            || executableName == "swiftpm-testing-helper"
     }
 
     private func scheduleTimeout() {
