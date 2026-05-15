@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 import type { InlineDirectives } from "./directive-handling.js";
 
-export function buildSubagentRun(): SubagentRunRecord {
+function buildSubagentRun(): SubagentRunRecord {
   return {
     runId: "run-1",
     childSessionKey: "agent:main:subagent:abc",
@@ -48,8 +48,10 @@ export function createEmptyInlineDirectives(): InlineDirectives {
   return {
     cleaned: "",
     hasThinkDirective: false,
+    clearThinkLevel: false,
     hasVerboseDirective: false,
     hasFastDirective: false,
+    clearFastMode: false,
     hasReasoningDirective: false,
     hasTraceDirective: false,
     hasElevatedDirective: false,

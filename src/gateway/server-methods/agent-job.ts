@@ -20,6 +20,7 @@ const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
 const pendingAgentRunErrors = new Map<string, PendingAgentRunError>();
 const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
+const agentRunWaiterCounts = new Map<string, number>();
 let agentRunListenerStarted = false;
 
 type AgentRunSnapshot = {
@@ -28,6 +29,9 @@ type AgentRunSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
   ts: number;
 };
 
@@ -134,12 +138,17 @@ function createSnapshotFromLifecycleEvent(params: {
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
+  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
+  const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   return {
     runId,
     status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
     startedAt,
     endedAt,
     error,
+    stopReason,
+    livenessState,
+    ...(data?.yielded === true ? { yielded: true } : {}),
     ts: Date.now(),
   };
 }
@@ -195,6 +204,23 @@ function getCachedAgentRun(runId: string) {
   return agentRunCache.get(runId);
 }
 
+function addAgentRunWaiter(runId: string): () => void {
+  agentRunWaiterCounts.set(runId, (agentRunWaiterCounts.get(runId) ?? 0) + 1);
+  let removed = false;
+  return () => {
+    if (removed) {
+      return;
+    }
+    removed = true;
+    const nextCount = (agentRunWaiterCounts.get(runId) ?? 1) - 1;
+    if (nextCount <= 0) {
+      agentRunWaiterCounts.delete(runId);
+      return;
+    }
+    agentRunWaiterCounts.set(runId, nextCount);
+  };
+}
+
 export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
@@ -216,6 +242,7 @@ export async function waitForAgentJob(params: {
     let pendingErrorTimer: NodeJS.Timeout | undefined;
     let pendingTimeoutTimer: NodeJS.Timeout | undefined;
     let onAbort: (() => void) | undefined;
+    let removeWaiter = () => {};
 
     const clearPendingErrorTimer = () => {
       if (!pendingErrorTimer) {
@@ -242,6 +269,7 @@ export async function waitForAgentJob(params: {
       clearPendingErrorTimer();
       clearPendingTimeoutTimer();
       unsubscribe();
+      removeWaiter();
       if (onAbort) {
         signal?.removeEventListener("abort", onAbort);
       }
@@ -334,6 +362,7 @@ export async function waitForAgentJob(params: {
       recordAgentRunSnapshot(snapshot);
       finish(snapshot);
     });
+    removeWaiter = addAgentRunWaiter(runId);
 
     const timer = setSafeTimeout(() => finish(null), timeoutMs);
     onAbort = () => finish(null);
@@ -342,3 +371,19 @@ export async function waitForAgentJob(params: {
 }
 
 ensureAgentRunListener();
+
+export const __testing = {
+  getWaiterCount(runId?: string): number {
+    if (runId) {
+      return agentRunWaiterCounts.get(runId) ?? 0;
+    }
+    let total = 0;
+    for (const count of agentRunWaiterCounts.values()) {
+      total += count;
+    }
+    return total;
+  },
+  resetWaiters(): void {
+    agentRunWaiterCounts.clear();
+  },
+};

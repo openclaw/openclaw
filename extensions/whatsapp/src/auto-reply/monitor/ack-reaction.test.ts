@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import type { WebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
@@ -10,6 +11,15 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMessage {
   return {
@@ -22,8 +32,8 @@ function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMe
     chatType: "direct",
     chatId: "15551234567@s.whatsapp.net",
     sendComposing: async () => {},
-    reply: async () => {},
-    sendMedia: async () => {},
+    reply: async () => acceptedSendResult("text", "r1"),
+    sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   };
 }
@@ -63,17 +73,17 @@ const runAckReaction = (overrides: Partial<AckReactionParams> = {}) =>
     ...overrides,
   });
 
-const expectAckReactionSent = (accountId: string) => {
+const expectAckReactionSent = (accountId: string, cfg: OpenClawConfig = createConfig("ack")) => {
   expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
     "15551234567@s.whatsapp.net",
     "msg-1",
     "👀",
-    expect.objectContaining({
+    {
       verbose: false,
       fromMe: false,
-      participant: undefined,
       accountId,
-    }),
+      cfg,
+    },
   );
 };
 
@@ -85,31 +95,36 @@ describe("maybeSendAckReaction", () => {
   it.each(["ack", "minimal", "extensive"] as const)(
     "sends ack reactions when reactionLevel is %s",
     async (reactionLevel) => {
-      await runAckReaction({
-        cfg: createConfig(reactionLevel),
+      const cfg = createConfig(reactionLevel);
+      const ackReaction = await runAckReaction({
+        cfg,
       });
 
-      expectAckReactionSent("default");
+      expect(ackReaction?.ackReactionValue).toBe("👀");
+      await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+      expectAckReactionSent("default", cfg);
     },
   );
 
   it("suppresses ack reactions when reactionLevel is off", async () => {
-    await runAckReaction({
+    const ackReaction = await runAckReaction({
       cfg: createConfig("off"),
     });
 
+    expect(ackReaction).toBeNull();
     expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
   it("uses the active account reactionLevel override for ack gating", async () => {
-    await runAckReaction({
-      cfg: createConfig("off", {
-        accounts: {
-          work: {
-            reactionLevel: "ack",
-          },
+    const cfg = createConfig("off", {
+      accounts: {
+        work: {
+          reactionLevel: "ack",
         },
-      }),
+      },
+    });
+    const ackReaction = await runAckReaction({
+      cfg,
       msg: createMessage({
         accountId: "work",
       }),
@@ -117,6 +132,44 @@ describe("maybeSendAckReaction", () => {
       accountId: "work",
     });
 
-    expectAckReactionSent("work");
+    expect(ackReaction?.ackReactionValue).toBe("👀");
+    expectAckReactionSent("work", cfg);
+  });
+
+  it("returns a handle that removes the ack with an empty reaction", async () => {
+    const cfg = createConfig("ack");
+    const ackReaction = await runAckReaction({ cfg });
+
+    await ackReaction?.remove();
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "",
+      {
+        verbose: false,
+        fromMe: false,
+        accountId: "default",
+        cfg,
+      },
+    );
+  });
+
+  it("records ack send failures on the handle", async () => {
+    const cfg = createConfig("ack");
+    const warn = vi.fn();
+    hoisted.sendReactionWhatsApp.mockRejectedValueOnce(new Error("session down"));
+
+    const ackReaction = await runAckReaction({ cfg, warn });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      {
+        error: "session down",
+        chatId: "15551234567@s.whatsapp.net",
+        messageId: "msg-1",
+      },
+      "failed to send ack reaction",
+    );
   });
 });

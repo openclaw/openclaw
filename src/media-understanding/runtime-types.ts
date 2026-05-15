@@ -1,6 +1,12 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
-import type { MediaUnderstandingOutput, MediaUnderstandingProvider } from "./types.js";
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+  StructuredExtractionInput,
+} from "./types.js";
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
@@ -9,6 +15,8 @@ export type RunMediaUnderstandingFileParams = {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  prompt?: string;
+  timeoutMs?: number;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -16,6 +24,7 @@ export type RunMediaUnderstandingFileResult = {
   provider?: string;
   model?: string;
   output?: MediaUnderstandingOutput;
+  decision?: MediaUnderstandingDecision;
 };
 
 export type DescribeImageFileParams = {
@@ -24,6 +33,8 @@ export type DescribeImageFileParams = {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  prompt?: string;
+  timeoutMs?: number;
 };
 
 export type DescribeImageFileWithModelParams = {
@@ -38,8 +49,29 @@ export type DescribeImageFileWithModelParams = {
   timeoutMs?: number;
 };
 
-export type DescribeImageFileWithModelResult = Awaited<
+type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
+>;
+
+export type ExtractStructuredWithModelParams = {
+  /** At least one image input is required; text inputs provide supplemental context. */
+  input: StructuredExtractionInput[];
+  instructions: string;
+  schemaName?: string;
+  jsonSchema?: unknown;
+  jsonMode?: boolean;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  provider: string;
+  model: string;
+  profile?: string;
+  preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
+};
+
+type ExtractStructuredWithModelResult = Awaited<
+  ReturnType<NonNullable<MediaUnderstandingProvider["extractStructured"]>>
 >;
 
 export type DescribeVideoFileParams = {
@@ -68,6 +100,11 @@ export type MediaUnderstandingRuntime = {
   describeImageFileWithModel: (
     params: DescribeImageFileWithModelParams,
   ) => Promise<DescribeImageFileWithModelResult>;
+  extractStructuredWithModel: (
+    params: ExtractStructuredWithModelParams,
+  ) => Promise<ExtractStructuredWithModelResult>;
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
-  transcribeAudioFile: (params: TranscribeAudioFileParams) => Promise<{ text: string | undefined }>;
+  transcribeAudioFile: (
+    params: TranscribeAudioFileParams,
+  ) => Promise<RunMediaUnderstandingFileResult>;
 };

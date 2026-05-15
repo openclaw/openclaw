@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import {
   resolveMemoryWikiConfig,
@@ -13,12 +13,12 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const MEMORY_WIKI_TEST_HOME = "/Users/tester";
 
-export type MemoryWikiTestVault = {
+type MemoryWikiTestVault = {
   rootDir: string;
   config: ResolvedMemoryWikiConfig;
 };
 
-export type MemoryWikiPluginApiHarness = {
+type MemoryWikiPluginApiHarness = {
   api: OpenClawPluginApi;
   registerCli: ReturnType<typeof vi.fn>;
   registerGatewayMethod: ReturnType<typeof vi.fn>;

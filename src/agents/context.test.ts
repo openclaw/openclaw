@@ -7,7 +7,7 @@ import {
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
-vi.mock("../config/config.js", () => ({ loadConfig: () => ({}) }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 
 function testModelContextWindow(id: string, contextWindow: number) {
   return {
@@ -91,6 +91,22 @@ describe("applyDiscoveredContextWindows", () => {
     });
 
     expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(200_000);
+  });
+
+  it("upgrades provider-owned anthropic opus 4.7 discovery ids", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        {
+          id: "anthropic/claude-opus-4.7-20260219",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+      ],
+    });
+
+    expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it("does not upgrade bare opus 4.7 discovery ids without verified ownership", () => {
@@ -187,6 +203,23 @@ describe("applyConfiguredContextWindows", () => {
 
     expect(cache.get("custom/model")).toBe(200_000);
   });
+
+  it("uses provider-level context defaults for configured model entries", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          ollama: {
+            contextWindow: 8_192,
+            models: [{ id: "qwen3.5:9b" }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("qwen3.5:9b")).toBe(8_192);
+  });
 });
 
 describe("createSessionManagerRuntimeRegistry", () => {
@@ -210,6 +243,50 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("uses provider-level context defaults when no model-level cap is set", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              contextWindow: 8_192,
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      fallbackContextTokens: 216_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(8_192);
+  });
+
+  it("prefers model-level context caps over provider-level defaults", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              contextWindow: 8_192,
+              models: [{ ...testModelContextWindow("qwen3.5:9b", 216_000), contextTokens: 16_000 }],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      fallbackContextTokens: 216_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(16_000);
+  });
+
   it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {
@@ -240,7 +317,37 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not force 1M context when context1m is not enabled", () => {
+  it("returns 1M context when claude-cli context1m is enabled for opus/sonnet", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "claude-cli": {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-7", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "claude-cli/claude-opus-4-7": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("returns 1M context for Anthropic opus/sonnet 4 even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -267,7 +374,28 @@ describe("resolveContextTokensForModel", () => {
       allowAsyncLoad: false,
     });
 
-    expect(result).toBe(200_000);
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("returns 1M context for Anthropic sonnet 4 even when config reports 200k", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-sonnet-4-6", 200_000)],
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {

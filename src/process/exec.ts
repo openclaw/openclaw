@@ -5,6 +5,11 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -39,6 +44,48 @@ function escapeForCmdExe(arg: string): string {
 
 function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
   return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+}
+
+function resolveTrustedWindowsCmdExe(): string {
+  if (process.platform !== "win32") {
+    return "cmd.exe";
+  }
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+}
+
+function assignChildEnvValue(params: {
+  env: NodeJS.ProcessEnv;
+  key: string;
+  platform: NodeJS.Platform;
+  value: string | undefined;
+}): void {
+  if (params.value === undefined) {
+    return;
+  }
+  if (params.platform === "win32") {
+    const normalizedKey = params.key.toLowerCase();
+    for (const existingKey of Object.keys(params.env)) {
+      if (existingKey.toLowerCase() === normalizedKey && existingKey !== params.key) {
+        delete params.env[existingKey];
+      }
+    }
+  }
+  params.env[params.key] = params.value;
+}
+
+function mergeChildEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(params.baseEnv)) {
+    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+  }
+  for (const [key, value] of Object.entries(params.env ?? {})) {
+    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+  }
+  return resolvedEnv;
 }
 
 /**
@@ -103,7 +150,7 @@ function resolveChildProcessInvocation(params: {
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
 
   return {
-    command: useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
     args: useCmdWrapper
       ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
@@ -135,30 +182,49 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts, encoding: "buffer" as const }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
+          encoding: "buffer" as const,
         };
   try {
     const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
-    const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+    const { stdout, stderr } = (await execFileAsync(invocation.command, invocation.args, {
       ...options,
       windowsHide: invocation.windowsHide,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    });
+    })) as { stdout: Buffer; stderr: Buffer };
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    const decodedStdout = decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding });
+    const decodedStderr = decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding });
     if (shouldLogVerbose()) {
-      if (stdout.trim()) {
-        logDebug(stdout.trim());
+      if (decodedStdout.trim()) {
+        logDebug(decodedStdout.trim());
       }
-      if (stderr.trim()) {
-        logError(stderr.trim());
+      if (decodedStderr.trim()) {
+        logError(decodedStderr.trim());
       }
     }
-    return { stdout, stderr };
+    return { stdout: decodedStdout, stderr: decodedStderr };
   } catch (err) {
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    if (err && typeof err === "object") {
+      const errorWithOutput = err as { stdout?: unknown; stderr?: unknown };
+      if (Buffer.isBuffer(errorWithOutput.stdout)) {
+        errorWithOutput.stdout = decodeWindowsOutputBuffer({
+          buffer: errorWithOutput.stdout,
+          windowsEncoding,
+        });
+      }
+      if (Buffer.isBuffer(errorWithOutput.stderr)) {
+        errorWithOutput.stderr = decodeWindowsOutputBuffer({
+          buffer: errorWithOutput.stderr,
+          windowsEncoding,
+        });
+      }
+    }
     if (shouldLogVerbose()) {
       logError(danger(`Command failed: ${command} ${args.join(" ")}`));
     }
@@ -215,8 +281,10 @@ export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
   baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
+  const platform = params.platform ?? process.platform;
   const argv = params.argv;
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
@@ -230,12 +298,7 @@ export function resolveCommandEnv(params: {
     return false;
   })();
 
-  const mergedEnv = params.env ? { ...baseEnv, ...params.env } : { ...baseEnv };
-  const resolvedEnv = Object.fromEntries(
-    Object.entries(mergedEnv)
-      .filter(([, value]) => value !== undefined)
-      .map(([key, value]) => [key, String(value)]),
-  );
+  const resolvedEnv = mergeChildEnv({ baseEnv, env: params.env, platform });
   if (shouldSuppressNpmFund) {
     if (resolvedEnv.NPM_CONFIG_FUND == null) {
       resolvedEnv.NPM_CONFIG_FUND = "false";
@@ -274,8 +337,9 @@ export async function runCommandWithTimeout(
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -309,6 +373,17 @@ export async function runCommandWithTimeout(
         return;
       }
       killIssuedByTimeout = true;
+      if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
+        try {
+          spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          return;
+        } catch {
+          // Fall through to Node's direct child kill as a last resort.
+        }
+      }
       child.kill("SIGKILL");
     };
 
@@ -333,16 +408,19 @@ export async function runCommandWithTimeout(
     armNoOutputTimer();
 
     if (hasInput && child.stdin) {
+      // Swallow EPIPE from a prematurely-exited child; the exit handler
+      // reports the real status. (#75438)
+      child.stdin.on("error", () => {});
       child.stdin.write(input ?? "");
       child.stdin.end();
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      stdoutChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
       armNoOutputTimer();
     });
     child.on("error", (err) => {
@@ -401,8 +479,14 @@ export async function runCommandWithTimeout(
           : resolvedCode;
       resolve({
         pid: child.pid ?? undefined,
-        stdout,
-        stderr,
+        stdout: decodeWindowsOutputBuffer({
+          buffer: Buffer.concat(stdoutChunks),
+          windowsEncoding,
+        }),
+        stderr: decodeWindowsOutputBuffer({
+          buffer: Buffer.concat(stderrChunks),
+          windowsEncoding,
+        }),
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

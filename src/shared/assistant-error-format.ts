@@ -14,6 +14,15 @@ const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const STANDALONE_HTML_ERROR_HINT_RE =
   /\bcloudflare\b|cdn-cgi\/challenge-platform|challenge-error-text|enable javascript and cookies to continue|access denied|forbidden|service unavailable|bad gateway|web server is down|captcha|attention required/i;
+const GENERIC_PROVIDER_INTERNAL_ERROR_RE = /an error occurred while processing your request/i;
+const SUPPORT_REQUEST_ID_RE = /(?:request[\s_-]*id)\s*[:#]?\s*([a-z0-9][a-z0-9_-]{6,}[a-z0-9])/i;
+const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+  "The AI service returned an internal error. Please try again in a moment.";
+
+export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
+  "OpenClaw transport error: malformed_streaming_fragment";
+const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
+  "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;
 
@@ -46,6 +55,10 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
       ) {
         return true;
       }
+    }
+    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
+    if (typeof err === "string" && typeof record.message === "string") {
+      return true;
     }
   }
   return false;
@@ -119,6 +132,17 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   );
 }
 
+export function isGenericProviderInternalError(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
+    (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
+  );
+}
+
 export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   if (!raw) {
     return null;
@@ -165,6 +189,9 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     if (typeof err.message === "string") {
       errMessage = err.message;
     }
+  } else if (typeof payload.error === "string") {
+    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
+    errType = payload.error;
   }
 
   return {
@@ -179,6 +206,14 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
     return "LLM request failed with an unknown error.";
+  }
+
+  if (trimmed === MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE) {
+    return MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE;
+  }
+
+  if (isGenericProviderInternalError(trimmed)) {
+    return GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE;
   }
 
   const leadingStatus = extractLeadingHttpStatus(trimmed);

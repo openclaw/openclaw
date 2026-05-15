@@ -57,7 +57,7 @@ export async function waitForRegisteredCommands(
   await vi.waitFor(() => {
     expect(setMyCommands).toHaveBeenCalled();
   });
-  return setMyCommands.mock.calls[0]?.[0] as RegisteredCommand[];
+  return setMyCommands.mock.calls.at(0)?.[0] as RegisteredCommand[];
 }
 
 export function resetNativeCommandMenuMocks() {
@@ -100,7 +100,7 @@ export function createNativeCommandTestParams(
     counts: { block: 0, final: 0, tool: 0 },
   };
   const telegramDeps: TelegramNativeCommandDeps = {
-    loadConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["loadConfig"],
+    getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],

@@ -10,6 +10,7 @@ import {
   shouldRefreshSnapshotForVersion,
 } from "../../agents/skills/refresh-state.js";
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
+import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -17,6 +18,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -26,6 +31,11 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
+// nextEntry.skillsSnapshot may carry resolvedSkills (full Skill[] with
+// SKILL.md bodies) for in-turn use. The persistence layer in
+// src/config/sessions/store-load.ts strips resolvedSkills before serializing,
+// so the on-disk sessions.json stays small. The in-memory params.sessionStore
+// reference still carries the runtime cache for the rest of this turn.
 async function persistSessionEntryUpdate(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -54,6 +64,19 @@ function emitCompactionSessionLifecycleHooks(params: {
   previousEntry: SessionEntry;
   nextEntry: SessionEntry;
 }) {
+  if (params.previousEntry.sessionId) {
+    forgetActiveSessionForShutdown(params.previousEntry.sessionId);
+  }
+  if (params.nextEntry.sessionId && params.storePath) {
+    noteActiveSessionForShutdown({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionId: params.nextEntry.sessionId,
+      storePath: params.storePath,
+      sessionFile: params.nextEntry.sessionFile,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    });
+  }
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner) {
     return;
@@ -91,6 +114,12 @@ function emitCompactionSessionLifecycleHooks(params: {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }
+}
+
+function resolvePositiveTokenCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 export async function ensureSkillSnapshot(params: {
@@ -164,7 +193,9 @@ export async function ensureSkillSnapshot(params: {
         updatedAt: Date.now(),
       };
     const skillSnapshot =
-      !current.skillsSnapshot || shouldRefreshSnapshot ? buildSnapshot() : current.skillsSnapshot;
+      !current.skillsSnapshot || shouldRefreshSnapshot
+        ? buildSnapshot()
+        : hydrateResolvedSkills(current.skillsSnapshot, buildSnapshot);
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -179,11 +210,12 @@ export async function ensureSkillSnapshot(params: {
   const hasFreshSnapshotInEntry =
     Boolean(nextEntry?.skillsSnapshot) &&
     (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
-  const skillsSnapshot = hasFreshSnapshotInEntry
-    ? nextEntry?.skillsSnapshot
-    : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
-      ? buildSnapshot()
-      : nextEntry.skillsSnapshot;
+  const skillsSnapshot =
+    hasFreshSnapshotInEntry && nextEntry?.skillsSnapshot
+      ? hydrateResolvedSkills(nextEntry.skillsSnapshot, buildSnapshot)
+      : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
+        ? buildSnapshot()
+        : hydrateResolvedSkills(nextEntry.skillsSnapshot, buildSnapshot);
   if (
     skillsSnapshot &&
     sessionStore &&
@@ -219,6 +251,8 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction, when the runtime rotated transcripts. */
   newSessionId?: string;
+  /** Session file after compaction, when the runtime rotated transcripts. */
+  newSessionFile?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -230,6 +264,7 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    newSessionFile,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -245,18 +280,32 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  if (newSessionId && newSessionId !== entry.sessionId) {
+  const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
+  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
+  const sessionFileChanged = Boolean(
+    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
+  );
+  if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
-    updates.sessionFile = resolveCompactionSessionFile({
-      entry,
-      sessionKey,
-      storePath,
-      newSessionId,
-    });
+    updates.sessionFile =
+      explicitNewSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId,
+      });
+    updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    updates.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
+    );
+  } else if (sessionFileChanged && explicitNewSessionFile) {
+    updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  if (tokensAfter != null && tokensAfter > 0) {
-    updates.totalTokens = tokensAfter;
+  const tokensAfterCompaction = resolvePositiveTokenCount(tokensAfter);
+  if (tokensAfterCompaction !== undefined) {
+    updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
@@ -276,7 +325,7 @@ export async function incrementCompactionCount(params: {
       };
     });
   }
-  if (newSessionId && newSessionId !== entry.sessionId && cfg) {
+  if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({
       cfg,
       sessionKey,

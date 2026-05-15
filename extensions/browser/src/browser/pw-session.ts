@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
   BrowserContext,
@@ -11,10 +10,10 @@ import type {
   Response,
   Route,
 } from "playwright-core";
-import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -35,9 +34,13 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { playwrightCore } from "./playwright-core.runtime.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 import { sanitizeUntrustedFileName } from "./safe-filename.js";
+
+const { chromium } = playwrightCore;
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -138,6 +141,19 @@ function buildManagedDownloadPath(fileName: string): string {
 
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
+}
+
+function isRecoverablePlaywrightDisconnectError(err: unknown): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  return (
+    message.includes("target page, context or browser has been closed") ||
+    message.includes("browser has been closed") ||
+    message.includes("browser disconnected") ||
+    message.includes("target closed") ||
+    message.includes("connection closed") ||
+    message.includes("websocket closed") ||
+    message.includes("cdp socket closed")
+  );
 }
 
 function isRecoverableStalePageSelectionError(err: unknown, reusedCachedBrowser: boolean): boolean {
@@ -241,6 +257,25 @@ function clearBlockedPageRefsForCdpUrl(cdpUrl?: string): void {
 
 function clearBlockedPageRef(cdpUrl: string, page: Page): void {
   blockedPageRefsByCdpUrl.get(normalizeCdpUrl(cdpUrl))?.delete(page);
+}
+
+function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
+  const normalized = normalizeCdpUrl(cdpUrl);
+  const cur = cachedByCdpUrl.get(normalized);
+  cachedByCdpUrl.delete(normalized);
+  connectingByCdpUrl.delete(normalized);
+  if (!cur) {
+    return null;
+  }
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
+  }
+  return cur;
+}
+
+function evictStalePlaywrightBrowserConnection(cdpUrl: string): void {
+  const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
+  cur?.browser.close().catch(() => {});
 }
 
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
@@ -432,8 +467,13 @@ export function ensurePageState(page: Page): PageState {
         );
         const managedPath = buildManagedDownloadPath(suggested);
         const managedSave = (async () => {
-          await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
-          await download.saveAs?.(managedPath);
+          await writeViaSiblingTempPath({
+            rootDir: DEFAULT_DOWNLOAD_DIR,
+            targetPath: managedPath,
+            writeTemp: async (tempPath) => {
+              await download.saveAs?.(tempPath);
+            },
+          });
           return managedPath;
         })();
         managedSave.catch(() => {});
@@ -815,16 +855,20 @@ function isSubframeDocumentNavigationRequest(page: Page, request: Request): bool
   }
 }
 
-function isPolicyDenyNavigationError(err: unknown): boolean {
+export function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
 
-async function closeBlockedNavigationTarget(opts: {
+// Mark a page (and its CDP target id when resolvable) as blocked so subsequent
+// OpenClaw operations short-circuit instead of re-running the SSRF check on a
+// page we have already proven is non-compliant. This is a pure bookkeeping
+// step; it does NOT close the tab. Read-only paths can call this safely on a
+// user-owned tab without losing the user's content.
+async function quarantineBlockedTarget(opts: {
   cdpUrl: string;
   page: Page;
   targetId?: string;
 }): Promise<void> {
-  // Quarantine the concrete page first; then persist by target id when available.
   markPageRefBlocked(opts.cdpUrl, opts.page);
   const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
   const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
@@ -832,9 +876,24 @@ async function closeBlockedNavigationTarget(opts: {
   if (targetIdToBlock) {
     markTargetBlocked(opts.cdpUrl, targetIdToBlock);
   }
+}
+
+// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.
+// Only callers that own the navigation lifecycle (gotoPageWithNavigationGuard
+// and the navigate-style entry points that wrap it) may invoke this — closing
+// a tab is a destructive action that must not happen on user-owned tabs from
+// read-only operations like snapshot/screenshot/interactions.
+export async function closeBlockedNavigationTarget(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  await quarantineBlockedTarget(opts);
   await opts.page.close().catch(() => {});
 }
 
+// On policy denial: quarantines and rethrows (never closes).
+// Navigate-style callers catch the rethrow and close via closeBlockedNavigationTarget.
 export async function assertPageNavigationCompletedSafely(
   opts: {
     cdpUrl: string;
@@ -857,7 +916,7 @@ export async function assertPageNavigationCompletedSafely(
     });
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
-      await closeBlockedNavigationTarget({
+      await quarantineBlockedTarget({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         targetId: opts.targetId,
@@ -1018,14 +1077,9 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   if (normalized) {
     clearBlockedTargetsForCdpUrl(normalized);
     clearBlockedPageRefsForCdpUrl(normalized);
-    const cur = cachedByCdpUrl.get(normalized);
-    cachedByCdpUrl.delete(normalized);
-    connectingByCdpUrl.delete(normalized);
+    const cur = takeCachedPlaywrightBrowserConnection(normalized);
     if (!cur) {
       return;
-    }
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
     }
     await cur.browser.close().catch(() => {});
     return;
@@ -1152,18 +1206,9 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  const cur = cachedByCdpUrl.get(normalized);
+  const cur = takeCachedPlaywrightBrowserConnection(normalized);
   if (!cur) {
     return;
-  }
-  cachedByCdpUrl.delete(normalized);
-  // Also clear the per-url in-flight connect so the next call does a fresh connectOverCDP
-  // rather than awaiting a stale promise.
-  connectingByCdpUrl.delete(normalized);
-  // Remove the "disconnected" listener to prevent the old browser's teardown
-  // from racing with a fresh connection and nulling the new cached entry.
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
-    cur.browser.off("disconnected", cur.onDisconnected);
   }
 
   // Best-effort: kill any stuck JS to unblock the target's execution context before we
@@ -1181,6 +1226,21 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   cur.browser.close().catch(() => {});
 }
 
+async function withPlaywrightSafeReadReconnect<T>(
+  cdpUrl: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isRecoverablePlaywrightDisconnectError(err)) {
+      throw err;
+    }
+    evictStalePlaywrightBrowserConnection(cdpUrl);
+    return await run();
+  }
+}
+
 /**
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
@@ -1196,30 +1256,59 @@ export async function listPagesViaPlaywright(opts: {
     type: string;
   }>
 > {
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-  const pages = await getAllPages(browser);
-  const results: Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    type: string;
-  }> = [];
+  return await withPlaywrightSafeReadReconnect(opts.cdpUrl, async () => {
+    const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+    const pages = await getAllPages(browser);
+    const results: Array<{
+      targetId: string;
+      title: string;
+      url: string;
+      type: string;
+    }> = [];
 
-  for (const page of pages) {
-    if (isBlockedPageRef(opts.cdpUrl, page)) {
-      continue;
+    for (const page of pages) {
+      if (isBlockedPageRef(opts.cdpUrl, page)) {
+        continue;
+      }
+      let tid: string | null;
+      try {
+        tid = await pageTargetId(page);
+      } catch (err) {
+        if (isRecoverablePlaywrightDisconnectError(err)) {
+          throw err;
+        }
+        tid = null;
+      }
+      if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
+        let title = "";
+        try {
+          title = await page.title();
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+        }
+        let url = "";
+        try {
+          url = page.url();
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+        }
+        if (!isSelectableCdpBrowserTarget({ url })) {
+          continue;
+        }
+        results.push({
+          targetId: tid,
+          title,
+          url,
+          type: "page",
+        });
+      }
     }
-    const tid = await pageTargetId(page).catch(() => null);
-    if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-      results.push({
-        targetId: tid,
-        title: await page.title().catch(() => ""),
-        url: page.url(),
-        type: "page",
-      });
-    }
-  }
-  return results;
+    return results;
+  });
 }
 
 /**
@@ -1274,14 +1363,27 @@ export async function createPageViaPlaywright(
         throw err;
       }
     }
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      browserProxyMode: opts.browserProxyMode,
-      targetId: createdTargetId ?? undefined,
-    });
+    // OpenClaw owns this newly-created tab: if the post-navigation safety
+    // check trips, close the tab we just spawned.
+    try {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: createdTargetId ?? undefined,
+      });
+    } catch (err) {
+      if (isPolicyDenyNavigationError(err)) {
+        await closeBlockedNavigationTarget({
+          cdpUrl: opts.cdpUrl,
+          page,
+          targetId: createdTargetId ?? undefined,
+        });
+      }
+      throw err;
+    }
   }
 
   // Get the targetId for this page

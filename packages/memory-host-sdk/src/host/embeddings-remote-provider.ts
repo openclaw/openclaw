@@ -1,16 +1,17 @@
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
 import {
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 import { joinRemoteEndpoint } from "./remote-url.js";
+import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export type RemoteEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
   model: string;
 };
 
@@ -31,6 +32,7 @@ export function createRemoteEmbeddingProvider(params: {
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
+      fetchImpl: client.fetchImpl,
       body: { model: client.model, input },
       errorPrefix: params.errorPrefix,
     });

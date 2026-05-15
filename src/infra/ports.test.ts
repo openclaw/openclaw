@@ -1,5 +1,5 @@
 import net from "node:net";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../terminal/ansi.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -14,6 +14,14 @@ let handlePortError: typeof import("./ports.js").handlePortError;
 let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
 
 async function listenServer(
   server: net.Server,
@@ -51,6 +59,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   runCommandWithTimeoutMock.mockReset();
+});
+
+afterEach(() => {
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
 });
 
 describe("ports helpers", () => {
@@ -116,7 +130,8 @@ describeUnix("inspectPortUsage", () => {
     try {
       const result = await inspectPortUsage(port);
       expect(result.status).toBe("busy");
-      expect(result.errors?.some((err) => err.includes("ENOENT"))).toBe(true);
+      const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
+      expect(enoentErrors.length).toBeGreaterThan(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -181,5 +196,77 @@ describeUnix("inspectPortUsage", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe("inspectPortUsage on Windows", () => {
+  it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const [command] = argv;
+      if (command === "netstat") {
+        return {
+          stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "tasklist") {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === "powershell") {
+        return {
+          stdout:
+            '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toHaveLength(1);
+    expect(result.listeners[0]?.command).toBe("node.exe");
+    expect(result.listeners[0]?.commandLine).toContain("openclaw");
+    expect(result.hints.some((hint) => hint.includes("Gateway already running locally"))).toBe(
+      false,
+    );
+  });
+
+  it("falls back to wmic when PowerShell cannot read the command line", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const [command] = argv;
+      if (command === "netstat") {
+        return {
+          stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "tasklist") {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === "powershell") {
+        return { stdout: "", stderr: "access denied", code: 1 };
+      }
+      if (command === "wmic") {
+        return {
+          stdout: "CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners[0]?.commandLine).toContain("openclaw");
+    const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
+    expect(commandNames).toContain("wmic");
   });
 });

@@ -8,13 +8,12 @@ import type {
 } from "./client.types.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 
-export type {
-  BrowserStatus,
-  BrowserTab,
-  BrowserTransport,
-  SnapshotAriaNode,
-} from "./client.types.js";
+export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
+
+const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
+const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
+const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS = 10_000;
 
 export type ProfileStatus = {
   name: string;
@@ -76,17 +75,26 @@ export async function browserStatus(
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 1500,
+        : BROWSER_STATUS_REQUEST_TIMEOUT_MS,
   });
 }
 
 export async function browserDoctor(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; deep?: boolean },
 ): Promise<BrowserDoctorReport> {
-  const q = buildProfileQuery(opts?.profile);
+  const params = new URLSearchParams();
+  if (opts?.profile) {
+    params.set("profile", opts.profile);
+  }
+  if (opts?.deep) {
+    params.set("deep", "true");
+  }
+  const q = params.size ? `?${params.toString()}` : "";
   return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
-    timeoutMs: 3000,
+    timeoutMs: opts?.deep
+      ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS
+      : BROWSER_DOCTOR_REQUEST_TIMEOUT_MS,
   });
 }
 

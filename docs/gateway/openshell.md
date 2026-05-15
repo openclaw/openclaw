@@ -18,6 +18,7 @@ and an optional `mirror` workspace mode.
 
 ## Prerequisites
 
+- OpenShell plugin installed (`openclaw plugins install @openclaw/openshell-sandbox`)
 - The `openshell` CLI installed and on `PATH` (or set a custom path via
   `plugins.entries.openshell.config.command`)
 - An OpenShell account with sandbox access
@@ -25,7 +26,11 @@ and an optional `mirror` workspace mode.
 
 ## Quick start
 
-1. Enable the plugin and set the sandbox backend:
+1. Install and enable the plugin, then set the sandbox backend:
+
+```bash
+openclaw plugins install @openclaw/openshell-sandbox
+```
 
 ```json5
 {
@@ -110,9 +115,9 @@ Best for:
 - You want lower per-turn sync overhead.
 - You do not want host-local edits to silently overwrite remote sandbox state.
 
-Important: if you edit files on the host outside OpenClaw after the initial seed,
-the remote sandbox does **not** see those changes. Use
-`openclaw sandbox recreate` to re-seed.
+<Warning>
+If you edit files on the host outside OpenClaw after the initial seed, the remote sandbox does **not** see those changes. Use `openclaw sandbox recreate` to re-seed.
+</Warning>
 
 ### Choosing a mode
 

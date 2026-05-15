@@ -2,17 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetFacadeRuntimeStateForTest } from "./facade-runtime.js";
 
 const ORIGINAL_ENV = {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-  OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE,
-  OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: process.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE,
-  OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: process.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
-  OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
   OPENCLAW_TEST_FAST: process.env.OPENCLAW_TEST_FAST,
 } as const;
 
@@ -25,8 +19,6 @@ function makeTempDir(prefix: string): string {
 }
 
 function resetQaRunnerRuntimeState() {
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   resetFacadeRuntimeStateForTest();
 }
 
@@ -34,10 +26,6 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
   beforeEach(() => {
     resetQaRunnerRuntimeState();
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
-    process.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE = "1";
-    process.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "0";
-    process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "0";
     process.env.OPENCLAW_TEST_FAST = "1";
   });
 
@@ -118,7 +106,15 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
 
     const module = await import("./qa-runner-runtime.js");
 
-    expect(module.listQaRunnerCliContributions()).toEqual([
+    const contributions = module.listQaRunnerCliContributions();
+    const contribution = contributions[0];
+    expect(contribution?.status).toBe("available");
+    if (!contribution || contribution.status !== "available") {
+      throw new Error("Expected linked QA runner contribution to be available");
+    }
+    const register = contribution.registration.register;
+    expect(typeof register).toBe("function");
+    expect(contributions).toEqual([
       {
         pluginId: "qa-linked",
         commandName: "linked",
@@ -126,7 +122,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
         status: "available",
         registration: {
           commandName: "linked",
-          register: expect.any(Function),
+          register,
         },
       },
     ]);

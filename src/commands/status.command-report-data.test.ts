@@ -48,4 +48,50 @@ describe("buildStatusCommandReportData", () => {
     });
     expect(result.footerLines.at(-1)).toBe("  Need to test channels? cmd:openclaw status --deep");
   });
+
+  it("shows skipped audit text when fast status omits the security audit", async () => {
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        securityAudit: undefined,
+      }),
+    );
+
+    expect(result.securityAuditLines).toEqual([
+      "muted(Skipped in fast status. Full report: cmd:openclaw security audit)",
+      "muted(Deep probe: cmd:openclaw status --deep)",
+    ]);
+  });
+
+  it("adds model-pricing degradation from gateway probe health to overview rows", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        surface: {
+          ...baseParams.surface,
+          gatewayProbe: {
+            connectLatencyMs: 123,
+            error: null,
+            health: {
+              ok: true,
+              modelPricing: {
+                state: "degraded",
+                detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+                sources: [{ source: "openrouter", state: "degraded" }],
+              },
+            },
+          },
+        },
+        health: undefined,
+      }),
+    );
+
+    const modelPricingIndex = result.overviewRows.findIndex((row) => row.Item === "Model pricing");
+    expect(modelPricingIndex).toBeGreaterThanOrEqual(0);
+    expect(result.overviewRows[modelPricingIndex]).toStrictEqual({
+      Item: "Model pricing",
+      Value:
+        "warn(warning · optional pricing refresh degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
+    });
+    expect(result.overviewRows[modelPricingIndex + 1]?.Item).toBe("Memory");
+  });
 });

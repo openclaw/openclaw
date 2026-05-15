@@ -1,5 +1,5 @@
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
 import { normalizeRemoteBaseUrl } from "./remote-url.js";
+import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export type BatchHttpClientConfig = {
   baseUrl?: string;

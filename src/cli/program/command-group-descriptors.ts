@@ -1,10 +1,10 @@
 import type { Command } from "commander";
-import type { CommandGroupEntry } from "./register-command-groups.js";
 
 export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  parentDefaultHelp?: boolean;
 };
 
 export type CommandGroupDescriptorSpec<TRegister> = {
@@ -21,6 +21,11 @@ export type ImportedCommandGroupDefinition<TRegisterArgs, TModule> = {
 export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
   placeholders: TDescriptor[];
   register: TRegister;
+};
+
+type CommandGroupEntryLike = {
+  placeholders: NamedCommandDescriptor[];
+  register: (program: Command) => Promise<void> | void;
 };
 
 function buildDescriptorIndex<TDescriptor extends NamedCommandDescriptor>(
@@ -49,8 +54,8 @@ export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescr
 export function buildCommandGroupEntries<TRegister>(
   descriptors: readonly NamedCommandDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
-  mapRegister: (register: TRegister) => CommandGroupEntry["register"],
-): CommandGroupEntry[] {
+  mapRegister: (register: TRegister) => CommandGroupEntryLike["register"],
+): CommandGroupEntryLike[] {
   return resolveCommandGroupEntries(descriptors, specs).map((entry) => ({
     placeholders: entry.placeholders,
     register: mapRegister(entry.register),

@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
+function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
+  const call = fetchMock.mock.calls[index] as [string, RequestInit] | undefined;
+  if (!call) {
+    throw new Error(`expected fetch call #${index + 1}`);
+  }
+  return { url: call[0], init: call[1], headers: call[1].headers as Record<string, string> };
+}
+
 describe("loadControlUiBootstrapConfig", () => {
   it("loads assistant identity from the bootstrap endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -20,6 +28,7 @@ describe("loadControlUiBootstrapConfig", () => {
         localMediaPreviewRoots: ["/tmp/openclaw"],
         embedSandbox: "scripts",
         allowExternalEmbedUrls: true,
+        chatMessageMaxWidth: "min(1280px, 82%)",
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -35,15 +44,15 @@ describe("loadControlUiBootstrapConfig", () => {
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
+      chatMessageMaxWidth: null,
       serverVersion: null,
     };
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
     expect(state.assistantAvatarSource).toBe("avatars/ops.png");
@@ -54,6 +63,142 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(true);
+    expect(state.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("can refresh runtime bootstrap settings without clobbering session identity", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+        embedSandbox: "trusted",
+        allowExternalEmbedUrls: true,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Worker",
+      assistantAvatar: "W",
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: "worker",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+
+    expect(state.assistantName).toBe("Worker");
+    expect(state.assistantAvatar).toBe("W");
+    expect(state.assistantAgentId).toBe("worker");
+    expect(state.serverVersion).toBe("2026.4.27");
+    expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
+    expect(state.embedSandboxMode).toBe("trusted");
+    expect(state.allowExternalEmbedUrls).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does not apply default-agent bootstrap identity to an active non-default session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "AI大管家",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+        embedSandbox: "trusted",
+        allowExternalEmbedUrls: true,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:fs-daying:main",
+      assistantName: "大颖",
+      assistantAvatar: "D",
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: "fs-daying",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("大颖");
+    expect(state.assistantAvatar).toBe("D");
+    expect(state.assistantAgentId).toBe("fs-daying");
+    expect(state.serverVersion).toBe("2026.4.27");
+    expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
+    expect(state.embedSandboxMode).toBe("trusted");
+    expect(state.allowExternalEmbedUrls).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps local assistant avatar override when default-agent bootstrap identity is skipped", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => JSON.stringify({ avatar: "data:image/png;base64,local" })),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    } as unknown as Storage);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:worker:main",
+      assistantName: "Worker",
+      assistantAvatar: "W",
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: "worker",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("Worker");
+    expect(state.assistantAvatar).toBe("data:image/png;base64,local");
+    expect(state.assistantAvatarSource).toBe("data:image/png;base64,local");
+    expect(state.assistantAvatarStatus).toBe("data");
+    expect(state.assistantAvatarReason).toBeNull();
+    expect(state.assistantAgentId).toBe("worker");
 
     vi.unstubAllGlobals();
   });
@@ -75,10 +220,9 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-      expect.objectContaining({ method: "GET" }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(CONTROL_UI_BOOTSTRAP_CONFIG_PATH);
+    expect(fetchCall.init.method).toBe("GET");
     expect(state.assistantName).toBe("Assistant");
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(false);
@@ -103,10 +247,9 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
 
     vi.unstubAllGlobals();
   });
@@ -129,16 +272,11 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          Authorization: "Bearer session-token",
-        }),
-      }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
+    expect(fetchCall.headers.Accept).toBe("application/json");
+    expect(fetchCall.headers.Authorization).toBe("Bearer session-token");
 
     vi.unstubAllGlobals();
   });
@@ -178,14 +316,10 @@ describe("loadControlUiBootstrapConfig", () => {
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, firstInit] = fetchMock.mock.calls[0] ?? [];
-    const [, secondInit] = fetchMock.mock.calls[1] ?? [];
-    expect((firstInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer stale-token",
-    );
-    expect((secondInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer fresh-password",
-    );
+    const firstFetchCall = requireFetchCall(fetchMock, 0);
+    const secondFetchCall = requireFetchCall(fetchMock, 1);
+    expect(firstFetchCall.headers.Authorization).toBe("Bearer stale-token");
+    expect(secondFetchCall.headers.Authorization).toBe("Bearer fresh-password");
     expect(state.assistantName).toBe("Ops");
     expect(state.serverVersion).toBe("2026.4.22");
 
@@ -235,17 +369,11 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `//evil.example${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-        }),
-      }),
-    );
-    const [, init] = fetchMock.mock.calls[0] ?? [];
-    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`//evil.example${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
+    expect(fetchCall.headers.Accept).toBe("application/json");
+    expect(fetchCall.headers.Authorization).toBeUndefined();
 
     vi.unstubAllGlobals();
   });

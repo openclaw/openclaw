@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
@@ -10,19 +14,24 @@ const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
   writeOptions: {},
 });
 const setRuntimeConfigSnapshot = vi.fn();
-const ensureOpenClawModelsJson = vi.fn().mockResolvedValue(undefined);
-const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
 const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
+const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
+const loadSupplementalManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(
+  () => [],
+);
+const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
 const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
+const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
   available: [] as Array<Record<string, unknown>>,
@@ -45,7 +54,38 @@ vi.mock("./models/load-config.js", () => ({
   }),
 }));
 
-vi.mock("./models/list.runtime.js", () => {
+vi.mock("../agents/auth-profiles/profile-list.js", () => ({
+  listProfilesForProvider,
+}));
+
+vi.mock("../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  hasUsableCustomProviderApiKey,
+  hasSyntheticLocalProviderAuthConfig,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog,
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: ({
+    provider,
+    modelId,
+    modelRegistry,
+  }: {
+    provider: string;
+    modelId: string;
+    modelRegistry: { find: (provider: string, id: string) => unknown };
+  }) => modelRegistry.find(provider, modelId),
+}));
+
+vi.mock("../agents/pi-model-discovery.js", () => {
   class MockModelRegistry {
     find(provider: string, id: string) {
       if (modelRegistryState.findError !== undefined) {
@@ -79,42 +119,36 @@ vi.mock("./models/list.runtime.js", () => {
   }
 
   return {
-    ensureAuthProfileStore,
-    ensureOpenClawModelsJson,
-    resolveOpenClawAgentDir,
-    listProfilesForProvider,
-    resolveEnvApiKey,
-    resolveAwsSdkEnvVarName,
-    hasUsableCustomProviderApiKey,
-    hasProviderStaticCatalogForFilter,
-    loadModelCatalog,
-    loadProviderCatalogModelsForList,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
-    resolveModelWithRegistry: ({
-      provider,
-      modelId,
-      modelRegistry,
-    }: {
-      provider: string;
-      modelId: string;
-      modelRegistry: { find: (provider: string, id: string) => unknown };
-    }) => {
-      return modelRegistry.find(provider, modelId);
-    },
   };
 });
+
+vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: () => [],
+}));
 
 vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./models/list.provider-catalog.js")>();
   return {
     ...actual,
     hasProviderStaticCatalogForFilter,
+    loadProviderCatalogModelsForList,
   };
 });
 
+vi.mock("./models/list.manifest-catalog.js", () => ({
+  loadStaticManifestCatalogRowsForList,
+  loadSupplementalManifestCatalogRowsForList,
+}));
+
+vi.mock("./models/list.provider-index-catalog.js", () => ({
+  loadProviderIndexCatalogRowsForList,
+}));
+
 vi.mock("../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
 }));
 
 function makeRuntime() {
@@ -125,13 +159,38 @@ function makeRuntime() {
   };
 }
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): unknown {
+  const call = mockFn.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call.at(0);
+}
+
+function runtimeLogText(runtime: ReturnType<typeof makeRuntime>): string {
+  const value = firstMockArg(runtime.log, "runtime.log");
+  if (typeof value !== "string") {
+    throw new Error("Expected runtime.log text");
+  }
+  return value;
+}
+
+function runtimeErrorText(runtime: ReturnType<typeof makeRuntime>): string {
+  const value = firstMockArg(runtime.error, "runtime.error");
+  if (typeof value !== "string") {
+    throw new Error("Expected runtime.error text");
+  }
+  return value;
+}
+
 function expectModelRegistryUnavailable(
   runtime: ReturnType<typeof makeRuntime>,
   expectedDetail: string,
 ) {
   expect(runtime.error).toHaveBeenCalledTimes(1);
-  expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-  expect(runtime.error.mock.calls[0]?.[0]).toContain(expectedDetail);
+  const errorText = runtimeErrorText(runtime);
+  expect(errorText).toContain("Model registry unavailable:");
+  expect(errorText).toContain(expectedDetail);
   expect(runtime.log).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
 }
@@ -151,17 +210,24 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
+  modelRegistryState.models = [];
+  modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   modelRegistryState.findError = undefined;
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
-  ensureOpenClawModelsJson.mockClear();
   loadModelCatalog.mockClear();
   loadModelCatalog.mockResolvedValue([]);
   loadProviderCatalogModelsForList.mockReset();
   loadProviderCatalogModelsForList.mockResolvedValue([]);
+  loadStaticManifestCatalogRowsForList.mockReset();
+  loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  loadSupplementalManifestCatalogRowsForList.mockReset();
+  loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
+  loadProviderIndexCatalogRowsForList.mockReset();
+  loadProviderIndexCatalogRowsForList.mockReturnValue([]);
   hasProviderStaticCatalogForFilter.mockReset();
   hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   shouldSuppressBuiltInModel.mockReset();
@@ -271,11 +337,12 @@ describe("models list/status", () => {
 
   function parseJsonLog(runtime: ReturnType<typeof makeRuntime>) {
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    return JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    return JSON.parse(runtimeLogText(runtime));
   }
 
   async function expectZaiProviderFilter(provider: string) {
     setDefaultZaiRegistry();
+    loadProviderIndexCatalogRowsForList.mockReturnValueOnce([ZAI_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, provider, json: true }, runtime);
@@ -290,6 +357,35 @@ describe("models list/status", () => {
     setDefaultModel("z.ai/glm-4.7");
     modelRegistryState.models = [ZAI_MODEL, OPENAI_MODEL];
     modelRegistryState.available = available ? [ZAI_MODEL, OPENAI_MODEL] : [];
+  }
+
+  async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-cloud");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-cloud",
+        configSchema: { type: "object" },
+        setup: {
+          providers: [
+            {
+              id: "workspace-cloud",
+              authEvidence: [
+                {
+                  type: "local-file-with-env",
+                  fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+                  credentialMarker: "workspace-cloud-local-credentials",
+                  source: "workspace cloud credentials",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
   }
 
   beforeAll(async () => {
@@ -326,7 +422,7 @@ describe("models list/status", () => {
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
+    expect(runtimeLogText(runtime)).toBe("zai/glm-4.7");
   });
 
   it("models list plain keeps canonical OpenRouter native ids", async () => {
@@ -349,7 +445,7 @@ describe("models list/status", () => {
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log.mock.calls[0]?.[0]).toBe("openrouter/hunter-alpha");
+    expect(runtimeLogText(runtime)).toBe("openrouter/hunter-alpha");
   });
 
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(
@@ -369,24 +465,84 @@ describe("models list/status", () => {
     expect(payload.models[0]?.available).toBe(false);
   });
 
+  it("models list uses trusted workspace plugin auth evidence for configured rows", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-models-list-auth-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const bundledDir = path.join(tempRoot, "bundled");
+    const stateDir = path.join(tempRoot, "state");
+    const credentialsPath = path.join(tempRoot, "credentials.json");
+    await fs.mkdir(bundledDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+    await writeWorkspaceAuthEvidencePlugin(workspaceDir);
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          model: "workspace-cloud/model-a",
+        },
+      },
+      plugins: { allow: ["workspace-cloud"] },
+      models: {
+        providers: {
+          "workspace-cloud": {
+            baseUrl: "https://workspace-cloud.example/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                name: "Workspace Cloud Model A",
+                input: ["text"],
+                contextWindow: 8192,
+                maxTokens: 4096,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          WORKSPACE_CLOUD_CREDENTIALS: credentialsPath,
+        },
+        () => modelsListCommand({ all: true, provider: "workspace-cloud", json: true }, runtime),
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("workspace-cloud/model-a");
+    expect(model.available).toBe(true);
+  });
+
   it("models list all includes unauthenticated provider catalog rows", async () => {
     setDefaultZaiRegistry({ available: false });
     hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
     loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
-    await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
+    await withEnvAsync(
+      { KIMI_API_KEY: undefined, KIMICODE_API_KEY: undefined, MOONSHOT_API_KEY: undefined },
+      () => modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime),
+    );
 
     const payload = parseJsonLog(runtime);
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "moonshot/kimi-k2.6",
-        name: "Kimi K2.6",
-        available: false,
-        missing: false,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("moonshot/kimi-k2.6");
+    expect(model.name).toBe("Kimi K2.6");
+    expect(model.available).toBe(false);
+    expect(model.missing).toBe(false);
   });
 
   it("models list rejects provider display labels", async () => {
@@ -441,7 +597,7 @@ describe("models list/status", () => {
 
     modelRegistryState.models = [];
     modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
+    await modelsListCommand({ local: true, json: true }, runtime);
 
     expectModelRegistryUnavailable(runtime, "model discovery unavailable");
   });
@@ -464,19 +620,19 @@ describe("models list/status", () => {
       models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
     };
 
-    await loadModelRegistry(resolvedConfig as never);
+    const loaded = await loadModelRegistry(resolvedConfig as never);
 
-    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(loaded.models).toEqual([OPENAI_MODEL]);
   });
 
   it("filters stale spark rows from models list and registry views", async () => {
-    shouldSuppressBuiltInModel.mockImplementation(
-      ({ provider, id }: { provider?: string | null; id?: string | null }) =>
-        id === "gpt-5.3-codex-spark" &&
-        (provider === "openai" ||
-          provider === "azure-openai-responses" ||
-          provider === "openai-codex"),
-    );
+    const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
+      id === "gpt-5.3-codex-spark" &&
+      (provider === "openai" ||
+        provider === "azure-openai-responses" ||
+        provider === "openai-codex");
+    shouldSuppressBuiltInModel.mockImplementation(suppressSpark);
+    shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
     modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
     modelRegistryState.available = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
@@ -546,18 +702,15 @@ describe("models list/status", () => {
 
     await modelsListCommand({ all: true, json: true }, runtime);
 
-    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "custom-proxy/custom-model",
-        name: "Custom Model",
-        missing: false,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("custom-proxy/custom-model");
+    expect(model.name).toBe("Custom Model");
+    expect(model.missing).toBe(false);
   });
 
-  it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
+  it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {
     const row = toModelRow({
       model: makeGoogleAntigravityTemplate(
         "claude-opus-4-6-thinking",

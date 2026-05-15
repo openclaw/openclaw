@@ -14,6 +14,10 @@ type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
 
@@ -23,6 +27,12 @@ const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
+);
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
 );
@@ -57,7 +67,7 @@ const finalizeSetupWizard = vi.hoisted(() =>
     }
 
     const hatch = await options.prompter.select({
-      message: "How do you want to hatch your bot?",
+      message: "How do you want to hatch your agent?",
       options: [],
     });
     if (hatch !== "tui") {
@@ -79,6 +89,8 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
+const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
@@ -96,7 +108,7 @@ function providerPluginStub(
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
-const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
+const replaceConfigFile = vi.hoisted(() => vi.fn(async () => ({ config: {} })));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
     const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
@@ -118,13 +130,18 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     legacyIssues: [] as Array<{ path: string; message: string }>,
   })),
 );
+const createConfigIO = vi.hoisted(() =>
+  vi.fn(() => ({
+    readConfigFileSnapshot,
+  })),
+);
 const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const buildPluginCompatibilityNotices = vi.hoisted(() =>
+const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
 );
 const formatPluginCompatibilityNotice = vi.hoisted(() =>
@@ -133,6 +150,50 @@ const formatPluginCompatibilityNotice = vi.hoisted(() =>
 
 function getWizardNoteCalls(note: WizardPrompter["note"]) {
   return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function getMockCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+): unknown {
+  const call = (mock.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function expectMockCallArgNotNull(
+  mock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+): void {
+  const value = getMockCallArg(mock, callIndex, argIndex, label);
+  if (value === null) {
+    throw new Error(`expected ${label} arg ${argIndex} to be non-null`);
+  }
 }
 
 vi.mock("../commands/onboard-channels.js", () => ({
@@ -161,6 +222,14 @@ vi.mock("../commands/auth-choice.js", () => ({
   warnIfModelConfigLooksOff,
 }));
 
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider,
+}));
+
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
   resolvePluginProviders: resolvePluginProvidersRuntime,
@@ -183,11 +252,16 @@ vi.mock("../commands/onboard-hooks.js", () => ({
   setupInternalHooks,
 }));
 
+vi.mock("./setup.migration-import.js", () => ({
+  detectSetupMigrationSources,
+  runSetupMigrationImport,
+}));
+
 vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
+  createConfigIO,
   resolveGatewayPort,
-  readConfigFileSnapshot,
-  writeConfigFile,
+  replaceConfigFile,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -228,7 +302,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 }));
 
@@ -294,7 +368,7 @@ describe("runSetupWizard", () => {
     return dir;
   }
 
-  it("does not crash when preferred-provider lookup sees a provider without an id", async () => {
+  it("skips provider entries without an id during preferred-provider lookup", async () => {
     setupChannels.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -316,13 +390,13 @@ describe("runSetupWizard", () => {
 
     const caseDir = await makeCaseDir("provider-missing-id-");
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
-      if (message === "Select setup mode") {
+      if (message === "Setup mode") {
         return "quickstart";
       }
       if (message === "Select channel (QuickStart)") {
         return "__skip__";
       }
-      if (message === "How do you want to hatch your bot?") {
+      if (message === "How do you want to hatch your agent?") {
         return "skip";
       }
       return "skip";
@@ -349,8 +423,10 @@ describe("runSetupWizard", () => {
         prompter,
       ),
     ).resolves.toBeUndefined();
-    expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ choice: "ollama" }),
+    expectRecordFields(
+      getMockCallArg(resolvePreferredProviderForAuthChoice, 0, 0, "preferred provider lookup"),
+      { choice: "ollama" },
+      "preferred provider lookup params",
     );
     expect(resolvePluginProvidersRuntime).toHaveBeenCalled();
     setupChannels.mockClear();
@@ -405,6 +481,7 @@ describe("runSetupWizard", () => {
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
     const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
+    createConfigIO.mockClear();
     ensureAuthProfileStore.mockClear();
 
     await runSetupWizard(
@@ -423,6 +500,7 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
+    expect(createConfigIO).toHaveBeenCalledWith({ pluginValidation: "skip" });
     expect(select).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(setupChannels).not.toHaveBeenCalled();
@@ -430,10 +508,9 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
-
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
-    writeConfigFile.mockClear();
+    replaceConfigFile.mockClear();
 
     const workspaceDir = await makeCaseDir("skip-bootstrap-");
     const prompter = buildWizardPrompter({});
@@ -457,20 +534,31 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            skipBootstrap: true,
-            workspace: workspaceDir,
-          }),
-        }),
-      }),
+    const replaceParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 0, 0, "config replacement"),
+      "config replacement params",
     );
-    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      workspaceDir,
-      runtime,
-      expect.objectContaining({ skipBootstrap: true }),
+    const nextConfig = requireRecord(replaceParams.nextConfig, "next config");
+    const agents = requireRecord(nextConfig.agents, "next config agents");
+    expectRecordFields(
+      requireRecord(agents.defaults, "next config agent defaults"),
+      {
+        skipBootstrap: true,
+        workspace: workspaceDir,
+      },
+      "next config agent defaults",
+    );
+    expectRecordFields(
+      replaceParams.writeOptions,
+      { allowConfigSizeDrop: true },
+      "config replacement write options",
+    );
+    expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 0, "workspace setup")).toBe(workspaceDir);
+    expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 1, "workspace setup")).toBe(runtime);
+    expectRecordFields(
+      getMockCallArg(ensureWorkspaceAndSessions, 0, 2, "workspace setup"),
+      { skipBootstrap: true },
+      "workspace setup options",
     );
   });
 
@@ -497,7 +585,7 @@ describe("runSetupWizard", () => {
     ).rejects.toThrow("auth choice is required");
   });
 
-  async function runTuiHatchTest(params: {
+  async function runTuiHatchTestAndExpectLaunch(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;
   }) {
@@ -509,7 +597,7 @@ describe("runSetupWizard", () => {
     }
 
     const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
-      if (opts.message === "How do you want to hatch your bot?") {
+      if (opts.message === "How do you want to hatch your agent?") {
         return "tui";
       }
       return "quickstart";
@@ -535,21 +623,29 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(runTui, 0, 0, "tui launch"),
+      {
         local: true,
         deliver: false,
         message: params.expectedMessage,
-      }),
+      },
+      "tui launch options",
     );
   }
 
   it("launches TUI without auto-delivery when hatching", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: true, expectedMessage: "Wake up, my friend!" });
+    await runTuiHatchTestAndExpectLaunch({
+      writeBootstrapFile: true,
+      expectedMessage: "Wake up, my friend!",
+    });
   });
 
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
+    await runTuiHatchTestAndExpectLaunch({
+      writeBootstrapFile: false,
+      expectedMessage: undefined,
+    });
   });
 
   it("shows the web search hint at the end of setup", async () => {
@@ -579,7 +675,8 @@ describe("runSetupWizard", () => {
 
       const calls = getWizardNoteCalls(note);
       expect(calls.length).toBeGreaterThan(0);
-      expect(calls.some((call) => call?.[1] === "Web search")).toBe(true);
+      const noteTitles = calls.map((call) => call?.[1]);
+      expect(noteTitles).toContain("Web search");
     } finally {
       if (prevBraveKey === undefined) {
         delete process.env.BRAVE_API_KEY;
@@ -610,19 +707,22 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(setupChannels).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({
+    expectMockCallArgNotNull(setupChannels, 0, 0, "channel setup");
+    expectMockCallArgNotNull(setupChannels, 0, 1, "channel setup");
+    expectMockCallArgNotNull(setupChannels, 0, 2, "channel setup");
+    expectRecordFields(
+      getMockCallArg(setupChannels, 0, 3, "channel setup"),
+      {
         deferStatusUntilSelection: true,
         quickstartDefaults: true,
-      }),
+      },
+      "channel setup options",
     );
   });
 
   it("prompts for a model during explicit interactive Ollama setup", async () => {
     promptDefaultModel.mockClear();
+    warnIfModelConfigLooksOff.mockClear();
     resolveProviderPluginChoice.mockReturnValue({
       provider: {
         id: "ollama",
@@ -668,10 +768,20 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(promptDefaultModel, 0, 0, "default model prompt"),
+      {
         allowKeep: false,
-      }),
+        browseCatalogOnDemand: true,
+      },
+      "default model prompt params",
+    );
+    expectMockCallArgNotNull(warnIfModelConfigLooksOff, 0, 0, "model warning");
+    expectMockCallArgNotNull(warnIfModelConfigLooksOff, 0, 1, "model warning");
+    expectRecordFields(
+      getMockCallArg(warnIfModelConfigLooksOff, 0, 2, "model warning"),
+      { validateCatalog: false },
+      "model warning options",
     );
   });
 
@@ -726,9 +836,9 @@ describe("runSetupWizard", () => {
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(applyAuthChoice, 1, 0, "retry auth choice"),
+      {
         authChoice: "demo-provider-two",
         config: {
           plugins: {
@@ -739,12 +849,54 @@ describe("runSetupWizard", () => {
             },
           },
         },
-      }),
+      },
+      "retry auth choice params",
     );
   });
 
+  it("forwards provider-specific auth flags to applyAuthChoice opts", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-codex-api-key",
+        openaiApiKey: "sk-flag-value",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        skipHooks: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai-codex auth choice");
+    const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
+    expect(opts.openaiApiKey).toBe("sk-flag-value");
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
-    buildPluginCompatibilityNotices.mockReturnValue([
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
         pluginId: "legacy-plugin",
         code: "legacy-before-agent-start",
@@ -796,13 +948,13 @@ describe("runSetupWizard", () => {
     );
 
     const calls = getWizardNoteCalls(note);
-    expect(calls.some((call) => call?.[1] === "Plugin compatibility")).toBe(true);
-    expect(
-      calls.some((call) => {
-        const body = call?.[0];
-        return typeof body === "string" && body.includes("legacy-plugin");
-      }),
-    ).toBe(true);
+    const noteTitles = calls.map((call) => call?.[1]);
+    expect(noteTitles).toContain("Plugin compatibility");
+    const noteBodies = calls
+      .map((call) => call?.[0])
+      .filter((body): body is string => typeof body === "string");
+    const legacyPluginNotes = noteBodies.filter((body) => body.includes("legacy-plugin"));
+    expect(legacyPluginNotes.length).toBeGreaterThan(0);
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
@@ -866,11 +1018,13 @@ describe("runSetupWizard", () => {
       }
     }
 
-    expect(probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(probeGatewayReachable, 0, 0, "gateway probe"),
+      {
         url: "ws://127.0.0.1:18789",
         password: "gateway-ref-password", // pragma: allowlist secret
-      }),
+      },
+      "gateway probe params",
     );
   });
 
@@ -897,10 +1051,12 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(configureGatewayForSetup).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(configureGatewayForSetup, 0, 0, "gateway setup"),
+      {
         secretInputMode: "ref", // pragma: allowlist secret
-      }),
+      },
+      "gateway setup params",
     );
   });
 
@@ -936,13 +1092,73 @@ describe("runSetupWizard", () => {
     }
 
     const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    expect(
-      calls.some(
-        (call) =>
-          call?.[1] === "QuickStart" &&
-          typeof call?.[0] === "string" &&
-          call[0].includes("Gateway port: 18791"),
-      ),
-    ).toBe(true);
+    const matchingQuickStartNotes = calls.filter(
+      (call) =>
+        call?.[1] === "QuickStart" &&
+        typeof call?.[0] === "string" &&
+        call[0].includes("Gateway port: 18791"),
+    );
+    expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
+  });
+
+  it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {
+    promptDefaultModel.mockClear();
+    resolvePluginProvidersRuntime.mockClear();
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "openai",
+      providerId: "openai-codex",
+      methodId: "oauth",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex Browser Login",
+    });
+    resolvePluginSetupProvider.mockReturnValue({
+      id: "openai-codex",
+      label: "OpenAI Codex",
+      auth: [
+        {
+          id: "oauth",
+          label: "OpenAI Codex Browser Login",
+          kind: "oauth",
+          wizard: {
+            modelSelection: {
+              allowKeepCurrent: false,
+            },
+          },
+          run: vi.fn(async () => ({ profiles: [] })),
+        },
+      ],
+    });
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expectRecordFields(
+      getMockCallArg(resolvePluginSetupProvider, 0, 0, "plugin setup provider"),
+      {
+        provider: "openai-codex",
+        pluginIds: ["openai"],
+      },
+      "plugin setup provider params",
+    );
+    expect(resolvePluginProvidersRuntime).not.toHaveBeenCalled();
+    expectRecordFields(
+      getMockCallArg(promptDefaultModel, 0, 0, "default model prompt"),
+      { allowKeep: false },
+      "default model prompt params",
+    );
   });
 });

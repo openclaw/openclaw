@@ -56,6 +56,8 @@ type MessagePresentationButton = {
   label: string;
   value?: string;
   url?: string;
+  webApp?: { url: string };
+  web_app?: { url: string };
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
@@ -80,6 +82,8 @@ Button semantics:
 - `value` is an application action value routed back through the channel's
   existing interaction path when the channel supports clickable controls.
 - `url` is a link button. It can exist without `value`.
+- `webApp` and `web_app` describe a channel-native web app button. Telegram
+  renders this as `web_app` and only supports it in private chats.
 - `label` is required and is also used in text fallback.
 - `style` is advisory. Renderers should map unsupported styles to a safe
   default, not fail the send.
@@ -91,7 +95,7 @@ Select semantics:
   select support.
 - If a channel does not support selects, fallback text lists the labels.
 
-## Producer Examples
+## Producer examples
 
 Simple card:
 
@@ -122,6 +126,19 @@ URL-only link button:
     {
       "type": "buttons",
       "buttons": [{ "label": "Open notes", "url": "https://example.com/release" }]
+    }
+  ]
+}
+```
+
+Telegram Mini App button:
+
+```json
+{
+  "blocks": [
+    {
+      "type": "buttons",
+      "buttons": [{ "label": "Launch", "web_app": { "url": "https://example.com/app" } }]
     }
   ]
 }
@@ -175,7 +192,7 @@ Pinned delivery with explicit JSON:
 }
 ```
 
-## Renderer Contract
+## Renderer contract
 
 Channel plugins declare render support on their outbound adapter:
 
@@ -206,7 +223,7 @@ renderer can make interactive, not every native platform limit. Renderers still
 own platform-specific limits such as maximum button count, block count, and
 card size.
 
-## Core Render Flow
+## Core render flow
 
 When a `ReplyPayload` or message action includes `presentation`, core:
 
@@ -222,7 +239,7 @@ When a `ReplyPayload` or message action includes `presentation`, core:
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
 plugins own native rendering and interaction handling.
 
-## Degradation Rules
+## Degradation rules
 
 Presentation must be safe to send on limited channels.
 
@@ -246,7 +263,7 @@ Examples:
 The main exception is `delivery.pin.required: true`; if pinning is requested as
 required and the channel cannot pin the sent message, delivery reports failure.
 
-## Provider Mapping
+## Provider mapping
 
 Current bundled renderers:
 
@@ -288,6 +305,7 @@ code:
 import {
   interactiveReplyToPresentation,
   normalizeMessagePresentation,
+  presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -295,7 +313,20 @@ import {
 
 New code should accept or produce `MessagePresentation` directly.
 
-## Delivery Pin
+`presentationToInteractiveReply(...)` preserves visible presentation text by
+mapping the title, text, context, buttons, and selects into the older
+`InteractiveReply` shape. Component renderers that already draw title, text,
+context, and divider blocks natively should use
+`presentationToInteractiveControlsReply(...)` instead, then append only the
+button and select controls.
+
+`renderMessagePresentationFallbackText(...)` returns an empty string for
+presentation blocks that have no text fallback, such as a divider-only
+presentation. Transports that require a non-empty send body can pass
+`emptyFallback` to opt into a minimal body without changing the default fallback
+contract.
+
+## Delivery pin
 
 Pinning is delivery behavior, not presentation. Use `delivery.pin` instead of
 provider-native fields such as `channelData.telegram.pin`.
@@ -312,7 +343,7 @@ Semantics:
 Manual `pin`, `unpin`, and `pins` message actions still exist for existing
 messages where the provider supports those operations.
 
-## Plugin Author Checklist
+## Plugin author checklist
 
 - Declare `presentation` from `describeMessageTool(...)` when the channel can
   render or safely degrade semantic presentation.
@@ -328,7 +359,7 @@ messages where the provider supports those operations.
 - Do not expose new provider-native card/block/component/button fields through
   the shared message action schema.
 
-## Related Docs
+## Related docs
 
 - [Message CLI](/cli/message)
 - [Plugin SDK Overview](/plugins/sdk-overview)

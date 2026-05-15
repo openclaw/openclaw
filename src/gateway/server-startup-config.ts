@@ -1,30 +1,21 @@
-import { formatCliCommand } from "../cli/command-format.js";
+import { formatInvalidConfigRecoveryHint } from "../cli/config-recovery-hints.js";
 import {
-  type ConfigFileSnapshot,
-  type GatewayAuthConfig,
-  type GatewayTailscaleConfig,
-  type OpenClawConfig,
-  applyConfigOverrides,
-  isNixMode,
-  readConfigFileSnapshot,
-  recoverConfigFromLastKnownGood,
-  recoverConfigFromJsonRootSuffix,
-  shouldAttemptLastKnownGoodRecovery,
-  writeConfigFile,
-} from "../config/config.js";
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
+  readConfigFileSnapshotWithPluginMetadata,
+} from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
-import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
   ensureGatewayStartupAuth,
@@ -43,92 +34,90 @@ type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOA
 export type ActivateRuntimeSecrets = (
   config: OpenClawConfig,
   params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
-) => Promise<Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>>;
+) => Promise<
+  Awaited<ReturnType<typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot>>
+>;
 
-type PrepareRuntimeSecretsSnapshot = typeof prepareSecretsRuntimeSnapshot;
-type ActivateRuntimeSecretsSnapshot = typeof activateSecretsRuntimeSnapshot;
+type PrepareRuntimeSecretsSnapshot =
+  typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;
+type ActivateRuntimeSecretsSnapshot =
+  typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
 
 type GatewayStartupConfigOverrides = {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 };
 
+type GatewayStartupConfigMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
+  measure?: GatewayStartupConfigMeasure;
+  initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
-  let configSnapshot = await readConfigFileSnapshot();
-  let wroteConfig = false;
+  const measure = params.measure ?? (async (_name, run) => await run());
+  const snapshotRead =
+    params.initialSnapshotRead ??
+    (await measure("config.snapshot.read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
+    ));
+  const configSnapshot = snapshotRead.snapshot;
+  const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
+  const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
     );
   }
   if (configSnapshot.exists) {
-    if (!configSnapshot.valid) {
-      const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
-      const recovered = canRecoverFromLastKnownGood
-        ? await recoverConfigFromLastKnownGood({
-            snapshot: configSnapshot,
-            reason: "startup-invalid-config",
-          })
-        : false;
-      if (!canRecoverFromLastKnownGood) {
-        params.log.warn(
-          `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configSnapshot.path}`,
-        );
-      }
-      if (recovered) {
-        wroteConfig = true;
-        params.log.warn(
-          `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
-        );
-        configSnapshot = await readConfigFileSnapshot();
-        if (configSnapshot.valid) {
-          enqueueConfigRecoveryNotice({
-            cfg: configSnapshot.config,
-            phase: "startup",
-            reason: "startup-invalid-config",
-            configPath: configSnapshot.path,
-          });
-        }
-      }
-      if (!recovered && (await recoverConfigFromJsonRootSuffix(configSnapshot))) {
-        wroteConfig = true;
-        params.log.warn(
-          `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
-        );
-        configSnapshot = await readConfigFileSnapshot();
-      }
-    }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
 
   const autoEnable = params.minimalTestGateway
     ? { config: configSnapshot.config, changes: [] as string[] }
-    : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
+    : await measure("config.snapshot.auto-enable", () =>
+        applyPluginAutoEnable({
+          config: configSnapshot.sourceConfig,
+          env: process.env,
+          ...(pluginMetadataSnapshot?.manifestRegistry
+            ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
+            : {}),
+        }),
+      );
   if (autoEnable.changes.length === 0) {
-    return { snapshot: configSnapshot, wroteConfig };
+    return {
+      snapshot: configSnapshot,
+      wroteConfig,
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    };
   }
 
-  try {
-    await writeConfigFile(autoEnable.config);
-    wroteConfig = true;
-    configSnapshot = await readConfigFileSnapshot();
-    assertValidGatewayStartupConfigSnapshot(configSnapshot);
-    params.log.info(
-      `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  } catch (err) {
-    params.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
-  }
+  params.log.info(
+    `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
+  );
+  return {
+    snapshot: withRuntimeConfig(configSnapshot, autoEnable.config),
+    wroteConfig,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  };
+}
 
-  return { snapshot: configSnapshot, wroteConfig };
+function withRuntimeConfig(
+  snapshot: ConfigFileSnapshot,
+  runtimeConfig: OpenClawConfig,
+): ConfigFileSnapshot {
+  return {
+    ...snapshot,
+    runtimeConfig,
+    config: runtimeConfig,
+  };
 }
 
 export function createRuntimeSecretsActivator(params: {
@@ -143,10 +132,16 @@ export function createRuntimeSecretsActivator(params: {
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
-  const prepareRuntimeSecretsSnapshot =
-    params.prepareRuntimeSecretsSnapshot ?? prepareSecretsRuntimeSnapshot;
-  const activateRuntimeSecretsSnapshot =
-    params.activateRuntimeSecretsSnapshot ?? activateSecretsRuntimeSnapshot;
+  let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
+  let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
+  const loadSecretsRuntime = () => {
+    secretsRuntimePromise ??= import("../secrets/runtime.js");
+    return secretsRuntimePromise;
+  };
+  const loadAuthProfiles = () => {
+    authProfilesPromise ??= import("../agents/auth-profiles.js");
+    return authProfilesPromise;
+  };
 
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const run = secretsActivationTail.then(operation, operation);
@@ -160,8 +155,22 @@ export function createRuntimeSecretsActivator(params: {
   return async (config, activationParams) =>
     await runWithSecretsActivationLock(async () => {
       try {
+        const secretsRuntime =
+          params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot
+            ? null
+            : await loadSecretsRuntime();
+        const prepareRuntimeSecretsSnapshot =
+          params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
+        const activateRuntimeSecretsSnapshot =
+          params.activateRuntimeSecretsSnapshot ?? secretsRuntime!.activateSecretsRuntimeSnapshot;
+        const startupPreflight =
+          activationParams.reason === "startup" || activationParams.reason === "restart-check";
+        const loadAuthStore = startupPreflight
+          ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
+          : undefined;
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
+          ...(loadAuthStore ? { loadAuthStore } : {}),
         });
         assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {
@@ -215,9 +224,7 @@ export function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
-  const doctorHint = options.includeDoctorHint
-    ? `\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.`
-    : "";
+  const doctorHint = options.includeDoctorHint ? `\n${formatInvalidConfigRecoveryHint()}` : "";
   throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
 }
 
@@ -226,24 +233,38 @@ export async function prepareGatewayStartupConfig(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
+  persistStartupAuth?: boolean;
+  measure?: GatewayStartupConfigMeasure;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
-  assertValidGatewayStartupConfigSnapshot(params.configSnapshot);
+  const measure = params.measure ?? (async (_name, run) => await run());
+  await measure("config.auth.snapshot-validate", () =>
+    assertValidGatewayStartupConfigSnapshot(params.configSnapshot),
+  );
 
-  const runtimeConfig = applyConfigOverrides(params.configSnapshot.config);
-  const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(runtimeConfig, {
-    auth: params.authOverride,
-    tailscale: params.tailscaleOverride,
+  const runtimeConfig = await measure("config.auth.runtime-overrides", () =>
+    applyConfigOverrides(params.configSnapshot.config),
+  );
+  const startupPreflightConfig = await measure("config.auth.startup-overrides", () =>
+    applyGatewayAuthOverridesForStartupPreflight(runtimeConfig, {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    }),
+  );
+  const needsAuthSecretPreflight = await measure("config.auth.secret-surface", () =>
+    hasActiveGatewayAuthSecretRef(startupPreflightConfig),
+  );
+  const preflightConfig = await measure("config.auth.secret-preflight", async () => {
+    if (!needsAuthSecretPreflight) {
+      return startupPreflightConfig;
+    }
+    return (
+      await params.activateRuntimeSecrets(startupPreflightConfig, {
+        reason: "startup",
+        activate: false,
+      })
+    ).config;
   });
-  const needsAuthSecretPreflight = hasActiveGatewayAuthSecretRef(startupPreflightConfig);
-  const preflightConfig = needsAuthSecretPreflight
-    ? (
-        await params.activateRuntimeSecrets(startupPreflightConfig, {
-          reason: "startup",
-          activate: false,
-        })
-      ).config
-    : startupPreflightConfig;
-  const preflightAuthOverride =
+  const preflightAuthOverride = await measure("config.auth.preflight-override", () =>
     typeof preflightConfig.gateway?.auth?.token === "string" ||
     typeof preflightConfig.gateway?.auth?.password === "string"
       ? {
@@ -255,25 +276,32 @@ export async function prepareGatewayStartupConfig(params: {
             ? { password: preflightConfig.gateway.auth.password }
             : {}),
         }
-      : params.authOverride;
+      : params.authOverride,
+  );
 
-  const authBootstrap = await ensureGatewayStartupAuth({
-    cfg: runtimeConfig,
-    env: process.env,
-    authOverride: preflightAuthOverride,
-    tailscaleOverride: params.tailscaleOverride,
-    persist: true,
-    baseHash: params.configSnapshot.hash,
-  });
-  const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
-    auth: params.authOverride,
-    tailscale: params.tailscaleOverride,
-  });
+  const authBootstrap = await measure("config.auth.ensure", () =>
+    ensureGatewayStartupAuth({
+      cfg: runtimeConfig,
+      env: process.env,
+      authOverride: preflightAuthOverride,
+      tailscaleOverride: params.tailscaleOverride,
+      persist: params.persistStartupAuth ?? false,
+      baseHash: params.configSnapshot.hash,
+    }),
+  );
+  const runtimeStartupConfig = await measure("config.auth.runtime-startup-overrides", () =>
+    applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    }),
+  );
   const activatedConfig = (
-    await params.activateRuntimeSecrets(runtimeStartupConfig, {
-      reason: "startup",
-      activate: true,
-    })
+    await measure("config.auth.secrets-activate", () =>
+      params.activateRuntimeSecrets(runtimeStartupConfig, {
+        reason: "startup",
+        activate: true,
+      }),
+    )
   ).config;
   return {
     ...authBootstrap,

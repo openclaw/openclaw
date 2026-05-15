@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
+const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
+  includePersistedAuthState: false,
+  includeSetupFallbackPlugins: true,
+} as const;
+
 vi.mock("../../../channels/plugins/registry.js", () => ({
   getLoadedChannelPlugin: (...args: Parameters<typeof mocks.getLoadedChannelPlugin>) =>
     mocks.getLoadedChannelPlugin(...args),
@@ -84,9 +89,10 @@ function mockBundledMatrixRuntimePlugin(doctor?: Record<string, unknown>) {
 
 function expectMatrixDoctorLookupCalls(cfg?: unknown) {
   if (cfg) {
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
-      includePersistedAuthState: false,
-    });
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
+      cfg,
+      READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
+    );
   }
   expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("matrix");
   expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("matrix");
@@ -121,7 +127,7 @@ describe("channel doctor compatibility mutations", () => {
   it("skips plugin discovery when no channels are configured", () => {
     const result = collectChannelDoctorCompatibilityMutations({} as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
   });
 
@@ -134,7 +140,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -150,7 +156,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -238,7 +244,7 @@ describe("channel doctor compatibility mutations", () => {
 
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       env,
-      includePersistedAuthState: false,
+      ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     });
   });
 
@@ -261,7 +267,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");
@@ -295,9 +301,10 @@ describe("channel doctor compatibility mutations", () => {
     });
 
     expect(result).toEqual(["channels.matrix extra"]);
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
-      includePersistedAuthState: false,
-    });
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
+      cfg,
+      READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
+    );
     expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
   });
 
@@ -374,7 +381,7 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       env,
-      includePersistedAuthState: false,
+      ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     });
     expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(3);
     expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);

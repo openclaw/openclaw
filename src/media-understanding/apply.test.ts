@@ -6,6 +6,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -24,14 +25,14 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
     return Boolean(resolved?.apiKey);
   }),
 );
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
-const mockedFetchRemoteMedia = fetchRemoteMediaMock;
+const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
 const mockedRunExec = runExecMock;
 
@@ -104,6 +105,29 @@ function expectTranscriptApplied(params: {
   expect(params.ctx.CommandBody).toBe(params.commandBody);
   expect(params.ctx.RawBody).toBe(params.commandBody);
   expect(params.ctx.BodyForCommands).toBe(params.commandBody);
+}
+
+function getRunExecCall(index = 0) {
+  const call = mockedRunExec.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected runExec call ${index}`);
+  }
+  return call;
+}
+
+function getRunFfmpegArgs(index = 0) {
+  const [args] = mockedRunFfmpeg.mock.calls[index] ?? [];
+  if (!Array.isArray(args)) {
+    throw new Error(`expected runFfmpeg args ${index}`);
+  }
+  return args;
+}
+
+function expectCliRunOptions(options: unknown) {
+  expect(options).toEqual({
+    timeoutMs: 60_000,
+    maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+  });
 }
 
 function createMediaDisabledConfig(): OpenClawConfig {
@@ -255,7 +279,7 @@ describe("applyMediaUnderstanding", () => {
       },
     }));
     vi.doMock("../media/fetch.js", () => ({
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
     }));
     vi.doMock("../media/ffmpeg-exec.js", () => ({
       runFfmpeg: runFfmpegMock,
@@ -309,10 +333,10 @@ describe("applyMediaUnderstanding", () => {
       mode: "api-key",
     });
     hasAvailableAuthForProviderMock.mockClear();
-    mockedFetchRemoteMedia.mockClear();
+    mockedReadRemoteMediaBuffer.mockClear();
     mockedRunFfmpeg.mockReset();
     mockedRunExec.mockReset();
-    mockedFetchRemoteMedia.mockResolvedValue({
+    mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
       fileName: "note.ogg",
@@ -459,9 +483,8 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nwhatsapp transcript");
   });
 
-  it("skips URL-only audio when remote file is too small", async () => {
-    // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
-    mockedFetchRemoteMedia.mockResolvedValueOnce({
+  it("injects a placeholder transcript when URL-only audio is too small", async () => {
+    mockedReadRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.alloc(100),
       contentType: "audio/ogg",
       fileName: "tiny.ogg",
@@ -499,7 +522,68 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(result.appliedAudio).toBe(false);
+    expect(result.appliedAudio).toBe(true);
+    expect(result.outputs).toEqual([
+      {
+        kind: "audio.transcription",
+        attachmentIndex: 0,
+        text: "[Voice note could not be transcribed because the audio attachment was too small]",
+        provider: "openclaw",
+        model: "synthetic-empty-audio",
+      },
+    ]);
+    expect(ctx.Transcript).toBe(
+      "[Voice note could not be transcribed because the audio attachment was too small]",
+    );
+    expect(ctx.Body).toBe(
+      "[Audio]\nTranscript:\n[Voice note could not be transcribed because the audio attachment was too small]",
+    );
+  });
+
+  it("injects a placeholder transcript when local-path audio is too small", async () => {
+    const ctx = await createAudioCtx({
+      fileName: "tiny.ogg",
+      mediaType: "audio/ogg",
+      content: Buffer.alloc(100),
+    });
+    const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(true);
+    expect(result.outputs).toEqual([
+      {
+        kind: "audio.transcription",
+        attachmentIndex: 0,
+        text: "[Voice note could not be transcribed because the audio attachment was too small]",
+        provider: "openclaw",
+        model: "synthetic-empty-audio",
+      },
+    ]);
+    expect(ctx.Transcript).toBe(
+      "[Voice note could not be transcribed because the audio attachment was too small]",
+    );
+    expect(ctx.Body).toBe(
+      "[Audio]\nTranscript:\n[Voice note could not be transcribed because the audio attachment was too small]",
+    );
   });
 
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
@@ -675,11 +759,16 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("sherpa ok");
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "sherpa-onnx-offline",
-      expect.any(Array),
-      expect.any(Object),
-    );
+    const [command, args, options] = getRunExecCall();
+    expect(command).toBe("sherpa-onnx-offline");
+    expect(args).toEqual([
+      `--tokens=${path.join(modelDir, "tokens.txt")}`,
+      `--encoder=${path.join(modelDir, "encoder.onnx")}`,
+      `--decoder=${path.join(modelDir, "decoder.onnx")}`,
+      `--joiner=${path.join(modelDir, "joiner.onnx")}`,
+      await fs.realpath(ctx.MediaPath ?? ""),
+    ]);
+    expectCliRunOptions(options);
   });
 
   it("auto-detects whisper-cli when sherpa is unavailable", async () => {
@@ -704,11 +793,16 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("whisper cpp ok");
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "whisper-cli",
-      expect.any(Array),
-      expect.any(Object),
-    );
+    const [command, args, options] = getRunExecCall();
+    expect(command).toBe("whisper-cli");
+    if (!Array.isArray(args)) {
+      throw new Error("expected whisper-cli args");
+    }
+    expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
+    expect(typeof args[4]).toBe("string");
+    expect(String(args[4]).endsWith("sample")).toBe(true);
+    expect(args.slice(5)).toEqual(["-np", "-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    expectCliRunOptions(options);
   });
 
   it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
@@ -751,24 +845,23 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("whisper cpp ogg ok");
-    expect(mockedRunFfmpeg).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        "-i",
-        expect.stringMatching(/telegram-voice\.ogg$/),
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        expect.stringMatching(/telegram-voice\.wav$/),
-      ]),
-    );
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "whisper-cli",
-      expect.arrayContaining([expect.stringMatching(/telegram-voice\.wav$/)]),
-      expect.any(Object),
-    );
+    const ffmpegArgs = getRunFfmpegArgs();
+    expect(ffmpegArgs).toHaveLength(10);
+    expect(ffmpegArgs.slice(0, 2)).toEqual(["-y", "-i"]);
+    expect(String(ffmpegArgs[2]).endsWith("telegram-voice.ogg")).toBe(true);
+    expect(ffmpegArgs.slice(3, 9)).toEqual(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]);
+    expect(String(ffmpegArgs[9])).toContain("telegram-voice.wav");
+    expect(String(ffmpegArgs[9]).endsWith(".part")).toBe(true);
+
+    const [command, args, options] = getRunExecCall();
+    expect(command).toBe("whisper-cli");
+    if (!Array.isArray(args)) {
+      throw new Error("expected whisper-cli transcode args");
+    }
+    expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
+    expect(args.slice(5, 7)).toEqual(["-np", "-nt"]);
+    expect(String(args[7]).endsWith("telegram-voice.wav")).toBe(true);
+    expectCliRunOptions(options);
   });
 
   it("skips audio auto-detect when no supported binaries or provider keys are available", async () => {
@@ -926,6 +1019,51 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("fallback transcript");
   });
 
+  it("skips audio STT for attachments marked transcribed by channel preflight", async () => {
+    const dir = await createTempMediaDir();
+    const audioPath = path.join(dir, "voice.ogg");
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
+    const transcribeAudio = vi.fn(async () => ({ text: "duplicate transcript" }));
+    const ctx: MsgContext = {
+      Body: "preflight transcript",
+      Transcript: "preflight transcript",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+      MediaTranscribedIndexes: [0],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio,
+        },
+      },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(false);
+    expect(ctx.Transcript).toBe("preflight transcript");
+    const audioDecision = result.decisions.find((decision) => decision.capability === "audio");
+    expect(audioDecision).toEqual({
+      capability: "audio",
+      outcome: "no-attachment",
+      attachments: [],
+    });
+  });
+
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const dir = await createTempMediaDir();
     const audioBytes = createSafeAudioFixtureBuffer(2048);
@@ -966,6 +1104,56 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("Audio 1:\nnote-a.ogg\n\nAudio 2:\nnote-b.ogg");
     expect(ctx.Body).toBe(
       ["[Audio 1/2]\nTranscript:\nnote-a.ogg", "[Audio 2/2]\nTranscript:\nnote-b.ogg"].join("\n\n"),
+    );
+  });
+
+  it("adds placeholder for tooSmall audio while preserving real transcript for valid audio", async () => {
+    const dir = await createTempMediaDir();
+    const validAudio = createSafeAudioFixtureBuffer(2048);
+    const tinyAudio = Buffer.alloc(100);
+    const validPath = path.join(dir, "valid.ogg");
+    const tinyPath = path.join(dir, "tiny.ogg");
+    await fs.writeFile(validPath, validAudio);
+    await fs.writeFile(tinyPath, tinyAudio);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPaths: [validPath, tinyPath],
+      MediaTypes: ["audio/ogg", "audio/ogg"],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            attachments: { mode: "all", maxAttachments: 2 },
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio: async (req) => ({ text: `transcribed ${req.fileName ?? "unknown"}` }),
+        },
+      },
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toContain("transcribed valid.ogg");
+    expect(ctx.Transcript).toContain(
+      "[Voice note could not be transcribed because the audio attachment was too small]",
+    );
+    expect(ctx.Body).toContain("[Audio 1/2]");
+    expect(ctx.Body).toContain("transcribed valid.ogg");
+    expect(ctx.Body).toContain("[Audio 2/2]");
+    expect(ctx.Body).toContain(
+      "[Voice note could not be transcribed because the audio attachment was too small]",
     );
   });
 
@@ -1026,6 +1214,68 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("audio ok");
     expect(ctx.CommandBody).toBe("audio ok");
     expect(ctx.BodyForCommands).toBe("audio ok");
+  });
+
+  it("orders synthetic too-small audio output between image and video", async () => {
+    const dir = await createTempMediaDir();
+    const imagePath = path.join(dir, "photo.jpg");
+    const audioPath = path.join(dir, "silent.ogg");
+    const videoPath = path.join(dir, "clip.mp4");
+    await fs.writeFile(imagePath, "image-bytes");
+    await fs.writeFile(audioPath, Buffer.alloc(100));
+    await fs.writeFile(videoPath, "video-bytes");
+
+    const ctx: MsgContext = {
+      Body: "<media:mixed>",
+      MediaPaths: [imagePath, audioPath, videoPath],
+      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
+          audio: { enabled: true, models: [{ provider: "groq" }] },
+          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: dir,
+      providers: {
+        openai: {
+          id: "openai",
+          describeImage: async () => ({ text: "image ok" }),
+        },
+        groq: {
+          id: "groq",
+          transcribeAudio: async () => ({ text: "audio should not run" }),
+        },
+        google: {
+          id: "google",
+          describeVideo: async () => ({ text: "video ok" }),
+        },
+      },
+    });
+
+    const placeholder =
+      "[Voice note could not be transcribed because the audio attachment was too small]";
+
+    expect(result.appliedImage).toBe(true);
+    expect(result.appliedAudio).toBe(true);
+    expect(result.appliedVideo).toBe(true);
+    expect(ctx.Body).toBe(
+      [
+        "[Image]\nDescription:\nimage ok",
+        `[Audio]\nTranscript:\n${placeholder}`,
+        "[Video]\nDescription:\nvideo ok",
+      ].join("\n\n"),
+    );
+    expect(ctx.Transcript).toBe(placeholder);
+    expect(ctx.CommandBody).toBe(placeholder);
+    expect(ctx.BodyForCommands).toBe(placeholder);
   });
 
   it("treats text-like attachments as CSV (comma wins over tabs)", async () => {
@@ -1401,6 +1651,36 @@ describe("applyMediaUnderstanding", () => {
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
+
+  it.each([
+    { fileName: "legacy.doc", mediaType: "application/msword" },
+    { fileName: "compound-file.doc", mediaType: "application/x-cfb" },
+  ])(
+    "skips legacy Word/OLE MIME $mediaType even when explicitly allowed and bytes look printable",
+    async ({ fileName, mediaType }) => {
+      const printableOlePayload = Buffer.from(
+        "Root Entry WordDocument 1Table Data Microsoft Office legacy text preview",
+        "utf8",
+      );
+      const filePath = await createTempMediaFile({
+        fileName,
+        content: printableOlePayload,
+      });
+
+      const { ctx, result } = await applyWithDisabledMedia({
+        body: "<media:file>",
+        mediaPath: filePath,
+        mediaType,
+        cfg: createMediaDisabledConfigWithAllowedMimes([
+          "text/plain",
+          "application/msword",
+          "application/x-cfb",
+        ]),
+      });
+
+      expectFileNotApplied({ ctx, result, body: "<media:file>" });
+    },
+  );
 
   it("keeps vendor +json attachments eligible for text extraction", async () => {
     const filePath = await createTempMediaFile({

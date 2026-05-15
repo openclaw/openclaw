@@ -261,6 +261,28 @@ describe("loader", () => {
       expect(keys).toContain("command:stop");
     });
 
+    it("loads legacy handler modules from dot-prefixed workspace paths", async () => {
+      await fs.mkdir(path.join(tmpDir, "..hooks"), { recursive: true });
+      await writeHandlerModule(
+        path.join("..hooks", "legacy-handler.js"),
+        'export default async function(event) { event.messages.push("dot-prefixed-hook"); }\n',
+      );
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.join("..hooks", "legacy-handler.js"),
+        },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(1);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["dot-prefixed-hook"]);
+    });
+
     it("preserves plugin-registered hooks when workspace hooks reload", async () => {
       const pluginHandler = vi.fn();
       registerInternalHook("gateway:startup", pluginHandler);
@@ -292,7 +314,12 @@ describe("loader", () => {
 
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
-      expect(event.messages.filter((message) => message === "reloadable-hook")).toHaveLength(1);
+      expect(
+        event.messages.reduce(
+          (count, message) => count + (message === "reloadable-hook" ? 1 : 0),
+          0,
+        ),
+      ).toBe(1);
     });
 
     it("should support named exports", async () => {

@@ -9,11 +9,16 @@ export type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
   SpeechProviderConfiguredContext,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderPrepareSynthesisContext,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechProviderOverrides,
   SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
+  SpeechSynthesisStreamResult,
+  SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,
   TtsDirectiveOverrides,
@@ -32,9 +37,12 @@ export { parseTtsDirectives } from "../tts/directives.js";
 export {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
+  listLoadedSpeechProviders,
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
+export { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
+export type { TtsConfigResolutionContext } from "../tts/tts-config.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
 export {
   asBoolean,

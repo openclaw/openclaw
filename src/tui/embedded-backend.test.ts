@@ -4,6 +4,7 @@ import { defaultRuntime } from "../runtime.js";
 
 const agentCommandFromIngressMock = vi.fn();
 let registeredListener: ((evt: unknown) => void) | undefined;
+const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
 vi.mock("../agents/agent-command.js", () => ({
   agentCommandFromIngress: (...args: unknown[]) => agentCommandFromIngressMock(...args),
@@ -44,16 +45,19 @@ vi.mock("../agents/model-selection.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
   loadConfig: () => ({}),
-}));
-
-vi.mock("../gateway/chat-sanitize.js", () => ({
-  stripEnvelopeFromMessages: (messages: unknown[]) => messages,
 }));
 
 vi.mock("../gateway/cli-session-history.js", () => ({
   augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
     localMessages ?? [],
+}));
+
+vi.mock("../gateway/chat-display-projection.js", () => ({
+  projectChatDisplayMessages: (messages: unknown[]) => messages,
+  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
+  resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
 vi.mock("../gateway/server-constants.js", () => ({
@@ -65,13 +69,11 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
-  resolveEffectiveChatHistoryMaxChars: () => 100_000,
-  sanitizeChatHistoryMessages: (messages: unknown[]) => messages,
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
   listAgentsForGateway: () => [],
-  listSessionsFromStore: () => ({ sessions: [] }),
+  listSessionsFromStoreAsync: async () => ({ sessions: [] }),
   loadCombinedSessionStoreForGateway: () => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
@@ -82,7 +84,7 @@ vi.mock("../gateway/session-utils.js", () => ({
     entry: {},
   }),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
-  readSessionMessages: () => [],
+  readSessionMessagesAsync: async () => [],
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",
@@ -112,12 +114,15 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
 }));
 
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((error?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -131,6 +136,8 @@ describe("EmbeddedTuiBackend", () => {
   const originalRuntimeError = defaultRuntime.error;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(embeddedEventTimestamp);
     agentCommandFromIngressMock.mockReset();
     registeredListener = undefined;
     setEmbeddedMode(false);
@@ -139,6 +146,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
     defaultRuntime.error = originalRuntimeError;
@@ -199,10 +207,11 @@ describe("EmbeddedTuiBackend", () => {
           runId: "run-local-1",
           sessionKey: "agent:main:main",
           state: "delta",
+          deltaText: "hello",
           message: {
             role: "assistant",
             content: [{ type: "text", text: "hello" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -224,11 +233,205 @@ describe("EmbeddedTuiBackend", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "hello" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
     ]);
+  });
+
+  it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "answer shortly",
+      runId: "run-local-no",
+    });
+
+    registeredListener?.({
+      runId: "run-local-no",
+      stream: "assistant",
+      data: { text: "No", delta: "No" },
+    });
+    registeredListener?.({
+      runId: "run-local-no",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "No" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map(
+        (entry) =>
+          entry.payload as {
+            runId?: string;
+            sessionKey?: string;
+            state?: string;
+            stopReason?: string;
+            message?: { content?: Array<{ text?: string }> };
+          },
+      );
+    const nonEmptyDeltas = chatPayloads.filter(
+      (payload) => payload.state === "delta" && payload.message?.content?.[0]?.text,
+    );
+    expect(nonEmptyDeltas).toHaveLength(0);
+    expect(chatPayloads.at(-1)).toStrictEqual({
+      runId: "run-local-no",
+      sessionKey: "agent:main:main",
+      state: "final",
+      stopReason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "No" }],
+        timestamp: embeddedEventTimestamp,
+      },
+    });
+  });
+
+  it("marks local embedded replacement deltas", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "replace",
+      runId: "run-local-replace",
+    });
+
+    registeredListener?.({
+      runId: "run-local-replace",
+      stream: "assistant",
+      data: { text: "Hello world" },
+    });
+    registeredListener?.({
+      runId: "run-local-replace",
+      stream: "assistant",
+      data: { text: "Goodbye world" },
+    });
+
+    pending.resolve({ payloads: [{ text: "Goodbye world" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map(
+        (entry) =>
+          entry.payload as {
+            state?: string;
+            deltaText?: string;
+            replace?: boolean;
+          },
+      );
+    expect(
+      chatPayloads
+        .filter((payload) => payload.state === "delta")
+        .map((payload) => ({
+          state: payload.state,
+          deltaText: payload.deltaText,
+          replace: payload.replace,
+        })),
+    ).toEqual([
+      { state: "delta", deltaText: "Hello world", replace: undefined },
+      { state: "delta", deltaText: "Goodbye world", replace: true },
+    ]);
+  });
+
+  it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "recover after timeout",
+      runId: "run-local-fallback",
+    });
+
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "lifecycle",
+      data: { phase: "error", error: "primary model timed out" },
+    });
+    await flushMicrotasks();
+    expect(
+      events.some(
+        (entry) =>
+          entry.event === "chat" && (entry.payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepFinalOutcome: "succeeded",
+        fallbackStepFromModel: "anthropic/claude-sonnet-4-6",
+        fallbackStepToModel: "anthropic/claude-sonnet-4-5",
+      },
+    });
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "assistant",
+      data: { text: "fallback answer", delta: "fallback answer" },
+    });
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "fallback answer" }], meta: {} });
+    await flushMicrotasks();
+    vi.advanceTimersByTime(15_001);
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map((entry) => entry.payload as { state?: string; message?: { content?: unknown } });
+    expect(chatPayloads.some((payload) => payload.state === "error")).toBe(false);
+    const finalPayload = chatPayloads.at(-1);
+    expect(finalPayload?.state).toBe("final");
+    const finalContent = finalPayload?.message?.content as Array<{ type?: string; text?: string }>;
+    expect(finalContent).toHaveLength(1);
+    expect(finalContent[0]?.type).toBe("text");
+    expect(finalContent[0]?.text).toBe("fallback answer");
   });
 
   it("emits side-result events for local /btw runs", async () => {
@@ -274,6 +477,49 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
+  it("emits side-result events for local /side alias runs", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "alias answer" }],
+      meta: {},
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "/side what changed?",
+      runId: "run-side-1",
+    });
+    await flushMicrotasks();
+
+    expect(events).toEqual([
+      {
+        event: "chat.side_result",
+        payload: {
+          kind: "btw",
+          runId: "run-side-1",
+          sessionKey: "agent:main:main",
+          question: "what changed?",
+          text: "alias answer",
+        },
+      },
+      {
+        event: "chat",
+        payload: {
+          runId: "run-side-1",
+          sessionKey: "agent:main:main",
+          state: "final",
+        },
+      },
+    ]);
+  });
+
   it("registers tool-first local runs before forwarding agent events", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
@@ -310,10 +556,11 @@ describe("EmbeddedTuiBackend", () => {
           runId: "run-tool-first",
           sessionKey: "agent:main:main",
           state: "delta",
+          deltaText: "",
           message: {
             role: "assistant",
             content: [{ type: "text", text: "" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -334,7 +581,7 @@ describe("EmbeddedTuiBackend", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "done" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -369,6 +616,34 @@ describe("EmbeddedTuiBackend", () => {
 
     expect(result).toEqual({ ok: true, aborted: true });
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("passes explicit chat timeouts to the agent command as seconds", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {},
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    try {
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "Wake up, my friend!",
+        runId: "run-explicit-timeout",
+        timeoutMs: 300_000,
+      });
+      await flushMicrotasks();
+
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      const ingressOptions = agentCommandFromIngressMock.mock.calls.at(0)?.[0] as
+        | { timeout?: unknown }
+        | undefined;
+      expect(ingressOptions?.timeout).toBe("300");
+    } finally {
+      backend.stop();
+    }
   });
 
   it("restores embedded mode and runtime loggers on stop", async () => {

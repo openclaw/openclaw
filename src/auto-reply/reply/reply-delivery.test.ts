@@ -13,7 +13,7 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
-  it("keeps captioned media-bearing block replies buffered when block streaming is disabled", async () => {
+  it("sends captioned media-bearing block replies when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
       text: payload.text,
@@ -40,9 +40,55 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(directlySentBlockKeys).toEqual(new Set());
+    const expectedPayload = {
+      text: "here's the vibe",
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+      replyToCurrent: true,
+      replyToId: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    };
+
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
+  });
+
+  it("sends captioned audio-as-voice block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({
+      text: "spoken confirmation",
+      mediaUrls: ["/tmp/voice.opus"],
+      audioAsVoice: true,
+    });
+
+    const expectedPayload = {
+      text: "spoken confirmation",
+      mediaUrl: "/tmp/voice.opus",
+      mediaUrls: ["/tmp/voice.opus"],
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: true,
+    };
+
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
   });
 
   it("sends media-only block replies when block streaming is disabled", async () => {
@@ -83,6 +129,41 @@ describe("createBlockReplyDeliveryHandler", () => {
         }),
       ]),
     );
+  });
+
+  it("sends presentation-only block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({ presentation });
+
+    const expectedPayload = {
+      presentation,
+      text: undefined,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    };
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
   });
 
   it("keeps text-only block replies buffered when block streaming is disabled", async () => {
@@ -174,11 +255,9 @@ describe("createBlockReplyDeliveryHandler", () => {
       parseMode: "auto",
     });
 
-    expect(normalized.payload).toMatchObject({
-      text: "Result",
-      mediaUrl: "./image.png",
-      mediaUrls: ["./image.png"],
-    });
+    expect(normalized.payload.text).toBe("Result");
+    expect(normalized.payload.mediaUrl).toBe("./image.png");
+    expect(normalized.payload.mediaUrls).toEqual(["./image.png"]);
   });
 
   it("parses lowercase media directives in block replies before path normalization", () => {
@@ -188,11 +267,9 @@ describe("createBlockReplyDeliveryHandler", () => {
       parseMode: "auto",
     });
 
-    expect(normalized.payload).toMatchObject({
-      text: undefined,
-      mediaUrl: "./report.pdf",
-      mediaUrls: ["./report.pdf"],
-    });
+    expect(normalized.payload.text).toBeUndefined();
+    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
+    expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
   });
 
   it("does not mark plain replies as explicit reply_to_current opt-outs", () => {
@@ -263,7 +340,15 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     await handler(payload);
 
-    const enqueuedPayload = enqueue.mock.calls[0]?.[0];
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const [firstCall] = enqueue.mock.calls;
+    if (!firstCall) {
+      throw new Error("Expected block reply pipeline enqueue call");
+    }
+    const [enqueuedPayload] = firstCall;
+    if (enqueuedPayload === undefined) {
+      throw new Error("Expected block reply pipeline payload");
+    }
     expect(enqueuedPayload).toEqual({
       text: "Alpha",
       mediaUrl: undefined,

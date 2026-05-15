@@ -55,6 +55,7 @@ Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-
 ```bash
 openclaw browser status
 openclaw browser doctor
+openclaw browser doctor --deep
 openclaw browser start
 openclaw browser start --headless
 openclaw browser stop
@@ -63,6 +64,8 @@ openclaw browser --browser-profile openclaw reset-profile
 
 Notes:
 
+- `doctor --deep` adds a live snapshot probe. It is useful when basic CDP
+  readiness is green but you want proof that the current tab can be inspected.
 - For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
   active control session and clears temporary emulation overrides even when
   OpenClaw did not launch the browser process itself.
@@ -82,8 +85,8 @@ Notes:
 If `openclaw browser` is an unknown command, check `plugins.allow` in
 `~/.openclaw/openclaw.json`.
 
-When `plugins.allow` is present, the bundled browser plugin must be listed
-explicitly:
+When `plugins.allow` is present, list the bundled browser plugin explicitly
+unless the config already has a root `browser` block:
 
 ```json5
 {
@@ -93,8 +96,9 @@ explicitly:
 }
 ```
 
-`browser.enabled=true` does not restore the CLI subcommand when the plugin
-allowlist excludes `browser`.
+An explicit root `browser` block, for example `browser.enabled=true` or
+`browser.profiles.<name>`, also activates the bundled browser plugin under a
+restrictive plugin allowlist.
 
 Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
 
@@ -138,6 +142,10 @@ the optional label, and the raw `targetId`. Agents should pass
 `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. You can
 assign a label with `open --label`, `tab new --label`, or `tab label`; labels,
 tab ids, raw target ids, and unique target-id prefixes are all accepted.
+When Chromium replaces the underlying raw target during a navigation or form
+submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab
+when it can prove the match. Raw target ids remain volatile; prefer
+`suggestedTargetId`.
 
 ## Snapshot / screenshot / actions
 
@@ -184,6 +192,10 @@ openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
 openclaw browser wait --text "Done"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
 ```
+
+Action responses return the current raw `targetId` after action-triggered page
+replacement when OpenClaw can prove the replacement tab. Scripts should still
+store and pass `suggestedTargetId`/labels for long-lived workflows.
 
 File + dialog helpers:
 

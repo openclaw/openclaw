@@ -4,17 +4,18 @@ import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared"
 
 const PROVIDER_ID = "opencode-go";
 
-export const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
-export const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
+const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
+const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
+const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
 
 const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
   [
     {
       id: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
-      api: "anthropic-messages",
+      api: "openai-completions",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       input: ["text"],
       cost: {
@@ -25,13 +26,18 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
       },
       contextWindow: 1_000_000,
       maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
     },
     {
       id: "deepseek-v4-flash",
       name: "DeepSeek V4 Flash",
-      api: "anthropic-messages",
+      api: "openai-completions",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       input: ["text"],
       cost: {
@@ -42,6 +48,11 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
       },
       contextWindow: 1_000_000,
       maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
     },
   ] satisfies ProviderRuntimeModel[]
 ).map((model) => normalizeModelCompat(model));
@@ -62,6 +73,36 @@ export function resolveOpencodeGoSupplementalModel(
 ): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
   return OPENCODE_GO_SUPPLEMENTAL_MODELS.find((model) => model.id === normalizedModelId);
+}
+
+export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {
+  return (
+    typeof modelId === "string" &&
+    OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS.has(modelId.trim().toLowerCase())
+  );
+}
+
+export function normalizeOpencodeGoResolvedModel(
+  model: ProviderRuntimeModel,
+): ProviderRuntimeModel | undefined {
+  if (!isOpencodeGoKimiNoReasoningModelId(model.id)) {
+    return undefined;
+  }
+  const compat =
+    model.compat && typeof model.compat === "object" && !Array.isArray(model.compat)
+      ? model.compat
+      : undefined;
+  if (!model.reasoning && !compat?.supportsReasoningEffort) {
+    return undefined;
+  }
+  return {
+    ...model,
+    reasoning: false,
+    compat: {
+      ...compat,
+      supportsReasoningEffort: false,
+    },
+  };
 }
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {

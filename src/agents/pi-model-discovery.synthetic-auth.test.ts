@@ -29,6 +29,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./auth-profiles/store.js", () => ({
+  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForSecretsRuntime: () => ({ version: 1, profiles: {} }),
+}));
+
+vi.mock("./pi-auth-discovery-core.js", () => ({
+  addEnvBackedPiCredentials: (credentials: Record<string, unknown>) => ({ ...credentials }),
+  scrubLegacyStaticAuthJsonEntriesForDiscovery: vi.fn(),
+}));
+
 let resolvePiCredentialsForDiscovery: typeof import("./pi-auth-discovery.js").resolvePiCredentialsForDiscovery;
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
@@ -60,7 +70,9 @@ describe("pi model discovery synthetic auth", () => {
     await withAgentDir(async (agentDir) => {
       const credentials = resolvePiCredentialsForDiscovery(agentDir, { readOnly: true });
 
-      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalled();
+      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledTimes(1);
+      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledWith();
+      expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledTimes(1);
       expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
         provider: "claude-cli",
         context: {

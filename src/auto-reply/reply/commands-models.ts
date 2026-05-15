@@ -1,16 +1,26 @@
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
-import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
+import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import {
-  buildAllowedModelSet,
+  isCliRuntimeProvider,
+  listLegacyRuntimeModelProviderAliases,
+} from "../../agents/model-runtime-aliases.js";
+import {
   buildModelAliasIndex,
   normalizeProviderId,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -60,9 +70,19 @@ type ParsedModelsCommand =
       modelId?: string;
     };
 
+function isModelsBrowseVisibleProvider(provider: string): boolean {
+  const normalized = normalizeProviderId(provider);
+  return isCliRuntimeProvider(normalized) || isModelPickerVisibleProvider(normalized);
+}
+
+function usesUnfilteredCatalogModels(provider: string): boolean {
+  return isCliRuntimeProvider(provider);
+}
+
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
+  options: { view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<ModelsProviderData> {
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
@@ -70,23 +90,44 @@ export async function buildModelsProviderData(
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
-  const allowed = buildAllowedModelSet({
+  const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
   });
+  const visibleCatalog = resolveVisibleModelCatalog({
+    cfg,
+    catalog,
+    defaultProvider: resolvedDefault.provider,
+    defaultModel: resolvedDefault.model,
+    agentId,
+    workspaceDir:
+      options.workspaceDir ??
+      (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
+      resolveDefaultAgentWorkspaceDir(),
+    view: options.view,
+  });
 
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: resolvedDefault.provider,
   });
+  const restrictToProviderWildcards =
+    options.view !== "all" && visibilityPolicy.hasProviderWildcards;
 
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
-    if (!isModelPickerVisibleProvider(key)) {
+    if (!isModelsBrowseVisibleProvider(key)) {
+      return;
+    }
+    if (
+      restrictToProviderWildcards &&
+      !usesUnfilteredCatalogModels(key) &&
+      !visibilityPolicy.allows({ provider: key, model: m })
+    ) {
       return;
     }
     const set = byProvider.get(key) ?? new Set<string>();
@@ -140,11 +181,29 @@ export async function buildModelsProviderData(
     }
   };
 
-  for (const entry of allowed.allowedCatalog) {
+  for (const entry of visibleCatalog) {
     add(entry.provider, entry.id);
   }
 
-  for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+  const hasAuth =
+    options.view === "all"
+      ? () => true
+      : createProviderAuthChecker({
+          cfg,
+          workspaceDir:
+            options.workspaceDir ??
+            (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
+            resolveDefaultAgentWorkspaceDir(),
+          agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
+        });
+
+  for (const entry of catalog) {
+    if (usesUnfilteredCatalogModels(entry.provider) && hasAuth(entry.provider)) {
+      add(entry.provider, entry.id);
+    }
+  }
+
+  for (const raw of visibilityPolicy.exactModelRefs) {
     addRawModelRef(raw);
   }
 
@@ -154,7 +213,7 @@ export async function buildModelsProviderData(
   const providers = [...byProvider.keys()].toSorted();
 
   const modelNames = new Map<string, string>();
-  for (const entry of catalog) {
+  for (const entry of [...catalog, ...visibleCatalog]) {
     if (entry.name && entry.name !== entry.id) {
       modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
     }
@@ -262,6 +321,7 @@ function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
   const authLabel = resolveModelAuthLabel({
@@ -269,6 +329,7 @@ function resolveProviderLabel(params: {
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   if (!authLabel || authLabel === "unknown") {
     return params.provider;
@@ -281,12 +342,14 @@ export function formatModelsAvailableHeader(params: {
   total: number;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
   });
   return `Models (${providerLabel}) — ${params.total} available`;
@@ -327,6 +390,7 @@ export async function resolveModelsCommandReply(params: {
   currentModel?: string;
   agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
@@ -340,6 +404,10 @@ export async function resolveModelsCommandReply(params: {
   const { byProvider, providers, modelNames } = await buildModelsProviderData(
     params.cfg,
     params.agentId,
+    {
+      ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
+      workspaceDir: params.workspaceDir,
+    },
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
@@ -405,6 +473,7 @@ export async function resolveModelsCommandReply(params: {
       provider,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       sessionEntry: params.sessionEntry,
     });
     return {
@@ -436,6 +505,7 @@ export async function resolveModelsCommandReply(params: {
         total,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         sessionEntry: params.sessionEntry,
       }),
       channelData: interactiveChannelData,
@@ -464,6 +534,7 @@ export async function resolveModelsCommandReply(params: {
     provider,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
   });
   const lines = [
@@ -520,6 +591,9 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
     agentId: modelsAgentId,
     agentDir: modelsAgentDir,
+    workspaceDir:
+      targetSessionEntry?.spawnedWorkspaceDir ??
+      (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
     sessionEntry: targetSessionEntry,
   });
   if (!reply) {

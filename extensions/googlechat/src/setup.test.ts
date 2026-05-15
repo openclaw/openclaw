@@ -1,17 +1,17 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  expectLifecyclePatch,
+  expectPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
-import {
-  expectLifecyclePatch,
-  expectPendingUntilAbort,
-  startAccountAndTrackLifecycle,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
@@ -69,19 +69,18 @@ function buildAccount(): ResolvedGoogleChatAccount {
 }
 
 async function waitForGoogleChatMonitorStarted() {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if (hoisted.startGoogleChatMonitor.mock.calls.length === 1) {
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce());
 }
 
 describe("googlechat setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./channel.runtime.js");
+    vi.resetModules();
   });
 
   it("rejects env auth for non-default accounts", () => {
@@ -461,6 +460,66 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.config.audienceType).toBe("project-number");
     expect(resolved.config.audience).toBe("1234567890");
     expect(resolved.config.webhookPath).toBe("/googlechat-april");
+  });
+
+  it("merges account bot loop protection over top-level defaults field-by-field", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          botLoopProtection: {
+            maxEventsPerWindow: 8,
+            windowSeconds: 120,
+            cooldownSeconds: 240,
+          },
+          accounts: {
+            april: {
+              webhookPath: "/googlechat-april",
+              botLoopProtection: {
+                maxEventsPerWindow: 3,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
+  });
+
+  it("merges account bot loop protection over accounts.default field-by-field", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            default: {
+              webhookPath: "/googlechat",
+              botLoopProtection: {
+                windowSeconds: 120,
+                cooldownSeconds: 240,
+              },
+            },
+            april: {
+              webhookPath: "/googlechat-april",
+              botLoopProtection: {
+                maxEventsPerWindow: 3,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
   });
 
   it("does not inherit disabled state from accounts.default for named accounts", () => {

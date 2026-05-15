@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -7,9 +8,12 @@ import {
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveConfiguredBinding } from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
+
+const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
 
 export type ConfiguredBindingRouteResult = {
   bindingResolution: ConfiguredBindingResolution | null;
@@ -122,6 +126,16 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
+  if (isCronRunSessionKey(boundSessionKey)) {
+    logVerbose(
+      `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
+    );
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
   getSessionBindingService().touch(bindingRecord.bindingId);
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
     return {
@@ -152,5 +166,34 @@ export async function ensureConfiguredBindingRouteReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  return await ensureConfiguredBindingTargetReady(params);
+  const readyPromise = ensureConfiguredBindingTargetReady(params);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutToken = Symbol("configured-binding-route-ready-timeout");
+  const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
+    timer = setTimeout(() => resolve(timeoutToken), CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS);
+    timer.unref?.();
+  });
+
+  try {
+    const result = await Promise.race([readyPromise, timeoutPromise]);
+    if (result !== timeoutToken) {
+      return result;
+    }
+    logVerbose(
+      `configured binding route ready check timed out after ${
+        CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
+      }s`,
+    );
+    readyPromise.then(
+      (lateResult) =>
+        logVerbose(
+          `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
+        ),
+      (err) =>
+        logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
+    );
+    return { ok: false, error: "Configured binding route ready check timed out" };
+  } finally {
+    clearTimeout(timer);
+  }
 }

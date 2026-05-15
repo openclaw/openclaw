@@ -70,7 +70,10 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);
-  const meta = [TASK_RUNTIME_LABELS[task.runtime], status, timing].filter(Boolean).join(" · ");
+  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status}`;
+  if (timing) {
+    meta += ` · ${timing}`;
+  }
   const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
   if (detail) {
     lines.push(`   ${detail}`);
@@ -78,7 +81,7 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   return lines.join("\n");
 }
 
-export function buildTasksText(params: { sessionKey: string; agentId: string }): string {
+function buildTasksText(params: { sessionKey: string; agentId: string }): string {
   const sessionSnapshot = buildTaskStatusSnapshot(
     listTasksForSessionKeyForStatus(params.sessionKey),
   );

@@ -33,7 +33,6 @@ describe("secret target registry", () => {
   it("resolves config targets by exact path including sibling ref metadata", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
@@ -58,7 +57,6 @@ describe("secret target registry", () => {
       "apiKey",
     ]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
 
     const fetchTarget = resolveConfigSecretTargetByPath([
@@ -69,7 +67,24 @@ describe("secret target registry", () => {
       "webFetch",
       "apiKey",
     ]);
-    expect(fetchTarget).not.toBeNull();
     expect(fetchTarget?.entry?.id).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
+  });
+
+  it("derives bundled plugin SecretInput contract target paths from plugin manifests", () => {
+    const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
+    expect(coreTargetIds.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
+
+    const target = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "voice-call",
+      "config",
+      "tts",
+      "providers",
+      "elevenlabs",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
   });
 });

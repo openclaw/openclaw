@@ -5,7 +5,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
+import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -105,6 +105,60 @@ function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentTool
   );
 }
 
+/**
+ * Coerce an arbitrary value into a JSON-safe shape that satisfies
+ * `isValidMiddlewareDetails`. Round-trips through `JSON.stringify` with a
+ * WeakSet replacer that drops functions, symbols, and `undefined`; coerces
+ * bigints to their decimal string form; breaks cycles at the offending
+ * reference; and collapses payloads larger than the validator byte cap to a
+ * `{ truncated, originalSizeBytes }` marker. Returns `null` for inputs that
+ * cannot be represented at all (top-level function/symbol/undefined).
+ */
+function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
+  const seen = new WeakSet<object>();
+  try {
+    const serialized = JSON.stringify(value, (_key, val) => {
+      if (typeof val === "bigint") {
+        return val.toString();
+      }
+      if (val !== null && typeof val === "object") {
+        if (seen.has(val)) {
+          return undefined;
+        }
+        seen.add(val);
+      }
+      return val;
+    });
+    if (serialized === undefined) {
+      return null;
+    }
+    if (serialized.length > MAX_MIDDLEWARE_DETAILS_BYTES) {
+      return { truncated: true, originalSizeBytes: serialized.length };
+    }
+    return JSON.parse(serialized);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Coerce an incoming tool result into a shape the validator will accept,
+ * before any middleware runs. Tool emitters legitimately produce raw
+ * dependency payloads on `details` (channel SDK objects with methods, exec
+ * traces with cycles back to the runner, large attachment metadata). The
+ * harness owes a registered middleware a JSON-safe view of that payload;
+ * subsequent middleware-side mutations are still validated strictly.
+ */
+function sanitizeToolResultForMiddleware(result: OpenClawAgentToolResult): OpenClawAgentToolResult {
+  if (result.details === undefined || result.details === null) {
+    return result;
+  }
+  if (isValidMiddlewareDetails(result.details)) {
+    return result;
+  }
+  return { ...result, details: sanitizeMiddlewareDetailsValue(result.details) };
+}
+
 function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   return {
     content: [
@@ -122,15 +176,38 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
 
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
-  handlers: AgentToolResultMiddleware[] = listAgentToolResultMiddlewares(ctx.runtime),
+  handlers?: AgentToolResultMiddleware[],
 ) {
   const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
+  let resolvedHandlers = handlers;
+  const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
+    const { loadAgentToolResultMiddlewaresForRuntime } =
+      await import("../../plugins/agent-tool-result-middleware-loader.js");
+    return loadAgentToolResultMiddlewaresForRuntime({
+      runtime: ctx.runtime,
+    });
+  });
+  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
+    if (resolvedHandlers) {
+      return resolvedHandlers;
+    }
+    resolvedHandlers = await resolvedHandlersLoader.load();
+    return resolvedHandlers;
+  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      let current = event.result;
-      for (const handler of handlers) {
+      const handlersForRun = await resolveHandlers();
+      // Fast path: with no middleware registered the result is delivered
+      // unchanged; skip validation entirely so tool emitters that produce
+      // dependency payloads on `details` (SDK objects with methods, cycles)
+      // are not penalized for behavior the validator was added to police.
+      if (handlersForRun.length === 0) {
+        return event.result;
+      }
+      let current = sanitizeToolResultForMiddleware(event.result);
+      for (const handler of handlersForRun) {
         try {
           const next = await handler({ ...event, result: current }, middlewareContext);
           // Middleware may mutate event.result in place for legacy Pi parity.

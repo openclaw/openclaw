@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  formatDiagnosticTraceparentForPropagation,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "./diagnostic-events.js";
-import { createDiagnosticTraceContext } from "./diagnostic-trace-context.js";
+import {
+  createDiagnosticTraceContext,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+} from "./diagnostic-trace-context.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -17,8 +22,20 @@ describe("diagnostic-events", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticTraceContextForTest();
     vi.restoreAllMocks();
   });
+
+  function expectConsoleErrorPrefix(errorSpy: { mock: { calls: unknown[][] } }, prefix: string) {
+    expect(errorSpy.mock.calls).toHaveLength(1);
+    const [call] = errorSpy.mock.calls;
+    if (!call) {
+      throw new Error("expected console error call");
+    }
+    const [message] = call;
+    expect(typeof message).toBe("string");
+    expect((message as string).startsWith(prefix)).toBe(true);
+  }
 
   it("emits monotonic seq and timestamps to subscribers", () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
@@ -59,8 +76,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(seen).toEqual(["message.queued"]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=message.queued seq=1: Error: boom"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=message.queued seq=1: Error: boom",
     );
   });
 
@@ -116,6 +134,39 @@ describe("diagnostic-events", () => {
     expect(events).toEqual([{ trace, type: "message.queued" }]);
   });
 
+  it("uses active request trace context when events omit explicit trace", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+    });
+    const explicitTrace = createDiagnosticTraceContext({
+      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      spanId: "bbbbbbbbbbbbbbbb",
+    });
+    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push({ trace: event.trace, type: event.type });
+    });
+
+    runWithDiagnosticTraceContext(trace, () => {
+      emitDiagnosticEvent({
+        type: "message.queued",
+        source: "telegram",
+      });
+      emitDiagnosticEvent({
+        type: "message.queued",
+        source: "telegram",
+        trace: explicitTrace,
+      });
+    });
+    stop();
+
+    expect(events).toEqual([
+      { trace, type: "message.queued" },
+      { trace: explicitTrace, type: "message.queued" },
+    ]);
+  });
+
   it("marks only internal trusted diagnostic emissions as trusted", async () => {
     const events: Array<{
       metadataTrusted: boolean;
@@ -147,7 +198,51 @@ describe("diagnostic-events", () => {
     ]);
   });
 
-  it("does not expose mutable diagnostic state on a global symbol", async () => {
+  it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    const traceparents: Array<string | undefined> = [];
+    onInternalDiagnosticEvent((event, metadata) => {
+      traceparents.push(formatDiagnosticTraceparentForPropagation(event, metadata));
+    });
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+      trace,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 1 },
+      trace,
+    });
+
+    expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
+    expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
+  });
+
+  it("shares diagnostic state across duplicate module instances", async () => {
+    const events: string[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event.type);
+    });
+
+    vi.resetModules();
+    const duplicateModule = (await import(
+      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
+    )) as typeof import("./diagnostic-events.js");
+    duplicateModule.emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+    });
+
+    expect(events).toEqual(["message.queued"]);
+  });
+
+  it("does not expose mutable diagnostic state on the obsolete global symbol", async () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const events: boolean[] = [];
     globalStore[Symbol.for("openclaw.diagnosticEventsState")] = {
@@ -189,7 +284,7 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(publicEvents).toEqual([]);
+    expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
 
@@ -209,8 +304,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(seen).toEqual([false]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=message.queued seq=1: TypeError"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=message.queued seq=1: TypeError",
     );
   });
 
@@ -239,8 +335,9 @@ describe("diagnostic-events", () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(seen).toEqual([{ traceId: trace.traceId, trusted: true }]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=model.call.started seq=1: TypeError"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=model.call.started seq=1: TypeError",
     );
   });
 
@@ -264,8 +361,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(seen).toEqual([{ total: 42, trusted: true }]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("listener error type=model.usage seq=1: TypeError"),
+    expectConsoleErrorPrefix(
+      errorSpy,
+      "[diagnostic-events] listener error type=model.usage seq=1: TypeError",
     );
   });
 
@@ -312,7 +410,7 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    expect(events).toEqual([]);
+    expect(events).toStrictEqual([]);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
   });
@@ -334,7 +432,7 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(publicEvents).toEqual([]);
+    expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual(["log.record"]);
   });
 
@@ -351,7 +449,7 @@ describe("diagnostic-events", () => {
       channel: "telegram",
     });
 
-    expect(seen).toEqual([]);
+    expect(seen).toStrictEqual([]);
     expect(nowSpy).not.toHaveBeenCalled();
   });
 
@@ -374,10 +472,8 @@ describe("diagnostic-events", () => {
     });
 
     expect(calls).toBe(101);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "recursion guard tripped at depth=101, dropping type=queue.lane.enqueue",
-      ),
+    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+      "[diagnostic-events] recursion guard tripped at depth=101, dropping type=queue.lane.enqueue",
     );
   });
 

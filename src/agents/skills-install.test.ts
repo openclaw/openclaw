@@ -93,6 +93,11 @@ function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
   });
 }
 
+function lastRunCommandCall(): unknown[] | undefined {
+  const calls = runCommandWithTimeoutMock.mock.calls;
+  return calls[calls.length - 1];
+}
+
 const workspaceSuite = createFixtureSuite("openclaw-skills-install-");
 
 beforeAll(async () => {
@@ -122,11 +127,18 @@ async function withWorkspaceCase(
 describe("installSkill code safety scanning", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
-    skillsInstallTesting.setDepsForTest({
-      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
-    });
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
+    skillsInstallTesting.setDepsForTest({
+      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+      resolveNodeInstallStateDir: () => {
+        const stateDir = process.env.OPENCLAW_STATE_DIR;
+        if (!stateDir) {
+          throw new Error("OPENCLAW_STATE_DIR missing in skills install test");
+        }
+        return stateDir;
+      },
+    });
     runCommandWithTimeoutMock.mockResolvedValue({
       code: 0,
       stdout: "ok",
@@ -156,10 +168,9 @@ describe("installSkill code safety scanning", () => {
 
       expect(result.ok).toBe(false);
       expect(result.message).toContain('Skill "danger-skill" installation blocked');
-      expect(result.warnings?.some((warning) => warning.includes("dangerous code patterns"))).toBe(
-        true,
-      );
-      expect(result.warnings?.some((warning) => warning.includes("runner.js:1"))).toBe(true);
+      const warningOutput = (result.warnings ?? []).join("\n");
+      expect(warningOutput).toContain("dangerous code patterns");
+      expect(warningOutput).toContain("runner.js:1");
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
@@ -185,6 +196,58 @@ describe("installSkill code safety scanning", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("runs npm node installs with an OpenClaw-managed user prefix", async () => {
+    await withWorkspaceCase(async ({ workspaceDir, stateDir }) => {
+      await writeInstallableSkill(workspaceDir, "node-prefix-skill");
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "node-prefix-skill",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      const npmPrefix = path.join(stateDir, "tools", "node", "npm");
+      const call = lastRunCommandCall();
+      expect(call?.[0]).toEqual(["npm", "install", "-g", "--ignore-scripts", "example-package"]);
+      const options = call?.[1] as { env?: NodeJS.ProcessEnv };
+      expect(options.env?.NPM_CONFIG_PREFIX).toBe(npmPrefix);
+      expect(options.env?.npm_config_prefix).toBe(npmPrefix);
+      expect(options.env).not.toHaveProperty("PATH");
+      const stat = await fs.stat(npmPrefix);
+      expect(stat.isDirectory()).toBe(true);
+    });
+  });
+
+  it("keeps the default npm prefix out of env-overridden state paths", () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    try {
+      process.env.OPENCLAW_STATE_DIR = "/tmp/untrusted-state";
+      process.env.OPENCLAW_CONFIG_PATH = "/tmp/untrusted-config/openclaw.json";
+
+      expect(
+        skillsInstallTesting.resolveDefaultNodeInstallStateDir({
+          getuid: () => 501,
+          homedir: () => "/Users/tester",
+          platform: "darwin",
+        }),
+      ).toBe("/Users/tester/.openclaw");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("uses a fixed system state root for root npm installs", () => {
+    expect(
+      skillsInstallTesting.resolveDefaultNodeInstallStateDir({
+        cwd: "/workspace/openclaw",
+        getuid: () => 0,
+        homedir: () => "/root",
+        platform: "linux",
+      }),
+    ).toBe("/var/lib/openclaw");
   });
 
   it("blocks install when skill scan fails", async () => {
@@ -228,29 +291,37 @@ describe("installSkill code safety scanning", () => {
 
       expect(result.ok).toBe(true);
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler.mock.calls[0]?.[0]).toMatchObject({
-        targetName: "policy-skill",
-        targetType: "skill",
-        origin: "openclaw-workspace",
-        sourcePath: expect.stringContaining("policy-skill"),
-        sourcePathKind: "directory",
-        request: {
-          kind: "skill-install",
-          mode: "install",
-        },
-        builtinScan: {
-          status: "ok",
-          findings: [],
-        },
-        skill: {
-          installId: "deps",
-          installSpec: expect.objectContaining({
-            kind: "node",
-            package: "example-package",
-          }),
-        },
+      const handlerCall = handler.mock.calls[0];
+      const payload = handlerCall?.[0] as
+        | {
+            targetName?: string;
+            targetType?: string;
+            origin?: string;
+            sourcePath?: string;
+            sourcePathKind?: string;
+            request?: { kind?: string; mode?: string };
+            builtinScan?: { status?: string; findings?: unknown[] };
+            skill?: {
+              installId?: string;
+              installSpec?: { kind?: string; package?: string };
+            };
+          }
+        | undefined;
+      expect(payload?.targetName).toBe("policy-skill");
+      expect(payload?.targetType).toBe("skill");
+      expect(payload?.origin).toBe("openclaw-workspace");
+      expect(payload?.sourcePath).toContain("policy-skill");
+      expect(payload?.sourcePathKind).toBe("directory");
+      expect(payload?.request).toEqual({
+        kind: "skill-install",
+        mode: "install",
       });
-      expect(handler.mock.calls[0]?.[1]).toEqual({
+      expect(payload?.builtinScan?.status).toBe("ok");
+      expect(payload?.builtinScan?.findings).toEqual([]);
+      expect(payload?.skill?.installId).toBe("deps");
+      expect(payload?.skill?.installSpec?.kind).toBe("node");
+      expect(payload?.skill?.installSpec?.package).toBe("example-package");
+      expect(handlerCall?.[1]).toEqual({
         origin: "openclaw-workspace",
         targetType: "skill",
         requestKind: "skill-install",

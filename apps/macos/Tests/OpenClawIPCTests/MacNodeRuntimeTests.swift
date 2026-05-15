@@ -5,11 +5,47 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
+    actor CanvasRefreshProbe {
+        private(set) var calls = 0
+
+        func refresh() -> String? {
+            self.calls += 1
+            return "http://127.0.0.1:18789/refreshed"
+        }
+    }
+
+    actor ExecEventProbe {
+        private var captured: [(event: String, json: String)] = []
+
+        func append(event: String, json: String?) {
+            self.captured.append((event: event, json: json ?? ""))
+        }
+
+        func events() -> [(event: String, json: String)] {
+            self.captured
+        }
+    }
+
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-1", command: "unknown.command"))
         #expect(response.ok == false)
+    }
+
+    @Test func `A2UI host capability refresh uses injected node session refresher`() async {
+        let probe = CanvasRefreshProbe()
+        let runtime = MacNodeRuntime(
+            canvasSurfaceUrl: { "http://127.0.0.1:18789/current" },
+            refreshCanvasSurfaceUrl: { await probe.refresh() })
+
+        let current = await runtime.resolveA2UIHostUrlWithCapabilityRefresh()
+        #expect(current == "http://127.0.0.1:18789/current/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 0)
+
+        let refreshed = await runtime.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true)
+        #expect(refreshed == "http://127.0.0.1:18789/refreshed/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 1)
     }
 
     @Test func `handle invoke rejects empty system run`() async throws {
@@ -19,6 +55,40 @@ struct MacNodeRuntimeTests {
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-2", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
         #expect(response.ok == false)
+    }
+
+    @Test func `system run denied event preserves gateway run id`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            let probe = ExecEventProbe()
+            let runtime = MacNodeRuntime()
+            await runtime.setEventSender { event, json in
+                await probe.append(event: event, json: json)
+            }
+            let params = OpenClawSystemRunParams(
+                command: ["/bin/sh", "-lc", "printf ok"],
+                sessionKey: "agent:main:main",
+                runId: "gateway-run-1")
+            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-run-id",
+                    command: OpenClawSystemCommand.run.rawValue,
+                    paramsJSON: json))
+
+            #expect(response.ok == false)
+            let denied = try #require((await probe.events()).first { $0.event == "exec.denied" })
+            struct Payload: Decodable {
+                var sessionKey: String
+                var runId: String
+            }
+            let payload = try JSONDecoder().decode(Payload.self, from: Data(denied.json.utf8))
+            #expect(payload.sessionKey == "agent:main:main")
+            #expect(payload.runId == "gateway-run-1")
+        }
     }
 
     @Test func `handle invoke rejects blocked system run env override before execution`() async throws {

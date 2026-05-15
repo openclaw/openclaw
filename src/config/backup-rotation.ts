@@ -1,15 +1,15 @@
 import path from "node:path";
 
-export const CONFIG_BACKUP_COUNT = 5;
+const CONFIG_BACKUP_COUNT = 5;
 
-export interface BackupRotationFs {
+interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   chmod?: (path: string, mode: number) => Promise<void>;
   readdir?: (path: string) => Promise<string[]>;
 }
 
-export interface BackupMaintenanceFs extends BackupRotationFs {
+interface BackupMaintenanceFs extends BackupRotationFs {
   copyFile: (from: string, to: string) => Promise<void>;
 }
 
@@ -105,6 +105,39 @@ export async function cleanOrphanBackups(
     await ioFs.unlink(path.join(dir, entry)).catch(() => {
       // best-effort
     });
+  }
+}
+
+interface PreUpdateSnapshotFs {
+  writeFile: (
+    path: string,
+    content: string,
+    options: { encoding: "utf-8"; mode: number; flag: "w" | "wx" },
+  ) => Promise<void>;
+  readFile: (path: string, encoding: "utf-8") => Promise<string>;
+  existsSync: (path: string) => boolean;
+}
+
+export async function createPreUpdateConfigSnapshot(params: {
+  configPath: string;
+  fs: PreUpdateSnapshotFs;
+}): Promise<void> {
+  if (!params.fs.existsSync(params.configPath)) {
+    return;
+  }
+  const snapshotPath = `${params.configPath}.pre-update`;
+  try {
+    const content = await params.fs.readFile(params.configPath, "utf-8");
+    await params.fs.writeFile(snapshotPath, content, {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
+      return;
+    }
+    // best-effort, do not block update
   }
 }
 

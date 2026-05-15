@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
-import { createTestPluginApi } from "../../../../test/helpers/plugins/plugin-api.ts";
 
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;
@@ -13,7 +13,7 @@ export const noopLogger = {
   debug: vi.fn(),
 };
 
-export type GoogleMeetTestNodeListResult = {
+type GoogleMeetTestNodeListResult = {
   nodes: Array<{
     nodeId: string;
     displayName?: string;
@@ -22,6 +22,12 @@ export type GoogleMeetTestNodeListResult = {
     caps?: string[];
     remoteIp?: string;
   }>;
+};
+
+type CommandResult = {
+  code: number;
+  stdout?: string;
+  stderr?: string;
 };
 
 export function captureStdout() {
@@ -50,6 +56,12 @@ export function setupGoogleMeetPlugin(
       params?: unknown;
       timeoutMs?: number;
     }) => Promise<unknown>;
+    runCommandWithTimeoutHandler?: (
+      argv: string[],
+      options?: { timeoutMs?: number },
+    ) => Promise<CommandResult>;
+    registerPlatform?: NodeJS.Platform;
+    toolContext?: Record<string, unknown>;
   } = {},
 ) {
   const methods = new Map<string, unknown>();
@@ -112,12 +124,17 @@ export function setupGoogleMeetPlugin(
     }
     return options.nodesInvokeResult ?? { launched: true };
   });
-  const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv[0] === "/usr/sbin/system_profiler") {
-      return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  });
+  const runCommandWithTimeout = vi.fn(
+    async (argv: string[], runOptions?: { timeoutMs?: number }) => {
+      if (options.runCommandWithTimeoutHandler) {
+        return options.runCommandWithTimeoutHandler(argv, runOptions);
+      }
+      if (argv[0] === "/usr/sbin/system_profiler") {
+        return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  );
   const api = createTestPluginApi({
     id: "google-meet",
     name: "Google Meet",
@@ -138,11 +155,26 @@ export function setupGoogleMeetPlugin(
     } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
-    registerTool: (tool: unknown) => tools.push(tool),
+    registerTool: (tool: unknown) => {
+      tools.push(
+        typeof tool === "function"
+          ? (tool as (ctx: Record<string, unknown>) => unknown)(options.toolContext ?? {})
+          : tool,
+      );
+    },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
   });
-  plugin.register(api);
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: options.registerPlatform ?? "darwin",
+  });
+  try {
+    plugin.register(api);
+  } finally {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  }
   return {
     cliRegistrations,
     methods,
@@ -152,4 +184,49 @@ export function setupGoogleMeetPlugin(
     nodesInvoke,
     nodeHostCommands,
   };
+}
+
+export async function invokeGoogleMeetGatewayMethodForTest(
+  methods: Map<string, unknown>,
+  method: string,
+  params?: unknown,
+): Promise<unknown> {
+  const handler = methods.get(method) as
+    | ((opts: {
+        params: Record<string, unknown>;
+        respond: (
+          ok: boolean,
+          payload?: unknown,
+          error?: { message?: string; details?: unknown },
+        ) => void;
+      }) => Promise<void> | void)
+    | undefined;
+  if (!handler) {
+    throw new Error(`gateway method not registered: ${method}`);
+  }
+  return await new Promise((resolve, reject) => {
+    const respond = (
+      ok: boolean,
+      payload?: unknown,
+      error?: { message?: string; details?: unknown },
+    ) => {
+      if (ok) {
+        resolve(payload);
+        return;
+      }
+      const err = new Error(error?.message ?? "gateway request failed") as Error & {
+        details?: unknown;
+      };
+      err.details = error?.details ?? payload;
+      reject(err);
+    };
+    void Promise.resolve(
+      handler({
+        params: (params && typeof params === "object" && !Array.isArray(params)
+          ? params
+          : {}) as Record<string, unknown>,
+        respond,
+      }),
+    ).catch(reject);
+  });
 }

@@ -1,13 +1,15 @@
 import type { Command } from "commander";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 
 type ProxyCliRuntime = typeof import("./proxy-cli.runtime.js");
 
-let proxyCliRuntimePromise: Promise<ProxyCliRuntime> | undefined;
+const proxyCliRuntimeLoader = createLazyImportLoader<ProxyCliRuntime>(
+  () => import("./proxy-cli.runtime.js"),
+);
 
 async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
-  proxyCliRuntimePromise ??= import("./proxy-cli.runtime.js");
-  return await proxyCliRuntimePromise;
+  return await proxyCliRuntimeLoader.load();
 }
 
 function parseOptionalNumber(value: string | undefined): number | undefined {
@@ -16,6 +18,10 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function collectOption(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
 }
 
 export function registerProxyCli(program: Command) {
@@ -49,6 +55,43 @@ export function registerProxyCli(program: Command) {
         commandArgs: cmd,
       });
     });
+
+  proxy
+    .command("validate")
+    .description("Validate the operator-managed network proxy")
+    .option("--json", "Print machine-readable JSON")
+    .option("--proxy-url <url>", "Proxy URL to validate instead of config/env")
+    .option(
+      "--allowed-url <url>",
+      "Destination expected to succeed through the proxy",
+      collectOption,
+    )
+    .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
+    .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
+    .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
+    .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", parseOptionalNumber)
+    .action(
+      async (opts: {
+        json?: boolean;
+        proxyUrl?: string;
+        allowedUrl?: string[];
+        deniedUrl?: string[];
+        apnsReachable?: boolean;
+        apnsAuthority?: string;
+        timeoutMs?: number;
+      }) => {
+        const runtime = await loadProxyCliRuntime();
+        await runtime.runProxyValidateCommand({
+          json: opts.json,
+          proxyUrl: opts.proxyUrl,
+          allowedUrls: opts.allowedUrl,
+          deniedUrls: opts.deniedUrl,
+          apnsReachability: opts.apnsReachable,
+          apnsAuthority: opts.apnsAuthority,
+          timeoutMs: opts.timeoutMs,
+        });
+      },
+    );
 
   proxy
     .command("coverage")

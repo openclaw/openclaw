@@ -1,9 +1,47 @@
 {
   "id": "anthropic",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "modelSupport": {
     "modelPrefixes": ["claude-"]
+  },
+  "modelIdNormalization": {
+    "providers": {
+      "anthropic": {
+        "aliases": {
+          "opus-4.6": "claude-opus-4-6",
+          "opus-4.5": "claude-opus-4-5",
+          "sonnet-4.6": "claude-sonnet-4-6",
+          "sonnet-4.5": "claude-sonnet-4-5"
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "anthropic": {
+        "openRouter": {
+          "modelIdTransforms": ["version-dots"]
+        }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "anthropic-public",
+      "hosts": ["api.anthropic.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "anthropic": {
+        "family": "anthropic"
+      }
+    }
   },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],
@@ -21,7 +59,8 @@
       "assistantPriority": -20,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key"
+      "groupHint": "Claude CLI + API key",
+      "onboardingFeatured": true
     },
     {
       "provider": "anthropic",
@@ -32,7 +71,8 @@
       "assistantPriority": 40,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key + token"
+      "groupHint": "Claude CLI + API key + token",
+      "onboardingFeatured": true
     },
     {
       "provider": "anthropic",
@@ -42,6 +82,7 @@
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
       "groupHint": "Claude CLI + API key",
+      "onboardingFeatured": true,
       "optionKey": "anthropicApiKey",
       "cliFlag": "--anthropic-api-key",
       "cliOption": "--anthropic-api-key <key>",

@@ -3,7 +3,7 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readClaudeCliCredentialsForSetup,
   readClaudeCliCredentialsForSetupNonInteractive,
@@ -12,9 +12,9 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-type AgentDefaultsEmbeddedHarness = NonNullable<
+type AgentDefaultsRuntimePolicy = NonNullable<
   NonNullable<OpenClawConfig["agents"]>["defaults"]
->["embeddedHarness"];
+>["agentRuntime"];
 type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 
 function toAnthropicModelRef(raw: string): string | null {
@@ -125,16 +125,14 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-function selectClaudeCliRuntime(
-  embeddedHarness: AgentDefaultsEmbeddedHarness | undefined,
-): AgentDefaultsEmbeddedHarness {
-  const currentRuntime = embeddedHarness?.runtime?.trim();
+function selectClaudeCliRuntime(agentRuntime: AgentDefaultsRuntimePolicy | undefined) {
+  const currentRuntime = agentRuntime?.id?.trim();
   if (currentRuntime && currentRuntime !== "auto") {
-    return embeddedHarness;
+    return agentRuntime;
   }
   return {
-    ...embeddedHarness,
-    runtime: CLAUDE_CLI_BACKEND_ID,
+    ...agentRuntime,
+    id: CLAUDE_CLI_BACKEND_ID,
   };
 }
 
@@ -198,7 +196,7 @@ export function buildAnthropicCliMigrationResult(
       agents: {
         defaults: {
           ...(rewrittenModel.changed ? { model: rewrittenModel.value } : {}),
-          embeddedHarness: selectClaudeCliRuntime(defaults?.embeddedHarness),
+          agentRuntime: selectClaudeCliRuntime(defaults?.agentRuntime),
           models: nextModels,
         },
       },

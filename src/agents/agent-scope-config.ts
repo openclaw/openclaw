@@ -25,11 +25,13 @@ export type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
+  runRetries?: AgentEntry["runRetries"];
   embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
@@ -123,6 +125,7 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    tts: entry.tts,
     contextLimits:
       typeof entry.contextLimits === "object" && entry.contextLimits
         ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
@@ -131,6 +134,10 @@ export function resolveAgentConfig(
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
+    runRetries:
+      typeof entry.runRetries === "object" && entry.runRetries
+        ? { ...agentDefaults?.runRetries, ...entry.runRetries }
+        : agentDefaults?.runRetries,
     embeddedPi:
       typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
     sandbox: entry.sandbox,
@@ -186,4 +193,11 @@ export function resolveAgentDir(
   }
   const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
+}
+
+export function resolveDefaultAgentDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentDir(cfg, resolveDefaultAgentId(cfg), env);
 }

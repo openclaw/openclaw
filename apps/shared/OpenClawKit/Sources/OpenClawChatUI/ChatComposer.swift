@@ -9,8 +9,6 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct OpenClawChatComposer: View {
-    private static let menuThinkingLevels = ["off", "low", "medium", "high"]
-
     @Bindable var viewModel: OpenClawChatViewModel
     let style: OpenClawChatView.Style
     let showsSessionSwitcher: Bool
@@ -95,12 +93,8 @@ struct OpenClawChatComposer: View {
                 get: { self.viewModel.thinkingLevel },
                 set: { next in self.viewModel.selectThinkingLevel(next) }))
         {
-            Text("Off").tag("off")
-            Text("Low").tag("low")
-            Text("Medium").tag("medium")
-            Text("High").tag("high")
-            if !Self.menuThinkingLevels.contains(self.viewModel.thinkingLevel) {
-                Text(self.viewModel.thinkingLevel.capitalized).tag(self.viewModel.thinkingLevel)
+            ForEach(self.viewModel.thinkingLevelOptions) { option in
+                Text(option.label).tag(option.id)
             }
         }
         .labelsHidden()
@@ -281,9 +275,9 @@ struct OpenClawChatComposer: View {
                 onPasteImageAttachment: { data, fileName, mimeType in
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 })
-            .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 3)
+                .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
             #else
             TextEditor(text: self.$viewModel.input)
                 .font(.system(size: 15))
@@ -441,7 +435,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
@@ -495,7 +491,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
         var parent: ChatComposerTextView
         var isProgrammaticUpdate = false
 
-        init(_ parent: ChatComposerTextView) { self.parent = parent }
+        init(_ parent: ChatComposerTextView) {
+            self.parent = parent
+        }
 
         func textDidChange(_ notification: Notification) {
             guard !self.isProgrammaticUpdate else { return }
@@ -507,7 +505,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
 }
 
 enum ChatComposerTextViewFactory {
-    // Internal for @testable import coverage of composer text view defaults.
+    /// Internal for @testable import coverage of composer text view defaults.
     @MainActor
     static func makeConfiguredTextView() -> NSTextView {
         let textView = ChatComposerNSTextView()
@@ -751,7 +749,10 @@ enum ChatComposerPasteSupport {
         (NSPasteboard.PasteboardType("public.heif"), "heif", "image/heif"),
     ]
 
-    private static func matches(_ preferredType: NSPasteboard.PasteboardType?, candidate: NSPasteboard.PasteboardType) -> Bool {
+    private static func matches(
+        _ preferredType: NSPasteboard.PasteboardType?,
+        candidate: NSPasteboard.PasteboardType) -> Bool
+    {
         guard let preferredType else { return true }
         return preferredType == candidate
     }

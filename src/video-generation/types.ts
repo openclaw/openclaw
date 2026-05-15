@@ -14,7 +14,7 @@ export type GeneratedVideoAsset = {
   metadata?: Record<string, unknown>;
 };
 
-export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
+export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P" | (string & {});
 
 /**
  * Canonical semantic role hints for reference assets. The list covers the
@@ -74,6 +74,15 @@ export type VideoGenerationRequest = {
   providerOptions?: Record<string, unknown>;
 };
 
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
+};
+
 export type VideoGenerationResult = {
   videos: GeneratedVideoAsset[];
   model?: string;
@@ -100,9 +109,12 @@ export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
   maxInputVideos?: number;
+  maxInputVideosByModel?: Readonly<Record<string, number>>;
   /** Max number of reference audio assets the provider accepts (e.g. background music, voice reference). */
   maxInputAudios?: number;
+  maxInputAudiosByModel?: Readonly<Record<string, number>>;
   maxDurationSeconds?: number;
   supportedDurationSeconds?: readonly number[];
   supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
@@ -151,5 +163,11 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };

@@ -1,11 +1,16 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
+import {
+  createProviderApiKeyResolver,
+  createProviderAuthResolver,
+} from "../../agents/models-config.providers.secrets.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata,
   resolvePluginContributionOwners,
   resolveProviderOwners,
   type PluginRegistrySnapshot,
@@ -13,7 +18,8 @@ import {
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolvePluginDiscoveryProviders,
+  resolveRuntimePluginDiscoveryProviders,
+  runProviderCatalog,
   runProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
 import {
@@ -70,10 +76,14 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
 }): string[] | undefined {
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     env: params.env,
   });
+  if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
+    return undefined;
+  }
+  const index = snapshot.snapshot;
   const pluginIds = [
     ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg),
     ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg),
@@ -152,7 +162,7 @@ export async function hasProviderStaticCatalogForFilter(params: {
   if (scopedPluginIds.length === 0) {
     return false;
   }
-  const providers = await resolvePluginDiscoveryProviders({
+  const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.cfg,
     env,
     onlyPluginIds: scopedPluginIds,
@@ -222,7 +232,7 @@ export async function loadProviderCatalogModelsForList(params: {
   }
 
   const providers = (
-    await resolvePluginDiscoveryProviders({
+    await resolveRuntimePluginDiscoveryProviders({
       config: params.cfg,
       env,
       onlyPluginIds: scopedPluginIds,
@@ -243,16 +253,32 @@ export async function loadProviderCatalogModelsForList(params: {
       if (!providerFilter && SELF_HOSTED_DISCOVERY_PROVIDER_IDS.has(provider.id)) {
         continue;
       }
-      let result: Awaited<ReturnType<typeof runProviderStaticCatalog>> | null;
+      let result: Awaited<ReturnType<typeof runProviderCatalog>> | null;
       try {
-        result = await runProviderStaticCatalog({
-          provider,
-          config: params.cfg,
-          agentDir: params.agentDir,
-          env,
-        });
+        if (params.staticOnly === true || typeof provider.staticCatalog?.run === "function") {
+          result = await runProviderStaticCatalog({
+            provider,
+            config: params.cfg,
+            agentDir: params.agentDir,
+            env,
+          });
+        } else {
+          const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+          const resolveProviderApiKey = createProviderApiKeyResolver(env, authStore, params.cfg);
+          const resolveProviderAuth = createProviderAuthResolver(env, authStore, params.cfg);
+          result = await runProviderCatalog({
+            provider,
+            config: params.cfg,
+            agentDir: params.agentDir,
+            env,
+            resolveProviderApiKey: (providerId) =>
+              resolveProviderApiKey(providerId?.trim() || provider.id),
+            resolveProviderAuth: (providerId, options) =>
+              resolveProviderAuth(providerId?.trim() || provider.id, options),
+          });
+        }
       } catch (error) {
-        log.warn(`provider static catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
+        log.warn(`provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
         result = null;
       }
       const normalized = normalizePluginDiscoveryResult({ provider, result });

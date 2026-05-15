@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const runFfmpegMock = vi.hoisted(() => vi.fn());
+const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  runFfmpeg: runFfmpegMock,
+  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
@@ -62,7 +62,8 @@ describe("buildXiaomiSpeechProvider", () => {
         cfg: {} as never,
         timeoutMs: 30000,
       });
-      expect(config).toMatchObject({
+      expect(config).toEqual({
+        apiKey: undefined,
         baseUrl: "https://example.com/v1",
         model: "mimo-v2-tts",
         voice: "default_en",
@@ -123,10 +124,11 @@ describe("buildXiaomiSpeechProvider", () => {
 
     beforeEach(() => {
       vi.stubGlobal("fetch", vi.fn());
-      runFfmpegMock.mockReset();
+      transcodeAudioBufferToOpusMock.mockReset();
     });
 
     afterEach(() => {
+      vi.unstubAllGlobals();
       globalThis.fetch = savedFetch;
       vi.restoreAllMocks();
     });
@@ -160,9 +162,12 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-mp3-audio");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls[0];
+      const [url, init] = mockFetch.mock.calls[0] ?? [];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
-      expect(init?.headers).toMatchObject({ "api-key": "sk-test" });
+      expect(init?.headers).toEqual({
+        "api-key": "sk-test",
+        "Content-Type": "application/json",
+      });
       const body = JSON.parse(init!.body as string);
       expect(body.model).toBe("mimo-v2-tts");
       expect(body.messages).toEqual([
@@ -170,7 +175,7 @@ describe("buildXiaomiSpeechProvider", () => {
         { role: "assistant", content: "Hello from OpenClaw." },
       ]);
       expect(body.audio).toEqual({ format: "mp3", voice: "default_en" });
-      expect(runFfmpegMock).not.toHaveBeenCalled();
+      expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
     });
 
     it("transcodes Xiaomi output to Opus for voice-note targets", async () => {
@@ -181,15 +186,7 @@ describe("buildXiaomiSpeechProvider", () => {
           headers: { "Content-Type": "application/json" },
         }),
       );
-      runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-        const outputPath = args.at(-1);
-        if (typeof outputPath !== "string") {
-          throw new Error("missing ffmpeg output path");
-        }
-        await import("node:fs/promises").then((fs) =>
-          fs.writeFile(outputPath, Buffer.from("fake-opus-audio")),
-        );
-      });
+      transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
 
       const result = await provider.synthesize({
         text: "Hello from OpenClaw.",
@@ -203,10 +200,12 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(result.fileExtension).toBe(".opus");
       expect(result.voiceCompatible).toBe(true);
       expect(result.audioBuffer.toString()).toBe("fake-opus-audio");
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libopus", "-ar", "48000"]),
-        { timeoutMs: 30000 },
-      );
+      expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
+        audioBuffer: Buffer.from("fake-mp3-audio"),
+        inputExtension: "mp3",
+        tempPrefix: "tts-xiaomi-",
+        timeoutMs: 30000,
+      });
     });
 
     it("throws when API key is missing", async () => {
@@ -223,7 +222,9 @@ describe("buildXiaomiSpeechProvider", () => {
           }),
         ).rejects.toThrow("Xiaomi API key missing");
       } finally {
-        if (savedKey) {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
           process.env.XIAOMI_API_KEY = savedKey;
         }
       }

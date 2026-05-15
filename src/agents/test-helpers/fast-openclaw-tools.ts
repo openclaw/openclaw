@@ -22,7 +22,15 @@ const coreTools = [
   stubActionTool("nodes", ["list", "invoke"]),
   stubActionTool("cron", ["schedule", "cancel"]),
   stubActionTool("message", ["send", "reply"]),
-  stubActionTool("gateway", ["status"]),
+  stubTool("heartbeat_respond"),
+  stubActionTool("gateway", [
+    "restart",
+    "config.get",
+    "config.schema.lookup",
+    "config.apply",
+    "config.patch",
+    "update.run",
+  ]),
   stubActionTool("agents_list", ["list", "show"]),
   stubActionTool("sessions_list", ["list", "show"]),
   stubActionTool("sessions_history", ["read", "tail"]),
@@ -39,8 +47,17 @@ const coreTools = [
   stubTool("pdf"),
 ];
 
+const createOpenClawToolsMock = vi.fn(
+  (options?: { enableHeartbeatTool?: boolean; recordToolPrepStage?: (name: string) => void }) => {
+    options?.recordToolPrepStage?.("openclaw-tools:test-helper");
+    return coreTools
+      .filter((tool) => tool.name !== "heartbeat_respond" || options?.enableHeartbeatTool === true)
+      .map((tool) => Object.assign({}, tool));
+  },
+);
+
 vi.mock("../openclaw-tools.js", () => ({
-  createOpenClawTools: () => coreTools.map((tool) => Object.assign({}, tool)),
+  createOpenClawTools: createOpenClawToolsMock,
   __testing: {
     setDepsForTest: () => {},
   },

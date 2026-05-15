@@ -1,4 +1,90 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+const providerEndpointPlugins = vi.hoisted(() => [
+  {
+    providerEndpoints: [
+      { endpointClass: "openai-public", hosts: ["api.openai.com"] },
+      { endpointClass: "openai-codex", hosts: ["chatgpt.com"] },
+      { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
+      { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
+      { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
+      { endpointClass: "mistral-public", hosts: ["api.mistral.ai"] },
+      { endpointClass: "chutes-native", hosts: ["llm.chutes.ai"] },
+      { endpointClass: "deepseek-native", hosts: ["api.deepseek.com"] },
+      { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
+      { endpointClass: "groq-native", hosts: ["api.groq.com"] },
+      { endpointClass: "opencode-native", hostSuffixes: ["opencode.ai"] },
+      { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
+      { endpointClass: "zai-native", hosts: ["api.z.ai"] },
+      { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.googleapis.com"],
+        googleVertexRegion: "global",
+      },
+      {
+        endpointClass: "google-vertex",
+        hostSuffixes: ["-aiplatform.googleapis.com"],
+        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
+      },
+      {
+        endpointClass: "moonshot-native",
+        baseUrls: ["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1"],
+      },
+      {
+        endpointClass: "modelstudio-native",
+        baseUrls: [
+          "https://coding-intl.dashscope.aliyuncs.com/v1",
+          "https://coding.dashscope.aliyuncs.com/v1",
+          "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        ],
+      },
+      {
+        endpointClass: "xai-native",
+        hosts: ["api.x.ai", "api.grok.x.ai"],
+      },
+    ],
+    providerRequest: {
+      providers: {
+        anthropic: { family: "anthropic" },
+        cerebras: { family: "cerebras" },
+        chutes: { family: "chutes" },
+        deepseek: { family: "deepseek" },
+        "github-copilot": { family: "github-copilot" },
+        google: { family: "google" },
+        groq: { family: "groq" },
+        kimi: { family: "moonshot", compatibilityFamily: "moonshot" },
+        mistral: { family: "mistral" },
+        moonshot: { family: "moonshot", compatibilityFamily: "moonshot" },
+        openrouter: { family: "openrouter" },
+        qwen: { family: "modelstudio" },
+        together: { family: "together" },
+        xai: { family: "xai" },
+        zai: { family: "zai" },
+      },
+    },
+  },
+]);
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    plugins: providerEndpointPlugins,
+    diagnostics: [],
+  }),
+}));
+
 import {
   listProviderAttributionPolicies,
   resolveProviderAttributionHeaders,
@@ -40,7 +126,8 @@ describe("provider attribution", () => {
       headers: {
         "HTTP-Referer": "https://openclaw.ai",
         "X-OpenRouter-Title": "OpenClaw",
-        "X-OpenRouter-Categories": "cli-agent",
+        "X-OpenRouter-Categories":
+          "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       },
     });
   });
@@ -53,7 +140,8 @@ describe("provider attribution", () => {
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories":
+        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
     });
   });
 
@@ -121,7 +209,7 @@ describe("provider attribution", () => {
   });
 
   it("authorizes hidden OpenAI attribution only on verified native hosts", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy(
         {
           provider: "openai",
@@ -132,16 +220,17 @@ describe("provider attribution", () => {
         },
         { OPENCLAW_VERSION: "2026.3.22" },
       ),
-    ).toMatchObject({
-      endpointClass: "openai-public",
-      attributionProvider: "openai",
-      allowsHiddenAttribution: true,
-      usesKnownNativeOpenAIEndpoint: true,
-      usesVerifiedOpenAIAttributionHost: true,
-      usesExplicitProxyLikeEndpoint: false,
-    });
+      {
+        endpointClass: "openai-public",
+        attributionProvider: "openai",
+        allowsHiddenAttribution: true,
+        usesKnownNativeOpenAIEndpoint: true,
+        usesVerifiedOpenAIAttributionHost: true,
+        usesExplicitProxyLikeEndpoint: false,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy(
         {
           provider: "openai",
@@ -152,32 +241,34 @@ describe("provider attribution", () => {
         },
         { OPENCLAW_VERSION: "2026.3.22" },
       ),
-    ).toMatchObject({
-      endpointClass: "custom",
-      attributionProvider: undefined,
-      allowsHiddenAttribution: false,
-      usesKnownNativeOpenAIEndpoint: false,
-      usesVerifiedOpenAIAttributionHost: false,
-      usesExplicitProxyLikeEndpoint: true,
-    });
+      {
+        endpointClass: "custom",
+        attributionProvider: undefined,
+        allowsHiddenAttribution: false,
+        usesKnownNativeOpenAIEndpoint: false,
+        usesVerifiedOpenAIAttributionHost: false,
+        usesExplicitProxyLikeEndpoint: true,
+      },
+    );
   });
 
   it("classifies OpenAI-family default, codex, and Azure routes distinctly", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openai",
         api: "openai-responses",
         transport: "stream",
         capability: "llm",
       }),
-    ).toMatchObject({
-      endpointClass: "default",
-      attributionProvider: undefined,
-      usesKnownNativeOpenAIRoute: true,
-      usesExplicitProxyLikeEndpoint: false,
-    });
+      {
+        endpointClass: "default",
+        attributionProvider: undefined,
+        usesKnownNativeOpenAIRoute: true,
+        usesExplicitProxyLikeEndpoint: false,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openai-codex",
         api: "openai-responses",
@@ -185,13 +276,14 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toMatchObject({
-      endpointClass: "openai-codex",
-      attributionProvider: "openai-codex",
-      allowsHiddenAttribution: true,
-    });
+      {
+        endpointClass: "openai-codex",
+        attributionProvider: "openai-codex",
+        allowsHiddenAttribution: true,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "azure-openai",
         api: "azure-openai-responses",
@@ -199,21 +291,22 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toMatchObject({
-      endpointClass: "azure-openai",
-      attributionProvider: undefined,
-      allowsHiddenAttribution: false,
-      usesKnownNativeOpenAIEndpoint: true,
-    });
+      {
+        endpointClass: "azure-openai",
+        attributionProvider: undefined,
+        allowsHiddenAttribution: false,
+        usesKnownNativeOpenAIEndpoint: true,
+      },
+    );
   });
 
   it("classifies native Mistral hosts centrally", () => {
-    expect(resolveProviderEndpoint("https://api.mistral.ai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.mistral.ai/v1"), {
       endpointClass: "mistral-public",
       hostname: "api.mistral.ai",
     });
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "mistral",
         api: "openai-completions",
@@ -221,50 +314,51 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "mistral-public",
-      isKnownNativeEndpoint: true,
-      knownProviderFamily: "mistral",
-    });
+      {
+        endpointClass: "mistral-public",
+        isKnownNativeEndpoint: true,
+        knownProviderFamily: "mistral",
+      },
+    );
   });
 
   it("classifies native OpenAI-compatible vendor hosts centrally", () => {
-    expect(resolveProviderEndpoint("https://api.x.ai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.x.ai/v1"), {
       endpointClass: "xai-native",
       hostname: "api.x.ai",
     });
-    expect(resolveProviderEndpoint("https://api.grok.x.ai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.grok.x.ai/v1"), {
       endpointClass: "xai-native",
       hostname: "api.grok.x.ai",
     });
-    expect(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4"), {
       endpointClass: "zai-native",
       hostname: "api.z.ai",
     });
-    expect(resolveProviderEndpoint("https://api.deepseek.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.deepseek.com"), {
       endpointClass: "deepseek-native",
       hostname: "api.deepseek.com",
     });
-    expect(resolveProviderEndpoint("https://llm.chutes.ai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://llm.chutes.ai/v1"), {
       endpointClass: "chutes-native",
       hostname: "llm.chutes.ai",
     });
-    expect(resolveProviderEndpoint("https://api.groq.com/openai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.groq.com/openai/v1"), {
       endpointClass: "groq-native",
       hostname: "api.groq.com",
     });
-    expect(resolveProviderEndpoint("https://api.cerebras.ai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.cerebras.ai/v1"), {
       endpointClass: "cerebras-native",
       hostname: "api.cerebras.ai",
     });
-    expect(resolveProviderEndpoint("https://opencode.ai/api")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/api"), {
       endpointClass: "opencode-native",
       hostname: "opencode.ai",
     });
   });
 
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openrouter",
         api: "openai-responses",
@@ -272,15 +366,16 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toMatchObject({
-      endpointClass: "openrouter",
-      usesExplicitProxyLikeEndpoint: true,
-      attributionProvider: "openrouter",
-    });
+      {
+        endpointClass: "openrouter",
+        usesExplicitProxyLikeEndpoint: true,
+        attributionProvider: "openrouter",
+      },
+    );
   });
 
   it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openrouter",
         api: "openai-responses",
@@ -288,11 +383,12 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toMatchObject({
-      endpointClass: "openrouter",
-      attributionProvider: "openrouter",
-      allowsHiddenAttribution: false,
-    });
+      {
+        endpointClass: "openrouter",
+        attributionProvider: "openrouter",
+        allowsHiddenAttribution: false,
+      },
+    );
 
     expect(
       resolveProviderRequestAttributionHeaders({
@@ -376,163 +472,167 @@ describe("provider attribution", () => {
   });
 
   it("models other provider families without enabling hidden attribution", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "google",
         baseUrl: "https://generativelanguage.googleapis.com",
         transport: "http",
         capability: "image",
       }),
-    ).toMatchObject({
-      knownProviderFamily: "google",
-      attributionProvider: undefined,
-      allowsHiddenAttribution: false,
-    });
+      {
+        knownProviderFamily: "google",
+        attributionProvider: undefined,
+        allowsHiddenAttribution: false,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "github-copilot",
         transport: "http",
         capability: "llm",
       }),
-    ).toMatchObject({
-      knownProviderFamily: "github-copilot",
-      attributionProvider: undefined,
-      allowsHiddenAttribution: false,
-    });
+      {
+        knownProviderFamily: "github-copilot",
+        attributionProvider: undefined,
+        allowsHiddenAttribution: false,
+      },
+    );
   });
 
   it("classifies native Anthropic endpoints separately from custom hosts", () => {
-    expect(resolveProviderEndpoint("https://api.anthropic.com/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.anthropic.com/v1"), {
       endpointClass: "anthropic-public",
       hostname: "api.anthropic.com",
     });
 
-    expect(resolveProviderEndpoint("https://proxy.example.com/anthropic")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/anthropic"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",
     });
   });
 
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
-    expect(resolveProviderEndpoint("https://generativelanguage.googleapis.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://generativelanguage.googleapis.com"), {
       endpointClass: "google-generative-ai",
       hostname: "generativelanguage.googleapis.com",
     });
 
-    expect(
+    expectRecordFields(
       resolveProviderEndpoint("https://europe-west4-aiplatform.googleapis.com/v1/projects/test"),
-    ).toMatchObject({
-      endpointClass: "google-vertex",
-      hostname: "europe-west4-aiplatform.googleapis.com",
-      googleVertexRegion: "europe-west4",
-    });
+      {
+        endpointClass: "google-vertex",
+        hostname: "europe-west4-aiplatform.googleapis.com",
+        googleVertexRegion: "europe-west4",
+      },
+    );
 
-    expect(resolveProviderEndpoint("https://aiplatform.googleapis.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.googleapis.com"), {
       endpointClass: "google-vertex",
       hostname: "aiplatform.googleapis.com",
       googleVertexRegion: "global",
     });
 
-    expect(resolveProviderEndpoint("https://proxy.example.com/google")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/google"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",
     });
   });
 
   it("classifies native Moonshot and ModelStudio endpoints separately from custom hosts", () => {
-    expect(resolveProviderEndpoint("https://api.moonshot.ai/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.moonshot.ai/v1"), {
       endpointClass: "moonshot-native",
       hostname: "api.moonshot.ai",
     });
 
-    expect(resolveProviderEndpoint("https://api.moonshot.cn/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.moonshot.cn/v1"), {
       endpointClass: "moonshot-native",
       hostname: "api.moonshot.cn",
     });
 
-    expect(
+    expectRecordFields(
       resolveProviderEndpoint("https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-    ).toMatchObject({
-      endpointClass: "modelstudio-native",
-      hostname: "dashscope-intl.aliyuncs.com",
-    });
+      {
+        endpointClass: "modelstudio-native",
+        hostname: "dashscope-intl.aliyuncs.com",
+      },
+    );
 
-    expect(resolveProviderEndpoint("https://proxy.example.com/v1")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/v1"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",
     });
   });
 
   it("classifies native GitHub Copilot endpoints separately from custom hosts", () => {
-    expect(resolveProviderEndpoint("https://api.individual.githubcopilot.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.individual.githubcopilot.com"), {
       endpointClass: "github-copilot-native",
       hostname: "api.individual.githubcopilot.com",
     });
 
-    expect(resolveProviderEndpoint("https://api.enterprise.githubcopilot.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.enterprise.githubcopilot.com"), {
       endpointClass: "github-copilot-native",
       hostname: "api.enterprise.githubcopilot.com",
     });
 
-    expect(resolveProviderEndpoint("https://api.githubcopilot.example.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://api.githubcopilot.example.com"), {
       endpointClass: "custom",
       hostname: "api.githubcopilot.example.com",
     });
   });
 
   it("does not classify malformed or embedded Google host strings as native endpoints", () => {
-    expect(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com"), {
       endpointClass: "custom",
       hostname: "proxy",
     });
 
-    expect(resolveProviderEndpoint("https://xgenerativelanguage.googleapis.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://xgenerativelanguage.googleapis.com"), {
       endpointClass: "custom",
       hostname: "xgenerativelanguage.googleapis.com",
     });
 
-    expect(resolveProviderEndpoint("proxy/aiplatform.googleapis.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("proxy/aiplatform.googleapis.com"), {
       endpointClass: "custom",
       hostname: "proxy",
     });
 
-    expect(resolveProviderEndpoint("https://xaiplatform.googleapis.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("https://xaiplatform.googleapis.com"), {
       endpointClass: "custom",
       hostname: "xaiplatform.googleapis.com",
     });
   });
 
   it("does not trust schemeless or embedded trusted-provider substrings", () => {
-    expect(resolveProviderEndpoint("api.anthropic.com.attacker.example")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("api.anthropic.com.attacker.example"), {
       endpointClass: "custom",
       hostname: "api.anthropic.com.attacker.example",
     });
 
-    expect(resolveProviderEndpoint("api.openai.com.attacker.example")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("api.openai.com.attacker.example"), {
       endpointClass: "custom",
       hostname: "api.openai.com.attacker.example",
     });
 
-    expect(resolveProviderEndpoint("attacker.example/?target=api.openai.com")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("attacker.example/?target=api.openai.com"), {
       endpointClass: "custom",
       hostname: "attacker.example",
     });
 
-    expect(resolveProviderEndpoint("openrouter.ai.attacker.example")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("openrouter.ai.attacker.example"), {
       endpointClass: "custom",
       hostname: "openrouter.ai.attacker.example",
     });
   });
 
   it("ignores non-http schemes when normalizing native comparable base URLs", () => {
-    expect(resolveProviderEndpoint("javascript:alert(1)")).toMatchObject({
+    expectRecordFields(resolveProviderEndpoint("javascript:alert(1)"), {
       endpointClass: "invalid",
     });
   });
 
-  it("requires the dedicated OpenAI audio transcription API for audio attribution", () => {
-    expect(
+  it("applies OpenAI attribution to every verified native capability", () => {
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openai",
         api: "openai-audio-transcriptions",
@@ -540,12 +640,13 @@ describe("provider attribution", () => {
         transport: "media-understanding",
         capability: "audio",
       }),
-    ).toMatchObject({
-      attributionProvider: "openai",
-      allowsHiddenAttribution: true,
-    });
+      {
+        attributionProvider: "openai",
+        allowsHiddenAttribution: true,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openai",
         api: "openai-responses",
@@ -553,27 +654,41 @@ describe("provider attribution", () => {
         transport: "media-understanding",
         capability: "audio",
       }),
-    ).toMatchObject({
-      attributionProvider: "openai",
-      allowsHiddenAttribution: true,
-    });
+      {
+        attributionProvider: "openai",
+        allowsHiddenAttribution: true,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openai",
-        api: "not-openai-audio",
         baseUrl: "https://api.openai.com/v1",
-        transport: "media-understanding",
+        transport: "http",
+        capability: "image",
+      }),
+      {
+        attributionProvider: "openai",
+        allowsHiddenAttribution: true,
+      },
+    );
+
+    expectRecordFields(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "websocket",
         capability: "audio",
       }),
-    ).toMatchObject({
-      attributionProvider: undefined,
-      allowsHiddenAttribution: false,
-    });
+      {
+        attributionProvider: "openai",
+        allowsHiddenAttribution: true,
+      },
+    );
   });
 
   it("resolves centralized request capabilities for native and proxied routes", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "openai",
         api: "openai-responses",
@@ -581,28 +696,30 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "openai-public",
-      allowsOpenAIServiceTier: true,
-      supportsOpenAIReasoningCompatPayload: true,
-      allowsResponsesStore: true,
-      supportsResponsesStoreField: true,
-      shouldStripResponsesPromptCache: false,
-    });
+      {
+        endpointClass: "openai-public",
+        allowsOpenAIServiceTier: true,
+        supportsOpenAIReasoningCompatPayload: true,
+        allowsResponsesStore: true,
+        supportsResponsesStoreField: true,
+        shouldStripResponsesPromptCache: false,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "anthropic",
         api: "anthropic-messages",
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "default",
-      allowsAnthropicServiceTier: true,
-    });
+      {
+        endpointClass: "default",
+        allowsAnthropicServiceTier: true,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "custom-proxy",
         api: "openai-responses",
@@ -610,20 +727,21 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "custom",
-      allowsOpenAIServiceTier: false,
-      supportsOpenAIReasoningCompatPayload: false,
-      allowsResponsesStore: false,
-      supportsResponsesStoreField: true,
-      shouldStripResponsesPromptCache: true,
-    });
+      {
+        endpointClass: "custom",
+        allowsOpenAIServiceTier: false,
+        supportsOpenAIReasoningCompatPayload: false,
+        allowsResponsesStore: false,
+        supportsResponsesStoreField: true,
+        shouldStripResponsesPromptCache: true,
+      },
+    );
   });
 
   it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
     // compat.supportsPromptCacheKey = true disables the strip even on a
     // proxy-like endpoint that would otherwise trigger it.
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "custom-proxy",
         api: "openai-responses",
@@ -632,14 +750,15 @@ describe("provider attribution", () => {
         transport: "stream",
         compat: { supportsPromptCacheKey: true },
       }),
-    ).toMatchObject({
-      endpointClass: "custom",
-      shouldStripResponsesPromptCache: false,
-    });
+      {
+        endpointClass: "custom",
+        shouldStripResponsesPromptCache: false,
+      },
+    );
 
     // compat.supportsPromptCacheKey = false forces the strip even on a
     // native OpenAI endpoint that would otherwise forward the field.
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "openai",
         api: "openai-responses",
@@ -648,15 +767,16 @@ describe("provider attribution", () => {
         transport: "stream",
         compat: { supportsPromptCacheKey: false },
       }),
-    ).toMatchObject({
-      endpointClass: "openai-public",
-      shouldStripResponsesPromptCache: true,
-    });
+      {
+        endpointClass: "openai-public",
+        shouldStripResponsesPromptCache: true,
+      },
+    );
 
     // compat.supportsPromptCacheKey unset preserves the existing default
     // (strip on proxy-like responses endpoints, preserving the fix from
     // #48155 for providers that reject the field).
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "custom-proxy",
         api: "openai-responses",
@@ -664,13 +784,14 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      shouldStripResponsesPromptCache: true,
-    });
+      {
+        shouldStripResponsesPromptCache: true,
+      },
+    );
   });
 
   it("resolves shared compat families and native streaming-usage gates", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "moonshot",
         api: "openai-completions",
@@ -678,13 +799,14 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "moonshot-native",
-      supportsNativeStreamingUsageCompat: true,
-      compatibilityFamily: "moonshot",
-    });
+      {
+        endpointClass: "moonshot-native",
+        supportsNativeStreamingUsageCompat: true,
+        compatibilityFamily: "moonshot",
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "qwen",
         api: "openai-completions",
@@ -692,12 +814,13 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "modelstudio-native",
-      supportsNativeStreamingUsageCompat: true,
-    });
+      {
+        endpointClass: "modelstudio-native",
+        supportsNativeStreamingUsageCompat: true,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "generic",
         api: "openai-completions",
@@ -705,12 +828,13 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "modelstudio-native",
-      supportsNativeStreamingUsageCompat: true,
-    });
+      {
+        endpointClass: "modelstudio-native",
+        supportsNativeStreamingUsageCompat: true,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "custom-local",
         api: "openai-completions",
@@ -718,14 +842,15 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-    ).toMatchObject({
-      endpointClass: "local",
-      supportsNativeStreamingUsageCompat: false,
-    });
+      {
+        endpointClass: "local",
+        supportsNativeStreamingUsageCompat: false,
+      },
+    );
   });
 
   it("treats native GitHub Copilot base URLs as known native endpoints", () => {
-    expect(
+    expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "github-copilot",
         api: "openai-responses",
@@ -733,11 +858,12 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "http",
       }),
-    ).toMatchObject({
-      endpointClass: "github-copilot-native",
-      knownProviderFamily: "github-copilot",
-      isKnownNativeEndpoint: true,
-    });
+      {
+        endpointClass: "github-copilot-native",
+        knownProviderFamily: "github-copilot",
+        isKnownNativeEndpoint: true,
+      },
+    );
   });
 
   it("resolves a provider capability matrix for representative native and proxied routes", () => {
@@ -984,9 +1110,7 @@ describe("provider attribution", () => {
     ];
 
     for (const testCase of cases) {
-      expect(resolveProviderRequestCapabilities(testCase.input), testCase.name).toMatchObject(
-        testCase.expected,
-      );
+      expectRecordFields(resolveProviderRequestCapabilities(testCase.input), testCase.expected);
     }
   });
 });

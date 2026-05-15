@@ -74,6 +74,11 @@ const {
     args: string[],
     cwd?: string,
     listChangedPaths?: (baseRef: string, cwd: string) => string[],
+    options?: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+      broad?: boolean;
+    },
   ) => string[] | null;
   resolveChangedTestTargetPlan: (
     changedPaths: string[],
@@ -92,12 +97,8 @@ const {
   ) => number;
 };
 
-const VITEST_NODE_PREFIX = [
-  "exec",
-  "node",
-  "--no-maglev",
-  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
-];
+const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
+const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -435,12 +436,23 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes acp targets to the acp config", () => {
-    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+  it("routes unit-fast acp targets to the cache-friendly unit-fast config", () => {
+    expect(buildVitestRunPlans(["src/acp/control-plane/runtime-cache.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/runtime-cache.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes reset-heavy acp targets to the acp config", () => {
+    expect(buildVitestRunPlans(["src/acp/runtime/session-meta.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.acp.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        includePatterns: ["src/acp/runtime/session-meta.test.ts"],
         watchMode: false,
       },
     ]);
@@ -460,7 +472,7 @@ describe("test-projects args", () => {
     ).toBe(1);
   });
 
-  it("keeps conservative full-suite runs on aggregate shards", () => {
+  it("keeps conservative core full-suite runs on aggregate shards", () => {
     const originalVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
     const originalTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
     const originalProjectParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
@@ -473,7 +485,11 @@ describe("test-projects args", () => {
 
       const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
+      expect(configs).toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
+      expect(configs).toContain("test/vitest/vitest.full-core-support-boundary.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.boundary.config.ts");
       expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.agents.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.plugins.config.ts");
     } finally {
       if (originalVitestMaxWorkers === undefined) {
@@ -543,11 +559,11 @@ describe("test-projects args", () => {
       },
     );
 
-    expect(specs[0]?.env).toMatchObject({
-      KEEP_ME: "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
-    });
+    const firstEnv = specs[0]?.env;
+    expect(firstEnv?.KEEP_ME).toBe("1");
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+    );
     expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
@@ -703,17 +719,6 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes bluebubbles extension tests to the bluebubbles config", () => {
-    expect(buildVitestRunPlans(["extensions/bluebubbles/src/monitor.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/bluebubbles/src/monitor.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes feishu extension tests to the feishu config", () => {
     expect(buildVitestRunPlans(["extensions/feishu/src/channel.test.ts"])).toEqual([
       {
@@ -758,10 +763,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes ui targets to the ui config", () => {
+  it("routes unit ui targets to the unit ui config", () => {
     expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.ui.config.ts",
+        config: "test/vitest/vitest.unit-ui.config.ts",
         forwardedArgs: [],
         includePatterns: ["ui/src/ui/views/channels.test.ts"],
         watchMode: false,
@@ -781,7 +786,7 @@ describe("test-projects args", () => {
   });
 
   it("widens top-level test helpers to sibling repo tests under contracts", () => {
-    expect(buildVitestRunPlans(["test/helpers/temp-home.ts"])).toEqual([
+    expect(buildVitestRunPlans(["test/helpers/temp-dir.ts"])).toEqual([
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
@@ -879,10 +884,10 @@ describe("test-projects args", () => {
     });
     expect(
       resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps core test-only changes on their owning test lane", () => {
@@ -900,25 +905,28 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("widens extension-facing core contract changes to extension tests", () => {
+  it("routes extension-facing core contract changes and supports broad extension opt-in", () => {
     const changedPaths = ["src/plugin-sdk/core.ts"];
     const plans = buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths);
+    const targetArgs = resolveChangedTargetArgs(
+      ["--changed=origin/main"],
+      process.cwd(),
+      () => changedPaths,
+    );
 
+    expect(targetArgs).toEqual(["src/plugin-sdk/core.test.ts"]);
     expect(
-      resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual(["src/plugin-sdk/core.ts", "extensions"]);
+      resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths, {
+        env: { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+      }),
+    ).toEqual(["src/plugin-sdk/core.test.ts", "extensions"]);
     expect(plans[0]).toEqual({
       config: "test/vitest/vitest.plugin-sdk.config.ts",
       forwardedArgs: [],
-      includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+      includePatterns: ["src/plugin-sdk/core.test.ts"],
       watchMode: false,
     });
-    expect(plans.map((plan) => plan.config)).toContain(
-      "test/vitest/vitest.extension-discord.config.ts",
-    );
-    expect(plans.map((plan) => plan.config)).toContain(
-      "test/vitest/vitest.extension-providers.config.ts",
-    );
+    expect(plans).toHaveLength(1);
   });
 
   it("keeps extension production changes on the owning extension lane", () => {
@@ -930,7 +938,16 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/discord/src/monitor/**/*.test.ts"],
+        includePatterns: [
+          "extensions/discord/src/api-barrel.test.ts",
+          "extensions/discord/src/channel-actions.contract.test.ts",
+          "extensions/discord/src/channel.message-adapter.test.ts",
+          "extensions/discord/src/channel.test.ts",
+          "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
+          "extensions/discord/src/monitor/message-handler.queue.test.ts",
+          "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
+          "extensions/discord/src/monitor/provider.test.ts",
+        ],
         watchMode: false,
       },
     ]);

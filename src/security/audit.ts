@@ -1,11 +1,11 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import type { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
-import { isInterpreterLikeAllowlistPattern } from "../infra/exec-inline-eval.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
@@ -26,10 +26,10 @@ import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
-  SecurityAuditSeverity,
   SecurityAuditSummary,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
 import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
@@ -57,7 +57,9 @@ export type SecurityAuditOptions = {
   /** Time limit for deep gateway probe. */
   deepTimeoutMs?: number;
   /** Dependency injection for tests. */
-  plugins?: ReturnType<typeof listChannelPlugins>;
+  plugins?: ChannelPlugin[];
+  /** Whether to import plugin modules to discover plugin security audit collectors. */
+  loadPluginSecurityCollectors?: boolean;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
   /** Dependency injection for tests (Docker label checks). */
@@ -88,20 +90,20 @@ export type AuditExecutionContext = {
   execIcacls?: ExecFn;
   execDockerRawFn?: ExecDockerRawFn;
   probeGatewayFn?: ProbeGatewayFn;
-  plugins?: ReturnType<typeof listChannelPlugins>;
+  plugins?: ChannelPlugin[];
+  loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
   deepProbeAuth?: { token?: string; password?: string };
   workspaceDir?: string;
 };
 
-let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
+let readOnlyChannelPluginsModulePromise:
+  | Promise<typeof import("../channels/plugins/read-only.js")>
+  | undefined;
 let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
-  | undefined;
-let pluginRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
   | undefined;
 let pluginMetadataRegistryLoaderModulePromise:
   | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
@@ -122,9 +124,9 @@ let gatewayProbeDepsPromise:
     }>
   | undefined;
 
-async function loadChannelPlugins() {
-  channelPluginsModulePromise ??= import("../channels/plugins/index.js");
-  return await channelPluginsModulePromise;
+async function loadReadOnlyChannelPlugins() {
+  readOnlyChannelPluginsModulePromise ??= import("../channels/plugins/read-only.js");
+  return await readOnlyChannelPluginsModulePromise;
 }
 
 async function loadAuditNonDeepModule() {
@@ -135,11 +137,6 @@ async function loadAuditNonDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
-}
-
-async function loadPluginRegistryLoaderModule() {
-  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
-  return await pluginRegistryLoaderModulePromise;
 }
 
 async function loadPluginMetadataRegistryLoaderModule() {
@@ -344,6 +341,9 @@ export function collectGatewayConfigFindings(
 export async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
+  if (!context.loadPluginSecurityCollectors) {
+    return [];
+  }
   const { getActivePluginRegistry } = await loadPluginRuntimeModule();
   let collectors = getActivePluginRegistry()?.securityAuditCollectors ?? [];
   if (collectors.length === 0) {
@@ -578,6 +578,20 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
         `Exec-enabled scopes:\n${execEnabledScopes.map((entry) => `- ${entry.id}: security=${entry.security}, host=${entry.host}`).join("\n")}`,
       remediation:
         "Tighten dmPolicy/groupPolicy to pairing or allowlist, or disable exec for agents reachable from shared/public channels.",
+    });
+  }
+
+  const execFilesystemPolicyHits = collectExecFilesystemPolicyDriftHits(cfg);
+  if (execFilesystemPolicyHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
+      severity: "warn",
+      title: "Filesystem tool policy does not make exec read-only",
+      detail:
+        `Found scopes where write/edit/apply_patch are unavailable but exec remains available:\n${execFilesystemPolicyHits.map((hit) => `- ${hit.scopeLabel}: runtime=[${hit.runtimeTools.join(", ")}], disabledFs=[${hit.disabledFilesystemTools.join(", ")}], exec.host=${hit.execHost}, sandbox=${hit.sandboxMode}, workspaceAccess=${hit.sandboxWorkspaceAccess}`).join("\n")}\n` +
+        "The exec tool is a shell and can still write files wherever the selected host or sandbox filesystem permits it.",
+      remediation:
+        'For read-only agents, deny exec and process too. If shell access is intentional, constrain the filesystem boundary with sandbox mode "all" and workspaceAccess "ro" or "none".',
     });
   }
 
@@ -946,6 +960,7 @@ async function createAuditExecutionContext(
     execDockerRawFn: opts.execDockerRawFn,
     probeGatewayFn: opts.probeGatewayFn,
     plugins: opts.plugins,
+    loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
@@ -1050,16 +1065,16 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
   }
   if (shouldAuditChannelSecurity) {
-    if (context.plugins === undefined) {
-      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
-        scope: "configured-channels",
-        config: cfg,
+    const channelPlugins =
+      context.plugins ??
+      (await loadReadOnlyChannelPlugins()).listReadOnlyChannelPluginsForConfig(cfg, {
         activationSourceConfig: context.sourceConfig,
         workspaceDir: context.workspaceDir,
         env,
+        stateDir,
+        includePersistedAuthState: true,
+        includeSetupFallbackPlugins: true,
       });
-    }
-    const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(
       ...(await collectChannelSecurityFindings({

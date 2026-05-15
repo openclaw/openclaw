@@ -5,12 +5,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import {
-  loadConfig,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  type OpenClawConfig,
-} from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
 import { setVerbose } from "../globals.js";
@@ -20,6 +15,9 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatUnsupportedChannelActionMessage } from "./error-format.js";
+import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 type ChannelAuthOptions = {
   channel?: string;
@@ -78,11 +76,13 @@ function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAut
     return configured[0];
   }
   if (configured.length === 0) {
-    throw new Error(`Channel is required (no configured channels support ${mode}).`);
+    throw new Error(
+      `No configured channel supports ${mode}. Run ${formatCliCommand("openclaw channels status")} to inspect channels or ${formatCliCommand("openclaw channels add --channel <channel>")} to add one.`,
+    );
   }
   const safeIds = configured.map(sanitizeForLog);
   throw new Error(
-    `Channel is required when multiple configured channels support ${mode}: ${safeIds.join(", ")}`,
+    `Multiple configured channels support ${mode}: ${safeIds.join(", ")}. Choose one with --channel <channel>.`,
   );
 }
 
@@ -112,11 +112,19 @@ async function resolveChannelPluginForMode(
   });
   const channelId = resolved.channelId ?? normalizedChannelId;
   if (!channelId) {
-    throw new Error(`Unsupported channel: ${channelInput}`);
+    throw new Error(
+      `Unsupported channel "${channelInput}". Run ${formatCliCommand("openclaw channels list")} to see available channels.`,
+    );
   }
   const plugin = resolved.plugin;
   if (!plugin || !supportsChannelAuthMode(plugin, mode)) {
-    throw new Error(`Channel ${channelId} does not support ${mode}`);
+    throw new Error(
+      formatUnsupportedChannelActionMessage({
+        channel: channelId,
+        action: mode,
+        inspectCommand: "openclaw channels status --channel " + channelId,
+      }),
+    );
   }
   return {
     cfg: resolved.cfg,
@@ -172,31 +180,65 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
   }
 }
 
+async function logoutViaGatewayRuntime(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+  accountId: string;
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  try {
+    await callGateway({
+      config: params.cfg,
+      method: "channels.logout",
+      params: {
+        channel: params.channelId,
+        accountId: params.accountId,
+      },
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      deviceIdentity: null,
+    });
+    return true;
+  } catch (error) {
+    if (params.cfg.gateway?.mode === "remote") {
+      throw error;
+    }
+    params.runtime.log(
+      `Local logout will clear auth for ${params.channelId}/${params.accountId}, but the running gateway did not stop it: ${formatErrorMessage(error)}`,
+    );
+    return false;
+  }
+}
+
 export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
-  const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
-    opts,
-    "login",
-    loadedCfg,
-    runtime,
-  );
+  const resolvedChannel = await resolveChannelPluginForMode(opts, "login", loadedCfg, runtime);
+  let cfg = resolvedChannel.cfg;
+  const { configChanged, channelInput, plugin } = resolvedChannel;
   if (autoEnabled.changes.length > 0 || configChanged) {
-    await replaceConfigFile({
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: (await sourceSnapshotPromise)?.hash,
     });
+    cfg = committed.config;
   }
   const login = plugin.auth?.login;
   if (!login) {
-    throw new Error(`Channel ${channelInput} does not support login`);
+    throw new Error(
+      formatUnsupportedChannelActionMessage({
+        channel: channelInput,
+        action: "login",
+        inspectCommand: "openclaw channels status --channel " + channelInput,
+      }),
+    );
   }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
@@ -223,28 +265,42 @@ export async function runChannelLogout(
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
-  const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
-    opts,
-    "logout",
-    loadedCfg,
-    runtime,
-  );
+  const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", loadedCfg, runtime);
+  let cfg = resolvedChannel.cfg;
+  const { configChanged, channelInput, plugin } = resolvedChannel;
   if (autoEnabled.changes.length > 0 || configChanged) {
-    await replaceConfigFile({
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: (await sourceSnapshotPromise)?.hash,
     });
+    cfg = committed.config;
   }
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
-    throw new Error(`Channel ${channelInput} does not support logout`);
+    throw new Error(
+      formatUnsupportedChannelActionMessage({
+        channel: channelInput,
+        action: "logout",
+        inspectCommand: "openclaw channels status --channel " + channelInput,
+      }),
+    );
   }
-  // Auth-only flow: resolve account + clear session state only.
+  // Prefer the live gateway so logout also stops any active channel runtime.
   const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  if (
+    await logoutViaGatewayRuntime({
+      cfg,
+      channelId: plugin.id,
+      accountId,
+      runtime,
+    })
+  ) {
+    return;
+  }
   const account = plugin.config.resolveAccount(cfg, accountId);
   await logoutAccount({
     cfg,

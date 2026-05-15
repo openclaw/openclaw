@@ -1,6 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
@@ -28,7 +28,66 @@ vi.mock("./runtime.js", async (importOriginal) => {
   };
 });
 
-type StreamEvent = { type: string };
+afterAll(() => {
+  vi.doUnmock("./models.fetch.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
+});
+
+type StreamEvent = { type: string } & Record<string, unknown>;
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectSingleDoneEvent(events: StreamEvent[]) {
+  expect(events).toHaveLength(1);
+  expect(events[0]?.type).toBe("done");
+}
+
+function requireMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function expectEnsureLoadedFields(fields: Record<string, unknown>) {
+  const [params] = requireMockCallArg(ensureLmstudioModelLoadedMock, "ensureLmstudioModelLoaded");
+  const record = requireRecord(params, "ensureLmstudioModelLoaded params");
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === "ssrfPolicy") {
+      expectRecordFields(
+        requireRecord(record.ssrfPolicy, "ssrfPolicy"),
+        value as Record<string, unknown>,
+      );
+    } else {
+      expect(record[key]).toEqual(value);
+    }
+  }
+}
+
+function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string, unknown>) {
+  const call = requireMockCallArg(
+    baseStream as unknown as { mock: { calls: unknown[][] } },
+    "base stream",
+  );
+  expectRecordFields(requireRecord(call[0], "base stream model"), fields);
+  if (call[1] === undefined) {
+    throw new Error("Expected base stream context");
+  }
+  expect(call[2]).toBeUndefined();
+}
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const resolved = stream instanceof Promise ? await stream : stream;
@@ -44,6 +103,19 @@ function buildDoneStreamFn(): StreamFn {
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => {
       stream.push({ type: "done", reason: "stop", message: {} as never });
+      stream.end();
+    });
+    return stream;
+  });
+}
+
+function buildEventStreamFn(events: unknown[]): StreamFn {
+  return vi.fn((_model, _context, _options) => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      for (const event of events) {
+        stream.push(event as never);
+      }
       stream.end();
     });
     return stream;
@@ -75,6 +147,7 @@ function runWrappedLmstudioStream(
   wrapped: StreamFn,
   model: Record<string, unknown>,
   options?: Record<string, unknown>,
+  context?: Record<string, unknown>,
 ) {
   return wrapped(
     {
@@ -83,7 +156,7 @@ function runWrappedLmstudioStream(
       id: "lmstudio/qwen3-8b-instruct",
       ...model,
     } as never,
-    { messages: [] } as never,
+    { messages: [], ...context } as never,
     options as never,
   );
 }
@@ -94,6 +167,7 @@ describe("lmstudio stream wrapper", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     ensureLmstudioModelLoadedMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockReset();
     resolveLmstudioRuntimeApiKeyMock.mockReset();
@@ -114,17 +188,15 @@ describe("lmstudio stream wrapper", () => {
     );
     const events = await collectEvents(stream);
 
-    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(events);
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
-    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://lmstudio.internal:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-        requestedContextLength: 131072,
-        apiKey: "lmstudio-token",
-        ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
-      }),
-    );
+    expectEnsureLoadedFields({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      requestedContextLength: 131072,
+      apiKey: "lmstudio-token",
+      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
   });
 
   it("prefers model contextTokens over contextWindow for preload requests", async () => {
@@ -139,17 +211,15 @@ describe("lmstudio stream wrapper", () => {
     );
     const events = await collectEvents(stream);
 
-    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(events);
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
-    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://lmstudio.internal:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-        requestedContextLength: 64000,
-        apiKey: "lmstudio-token",
-        ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
-      }),
-    );
+    expectEnsureLoadedFields({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      requestedContextLength: 64000,
+      apiKey: "lmstudio-token",
+      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
   });
 
   it("continues inference when preload fails", async () => {
@@ -181,8 +251,51 @@ describe("lmstudio stream wrapper", () => {
       undefined as never,
     );
     const events = await collectEvents(stream);
-    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(events);
     expect(baseStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips native model preload when provider params disable it", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              params: { preload: false },
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const events = await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+    expect(baseStream).toHaveBeenCalledTimes(1);
+    const [model] = requireMockCallArg(
+      baseStream as unknown as { mock: { calls: unknown[][] } },
+      "base stream",
+    );
+    expectRecordFields(requireRecord(requireRecord(model, "base stream model").compat, "compat"), {
+      supportsUsageInStreaming: true,
+    });
   });
 
   it("dedupes concurrent preload requests for the same model and context", async () => {
@@ -244,8 +357,8 @@ describe("lmstudio stream wrapper", () => {
     resolvePreload();
     const [firstEvents, secondEvents] = await Promise.all([firstPromise, secondPromise]);
 
-    expect(firstEvents).toEqual([expect.objectContaining({ type: "done" })]);
-    expect(secondEvents).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(firstEvents);
+    expectSingleDoneEvent(secondEvents);
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
   });
 
@@ -279,7 +392,7 @@ describe("lmstudio stream wrapper", () => {
         undefined as never,
       ),
     );
-    expect(firstEvents).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(firstEvents);
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
 
     const secondEvents = await collectEvents(
@@ -293,7 +406,7 @@ describe("lmstudio stream wrapper", () => {
         undefined as never,
       ),
     );
-    expect(secondEvents).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(secondEvents);
     // The second call must NOT retry preload because cooldown is active, but
     // the underlying stream must still run so the user gets a response.
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
@@ -386,18 +499,160 @@ describe("lmstudio stream wrapper", () => {
     );
     const events = await collectEvents(stream);
 
-    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expectSingleDoneEvent(events);
     expect(baseStream).toHaveBeenCalledTimes(1);
-    expect(baseStream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "lmstudio",
-        compat: expect.objectContaining({
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: true,
-        }),
+    expectBaseStreamModelFields(baseStream, { provider: "lmstudio" });
+    const [model] = requireMockCallArg(
+      baseStream as unknown as { mock: { calls: unknown[][] } },
+      "base stream",
+    );
+    expectRecordFields(requireRecord(requireRecord(model, "base stream model").compat, "compat"), {
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: true,
+    });
+  });
+
+  it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
+    const rawToolText = [
+      "[mempalace_mempalace_search]",
+      '{"query":"codename","wing":"personal","room":"identities"}',
+      "[END_TOOL_REQUEST]",
+    ].join("\n");
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [
+          {
+            name: "mempalace_mempalace_search",
+            description: "Search MemPalace",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
       }),
-      expect.anything(),
-      undefined,
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+    const toolCall = requireRecord(done.message?.content?.[0], "tool call content");
+    expectRecordFields(toolCall, {
+      type: "toolCall",
+      name: "mempalace_mempalace_search",
+      arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
+    expect(String(toolCall.id)).toMatch(/^call_[a-f0-9]{24}$/);
+  });
+
+  it("promotes standalone Harmony local-model tool text to a structured tool call", async () => {
+    const rawToolText =
+      'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expectRecordFields(requireRecord(done.message?.content?.[0], "tool call content"), {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/path/to/file", line_start: 1, line_end: 400 },
+    });
+  });
+
+  it("passes through bracketed text when the tool is not registered", async () => {
+    const rawToolText = [
+      "[mempalace_mempalace_search]",
+      '{"query":"codename"}',
+      "[/mempalace_mempalace_search]",
+    ].join("\n");
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expectRecordFields(
+      requireRecord(
+        events.find((event) => event.type === "text_delta"),
+        "text delta",
+      ),
+      {
+        delta: rawToolText,
+      },
     );
   });
 });

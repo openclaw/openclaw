@@ -1,12 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { isRecord } from "../utils.js";
+import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
@@ -22,39 +20,29 @@ export type BundleServerRuntimeSupport = {
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
-  onOpenFailure?: (
-    failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>,
-  ) => ReadBundleJsonResult;
+  onOpenFailure?: (failure: RootFileOpenFailure) => ReadBundleJsonResult;
 }): ReadBundleJsonResult {
-  const absolutePath = path.join(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
-    return params.onOpenFailure?.(opened) ?? { ok: true, raw: {} };
+  if (result.ok) {
+    return { ok: true, raw: result.value };
   }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      return { ok: false, error: `${params.relativePath} must contain a JSON object` };
-    }
-    return { ok: true, raw };
-  } catch (error) {
-    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(error)}` };
-  } finally {
-    fs.closeSync(opened.fd);
+  if (result.reason === "open") {
+    return params.onOpenFailure?.(result.failure) ?? { ok: true, raw: {} };
   }
+  return { ok: false, error: result.error };
 }
 
 export function resolveBundleJsonOpenFailure(params: {
-  failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
+  failure: RootFileOpenFailure;
   relativePath: string;
   allowMissing?: boolean;
 }): ReadBundleJsonResult {
-  return matchBoundaryFileOpenFailure(params.failure, {
+  return matchRootFileOpenFailure(params.failure, {
     path: () => {
       if (params.allowMissing) {
         return { ok: true, raw: {} };
@@ -107,9 +95,10 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     return { config: params.createEmptyConfig(), diagnostics: [] };
   }
 
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    includeDisabled: true,
   });
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();

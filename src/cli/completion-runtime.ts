@@ -10,6 +10,7 @@ import { pathExists } from "../utils.js";
 
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
+export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
 
 export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
@@ -68,9 +69,9 @@ function formatCompletionSourceLine(
   cachePath: string,
 ): string {
   if (shell === "fish") {
-    return `source "${cachePath}"`;
+    return `test -f "${cachePath}"; and source "${cachePath}"`;
   }
-  return `source "${cachePath}"`;
+  return `[ -f "${cachePath}" ] && source "${cachePath}"`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {

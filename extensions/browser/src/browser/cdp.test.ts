@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import "../../test-support/browser-security-runtime.mock.js";
+import "../test-support/browser-security.mock.js";
 import {
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
@@ -48,6 +49,19 @@ describe("cdp", () => {
           params?: Record<string, unknown>;
         };
         onMessage(msg, socket);
+        if (msg.method === "Target.attachToTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
+        } else if (
+          msg.method === "Target.detachFromTarget" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.enable" ||
+          msg.method === "Network.enable" ||
+          msg.method === "DOM.enable" ||
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Runtime.runIfWaitingForDebugger"
+        ) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
       });
     });
     return wsPort;
@@ -86,7 +100,11 @@ describe("cdp", () => {
   });
 
   it("creates a target via the browser websocket", async () => {
+    const methods: string[] = [];
     const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
       if (msg.method !== "Target.createTarget") {
         return;
       }
@@ -108,6 +126,17 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
+    expect(methods).toEqual([
+      "Target.createTarget",
+      "Target.attachToTarget",
+      "Page.enable",
+      "Runtime.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Accessibility.enable",
+      "Runtime.runIfWaitingForDebugger",
+      "Target.detachFromTarget",
+    ]);
   });
 
   it("creates a target via direct WebSocket URL (skips /json/version)", async () => {
@@ -138,6 +167,67 @@ describe("cdp", () => {
     }
   });
 
+  it("honors configured HTTP discovery timeouts when creating a target", async () => {
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method !== "Target.createTarget") {
+        return;
+      }
+      socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_SLOW" } }));
+    });
+
+    httpServer = createServer((req, res) => {
+      if (req.url === "/json/version") {
+        setTimeout(() => {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/SLOW`,
+            }),
+          );
+        }, 120);
+        return;
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    const httpPort = (httpServer.address() as AddressInfo).port;
+
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        url: "https://example.com",
+        timeouts: { httpTimeoutMs: 20 },
+      }),
+    ).rejects.toThrow(/abort|timeout|timed out/i);
+  });
+
+  it("honors configured WebSocket handshake timeouts when creating a target", async () => {
+    wsServer = new WebSocketServer({ noServer: true });
+    httpServer = createServer();
+    const heldSockets: Duplex[] = [];
+    httpServer.on("upgrade", (_req, socket) => {
+      heldSockets.push(socket);
+      // Hold the TCP connection open without completing the WebSocket handshake.
+    });
+    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    const port = (httpServer.address() as AddressInfo).port;
+
+    try {
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: `ws://127.0.0.1:${port}/devtools/browser/SLOW`,
+          url: "https://example.com",
+          timeouts: { handshakeTimeoutMs: 20 },
+        }),
+      ).rejects.toThrow(/handshake|timeout|timed out/i);
+    } finally {
+      for (const socket of heldSockets) {
+        socket.destroy();
+      }
+    }
+  });
+
   it("preserves query params when connecting via direct WebSocket URL", async () => {
     let receivedHeaders: Record<string, string> = {};
     const wsPort = await startWsServer();
@@ -154,6 +244,18 @@ describe("cdp", () => {
         const msg = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
         if (msg.method === "Target.createTarget") {
           socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_QP" } }));
+        } else if (msg.method === "Target.attachToTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
+        } else if (
+          msg.method === "Target.detachFromTarget" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.enable" ||
+          msg.method === "Network.enable" ||
+          msg.method === "DOM.enable" ||
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Runtime.runIfWaitingForDebugger"
+        ) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
         }
       });
     });
@@ -369,22 +471,39 @@ describe("cdp", () => {
     });
     const wss = new WebSocketServer({ noServer: true });
     server.on("upgrade", (req, socket, head) => {
-      if (req.url?.startsWith("/e/bad")) {
-        socket.destroy();
-        return;
-      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
     });
-    wss.on("connection", (socket) => {
+    wss.on("connection", (socket, req) => {
       socket.on("message", (data) => {
         const msg = JSON.parse(rawDataToString(data)) as {
           id?: number;
           method?: string;
         };
+        if (req.url?.startsWith("/e/bad")) {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              error: { message: "Browserless endpoint rejected command" },
+            }),
+          );
+          return;
+        }
         if (msg.method === "Target.createTarget") {
           socket.send(JSON.stringify({ id: msg.id, result: { targetId: "ROOT_FALLBACK" } }));
+        } else if (msg.method === "Target.attachToTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
+        } else if (
+          msg.method === "Target.detachFromTarget" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.enable" ||
+          msg.method === "Network.enable" ||
+          msg.method === "DOM.enable" ||
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Runtime.runIfWaitingForDebugger"
+        ) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
         }
       });
     });

@@ -35,13 +35,14 @@ agent automation and verification.
 
 ```bash
 openclaw browser --browser-profile openclaw doctor
+openclaw browser --browser-profile openclaw doctor --deep
 openclaw browser --browser-profile openclaw status
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
-If you get “Browser disabled”, enable it in config (see below) and restart the
+If you get "Browser disabled", enable it in config (see below) and restart the
 Gateway.
 
 If `openclaw browser` is missing entirely, or the agent says the browser tool
@@ -103,7 +104,7 @@ turns do not pay the full token cost.
 
 ## Missing browser command or tool
 
-If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser`. Add it:
+If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser` and no root `browser` config block exists. Add it:
 
 ```json5
 {
@@ -113,7 +114,7 @@ If `openclaw browser` is unknown after an upgrade, `browser.request` is missing,
 }
 ```
 
-`browser.enabled=true`, `plugins.entries.browser.enabled=true`, and `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership — the allowlist gates plugin loading, and tool policy only runs after load. Removing `plugins.allow` entirely also restores the default.
+An explicit root `browser` block, for example `browser.enabled=true` or `browser.profiles.<name>`, activates the bundled browser plugin even under a restrictive `plugins.allow`, matching channel config behavior. `plugins.entries.browser.enabled=true` and `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership by themselves. Removing `plugins.allow` entirely also restores the default.
 
 ## Profiles: `openclaw` vs `user`
 
@@ -193,12 +194,20 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
-- `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP HTTP reachability checks; `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket handshakes.
+- `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
+  checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
+  their CDP WebSocket handshakes.
 - `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
   process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
   follow-up budget for CDP websocket readiness after the process is discovered.
   Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
-  starts slowly. Values are capped at 120000 ms.
+  starts slowly. Values must be positive integers up to `120000` ms; invalid
+  config values are rejected.
+- Repeated managed Chrome launch/readiness failures are circuit-broken per
+  profile. After several consecutive failures, OpenClaw pauses new launch
+  attempts briefly instead of spawning Chromium on every browser tool call. Fix
+  the startup problem, disable the browser if it is not needed, or restart the
+  Gateway after repair.
 - `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
@@ -233,22 +242,23 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;
   an explicit `start --headless` request still wins for that one launch.
-- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers.
+- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
-- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.).
+- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
 
 </AccordionGroup>
 
-## Use Brave (or another Chromium-based browser)
+## Use Brave or another Chromium-based browser
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override
-auto-detection. `~` expands to your OS home directory:
+auto-detection. Top-level and per-profile `executablePath` values accept `~`
+for your OS home directory:
 
 ```bash
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
@@ -332,10 +342,10 @@ This is the default path for remote gateways.
 Notes:
 
 - The node host exposes its local browser control server via a **proxy command**.
-- Profiles come from the node’s own `browser.profiles` config (same as local).
+- Profiles come from the node's own `browser.profiles` config (same as local).
 - `nodeHost.browserProxy.allowProfiles` is optional. Leave it empty for the legacy/default behavior: all configured profiles remain reachable through the proxy, including profile create/delete routes.
 - If you set `nodeHost.browserProxy.allowProfiles`, OpenClaw treats it as a least-privilege boundary: only allowlisted profiles can be targeted, and persistent profile create/delete routes are blocked on the proxy surface.
-- Disable if you don’t want it:
+- Disable if you don't want it:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"`
 
@@ -412,14 +422,14 @@ Some hosted browser services expose a **direct WebSocket** endpoint rather than
 the standard HTTP-based CDP discovery (`/json/version`). OpenClaw accepts three
 CDP URL shapes and picks the right connection strategy automatically:
 
-- **HTTP(S) discovery** — `http://host[:port]` or `https://host[:port]`.
+- **HTTP(S) discovery** - `http://host[:port]` or `https://host[:port]`.
   OpenClaw calls `/json/version` to discover the WebSocket debugger URL, then
   connects. No WebSocket fallback.
-- **Direct WebSocket endpoints** — `ws://host[:port]/devtools/<kind>/<id>` or
+- **Direct WebSocket endpoints** - `ws://host[:port]/devtools/<kind>/<id>` or
   `wss://...` with a `/devtools/browser|page|worker|shared_worker|service_worker/<id>`
   path. OpenClaw connects directly via a WebSocket handshake and skips
   `/json/version` entirely.
-- **Bare WebSocket roots** — `ws://host[:port]` or `wss://host[:port]` with no
+- **Bare WebSocket roots** - `ws://host[:port]` or `wss://host[:port]` with no
   `/devtools/...` path (e.g. [Browserless](https://browserless.io),
   [Browserbase](https://www.browserbase.com)). OpenClaw tries HTTP
   `/json/version` discovery first (normalising the scheme to `http`/`https`);
@@ -471,14 +481,17 @@ Notes:
 
 Key ideas:
 
-- Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- Browser control is loopback-only; access flows through the Gateway's auth or node pairing.
 - The standalone loopback browser HTTP API uses **shared-secret auth only**:
   gateway token bearer auth, `x-openclaw-password`, or HTTP Basic auth with the
   configured gateway password.
 - Tailscale Serve identity headers and `gateway.auth.mode: "trusted-proxy"` do
   **not** authenticate this standalone loopback browser API.
 - If browser control is enabled and no shared-secret auth is configured, OpenClaw
-  auto-generates `gateway.auth.token` on startup and persists it to config.
+  generates a runtime-only gateway token for that startup. Configure
+  `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or
+  `OPENCLAW_GATEWAY_PASSWORD` explicitly if clients need a stable secret across
+  restarts.
 - OpenClaw does **not** auto-generate that token when `gateway.auth.mode` is
   already `password`, `none`, or `trusted-proxy`.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
@@ -502,7 +515,7 @@ Defaults:
 - The `openclaw` profile is auto-created if missing.
 - The `user` profile is built-in for Chrome MCP existing-session attach.
 - Existing-session profiles are opt-in beyond `user`; create them with `--driver existing-session`.
-- Local CDP ports allocate from **18800–18899** by default.
+- Local CDP ports allocate from **18800-18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
 All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`.
@@ -530,7 +543,8 @@ Default behavior:
 - The built-in `user` profile uses Chrome MCP auto-connect, which targets the
   default local Google Chrome profile.
 
-Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
+Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile.
+`~` expands to your OS home directory:
 
 ```json5
 {
@@ -587,7 +601,7 @@ What to check if attach does not work:
 
 Agent use:
 
-- Use `profile="user"` when you need the user’s logged-in browser state.
+- Use `profile="user"` when you need the user's logged-in browser state.
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Only choose this mode when the user is at the computer to approve the attach
   prompt.
@@ -630,10 +644,10 @@ directory.
 
 Compared to the managed `openclaw` profile, existing-session drivers are more constrained:
 
-- **Screenshots** — page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
-- **Actions** — `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
-- **Wait / upload / dialog** — `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides.
-- **Managed-only features** — batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
+- **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
+- **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides.
+- **Managed-only features** - batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
 
 </Accordion>
 
@@ -663,7 +677,8 @@ Platforms:
 - macOS: checks `/Applications` and `~/Applications`.
 - Linux: checks common Chrome/Brave/Edge/Chromium locations under `/usr/bin`,
   `/snap/bin`, `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and
-  `/usr/lib/chromium-browser`.
+  `/usr/lib/chromium-browser`, plus Playwright-managed Chromium under
+  `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
 - Windows: checks common install locations.
 
 ## Control API (optional)
@@ -729,7 +744,7 @@ Security guidance:
 
 The agent gets **one tool** for browser automation:
 
-- `browser` — doctor/status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
+- `browser` - doctor/status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
 
 How it maps:
 
@@ -748,6 +763,6 @@ This keeps the agent deterministic and avoids brittle selectors.
 
 ## Related
 
-- [Tools Overview](/tools) — all available agent tools
-- [Sandboxing](/gateway/sandboxing) — browser control in sandboxed environments
-- [Security](/gateway/security) — browser control risks and hardening
+- [Tools Overview](/tools) - all available agent tools
+- [Sandboxing](/gateway/sandboxing) - browser control in sandboxed environments
+- [Security](/gateway/security) - browser control risks and hardening

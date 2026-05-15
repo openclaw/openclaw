@@ -83,7 +83,6 @@ describe("memory search config", () => {
   }
 
   function expectDefaultRemoteBatch(resolved: ReturnType<typeof resolveMemorySearchConfig>): void {
-    expect(resolved?.remote?.concurrency).toBe(4);
     expect(resolved?.remote?.batch).toEqual({
       enabled: false,
       wait: true,
@@ -128,12 +127,15 @@ describe("memory search config", () => {
   function expectMergedRemoteConfig(
     resolved: ReturnType<typeof resolveMemorySearchConfig>,
     apiKey: unknown,
+    extras?: { nonBatchConcurrency?: number },
   ) {
     expect(resolved?.remote).toEqual({
       baseUrl: "https://agent.example/v1",
       apiKey,
       headers: { "X-Default": "on" },
-      concurrency: 4,
+      ...(typeof extras?.nonBatchConcurrency === "number"
+        ? { nonBatchConcurrency: extras.nonBatchConcurrency }
+        : {}),
       batch: {
         enabled: false,
         wait: true,
@@ -197,6 +199,33 @@ describe("memory search config", () => {
     expect(resolved?.fallback).toBe("none");
   });
 
+  it("resolves custom provider ids through their configured api owner", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://10.0.0.8:11435",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama-5080",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.provider).toBe("ollama-5080");
+    expect(resolved?.model).toBe("nomic-embed-text");
+    expectDefaultRemoteBatch(resolved);
+  });
+
   it("resolves sync config without consulting embedding providers", () => {
     clearMemoryEmbeddingProviders();
     const cfg = asConfig({
@@ -227,12 +256,30 @@ describe("memory search config", () => {
       watch: false,
       watchDebounceMs: 25,
       intervalMinutes: 3,
+      embeddingBatchTimeoutSeconds: undefined,
       sessions: {
         deltaBytes: 321,
         deltaMessages: 7,
         postCompactionForce: false,
       },
     });
+  });
+
+  it("uses configured embeddingBatchTimeoutSeconds when set", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              embeddingBatchTimeoutSeconds: 600,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds).toBe(600);
   });
 
   it("merges defaults and overrides", () => {
@@ -464,6 +511,33 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("nomic-embed-text");
   });
 
+  it("merges memory search input_type overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            inputType: "passage",
+            queryInputType: "query",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              documentInputType: "document",
+            },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.inputType).toBe("passage");
+    expect(resolved?.queryInputType).toBe("query");
+    expect(resolved?.documentInputType).toBe("document");
+  });
+
   it("defaults session delta thresholds", () => {
     const cfg = asConfig({
       agents: {
@@ -492,66 +566,16 @@ describe("memory search config", () => {
     expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
   });
 
-  it("uses remote embedding concurrency from defaults", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: { concurrency: 2 },
-          },
-        },
-      },
+  it("merges remote non-batch concurrency from defaults with agent overrides", () => {
+    const cfg = configWithRemoteDefaults({
+      apiKey: "default-key", // pragma: allowlist secret
+      headers: { "X-Default": "on" },
+      nonBatchConcurrency: 1,
     });
 
     const resolved = resolveMemorySearchConfig(cfg, "main");
 
-    expect(resolved?.remote?.concurrency).toBe(2);
-    expect(resolved?.remote?.batch?.concurrency).toBe(2);
-  });
-
-  it("lets agent remote embedding concurrency override defaults", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: { concurrency: 3 },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
-            memorySearch: {
-              remote: { concurrency: 1 },
-            },
-          },
-        ],
-      },
-    });
-
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-
-    expect(resolved?.remote?.concurrency).toBe(1);
-    expect(resolved?.remote?.batch?.concurrency).toBe(2);
-  });
-
-  it("clamps remote embedding concurrency to at least one", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: { concurrency: 0 },
-          },
-        },
-      },
-    });
-
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-
-    expect(resolved?.remote?.concurrency).toBe(1);
+    expectMergedRemoteConfig(resolved, "default-key", { nonBatchConcurrency: 1 }); // pragma: allowlist secret
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {

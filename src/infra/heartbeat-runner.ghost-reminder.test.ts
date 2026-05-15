@@ -8,7 +8,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -103,12 +103,65 @@ describe("Ghost reminder bug (issue #13317)", () => {
     } | null,
     reminderText: string,
   ) => {
-    expect(calledCtx).not.toBeNull();
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).toContain(reminderText);
-    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-    expect(calledCtx?.Body).not.toContain("heartbeat poll");
+    if (calledCtx === null || typeof calledCtx.Body !== "string") {
+      throw new Error("Expected cron event prompt body");
+    }
+    expect(calledCtx.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx.Body).toContain(reminderText);
+    expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+    expect(calledCtx.Body).not.toContain("heartbeat poll");
+  };
+
+  const mockCallAt = (
+    mock: { mock: { calls: Array<readonly unknown[]> } },
+    index: number,
+    label: string,
+  ): readonly unknown[] => {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  };
+
+  const getFirstReplyContext = (
+    replySpy: ReturnType<typeof vi.fn>,
+  ): {
+    Provider?: string;
+    SessionKey?: string;
+    MessageThreadId?: number;
+    Body?: string;
+    ForceSenderIsOwnerFalse?: boolean;
+  } => {
+    const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
+    if (!ctx || typeof ctx !== "object") {
+      throw new Error("expected heartbeat reply context");
+    }
+    return ctx as {
+      Provider?: string;
+      SessionKey?: string;
+      MessageThreadId?: number;
+      Body?: string;
+      ForceSenderIsOwnerFalse?: boolean;
+    };
+  };
+
+  const expectTelegramSend = (
+    sendTelegram: ReturnType<typeof vi.fn>,
+    params: {
+      to: string;
+      text: string;
+      messageThreadId?: number;
+    },
+  ) => {
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    const [to, text, options] = mockCallAt(sendTelegram, 0, "Telegram send");
+    expect(to).toBe(params.to);
+    expect(text).toBe(params.text);
+    expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
+      params.messageThreadId,
+    );
   };
 
   const runCronReminderCase = async (
@@ -143,6 +196,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       SessionKey?: string;
       ForceSenderIsOwnerFalse?: boolean;
     } | null;
+    sessionKey: string;
     replyCallCount: number;
   }> => {
     return withTempHeartbeatSandbox(
@@ -164,16 +218,13 @@ describe("Ghost reminder bug (issue #13317)", () => {
             telegram: sendTelegram,
           },
         });
-        const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
-          Provider?: string;
-          Body?: string;
-          SessionKey?: string;
-          ForceSenderIsOwnerFalse?: boolean;
-        } | null;
+        const calledCtx =
+          getReplySpy.mock.calls.length === 0 ? null : getFirstReplyContext(getReplySpy);
         return {
           result,
           sendTelegram,
           calledCtx,
+          sessionKey,
           replyCallCount: getReplySpy.mock.calls.length,
         };
       },
@@ -313,8 +364,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(second.status).toBe("ran");
       expect(getReplySpy).toHaveBeenCalledTimes(2);
 
-      const firstCtx = getReplySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
-      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      const firstCtx = mockCallAt(getReplySpy, 0, "first heartbeat reply")[0] as {
+        Provider?: string;
+        Body?: string;
+      };
+      const secondCtx = mockCallAt(getReplySpy, 1, "second heartbeat reply")[0] as {
+        Provider?: string;
+        Body?: string;
+      };
       expect(firstCtx.Provider).toBe("cron-event");
       expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
       expect(secondCtx.Provider).toBe("heartbeat");
@@ -373,6 +430,26 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("consumes exec completion entries without dropping later generic events", async () => {
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-preserve-generic-",
+      replyText: "Deploy succeeded",
+      reason: "exec-event",
+      enqueue: (key) => {
+        enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded", {
+          sessionKey: key,
+        });
+        enqueueSystemEvent("Node connected", { sessionKey: key });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("deploy succeeded");
+    expect(calledCtx?.Body).not.toContain("Node connected");
+    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
   });
 
   it("classifies hook:wake exec completions as exec-event prompts", async () => {
@@ -489,6 +566,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
+        source: "hook",
+        intent: "immediate",
         reason: "wake",
         deps: {
           getReplyFromConfig: replySpy,
@@ -497,12 +576,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "-100155462274",
-        "Restart complete",
-        expect.objectContaining({ messageThreadId: 42 }),
-      );
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+        messageThreadId: 42,
+      });
     });
   });
 
@@ -529,6 +607,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
+        source: "hook",
+        intent: "immediate",
         reason: "wake",
         deps: {
           getReplyFromConfig: replySpy,
@@ -537,20 +617,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: `${sessionKey}:heartbeat`,
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram.mock.calls[0]?.[0]).toBe("-100155462274");
-      const options = sendTelegram.mock.calls[0]?.[2] as { messageThreadId?: number } | undefined;
-      expect(options?.messageThreadId).toBeUndefined();
+      expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+      });
     });
   });
-  it("keeps exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
+  it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -586,6 +660,69 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const getReplySpy = vi.fn().mockResolvedValue({
         text: "The review-worker spawn finished successfully.",
       });
+      enqueueSystemEvent("Exec completed (review-run, code 0) :: review-worker spawn finished", {
+        sessionKey,
+        trusted: false,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003774691294:topic:47",
+          threadId: 47,
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        to: "telegram:-1003774691294:topic:47",
+        text: "The review-worker spawn finished successfully.",
+        messageThreadId: 47,
+      });
+    });
+  });
+
+  it("suppresses metadata-only successful exec completions", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294:topic:2175",
+            lastThreadId: 2175,
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn();
+      const getReplySpy = vi.fn().mockResolvedValue({
+        text: "HEARTBEAT_OK",
+      });
       enqueueSystemEvent("Exec completed (review-run, code 0)", {
         sessionKey,
         trusted: false,
@@ -608,12 +745,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "telegram:-1003774691294:topic:47",
-        "The review-worker spawn finished successfully.",
-        expect.objectContaining({ messageThreadId: 47 }),
-      );
+      expect(getFirstReplyContext(getReplySpy).Body).toContain("no command output was found");
+      expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
 
@@ -648,20 +781,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: `${sessionKey}:heartbeat`,
-          MessageThreadId: 42,
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "-100155462274",
-        "Topic heartbeat",
-        expect.objectContaining({ messageThreadId: 42 }),
-      );
+      const replyCtx = getFirstReplyContext(replySpy);
+      expect(replyCtx.SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expect(replyCtx.MessageThreadId).toBe(42);
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Topic heartbeat",
+        messageThreadId: 42,
+      });
     });
   });
 });

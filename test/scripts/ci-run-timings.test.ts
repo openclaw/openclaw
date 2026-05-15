@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { summarizeRunTimings } from "../../scripts/ci-run-timings.mjs";
+import {
+  parseRunTimingArgs,
+  selectLatestMainPushCiRun,
+  summarizeRunTimings,
+} from "../../scripts/ci-run-timings.mjs";
 
 describe("scripts/ci-run-timings.mjs", () => {
   it("separates queue time from job duration", () => {
@@ -45,5 +49,67 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["queued", 50],
       ["slow", 20],
     ]);
+  });
+
+  it("selects the push CI run for the current main SHA", () => {
+    expect(
+      selectLatestMainPushCiRun(
+        [
+          {
+            databaseId: 3,
+            event: "issue_comment",
+            headSha: "current",
+          },
+          {
+            databaseId: 2,
+            event: "push",
+            headSha: "older",
+          },
+          {
+            databaseId: 1,
+            event: "push",
+            headSha: "current",
+          },
+        ],
+        "current",
+      ),
+    ).toEqual({
+      databaseId: 1,
+      event: "push",
+      headSha: "current",
+    });
+  });
+
+  it("falls back to the newest push CI run when the exact SHA has not appeared yet", () => {
+    expect(
+      selectLatestMainPushCiRun(
+        [
+          {
+            databaseId: 4,
+            event: "issue_comment",
+            headSha: "current",
+          },
+          {
+            databaseId: 3,
+            event: "push",
+            headSha: "previous",
+          },
+        ],
+        "current",
+      ),
+    ).toEqual({
+      databaseId: 3,
+      event: "push",
+      headSha: "previous",
+    });
+  });
+
+  it("ignores pnpm passthrough sentinels when parsing monitor args", () => {
+    expect(parseRunTimingArgs(["--latest-main", "--", "--limit", "3"])).toEqual({
+      explicitRunId: undefined,
+      limit: 3,
+      recentLimit: null,
+      useLatestMain: true,
+    });
   });
 });

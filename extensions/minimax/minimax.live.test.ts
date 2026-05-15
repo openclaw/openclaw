@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
@@ -12,6 +12,7 @@ const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY?.trim() ?? "";
 const MINIMAX_SEARCH_KEY =
   process.env.MINIMAX_CODE_PLAN_KEY?.trim() ||
   process.env.MINIMAX_CODING_API_KEY?.trim() ||
+  process.env.MINIMAX_OAUTH_TOKEN?.trim() ||
   MINIMAX_API_KEY ||
   "";
 const MINIMAX_TTS_TOKEN_PLAN_KEY =

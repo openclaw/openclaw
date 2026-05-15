@@ -3,7 +3,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
@@ -13,6 +13,8 @@ const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
+const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -20,14 +22,31 @@ const GEMMA_PREFIX = "gemma-";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
-const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
+const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
-const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
 const GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
+const GOOGLE_PROVIDER_PREFIX = "google/";
+
+function normalizeGeminiProRequestId(id: string): string {
+  if (id.startsWith(GOOGLE_PROVIDER_PREFIX)) {
+    const modelId = id.slice(GOOGLE_PROVIDER_PREFIX.length);
+    const normalizedModelId = normalizeGeminiProRequestId(modelId);
+    return normalizedModelId === modelId ? id : `${GOOGLE_PROVIDER_PREFIX}${normalizedModelId}`;
+  }
+  if (id === "gemini-3-pro" || id === "gemini-3-pro-preview" || id === "gemini-3.1-pro") {
+    return "gemini-3.1-pro-preview";
+  }
+  return id;
+}
+
+function googleFamilyModelId(id: string): string {
+  return id.startsWith(GOOGLE_PROVIDER_PREFIX) ? id.slice(GOOGLE_PROVIDER_PREFIX.length) : id;
+}
 
 type GoogleForwardCompatFamily = {
   googleTemplateIds: readonly string[];
@@ -120,8 +139,8 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
-  const trimmed = params.ctx.modelId.trim();
-  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
+  const lower = normalizeOptionalLowercaseString(googleFamilyModelId(trimmed)) ?? "";
 
   let family: GoogleForwardCompatFamily;
   let patch: Partial<ProviderRuntimeModel> | undefined;
@@ -154,6 +173,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     }
   } else if (
     lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX) ||
+    lower.startsWith(GEMINI_3_FLASH_LITE_PREFIX) ||
     lower === GEMINI_FLASH_LITE_LATEST_ID
   ) {
     family = {
@@ -161,7 +181,11 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
       antigravityTemplateIds: GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS,
     };
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX) || lower === GEMINI_FLASH_LATEST_ID) {
+  } else if (
+    lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
+    lower.startsWith(GEMINI_3_FLASH_PREFIX) ||
+    lower === GEMINI_FLASH_LATEST_ID
+  ) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,

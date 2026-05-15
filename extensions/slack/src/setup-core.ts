@@ -19,10 +19,11 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
 import {
+  buildSlackManifest,
   buildSlackSetupLines,
   isSlackSetupAccountConfigured,
   SLACK_CHANNEL as channel,
@@ -176,6 +177,17 @@ export function createSlackSetupWizardBase(handlers: {
       lines: buildSlackSetupLines(),
       shouldShow: ({ cfg, accountId }) =>
         !isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId })),
+    },
+    prepare: async ({ cfg, accountId, prompter }) => {
+      if (isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId }))) {
+        return;
+      }
+      const manifest = buildSlackManifest();
+      if (prompter.plain) {
+        await prompter.plain(manifest);
+      } else {
+        await prompter.note(manifest, "Slack manifest JSON");
+      }
     },
     envShortcut: {
       prompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
