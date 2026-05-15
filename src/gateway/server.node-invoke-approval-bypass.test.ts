@@ -22,6 +22,8 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
+const NODE_LIST_WAIT_MS = 2_000;
+const NODE_LIST_POLL_MS = 25;
 
 function createDeviceIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
@@ -64,14 +66,23 @@ function requireRecord(
 }
 
 async function getConnectedNodeId(ws: WebSocket, command = "system.run"): Promise<string> {
-  const nodes = await rpcReq<{
-    nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-  }>(ws, "node.list", {});
-  expect(nodes.ok).toBe(true);
-  const matchingNode = nodes.payload?.nodes?.find(
-    (n) => n.connected && n.commands?.includes(command),
+  const deadline = Date.now() + NODE_LIST_WAIT_MS;
+  let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
+  while (Date.now() <= deadline) {
+    const nodes = await rpcReq<{
+      nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
+    }>(ws, "node.list", {});
+    expect(nodes.ok).toBe(true);
+    lastNodes = nodes.payload?.nodes ?? [];
+    const matchingNode = lastNodes.find((n) => n.connected && n.commands?.includes(command));
+    if (matchingNode?.nodeId) {
+      return matchingNode.nodeId;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, NODE_LIST_POLL_MS));
+  }
+  throw new Error(
+    `expected connected ${command} node id; last nodes: ${JSON.stringify(lastNodes)}`,
   );
-  return requireNonEmptyString(matchingNode?.nodeId, `connected ${command} node id`);
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
