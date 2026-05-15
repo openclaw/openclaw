@@ -12,9 +12,9 @@ import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import {
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
+import type {
+  PluginManifestRecord,
+  PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";

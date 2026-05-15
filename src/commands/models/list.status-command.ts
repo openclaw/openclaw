@@ -52,7 +52,7 @@ import { colorize, theme } from "../../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
-import { type AuthProbeSummary } from "./list.probe.js";
+import type { AuthProbeSummary } from "./list.probe.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,

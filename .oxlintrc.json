@@ -1,6 +1,10 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["unicorn", "typescript", "oxc"],
+  "plugins": [
+    "unicorn",
+    "typescript",
+    "oxc"
+  ],
   "categories": {
     "correctness": "error",
     "perf": "error",
@@ -62,7 +66,12 @@
     "typescript/adjacent-overload-signatures": "error",
     "typescript/ban-tslint-comment": "error",
     "typescript/consistent-return": "error",
-    "typescript/no-empty-object-type": ["error", { "allowInterfaces": "with-single-extends" }],
+    "typescript/no-empty-object-type": [
+      "error",
+      {
+        "allowInterfaces": "with-single-extends"
+      }
+    ],
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "error",
     "typescript/no-meaningless-void-operator": "error",
@@ -79,7 +88,9 @@
     "typescript/no-wrapper-object-types": "error",
     "typescript/switch-exhaustiveness-check": [
       "error",
-      { "considerDefaultExhaustiveForUnions": true }
+      {
+        "considerDefaultExhaustiveForUnions": true
+      }
     ],
     "typescript/prefer-as-const": "error",
     "typescript/prefer-namespace-keyword": "error",
@@ -174,7 +185,9 @@
     "vitest/valid-expect": "error",
     "vitest/valid-expect-in-promise": "error",
     "vitest/valid-title": "error",
-    "vitest/warn-todo": "error"
+    "vitest/warn-todo": "error",
+    "typescript/no-import-type-side-effects": "error",
+    "eslint/no-underscore-dangle": "off"
   },
   "ignorePatterns": [
     "dist/",
@@ -198,7 +211,9 @@
   ],
   "overrides": [
     {
-      "files": ["src/security/**"],
+      "files": [
+        "src/security/**"
+      ],
       "rules": {
         "eslint/no-warning-comments": "off",
         "oxc/no-map-spread": "off"

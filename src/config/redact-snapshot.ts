@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { type ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,

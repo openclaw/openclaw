@@ -21,7 +21,7 @@ import {
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
-import { type SecretResolverWarning } from "./runtime-shared.js";
+import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState,

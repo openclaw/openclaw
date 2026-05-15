@@ -6,7 +6,7 @@ import {
   type ConnectPairingRequiredReason,
 } from "../gateway/protocol/connect-error-details.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
-import { type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";

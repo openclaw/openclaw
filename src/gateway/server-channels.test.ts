@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
-import {
-  type ChannelGatewayContext,
-  type ChannelId,
-  type ChannelPlugin,
+import type {
+  ChannelGatewayContext,
+  ChannelId,
+  ChannelPlugin,
 } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,

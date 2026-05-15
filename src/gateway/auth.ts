@@ -11,7 +11,7 @@ import {
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
-import { type ResolvedGatewayAuth } from "./auth-resolve.js";
+import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,

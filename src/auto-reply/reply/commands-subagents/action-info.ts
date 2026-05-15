@@ -14,7 +14,7 @@ import {
   formatRunStatus,
   resolveSubagentTargetFromRuns,
 } from "../subagents-utils.js";
-import { type SubagentsCommandContext } from "./shared.js";
+import type { SubagentsCommandContext } from "./shared.js";
 
 const RECENT_WINDOW_MINUTES = 30;
 
