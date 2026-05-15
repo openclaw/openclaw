@@ -606,6 +606,58 @@ describe("plugin-sdk/approval-renderers", () => {
     );
   });
 
+  it.each([
+    {
+      command: "find . -fprint .env",
+      id: "plugin-command-find-fprint",
+      preview: "find . -fprint .env",
+      target: ".env",
+    },
+    {
+      command: "find . -fprint0 output.bin",
+      id: "plugin-command-find-fprint0",
+      preview: "find . -fprint0 output.bin",
+      target: "output.bin",
+    },
+    {
+      command: "find . -fls files.list",
+      id: "plugin-command-find-fls",
+      preview: "find . -fls files.list",
+      target: "files.list",
+    },
+    {
+      command: String.raw`find . -fprintf .env '%p\n'`,
+      id: "plugin-command-find-fprintf",
+      preview: String.raw`find . -fprintf .env '%p\n'`,
+      target: ".env",
+    },
+  ])(
+    "flags find output-file predicates as writes: $command",
+    ({ command, id, preview, target }) => {
+      const payload = buildPluginApprovalPendingReplyPayload({
+        request: {
+          id,
+          request: {
+            title: "Codex app-server command approval",
+            description: `Command: ${command}`,
+            toolName: "codex_command_approval",
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 121_000,
+        },
+        nowMs: 1_000,
+        language: "simple",
+      });
+
+      expect(payload.text).toContain(`- write find output to files: ${target}`);
+      expect(payload.text).toContain(`Command preview\n${preview}`);
+      expect(payload.text).toContain("Risk: High");
+      expect(payload.text).toContain("find output-file predicates can create or overwrite files.");
+      expect(payload.text).not.toContain("- search/list files");
+      expect(payload.text).not.toContain("Risk: Low");
+    },
+  );
+
   it("treats redirected read commands as file writes", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

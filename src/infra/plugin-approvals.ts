@@ -156,6 +156,7 @@ const ENV_BOOLEAN_FLAGS = new Set([
 const ENV_UNSAFE_SPLIT_FLAGS = new Set(["-S", "--split-string"]);
 const FIND_DELETE_PREDICATES = new Set(["-delete"]);
 const FIND_EXEC_PREDICATES = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+const FIND_OUTPUT_FILE_PREDICATES = new Set(["-fls", "-fprint", "-fprint0", "-fprintf"]);
 const CURL_UPLOAD_FILE_FLAGS = new Set(["-T", "--upload-file"]);
 const CURL_UPLOAD_BODY_FLAGS = new Set([
   "-d",
@@ -801,6 +802,19 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
             kind: "unknown",
             reason:
               "find -exec can run another command on every matched file, so review it before approving.",
+            showCommandPreview: true,
+          },
+          sudoPrefix,
+        );
+      }
+      const findOutputFileTargets = getFindOutputFileTargets(args);
+      if (findOutputFileTargets.targets.length > 0 || findOutputFileTargets.ambiguous) {
+        return withSudo(
+          {
+            text: `write find output to files${formatTargets(findOutputFileTargets.targets)}`,
+            risk: "high",
+            kind: "write",
+            reason: "find output-file predicates can create or overwrite files.",
             showCommandPreview: true,
           },
           sudoPrefix,
@@ -1694,6 +1708,33 @@ function hasFindDeletePredicate(args: readonly string[]): boolean {
 
 function hasFindExecPredicate(args: readonly string[]): boolean {
   return args.some((arg) => FIND_EXEC_PREDICATES.has(arg));
+}
+
+function getFindOutputFileTargets(args: readonly string[]): {
+  ambiguous: boolean;
+  targets: string[];
+} {
+  const targets: string[] = [];
+  let ambiguous = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    const inlineValue = getInlineOptionValue(arg, FIND_OUTPUT_FILE_PREDICATES);
+    if (inlineValue) {
+      targets.push(inlineValue);
+      continue;
+    }
+    if (!FIND_OUTPUT_FILE_PREDICATES.has(arg)) {
+      continue;
+    }
+    const target = args[index + 1];
+    if (target) {
+      targets.push(target);
+      index += 1;
+    } else {
+      ambiguous = true;
+    }
+  }
+  return { ambiguous, targets };
 }
 
 function hasSedInPlaceOption(args: readonly string[]): boolean {
