@@ -854,6 +854,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        modelPreflight: z
+          .object({
+            timeoutMs: z.number().int().min(100).max(60_000).optional(),
+            maxAttempts: z.number().int().min(1).max(10).optional(),
+            retryDelayMs: z.number().int().min(0).max(60_000).optional(),
+          })
+          .strict()
+          .optional(),
         failureAlert: z
           .object({
             enabled: z.boolean().optional(),

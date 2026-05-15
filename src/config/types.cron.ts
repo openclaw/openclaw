@@ -29,6 +29,15 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+export type CronModelPreflightConfig = {
+  /** Timeout in ms for each local model provider preflight probe. Default: 2500. */
+  timeoutMs?: number;
+  /** Number of probe attempts before marking the run skipped. Default: 1. */
+  maxAttempts?: number;
+  /** Delay in ms between failed probe attempts. Default: 0. */
+  retryDelayMs?: number;
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -59,6 +68,8 @@ export type CronConfig = {
     maxBytes?: number | string;
     keepLines?: number;
   };
+  /** Local model provider preflight behavior for isolated cron agent turns. */
+  modelPreflight?: CronModelPreflightConfig;
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;

@@ -263,7 +263,11 @@ turn. If the selected model resolves to a local, private-network, or `.local`
 Ollama provider and `/api/tags` is unreachable, OpenClaw records that cron run
 as `skipped` with the selected `ollama/<model>` in the error text. The endpoint
 preflight is cached for 5 minutes, so multiple cron jobs pointed at the same
-stopped Ollama daemon do not all launch failing model requests.
+stopped Ollama daemon do not all launch failing model requests. If a sleeping
+Ollama host needs more than the default single 2.5s probe to wake, configure
+`cron.modelPreflight.maxAttempts`, `cron.modelPreflight.retryDelayMs`, and/or
+`cron.modelPreflight.timeoutMs` to give it a short wake-up window before cron
+marks the run skipped.
 
 Live-verify the local text path, native stream path, and embeddings against
 local Ollama with:

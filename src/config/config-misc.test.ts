@@ -1082,6 +1082,19 @@ describe("cron webhook schema", () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it("accepts cron.modelPreflight config", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        modelPreflight: {
+          timeoutMs: 10000,
+          maxAttempts: 3,
+          retryDelayMs: 5000,
+        },
+      },
+    });
+    expect(res.success).toBe(true);
+  });
 });
 
 describe("broadcast", () => {
