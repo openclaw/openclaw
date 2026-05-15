@@ -429,8 +429,9 @@ function resolveCronAwarenessText(params: {
 }): string | undefined {
   if (params.outboundPayloads?.length) {
     const projection = projectDeliveredDirectCronPayloadsForMirror(params.outboundPayloads);
-    if (normalizeOptionalString(projection.text)) {
-      return resolveDirectCronTranscriptMirrorText(projection);
+    const projectedText = resolveDirectCronTranscriptMirrorText(projection);
+    if (projectedText) {
+      return projectedText;
     }
   }
   return params.deliveryPayloads
@@ -525,7 +526,10 @@ function isTtsAudioMirrorOnly(params: {
   payload: NormalizedOutboundPayload;
   mediaUrl: string;
 }): boolean {
-  return !!params.payload.hookContent && isAudioFileName(params.mediaUrl);
+  return (
+    (params.payload.audioAsVoice === true || !!params.payload.hookContent) &&
+    isAudioFileName(params.mediaUrl)
+  );
 }
 
 function projectDeliveredDirectCronPayloadsForMirror(
@@ -1007,7 +1011,16 @@ export async function dispatchCronDelivery(
         : undefined;
       const deliveryWillReachAwarenessMainSession =
         mirrorTargetsAwarenessMainSession && shouldQueueAwarenessForDelivery && !!awarenessText;
-      if (delivered && !deliveryWillReachAwarenessMainSession) {
+      // Implicit/default isolated delivery must not create main-session awareness.
+      const mirrorWouldBypassIsolatedAwarenessPolicy =
+        mirrorTargetsAwarenessMainSession &&
+        params.job.sessionTarget === "isolated" &&
+        delivery.mode !== "explicit";
+      if (
+        delivered &&
+        !deliveryWillReachAwarenessMainSession &&
+        !mirrorWouldBypassIsolatedAwarenessPolicy
+      ) {
         const mirrorProjection =
           attemptedPayloadsForMirror.length > 0
             ? projectDeliveredDirectCronPayloadsForMirror(attemptedPayloadsForMirror)

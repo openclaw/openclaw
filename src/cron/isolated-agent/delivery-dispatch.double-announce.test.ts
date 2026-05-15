@@ -459,6 +459,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("applies TTS directives before direct cron announce delivery and mirrors spoken text", async () => {
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayload?.({
+        text: "Morning briefing complete.",
+        mediaUrls: [
+          "file:///tmp/chart.png",
+          "file:///tmp/narration.ogg",
+          "file:///tmp/cron-tts.mp3",
+        ],
+        audioAsVoice: true,
+      });
+      return [{ ok: true } as never];
+    });
     maybeApplyTtsToPayloadMock.mockImplementation(async (params: { payload: unknown }) => {
       const payload = params.payload as { text?: string };
       expect(payload.text).toBe("[[tts]] Morning briefing complete.");
@@ -637,14 +649,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("keeps media filenames in main-session awareness before suppressing the mirror", async () => {
+  it("keeps effective media-only payloads in main-session awareness before suppressing the mirror", async () => {
     mockResolvedOutboundRoute({
       sessionKey: "agent:main:main",
       baseSessionKey: "agent:main:main",
     });
     vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (params) => {
       params.onPayload?.({
-        text: "Main session briefing.",
+        text: "",
         mediaUrls: ["https://example.com/main-chart.png"],
       });
       return [{ channel: "telegram", messageId: "tg-main-media" }];
@@ -663,7 +675,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Main session briefing.\nmain-chart.png", {
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("main-chart.png", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       forceSenderIsOwnerFalse: true,
@@ -814,6 +826,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("skips main-session awareness for isolated cron jobs with implicit delivery targets", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+    });
     const params = makeBaseParams({
       synthesizedText: "Implicit cron update.",
       resolvedDeliveryMode: "implicit",
@@ -825,6 +841,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("skips awareness text when direct delivery strips a silent caption", async () => {
