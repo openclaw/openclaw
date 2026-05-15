@@ -421,7 +421,7 @@ describe("SSRF external proxy routing", () => {
               ws.close();
               resolve();
             });
-            ws.once("error", () => resolve());
+            ws.once("error", reject);
           });
         }
 
