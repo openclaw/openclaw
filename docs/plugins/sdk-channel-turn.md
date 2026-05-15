@@ -360,10 +360,12 @@ plugin before they become model-visible media.
 ## History windows
 
 Message-turn code should use `createChannelHistoryWindow(...)` instead of
-calling low-level `reply-history` map helpers directly. The window facade keeps
-text context, structured `InboundHistory`, history-media normalization, and
-clearing behind one core-owned API while still letting the channel choose how a
-history line is rendered.
+calling low-level `reply-history` map helpers directly. The old map helpers
+remain importable as deprecated compatibility exports, but new plugin runtime
+code should not call them. The window facade keeps text context, structured
+`InboundHistory`, history-media normalization, and clearing behind one
+core-owned API while still letting the channel choose how a history line is
+rendered.
 
 ```typescript
 const history = createChannelHistoryWindow({ historyMap: groupHistories });
@@ -389,7 +391,7 @@ const combinedBody = history.buildPendingContext({
 
 The older `buildPendingHistoryContextFromMap`,
 `buildInboundHistoryFromMap`, `recordPendingHistoryEntry*`, and
-`clearHistoryEntriesIfEnabled` exports remain for compatibility with plugins
+`clearHistoryEntries*` exports remain as deprecated compatibility for plugins
 that have not migrated yet. New channel work should use the window or the turn
 kernel record/finalize options.
 
