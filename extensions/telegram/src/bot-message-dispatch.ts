@@ -66,6 +66,7 @@ import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
+  readLatestAssistantTextFromSessionTranscript,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -442,6 +443,7 @@ export const dispatchTelegramMessage = async ({
   telegramDeps: injectedTelegramDeps,
   opts,
 }: DispatchTelegramMessageParams) => {
+  const dispatchStartedAt = Date.now();
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const {
@@ -962,6 +964,43 @@ export const dispatchTelegramMessage = async ({
     );
   const endTelegramInboundTurnDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+    if (!sessionKey) {
+      return undefined;
+    }
+    try {
+      const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
+      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+        skipCache: true,
+      });
+      const sessionEntry = resolveSessionStoreEntry({
+        store,
+        sessionKey,
+      }).existing;
+      if (!sessionEntry?.sessionId) {
+        return undefined;
+      }
+      const { sessionFile } = await resolveAndPersistSessionFile({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionStore: store,
+        storePath,
+        sessionEntry,
+        agentId: route.agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+      if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
+        return undefined;
+      }
+      return latest.text;
+    } catch (err) {
+      logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
+      return undefined;
+    }
+  };
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
@@ -1201,6 +1240,7 @@ export const dispatchTelegramMessage = async ({
           buttons,
         });
       },
+      resolveFinalTextCandidate: () => resolveCurrentTurnTranscriptFinalText(),
       log: logVerbose,
       markDelivered: () => {
         deliveryState.markDelivered();
