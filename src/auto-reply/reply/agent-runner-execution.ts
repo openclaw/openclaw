@@ -1514,10 +1514,10 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              cliExecutionProvider,
-            );
+            const isRoomEventCliTurn = params.followupRun.currentTurnKind === "room_event";
+            const cliSessionBinding = isRoomEventCliTurn
+              ? undefined
+              : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
             const authProfile = resolveRunAuthProfile(
               params.followupRun.run,
               cliExecutionProvider,
@@ -1579,7 +1579,7 @@ export async function runAgentTurnWithFallback(params: {
                   })
                 : noopBridge;
               try {
-                const result = await runCliAgent({
+                const rawResult = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
@@ -1589,6 +1589,7 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                   prompt: params.commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
+                  currentTurnKind: params.followupRun.currentTurnKind,
                   currentTurnContext: params.followupRun.currentTurnContext,
                   inputProvenance: params.followupRun.run.inputProvenance,
                   provider: cliExecutionProvider,
@@ -1621,6 +1622,23 @@ export async function runAgentTurnWithFallback(params: {
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
+                const result: EmbeddedAgentRunResult =
+                  isRoomEventCliTurn && rawResult.meta.agentMeta
+                    ? (() => {
+                        const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                          rawResult.meta.agentMeta;
+                        return {
+                          ...rawResult,
+                          meta: {
+                            ...rawResult.meta,
+                            agentMeta: {
+                              ...agentMeta,
+                              sessionId: "",
+                            },
+                          },
+                        };
+                      })()
+                    : rawResult;
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
@@ -1749,12 +1767,17 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                currentTurnKind: params.followupRun.currentTurnKind,
                 currentTurnContext: params.followupRun.currentTurnContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                suppressNextUserMessagePersistence:
+                  params.followupRun.run.suppressNextUserMessagePersistence,
+                suppressTranscriptOnlyAssistantPersistence:
+                  params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,

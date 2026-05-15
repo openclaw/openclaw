@@ -136,7 +136,7 @@ async function expectSelectedModel(
   expected: { provider: string; model: string },
 ) {
   const result = await selectModel(options);
-  expect(result).toEqual({ ok: true, ...expected });
+  expect(result).toMatchObject({ ok: true, ...expected });
 }
 
 async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {

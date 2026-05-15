@@ -518,7 +518,7 @@ jobs:
       openai_model: openai/gpt-5.4
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025
-      macos_runner: macos-latest
+      macos_runner: macos-26
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

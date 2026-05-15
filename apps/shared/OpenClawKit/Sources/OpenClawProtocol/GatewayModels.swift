@@ -541,6 +541,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let senderisowner: Bool?
     public let sessionkey: String?
     public let sessionid: String?
+    public let inboundturnkind: String?
     public let agentid: String?
     public let toolcontext: [String: AnyCodable]?
     public let idempotencykey: String
@@ -554,6 +555,7 @@ public struct MessageActionParams: Codable, Sendable {
         senderisowner: Bool?,
         sessionkey: String?,
         sessionid: String?,
+        inboundturnkind: String? = nil,
         agentid: String?,
         toolcontext: [String: AnyCodable]?,
         idempotencykey: String)
@@ -566,6 +568,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
         self.sessionid = sessionid
+        self.inboundturnkind = inboundturnkind
         self.agentid = agentid
         self.toolcontext = toolcontext
         self.idempotencykey = idempotencykey
@@ -580,6 +583,7 @@ public struct MessageActionParams: Codable, Sendable {
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
         case sessionid = "sessionId"
+        case inboundturnkind = "inboundTurnKind"
         case agentid = "agentId"
         case toolcontext = "toolContext"
         case idempotencykey = "idempotencyKey"
@@ -5289,6 +5293,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let delivered: Bool?
     public let deliverystatus: AnyCodable?
     public let deliveryerror: String?
+    public let failurenotificationdelivery: [String: AnyCodable]?
     public let sessionid: String?
     public let sessionkey: String?
     public let runid: String?
@@ -5311,6 +5316,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         delivered: Bool?,
         deliverystatus: AnyCodable?,
         deliveryerror: String?,
+        failurenotificationdelivery: [String: AnyCodable]? = nil,
         sessionid: String?,
         sessionkey: String?,
         runid: String?,
@@ -5332,6 +5338,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.delivered = delivered
         self.deliverystatus = deliverystatus
         self.deliveryerror = deliveryerror
+        self.failurenotificationdelivery = failurenotificationdelivery
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.runid = runid
@@ -5355,6 +5362,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case delivered
         case deliverystatus = "deliveryStatus"
         case deliveryerror = "deliveryError"
+        case failurenotificationdelivery = "failureNotificationDelivery"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case runid = "runId"

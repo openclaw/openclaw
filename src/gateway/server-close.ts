@@ -11,8 +11,8 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
-const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
-const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 1_000;
+const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
+const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
 const ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS = 2_000;
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;

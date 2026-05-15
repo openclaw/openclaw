@@ -389,6 +389,14 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("rejects unexpected readMessages payloads with a boundary error", async () => {
+    readMessagesDiscord.mockResolvedValueOnce({ ok: true } as never);
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions),
+    ).rejects.toThrow("Discord message read returned object with keys ok instead of an array.");
+  });
+
   it("threads provided cfg into readMessages calls", async () => {
     const cfg = {
       channels: {

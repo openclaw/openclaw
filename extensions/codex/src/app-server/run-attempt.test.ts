@@ -2947,7 +2947,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(startConfig?.["features.hooks"]).toBe(true);
     const preToolUseHooks = startConfig?.["hooks.PreToolUse"] as
       | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
       | undefined;
@@ -3035,7 +3035,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PostToolUse"])).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.Stop"])).toBe(true);
@@ -3071,7 +3071,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PermissionRequest"])).toBe(true);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
@@ -3211,7 +3211,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(false);
+    expect(startConfig?.["features.hooks"]).toBe(false);
     expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);
@@ -3496,6 +3496,15 @@ describe("runCodexAppServerAttempt", () => {
 
     const params = createParams(sessionFile, workspaceDir);
     params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "discord";
+    params.messageProvider = "discord-voice";
+    params.senderId = "user-123";
+    params.senderName = "Test User";
+    params.senderUsername = "testuser";
+    params.inputProvenance = {
+      kind: "external_user",
+      sourceChannel: "discord",
+    };
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
 
@@ -3528,7 +3537,31 @@ describe("runCodexAppServerAttempt", () => {
     expect(agentEndPayload.success).toBe(false);
     expect(agentEndPayload.error).toBe("turn start exploded");
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
-    expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
+    const userMessage = agentEndPayload.messages?.find((message) => message.role === "user") as
+      | {
+          content?: unknown;
+          provenance?: unknown;
+          role?: string;
+          senderId?: unknown;
+          senderLabel?: unknown;
+          senderName?: unknown;
+          senderUsername?: unknown;
+          sourceChannel?: unknown;
+        }
+      | undefined;
+    expect(userMessage).toMatchObject({
+      role: "user",
+      content: "hello",
+      sourceChannel: "discord",
+      senderId: "user-123",
+      senderName: "Test User",
+      senderUsername: "testuser",
+      senderLabel: "Test User (user-123)",
+      provenance: {
+        kind: "external_user",
+        sourceChannel: "discord",
+      },
+    });
   });
 
   it("fires agent_end with success false when the codex turn is aborted", async () => {
@@ -5334,7 +5367,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const config = {
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PreToolUse": [],
     };
     const expectedConfig = {
@@ -5393,7 +5426,7 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config: { "features.codex_hooks": true, hooks: { PreToolUse: [] } },
+      config: { "features.hooks": true, hooks: { PreToolUse: [] } },
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
@@ -5406,7 +5439,7 @@ describe("runCodexAppServerAttempt", () => {
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
       hooks: { PreToolUse: [] },
@@ -5446,7 +5479,7 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config: { "features.codex_hooks": true },
+      config: { "features.hooks": true },
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
@@ -5459,7 +5492,7 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config: { "features.codex_hooks": true },
+      config: { "features.hooks": true },
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
@@ -5473,13 +5506,13 @@ describe("runCodexAppServerAttempt", () => {
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
     });
@@ -5939,7 +5972,7 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
-    expect(resumeConfig?.["features.codex_hooks"]).toBe(true);
+    expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
     expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
     expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);

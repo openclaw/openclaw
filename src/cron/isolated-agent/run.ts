@@ -474,6 +474,7 @@ type PreparedCronRunContext = {
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
+  useSubagentFallbacks: boolean;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /**
@@ -616,6 +617,7 @@ async function prepareCronRunContext(params: {
   }
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
+  const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
 
   const preflight = await (
     await loadCronModelPreflightRuntime()
@@ -832,6 +834,7 @@ async function prepareCronRunContext(params: {
       toolPolicy,
       skillsSnapshot,
       liveSelection,
+      useSubagentFallbacks,
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
@@ -1175,6 +1178,7 @@ export async function runCronIsolatedAgentTurn(params: {
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
+      useSubagentFallbacks: prepared.context.useSubagentFallbacks,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,
       cronSession: prepared.context.cronSession,

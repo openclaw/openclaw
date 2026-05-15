@@ -64,7 +64,7 @@ export {
   toInboundMediaFacts,
 } from "../channels/turn/media.js";
 export type { ChannelTurnMediaInput, ChannelTurnMediaPayload } from "../channels/turn/media.js";
-export type { CommandFacts, InboundMediaFacts } from "../channels/turn/types.js";
+export type { CommandFacts, InboundMediaFacts, InboundTurnKind } from "../channels/turn/types.js";
 export {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,

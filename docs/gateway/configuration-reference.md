@@ -108,6 +108,11 @@ target server during config edits.
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
+        // Optional Codex app-server projection controls.
+        codex: {
+          agents: ["main"],
+          defaultToolsApprovalMode: "approve", // auto | prompt | approve
+        },
       },
     },
   },
@@ -119,6 +124,17 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
+  This block is OpenClaw metadata for Codex app-server threads only; it does not
+  affect ACP sessions, generic Codex harness config, or other runtime adapters.
+  Non-empty `codex.agents` limits the server to the listed OpenClaw agent ids.
+  Empty, blank, or invalid scoped agent lists are rejected by config validation
+  and omitted by the runtime projection path instead of becoming global.
+  `codex.defaultToolsApprovalMode` emits Codex's native
+  `default_tools_approval_mode` for that server. OpenClaw strips the `codex`
+  block before passing native `mcp_servers` config to Codex. Omit the block to
+  keep the server projected for every Codex app-server agent with Codex's
+  default MCP approval behavior.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.

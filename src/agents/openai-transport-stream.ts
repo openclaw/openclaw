@@ -30,6 +30,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
@@ -887,12 +888,15 @@ async function processResponsesStream(
         | undefined;
       if (usage) {
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
+        const inputTokens = usage.input_tokens || 0;
+        const outputTokens = usage.output_tokens || 0;
+        const input = Math.max(0, inputTokens - cachedTokens);
         output.usage = {
-          input: (usage.input_tokens || 0) - cachedTokens,
-          output: usage.output_tokens || 0,
+          input,
+          output: outputTokens,
           cacheRead: cachedTokens,
           cacheWrite: 0,
-          totalTokens: usage.total_tokens || 0,
+          totalTokens: input + outputTokens + cachedTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
       }
@@ -2252,6 +2256,16 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
+function resolveOpenAICompletionsMaxTokens(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+): number | undefined {
+  const paramsMaxTokens = resolveMaxTokensParam(
+    (model as { params?: Record<string, unknown> }).params,
+  );
+  return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
+}
+
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
   return format === "qwen" || format === "qwen-chat-template";
 }
@@ -2583,8 +2597,10 @@ export function buildOpenAICompletionsParams(
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
     stream: true,
-    stream_options: { include_usage: true },
   };
+  if (compat.supportsUsageInStreaming) {
+    params.stream_options = { include_usage: true };
+  }
   if (compat.supportsStore) {
     params.store = false;
   }
@@ -2592,7 +2608,7 @@ export function buildOpenAICompletionsParams(
     params.prompt_cache_key = options.sessionId;
   }
   {
-    const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
     if (effectiveMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = effectiveMaxTokens;
