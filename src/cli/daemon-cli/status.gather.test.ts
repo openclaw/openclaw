@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -28,7 +29,9 @@ const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   fingerprintSha256: "sha256:11:22:33:44",
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
-const findStaleOpenClawUpdateLaunchdJobs = vi.fn(async () => []);
+const findStaleOpenClawUpdateLaunchdJobs = vi.fn<() => Promise<StaleOpenClawUpdateLaunchdJob[]>>(
+  async () => [],
+);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free" as const,
