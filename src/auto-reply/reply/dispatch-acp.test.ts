@@ -881,13 +881,7 @@ describe("tryDispatchAcpReply", () => {
     try {
       await fs.writeFile(imagePath, "recent-image");
       const result = await resolveAcpTurnAttachments({
-        cfg: createAcpTestConfig({
-          channels: {
-            discord: {
-              attachmentRoots: [tempDir],
-            },
-          },
-        }),
+        cfg: createAcpTestConfig(),
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
@@ -949,13 +943,7 @@ describe("tryDispatchAcpReply", () => {
       await fs.writeFile(currentPath, "current-image");
       await fs.writeFile(historyPath, "history-image");
       const result = await resolveAcpTurnAttachments({
-        cfg: createAcpTestConfig({
-          channels: {
-            discord: {
-              attachmentRoots: [tempDir],
-            },
-          },
-        }),
+        cfg: createAcpTestConfig(),
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",

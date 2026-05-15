@@ -27,7 +27,6 @@ import {
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
@@ -66,10 +65,6 @@ import {
   type DiscordMediaInfo,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
-import {
-  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-} from "./timeouts.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -80,6 +75,11 @@ export {
   resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
+
+const DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
+const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+const DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
+const DISCORD_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
 
 function resolveDiscordPreflightConversationKind(params: {
   isGuildMessage: boolean;
@@ -138,10 +138,10 @@ async function resolveDiscordHistoryEntryForPendingRecord(params: {
   if (!params.entry) {
     return undefined;
   }
-  const imageAttachments = (params.message.attachments ?? []).filter(
-    isDiscordImageAttachmentCandidate,
-  );
-  if (imageAttachments.length === 0 && resolveDiscordMessageStickers(params.message).length === 0) {
+  const imageAttachments = (params.message.attachments ?? [])
+    .filter(isDiscordImageAttachmentCandidate)
+    .slice(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS);
+  if (imageAttachments.length === 0) {
     return params.entry;
   }
   const mediaMessage = Object.assign(
@@ -151,13 +151,17 @@ async function resolveDiscordHistoryEntryForPendingRecord(params: {
       attachments: imageAttachments,
     },
   ) as typeof params.message;
-  const mediaList = await resolveMediaList(mediaMessage, params.preflight.mediaMaxBytes, {
-    fetchImpl: params.preflight.discordRestFetch,
-    ssrfPolicy: params.preflight.cfg.browser?.ssrfPolicy,
-    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-    abortSignal: params.preflight.abortSignal,
-  });
+  const mediaList = await resolveMediaList(
+    mediaMessage,
+    Math.min(params.preflight.mediaMaxBytes, DISCORD_HISTORY_MEDIA_MAX_BYTES),
+    {
+      fetchImpl: params.preflight.discordRestFetch,
+      ssrfPolicy: params.preflight.cfg.browser?.ssrfPolicy,
+      readIdleTimeoutMs: DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
+      totalTimeoutMs: DISCORD_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
+      abortSignal: params.preflight.abortSignal,
+    },
+  );
   const media = buildDiscordHistoryMediaEntries({
     messageId: params.message.id,
     mediaList,
@@ -171,6 +175,9 @@ async function recordDiscordPendingHistoryEntry(params: {
   message: DiscordMessagePreflightContext["message"];
   entry?: HistoryEntry;
 }) {
+  if (params.preflight.historyLimit <= 0) {
+    return;
+  }
   const entry = await resolveDiscordHistoryEntryForPendingRecord({
     preflight: params.preflight,
     message: params.message,
