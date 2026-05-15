@@ -1,3 +1,4 @@
+import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -1323,10 +1324,12 @@ async function agentCommandInternal(
       !isSubagentSessionKey(sessionKey)
     ) {
       const now = Date.now();
-      const combinedPayload = payloads
-        .map((p) => (typeof p.text === "string" ? p.text : ""))
-        .filter(Boolean)
-        .join("\n\n");
+      const combinedPayload = sanitizePendingFinalDeliveryText(
+        payloads
+          .map((p) => (typeof p.text === "string" ? p.text : ""))
+          .filter(Boolean)
+          .join("\n\n"),
+      );
 
       if (combinedPayload) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
