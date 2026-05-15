@@ -19,6 +19,7 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
+  resolveContextEngineOwnerPluginId,
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
@@ -139,7 +140,10 @@ import {
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
-import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+import {
+  buildCodexUserPromptMessage,
+  mirrorCodexAppServerTranscript,
+} from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
@@ -580,6 +584,7 @@ export async function runCodexAppServerAttempt(
     ...hookContextWindowFields,
   };
   if (activeContextEngine) {
+    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     await bootstrapHarnessContextEngine({
       hadSessionFile,
       contextEngine: activeContextEngine,
@@ -590,6 +595,8 @@ export async function runCodexAppServerAttempt(
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
         agentDir,
+        activeAgentId: sessionAgentId,
+        contextEnginePluginId: activeContextEnginePluginId,
         tokenBudget: params.contextTokenBudget,
       }),
       runMaintenance: runHarnessContextEngineMaintenance,
@@ -790,6 +797,7 @@ export async function runCodexAppServerAttempt(
           const threadLifecycleParams = {
             client: startupClient,
             params: runtimeParams,
+            agentId: sessionAgentId,
             cwd: effectiveWorkspace,
             dynamicTools: toolBridge.specs,
             appServer: pluginAppServer,
@@ -1254,6 +1262,16 @@ export async function runCodexAppServerAttempt(
       turnAssistantCompletionIdleWatchArmed &&
       notification.method === "item/completed" &&
       activeTurnItemIds.size === 0;
+    const trackedDynamicToolCompletion = isTrackedOpenClawDynamicToolCompletionNotification(
+      notification,
+      activeOpenClawDynamicToolCallIds,
+    );
+    const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
+      isCurrentTurnNotification &&
+      notification.method === "item/completed" &&
+      activeTurnItemIds.size === 0 &&
+      !trackedDynamicToolCompletion &&
+      !isCompletedAssistantNotification(notification);
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
@@ -1267,6 +1285,11 @@ export async function runCodexAppServerAttempt(
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
+    } else if (shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem) {
+      // If a non-assistant current-turn item is the last active item and the
+      // bridge then goes quiet, reset the short completion-idle guard from that
+      // final completion so the remaining silent-turn gap fails fast.
+      armTurnCompletionIdleWatch();
     } else if (
       isCurrentTurnNotification &&
       shouldDisarmAssistantCompletionIdleWatch(notification)
@@ -1278,10 +1301,8 @@ export async function runCodexAppServerAttempt(
       !turnCompletionIdleWatchPinnedByTerminalError &&
       notification.method !== "turn/completed" &&
       isCurrentTurnNotification &&
-      !isTrackedOpenClawDynamicToolCompletionNotification(
-        notification,
-        activeOpenClawDynamicToolCallIds,
-      )
+      !trackedDynamicToolCompletion &&
+      !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
       // accepts a turn or after OpenClaw hands a turn-scoped request result
@@ -1298,6 +1319,7 @@ export async function runCodexAppServerAttempt(
       isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
     const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
     try {
+      await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
     } catch (error) {
       embeddedAgentLog.debug("codex app-server projector notification threw", {
@@ -1321,6 +1343,11 @@ export async function runCodexAppServerAttempt(
     }
   };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
+    if (!projector || !turnId) {
+      userInputBridge?.handleNotification(notification);
+      pendingNotifications.push(notification);
+      return Promise.resolve();
+    }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
       () => handleNotification(notification),
@@ -1479,11 +1506,7 @@ export async function runCodexAppServerAttempt(
   };
   const turnStartFailureMessages = [
     ...historyMessages,
-    {
-      role: "user" as const,
-      content: promptBuild.prompt,
-      timestamp: Date.now(),
-    },
+    buildCodexUserPromptMessage({ ...params, prompt: promptBuild.prompt }),
   ];
 
   let turn: CodexTurnStartResponse | undefined;
@@ -1775,6 +1798,7 @@ export async function runCodexAppServerAttempt(
       });
     }
     if (activeContextEngine) {
+      const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
         (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
@@ -1793,6 +1817,8 @@ export async function runCodexAppServerAttempt(
           attempt: runtimeParams,
           workspaceDir: effectiveWorkspace,
           agentDir,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginId,
           tokenBudget: params.contextTokenBudget,
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
@@ -3233,6 +3259,12 @@ function prependCurrentTurnContext(
 ): string {
   const text = context?.text.trim();
   return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+}
+
+function waitForCodexNotificationDispatchTurn(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function handleApprovalRequest(params: {

@@ -324,6 +324,20 @@ describe("session store writer queue", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
+  it("drops non-object persisted session entries on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": { sessionId: "s-good", updatedAt: Date.now() },
+      "agent:main:string": "not-a-session-entry",
+      "agent:main:array": [{ sessionId: "s-array", updatedAt: Date.now() }],
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:string"]).toBeUndefined();
+    expect(store["agent:main:array"]).toBeUndefined();
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({

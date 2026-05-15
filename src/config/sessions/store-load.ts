@@ -33,6 +33,10 @@ function isSessionStoreRecord(value: unknown): value is Record<string, SessionEn
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function isSessionEntryRecord(value: unknown): value is SessionEntry {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const normalized = normalizeSessionDeliveryFields({
     channel: entry.channel,
@@ -84,7 +88,9 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
 export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
+    if (!isSessionEntryRecord(entry)) {
+      delete store[key];
+      changed = true;
       continue;
     }
     const normalized = stripPersistedSkillsCache(

@@ -37,6 +37,7 @@ import {
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
+  adoptCronRunSessionMetadata,
   createPersistCronSessionEntry,
   markCronSessionPreRun,
   persistCronSkillsSnapshotIfChanged,
@@ -473,6 +474,7 @@ type PreparedCronRunContext = {
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
+  useSubagentFallbacks: boolean;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /**
@@ -580,7 +582,7 @@ async function prepareCronRunContext(params: {
   });
   const withRunSession: WithRunSession = (result) => ({
     ...result,
-    sessionId: runSessionId,
+    sessionId: cronSession.sessionEntry.sessionId ?? runSessionId,
     sessionKey: runSessionKey,
   });
   if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
@@ -615,6 +617,7 @@ async function prepareCronRunContext(params: {
   }
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
+  const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
 
   const preflight = await (
     await loadCronModelPreflightRuntime()
@@ -831,6 +834,7 @@ async function prepareCronRunContext(params: {
       toolPolicy,
       skillsSnapshot,
       liveSelection,
+      useSubagentFallbacks,
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
@@ -852,6 +856,11 @@ async function finalizeCronRun(params: {
   if (finalRunResult.meta?.systemPromptReport) {
     prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
   }
+  adoptCronRunSessionMetadata({
+    entry: prepared.cronSession.sessionEntry,
+    sessionKey: prepared.agentSessionKey,
+    runMeta: finalRunResult.meta?.agentMeta,
+  });
   const usage = finalRunResult.meta?.agentMeta?.usage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
   const modelUsed =
@@ -1169,6 +1178,7 @@ export async function runCronIsolatedAgentTurn(params: {
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
+      useSubagentFallbacks: prepared.context.useSubagentFallbacks,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,
       cronSession: prepared.context.cronSession,

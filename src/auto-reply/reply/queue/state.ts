@@ -1,7 +1,13 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
-import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+import {
+  completeFollowupRunLifecycle,
+  type FollowupRun,
+  type QueueDropPolicy,
+  type QueueMode,
+  type QueueSettings,
+} from "./types.js";
 
 export type FollowupQueueState = {
   items: FollowupRun[];
@@ -13,6 +19,7 @@ export type FollowupQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  summarySources: FollowupRun[];
   lastRun?: FollowupRun["run"];
 };
 
@@ -62,6 +69,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
+    summarySources: [],
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -78,9 +86,16 @@ export function clearFollowupQueue(key: string): number {
     return 0;
   }
   const cleared = queue.items.length + queue.droppedCount;
+  for (const item of queue.items) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const item of queue.summarySources) {
+    completeFollowupRunLifecycle(item);
+  }
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
+  queue.summarySources = [];
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);

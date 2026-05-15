@@ -1,3 +1,4 @@
+import { MessageFlags } from "discord-api-types/v10";
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import {
   recordChannelBotPairLoopAndCheckSuppression,
@@ -595,7 +596,7 @@ function expectPreviewEditContent(content: string) {
   const call = firstMockCall(editMessageDiscord, "preview edit");
   expect(call[0]).toBe("c1");
   expect(call[1]).toBe("preview-1");
-  expect(call[2]).toEqual({ content });
+  expect(call[2]).toEqual({ content, flags: MessageFlags.SuppressEmbeds });
   requireRecord(requireRecord(call[3], "preview edit options").rest, "preview edit REST client");
 }
 

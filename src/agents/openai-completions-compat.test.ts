@@ -27,6 +27,16 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     ).toBe(true);
   });
 
+  it("keeps streaming usage enabled for local OpenAI-compatible endpoints", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "llama-cpp",
+        endpointClass: "local",
+        knownProviderFamily: "llama-cpp",
+      }).supportsUsageInStreaming,
+    ).toBe(true);
+  });
+
   it("does not broaden streaming usage for generic custom providers", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({

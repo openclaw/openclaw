@@ -218,6 +218,7 @@ function providerCallProviders() {
 }
 
 beforeEach(() => {
+  delete process.env.OPENCLAW_LOCALE;
   vi.clearAllMocks();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   listProfilesForProvider.mockReturnValue([]);
@@ -860,6 +861,25 @@ describe("promptModelAllowlist", () => {
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["anthropic/claude-opus-4-6"]);
     expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
+  });
+
+  it("localizes the model allowlist picker", async () => {
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptModelAllowlist({ config, prompter });
+
+    expect(multiselect.mock.calls[0]?.[0]?.message).toBe("/model 选择器中的模型（多选）");
   });
 
   it("uses static manifest catalog rows for a preferred provider without loading runtime catalog", async () => {

@@ -1,3 +1,4 @@
+import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -8,7 +9,9 @@ import {
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -1323,10 +1326,12 @@ async function agentCommandInternal(
       !isSubagentSessionKey(sessionKey)
     ) {
       const now = Date.now();
-      const combinedPayload = payloads
-        .map((p) => (typeof p.text === "string" ? p.text : ""))
-        .filter(Boolean)
-        .join("\n\n");
+      const combinedPayload = sanitizePendingFinalDeliveryText(
+        payloads
+          .map((p) => (typeof p.text === "string" ? p.text : ""))
+          .filter(Boolean)
+          .join("\n\n"),
+      );
 
       if (combinedPayload) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
@@ -1394,18 +1399,26 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  return await agentCommandInternal(
+  const resolvedDeps = await resolveAgentCommandDeps(deps);
+  return await withLocalGatewayRequestScope(
     {
-      ...opts,
-      // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
-      // Ingress callers must opt into owner semantics explicitly via
-      // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
-      senderIsOwner: opts.senderIsOwner ?? true,
-      // Local/CLI callers are trusted by default for per-run model overrides.
-      allowModelOverride: opts.allowModelOverride ?? true,
+      deps: resolvedDeps,
+      getRuntimeConfig,
     },
-    runtime,
-    deps,
+    async () =>
+      await agentCommandInternal(
+        {
+          ...opts,
+          // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+          // Ingress callers must opt into owner semantics explicitly via
+          // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
+          senderIsOwner: opts.senderIsOwner ?? true,
+          // Local/CLI callers are trusted by default for per-run model overrides.
+          allowModelOverride: opts.allowModelOverride ?? true,
+        },
+        runtime,
+        resolvedDeps,
+      ),
   );
 }
 

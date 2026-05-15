@@ -9,15 +9,11 @@ import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/his
 
 type MaybePromise<T> = T | Promise<T>;
 
-export type ChannelHistoryWindow = {
-  record: (params: {
-    historyKey: string;
-    entry?: HistoryEntry | null;
-    limit: number;
-  }) => HistoryEntry[];
+export type ChannelHistoryWindow<T extends HistoryEntry = HistoryEntry> = {
+  record: (params: { historyKey: string; entry?: T | null; limit: number }) => T[];
   recordWithMedia: (params: {
     historyKey: string;
-    entry?: HistoryEntry | null;
+    entry?: T | null;
     limit: number;
     media?:
       | readonly HistoryMediaEntry[]
@@ -26,12 +22,12 @@ export type ChannelHistoryWindow = {
     mediaLimit?: number;
     messageId?: string;
     shouldRecord?: () => boolean;
-  }) => Promise<HistoryEntry[]>;
+  }) => Promise<T[]>;
   buildPendingContext: (params: {
     historyKey: string;
     limit: number;
     currentMessage: string;
-    formatEntry: (entry: HistoryEntry) => string;
+    formatEntry: (entry: T) => string;
     lineBreak?: string;
   }) => string;
   buildInboundHistory: (params: {
@@ -41,9 +37,9 @@ export type ChannelHistoryWindow = {
   clear: (params: { historyKey: string; limit: number }) => void;
 };
 
-export function createChannelHistoryWindow(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-}): ChannelHistoryWindow {
+export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry>(params: {
+  historyMap: Map<string, T[]>;
+}): ChannelHistoryWindow<T> {
   const { historyMap } = params;
   return {
     record: (recordParams) =>
@@ -70,7 +66,7 @@ export function createChannelHistoryWindow(params: {
         historyKey: contextParams.historyKey,
         limit: contextParams.limit,
         currentMessage: contextParams.currentMessage,
-        formatEntry: contextParams.formatEntry,
+        formatEntry: contextParams.formatEntry as (entry: HistoryEntry) => string,
         lineBreak: contextParams.lineBreak,
       }),
     buildInboundHistory: (historyParams) =>
