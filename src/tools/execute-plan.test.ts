@@ -112,4 +112,28 @@ describe("executeToolPlan", () => {
       executeToolPlan({ steps: "openclaw.version" }, { invoke: async () => ({ ok: true }) }),
     ).rejects.toThrow("execute plan must be a JSON array or an object with a steps array");
   });
+
+  it("fails closed on malformed tool argument payloads before invoking tools", async () => {
+    const calls: string[] = [];
+    const invoke = async (step: {
+      action: string;
+      args: Record<string, unknown>;
+      index: number;
+    }): Promise<ExecutePlanToolInvokeResult> => {
+      calls.push(step.action);
+      return { ok: true, toolName: step.action };
+    };
+
+    await expect(
+      executeToolPlan({ steps: [{ action: "openclaw.version", args: "bad" }] }, { invoke }),
+    ).rejects.toThrow("step 0 args must be an object");
+    await expect(
+      executeToolPlan({ steps: [{ action: "openclaw.version", input: ["bad"] }] }, { invoke }),
+    ).rejects.toThrow("step 0 input must be an object");
+    await expect(
+      executeToolPlan({ steps: [{ action: "openclaw.version", arguments: null }] }, { invoke }),
+    ).rejects.toThrow("step 0 arguments must be an object");
+
+    expect(calls).toEqual([]);
+  });
 });

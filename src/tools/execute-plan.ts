@@ -59,11 +59,28 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function normalizeArgs(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasOwn(value: object, key: keyof ExecutePlanStepInput): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function normalizeArgs(raw: ExecutePlanStepInput, index: number): Record<string, unknown> {
+  for (const key of ["input", "args", "arguments"] as const) {
+    if (!hasOwn(raw, key)) {
+      continue;
+    }
+
+    const value = raw[key];
+    if (!isRecord(value)) {
+      throw new Error(`step ${index} ${key} must be an object`);
+    }
+    return value;
   }
-  return value as Record<string, unknown>;
+
+  return {};
 }
 
 function isPlanObject(input: ExecutePlanInput): input is { steps?: unknown } {
@@ -93,7 +110,7 @@ function normalizeStep(
   }
   return {
     action,
-    args: normalizeArgs(raw.input ?? raw.args ?? raw.arguments),
+    args: normalizeArgs(raw, index),
   };
 }
 
