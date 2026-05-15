@@ -693,10 +693,6 @@ export const fa: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "ببینید توکن‌ها کجا مصرف می‌شوند، نشست‌ها چه زمانی جهش می‌کنند و چه چیزی هزینه را افزایش می‌دهد.",
-    },
     common: {
       emptyValue: "—",
       unknown: "نامشخص",
