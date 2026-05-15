@@ -157,6 +157,7 @@
   "direct-dm-access",
   "direct-dm-guard-policy",
   "discord",
+  "feishu",
   "mattermost",
   "matrix",
   "device-bootstrap",

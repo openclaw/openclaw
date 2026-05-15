@@ -1375,6 +1375,14 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
+  it("keeps the Feishu compatibility facade importable", async () => {
+    const feishuSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/feishu");
+
+    expect(typeof feishuSdk.createScopedPairingAccess).toBe("function");
+    expect(typeof feishuSdk.issuePairingChallenge).toBe("function");
+    expect(feishuSdk.PAIRING_APPROVED_MESSAGE).toBeTruthy();
+  });
+
   it("keeps the Zalouser command-auth compatibility facade importable", async () => {
     const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
     const commandAuthSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/command-auth");
