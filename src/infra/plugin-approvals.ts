@@ -409,7 +409,7 @@ function redactSensitiveCommandText(command: string): string {
       "$1[redacted]",
     )
     .replace(
-      /(\b(?:api[-_]?key|auth[-_]?token|password|passwd|secret|token)\b\s*=\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      /(\b[A-Za-z_][A-Za-z0-9_.-]*(?:api[-_]?key|auth[-_]?token|access[-_]?token|private[-_]?token|password|passwd|secret|token)[A-Za-z0-9_.-]*\s*=\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
     )
     .replace(

@@ -398,7 +398,7 @@ describe("plugin-sdk/approval-renderers", () => {
         request: {
           title: "Codex app-server command approval",
           description:
-            "Command: custom-tool --token secret-value --send https://user:pass@example.test/path",
+            "Command: GITHUB_TOKEN=s3cr3t AWS_SECRET_ACCESS_KEY='top secret' custom-tool --token secret-value --send https://user:pass@example.test/path",
           toolName: "codex_command_approval",
         },
         createdAtMs: 1_000,
@@ -410,8 +410,10 @@ describe("plugin-sdk/approval-renderers", () => {
 
     expect(payload.text).toContain("- run custom-tool");
     expect(payload.text).toContain(
-      "Command preview\ncustom-tool --token [redacted] --send https://user:[redacted]@example.test/path",
+      "Command preview\nGITHUB_TOKEN=[redacted] AWS_SECRET_ACCESS_KEY=[redacted] custom-tool --token [redacted] --send https://user:[redacted]@example.test/path",
     );
+    expect(payload.text).not.toContain("s3cr3t");
+    expect(payload.text).not.toContain("top secret");
     expect(payload.text).not.toContain("secret-value");
     expect(payload.text).not.toContain("user:pass@example.test");
     expect(payload.text).not.toContain("Technical details:");
