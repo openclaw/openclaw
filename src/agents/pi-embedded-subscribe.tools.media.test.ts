@@ -39,12 +39,19 @@ describe("extractToolResultMediaPaths", () => {
             attachments: [
               { type: "audio", path: "/tmp/song.mp3", mimeType: "audio/mpeg" },
               { type: "image", url: "https://example.test/cover.png" },
+              { type: "file", media: "/tmp/stems.zip" },
+              { type: "file", fileUrl: "https://example.test/stems.zip" },
             ],
           },
         },
       }),
     ).toEqual({
-      mediaUrls: ["/tmp/song.mp3", "https://example.test/cover.png"],
+      mediaUrls: [
+        "/tmp/song.mp3",
+        "https://example.test/cover.png",
+        "/tmp/stems.zip",
+        "https://example.test/stems.zip",
+      ],
     });
   });
 

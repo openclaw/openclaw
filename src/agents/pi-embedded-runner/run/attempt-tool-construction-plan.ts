@@ -113,8 +113,15 @@ export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
   params: { forceMessageTool?: boolean },
 ): string[] | undefined {
-  if (!params.forceMessageTool || !toolsAllow?.length || hasWildcardToolAllowlist(toolsAllow)) {
+  if (
+    !params.forceMessageTool ||
+    toolsAllow === undefined ||
+    hasWildcardToolAllowlist(toolsAllow)
+  ) {
     return toolsAllow;
+  }
+  if (toolsAllow.length === 0) {
+    return ["message"];
   }
   const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
   return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];

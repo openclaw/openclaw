@@ -379,10 +379,12 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
       return;
     }
     const attachment = value as Record<string, unknown>;
+    pushString(attachment.media);
     pushString(attachment.path);
     pushString(attachment.url);
     pushString(attachment.mediaUrl);
     pushString(attachment.filePath);
+    pushString(attachment.fileUrl);
   };
   if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
     urls.push(media.mediaUrl.trim());

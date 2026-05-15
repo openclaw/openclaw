@@ -2344,8 +2344,11 @@ function includeForcedMessageToolAllow(
   if (!shouldForceMessageTool(params)) {
     return toolsAllow;
   }
-  if (!toolsAllow?.length) {
+  if (toolsAllow === undefined) {
     return toolsAllow;
+  }
+  if (toolsAllow.length === 0) {
+    return ["message"];
   }
   const normalized = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
   return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];

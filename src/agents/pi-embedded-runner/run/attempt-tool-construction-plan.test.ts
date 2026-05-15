@@ -59,6 +59,18 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
+  it("materializes forced message tool through empty runtime allowlists", () => {
+    const tools = [{ name: "music_generate" }, { name: "message" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
+      forceMessageTool: true,
+    });
+
+    expect(toolsAllow).toEqual(["message"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "message",
+    ]);
+  });
+
   it("normalizes explicit toolsAllow entries before filtering", () => {
     const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
 
@@ -153,6 +165,24 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         includePluginTools: false,
       },
     });
+  });
+
+  it("constructs message tool for forced message delivery on explicit no-tools runs", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [], forceMessageTool: true }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["message"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("materializes only plugin candidates for plugin-only allowlists", () => {
