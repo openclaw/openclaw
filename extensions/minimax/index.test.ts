@@ -8,6 +8,13 @@ import { describe, expect, it, vi } from "vitest";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
+type CatalogProvider = {
+  api: string;
+  authHeader: boolean;
+  baseUrl: string;
+  models: Array<{ id?: string }>;
+};
+
 vi.mock("./oauth.runtime.js", () => ({
   loginMiniMaxPortalOAuth: vi.fn(async () => ({
     access: "minimax-oauth-access-token",
@@ -176,15 +183,21 @@ describe("minimax provider hooks", () => {
       }),
     } as never);
 
-    const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
-    expect(provider?.api).toBe("anthropic-messages");
-    expect(provider?.authHeader).toBe(true);
-    expect(provider?.baseUrl).toBe("https://api.minimax.io/anthropic");
-    const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M2.7");
-    expect(model?.id).toBe("MiniMax-M2.7");
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.name).toBe("MiniMax M2.7");
-    expect(model?.reasoning).toBe(true);
+    const provider =
+      catalog !== null && catalog !== undefined && "provider" in catalog
+        ? (catalog.provider as CatalogProvider)
+        : undefined;
+    expect(provider).toMatchObject({
+      api: "anthropic-messages",
+      authHeader: true,
+      baseUrl: "https://api.minimax.io/anthropic",
+    });
+    expect(provider?.models.find((model) => model.id === "MiniMax-M2.7")).toMatchObject({
+      id: "MiniMax-M2.7",
+      input: ["text"],
+      name: "MiniMax M2.7",
+      reasoning: true,
+    });
   });
 
   it("owns fast-mode stream wrapping for MiniMax transports", async () => {

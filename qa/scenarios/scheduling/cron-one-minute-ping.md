@@ -4,6 +4,7 @@
 id: cron-one-minute-ping
 title: Cron one-minute ping
 surface: cron
+runtimeParityTier: live-only
 coverage:
   primary:
     - scheduling.cron

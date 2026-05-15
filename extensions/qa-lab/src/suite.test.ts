@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeParityResult } from "./runtime-parity.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
 
 describe("qa suite", () => {
@@ -84,5 +86,236 @@ describe("qa suite", () => {
       "scenario id value",
     );
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
+  });
+
+  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
+      OPENAI_API_KEY: "qa-mock-openai-key",
+      CODEX_API_KEY: "qa-mock-openai-key",
+    });
+  });
+
+  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+    });
+  });
+
+  it("remaps mock-openai model refs onto the OpenAI provider for both forced runtime cells", () => {
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+      }),
+    ).toBe("openai/gpt-5.5");
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+      }),
+    ).toBe("openai/gpt-5.5");
+  });
+
+  it("builds a private QA Codex direct dynamic tool loading config patch", () => {
+    expect(qaSuiteProgressTesting.buildQaCodexToolLoadingConfigPatch("direct")).toEqual({
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              codexDynamicToolsLoading: "direct",
+            },
+          },
+        },
+      },
+    });
+    expect(qaSuiteProgressTesting.buildQaCodexToolLoadingConfigPatch(undefined)).toBeUndefined();
+  });
+
+  it("treats tracked fixture drift as report-only unless a runtime cell failed", () => {
+    const scenario = readQaScenarioById("runtime-tool-fs-read");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "tool-call-shape",
+      driftDetails: "Pi recorded OpenClaw dynamic read while Codex owns read natively",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+      }),
+    ).toContain("Codex native read behavior");
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result: {
+          ...result,
+          cells: {
+            ...result.cells,
+            codex: {
+              ...result.cells.codex,
+              runtimeErrorClass: "runtime-crash",
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps declared mock/native harness gaps report-only despite scenario-level timeouts", () => {
+    const scenario = readQaScenarioById("approval-turn-tool-followthrough");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "failure-mode",
+      driftDetails: "scenario status differs (pass vs fail)",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+          finalText: "Protocol note: I reviewed the requested material.",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "Protocol note: unsupported call: read",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          runtimeErrorClass: "timeout",
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+      }),
+    ).toContain("Codex-native approval/read behavior requires native/live proof");
+  });
+
+  it("keeps mock fault-injection native workspace rows report-only when mock cannot drive Codex native tools", () => {
+    const scenario = readQaScenarioById("reasoning-only-recovery-replay-safe-read");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "failure-mode",
+      driftDetails: "scenario status differs (pass vs fail)",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+          finalText: "REASONING-RECOVERED-OK",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          runtimeErrorClass: "timeout",
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+      }),
+    ).toContain("Codex owns read natively");
+  });
+
+  it("hard-gates OpenClaw dynamic integration drift in direct loading mode", () => {
+    const scenario = readQaScenarioById("runtime-tool-web-search");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "tool-call-shape",
+      driftDetails: "Pi recorded web_search while Codex recorded none",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+        codexToolLoading: "searchable",
+      }),
+    ).toContain("searchable/deferred");
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+        codexToolLoading: "direct",
+      }),
+    ).toBeUndefined();
   });
 });

@@ -3,8 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stripAnsi } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { loginWeb } from "./login.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
@@ -82,9 +81,9 @@ async function flushTasks() {
   await Promise.resolve();
 }
 
-function runtimeMessageCalls(fn: RuntimeEnv["log"]) {
-  const calls = (fn as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls;
-  return calls.map((call) => sanitizeTerminalText(String(call[0])));
+function runtimeMessageCalls(fn: (...args: unknown[]) => void) {
+  const mock = fn as Mock<(...args: unknown[]) => void>;
+  return mock.mock.calls.map((call) => stripAnsi(String(call[0])));
 }
 
 function createWaSocketCall(index: number) {

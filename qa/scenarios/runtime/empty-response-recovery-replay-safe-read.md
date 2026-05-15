@@ -4,6 +4,7 @@
 id: empty-response-recovery-replay-safe-read
 title: Empty-response recovery after replay-safe read
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.empty-response-recovery
@@ -25,6 +26,10 @@ execution:
   summary: Verify empty OpenAI turns recover after a replay-safe read.
   config:
     requiredProvider: mock-openai
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: https://github.com/openclaw/openclaw/issues/80319
+      reason: mock-openai drives this seeded recovery through a replay-safe read; Codex owns read natively, so dynamic read-call shape is report-only and native/live proof is required for product claims
     promptSnippet: Empty response continuation QA check
     prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK."
     expectedReply: EMPTY-RECOVERED-OK

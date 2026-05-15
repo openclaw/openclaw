@@ -4,6 +4,7 @@
 id: group-message-tool-unavailable-fallback
 title: Group fallback when message tool is unavailable
 surface: channel
+runtimeParityTier: live-only
 coverage:
   primary:
     - channels.group-visible-replies

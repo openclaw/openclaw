@@ -48,6 +48,11 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    readGatewayLogs: fn,
+    markGatewayLogCursor: fn,
+    scanGatewayLogSentinels: fn,
+    assertNoGatewayLogSentinels: fn,
+    readSessionTranscriptSummary: fn,
     runQaCli: fn,
     extractMediaPathFromText: fn,
     resolveGeneratedImagePath: fn,
@@ -64,6 +69,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     runAgentPrompt: fn,
     ensureImageGenerationConfigured: fn,
     handleQaAction: fn,
+    runRuntimeToolFixture: fn,
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,
@@ -158,6 +164,11 @@ describe("createQaScenarioRuntimeApi", () => {
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }
+    expect(api.readGatewayLogs).toBe(deps.readGatewayLogs);
+    expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
+    expect(api.scanGatewayLogSentinels).toBe(deps.scanGatewayLogSentinels);
+    expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
+    expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 

@@ -4,6 +4,7 @@
 id: memory-failure-fallback
 title: Memory failure fallback
 surface: memory
+runtimeParityTier: live-only
 coverage:
   primary:
     - memory.failure-handling

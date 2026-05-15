@@ -4,6 +4,7 @@
 id: cron-natural-fire-no-duplicate
 title: Cron natural fire no duplicate
 surface: cron
+runtimeParityTier: live-only
 coverage:
   primary:
     - scheduling.cron

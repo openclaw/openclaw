@@ -44,6 +44,25 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.scenarioIds).toEqual(scenarioIds);
   });
 
+  it("records the runtime pair when the suite runs the runtime axis", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      runtimePair: ["pi", "codex"],
+    });
+
+    expect(json.run.runtimePair).toEqual(["pi", "codex"]);
+  });
+
+  it("records Codex dynamic tool loading mode for runtime-axis suites", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      runtimePair: ["pi", "codex"],
+      codexToolLoading: "direct",
+    });
+
+    expect(json.run.codexToolLoading).toBe("direct");
+  });
+
   it("treats an empty scenarioIds array as unspecified (no filter)", () => {
     // A CLI path that omits --scenario passes an empty array to runQaSuite.
     // The summary must encode that as null so downstream parity/report
@@ -89,7 +108,52 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.counts).toEqual({
       total: 2,
       passed: 1,
+      skipped: 0,
       failed: 1,
+    });
+  });
+
+  it("preserves scenario-level runtime parity payloads", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      scenarios: [
+        {
+          name: "Scenario A",
+          status: "pass" as const,
+          steps: [],
+          runtimeParity: {
+            scenarioId: "scenario-a",
+            drift: "none" as const,
+            cells: {
+              pi: {
+                runtime: "pi" as const,
+                transcriptBytes: "",
+                toolCalls: [],
+                finalText: "done",
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                wallClockMs: 10,
+                bootStateLines: [],
+              },
+              codex: {
+                runtime: "codex" as const,
+                transcriptBytes: "",
+                toolCalls: [],
+                finalText: "done",
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                wallClockMs: 10,
+                bootStateLines: [],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(json.scenarios[0]).toMatchObject({
+      runtimeParity: {
+        scenarioId: "scenario-a",
+        drift: "none",
+      },
     });
   });
 

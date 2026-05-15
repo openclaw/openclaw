@@ -1,10 +1,15 @@
+import type { GatewayLogSentinelFinding } from "./gateway-log-sentinel.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaCodexToolLoading } from "./runtime-tool-metadata.js";
 
 type QaSuiteSummaryScenario = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: unknown[];
   details?: string;
+  runtimeParity?: RuntimeParityResult;
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
 };
 
 export type QaSuiteSummaryJson = {
@@ -12,6 +17,7 @@ export type QaSuiteSummaryJson = {
   counts: {
     total: number;
     passed: number;
+    skipped: number;
     failed: number;
   };
   metrics?: {
@@ -22,6 +28,7 @@ export type QaSuiteSummaryJson = {
     gatewayProcessRssEndBytes?: number | null;
     gatewayProcessRssDeltaBytes?: number | null;
   };
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
   run: {
     startedAt: string;
     finishedAt: string;
@@ -35,6 +42,8 @@ export type QaSuiteSummaryJson = {
     fastMode: boolean;
     concurrency: number;
     scenarioIds: string[] | null;
+    runtimePair?: [RuntimeId, RuntimeId] | null;
+    codexToolLoading?: QaCodexToolLoading | null;
   };
 };
 
@@ -50,6 +59,18 @@ export function countQaSuiteFailedScenarios(
     }
   }
   return failed;
+}
+
+export function countQaSuiteSkippedScenarios(
+  scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
+): number {
+  let skipped = 0;
+  for (const scenario of scenarios) {
+    if (scenario.status === "skip") {
+      skipped += 1;
+    }
+  }
+  return skipped;
 }
 
 export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {

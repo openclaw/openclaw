@@ -4,6 +4,7 @@
 id: compaction-retry-mutating-tool
 title: Compaction retry after mutating tool
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.compaction
@@ -27,6 +28,10 @@ execution:
   kind: flow
   summary: Verify a mutating tool step keeps replay-unsafety explicit through compaction or retry pressure.
   config:
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: "#80434"
+      reason: "mock-openai cannot create files through Codex-native read/write tools; compaction replay safety remains a native/live Codex proof lane"
     contextFile: COMPACTION_RETRY_CONTEXT.md
     outputFile: compaction-retry-summary.txt
     promptSnippet: Compaction retry mutating tool check

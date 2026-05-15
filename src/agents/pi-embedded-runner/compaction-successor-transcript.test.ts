@@ -203,7 +203,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(contextText).toContain("kept user");
     expect(contextText).toContain("post assistant");
     expect(
-      context.messages.some((message) => message.role === "user" && message.content === "old user"),
+      context.messages.some(
+        (message) =>
+          message.role === "user" && "content" in message && message.content === "old user",
+      ),
     ).toBe(false);
     expect(context.model?.provider).toBe("openai");
     expect(context.thinkingLevel).toBe("medium");

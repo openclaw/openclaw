@@ -2258,6 +2258,61 @@ describe("qa mock openai server", () => {
     expect(outputText(await toolResult.json())).toContain("MEDIA:/tmp/qa-lighthouse.png");
   });
 
+  it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      instructions: "Codex dynamic OpenClaw tools available in this turn: web_search.",
+      input: [
+        makeUserInput(
+          "tool search qa check target=web_search. Call exactly that tool once and then summarize.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("web_search");
+  });
+
+  it("plans QA tool-search calls from explicit fixture targets even without Responses tools", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "tool search qa check target=session_status. Call exactly that tool once and then summarize.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("session_status");
+  });
+
+  it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("sessions_spawn");
+  });
+
   it("records image inputs and describes attached images", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

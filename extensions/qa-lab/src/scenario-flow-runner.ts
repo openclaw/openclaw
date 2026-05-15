@@ -8,7 +8,7 @@ type QaSuiteStep = {
 
 type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: Array<{
     name: string;
     status: "pass" | "fail" | "skip";

@@ -4,6 +4,7 @@
 id: model-switch-tool-continuity
 title: Model switch with tool continuity
 surface: models
+runtimeParityTier: standard
 coverage:
   primary:
     - models.switching
@@ -24,6 +25,7 @@ execution:
   kind: flow
   summary: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
   config:
+    runtimeParityComparison: codex-native-workspace
     initialPrompt: "Read repo/qa/scenarios/index.md and summarize the QA scenario pack mission in one clause before any model switch."
     followupPrompt: "The harness has already requested the alternate model for this turn. Do not call session_status or change models yourself. Tool continuity check: use the read tool to reread repo/qa/scenarios/index.md, then mention the model handoff and QA mission in one short sentence."
     promptSnippet: "Tool continuity check"

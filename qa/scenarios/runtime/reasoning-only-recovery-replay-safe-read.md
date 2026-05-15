@@ -4,6 +4,7 @@
 id: reasoning-only-recovery-replay-safe-read
 title: Reasoning-only recovery after replay-safe read
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.reasoning-only-recovery
@@ -25,6 +26,10 @@ execution:
   summary: Verify reasoning-only OpenAI turns recover after a replay-safe read.
   config:
     requiredProvider: mock-openai
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: https://github.com/openclaw/openclaw/issues/80319
+      reason: mock-openai drives this seeded reasoning-only recovery through a replay-safe read; Codex owns read natively, so dynamic read-call shape is report-only and native/live proof is required for product claims
     promptSnippet: Reasoning-only continuation QA check
     prompt: "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK."
     expectedReply: REASONING-RECOVERED-OK

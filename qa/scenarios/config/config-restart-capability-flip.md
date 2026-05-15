@@ -4,6 +4,7 @@
 id: config-restart-capability-flip
 title: Config restart capability flip
 surface: config
+runtimeParityTier: standard
 coverage:
   primary:
     - config.restart-apply

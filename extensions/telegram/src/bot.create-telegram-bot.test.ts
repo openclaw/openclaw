@@ -4,7 +4,6 @@ import {
   stripAnsi,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
@@ -242,8 +241,9 @@ describe("createTelegramBot", () => {
   });
 
   it("logs middleware errors through grammY catch without rethrowing", () => {
+    const errorMock = vi.fn();
     const runtime = {
-      error: vi.fn(),
+      error: errorMock,
     } as unknown as NonNullable<TelegramBotOptions["runtime"]>;
     const bot = createTelegramBot({ token: "tok", runtime });
     const catchMock = bot.catch as unknown as {
@@ -253,9 +253,7 @@ describe("createTelegramBot", () => {
 
     expect(errorHandler).toBeTypeOf("function");
     errorHandler?.(new Error("handler boom"));
-    const errorCalls = (runtime.error as unknown as { mock: { calls: Array<[unknown]> } }).mock
-      .calls;
-    const errorMessage = sanitizeTerminalText(String(errorCalls[0]?.[0]));
+    const errorMessage = stripAnsi(String(errorMock.mock.calls[0]?.[0]));
     expect(errorMessage.startsWith("telegram bot error: Error: handler boom")).toBe(true);
   });
 

@@ -4,6 +4,7 @@
 id: qa-channel-reconnect-dedupe
 title: QA channel reconnect dedupe
 surface: channel
+runtimeParityTier: live-only
 coverage:
   primary:
     - channels.reconnect

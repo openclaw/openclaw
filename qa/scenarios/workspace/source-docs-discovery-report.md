@@ -4,6 +4,7 @@
 id: source-docs-discovery-report
 title: Source and docs discovery report
 surface: discovery
+runtimeParityTier: standard
 coverage:
   primary:
     - workspace.repo-discovery
@@ -26,6 +27,7 @@ execution:
   kind: flow
   summary: Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.
   config:
+    runtimeParityComparison: codex-native-workspace
     requiredFiles:
       - repo/qa/scenarios/index.md
       - repo/extensions/qa-lab/src/suite.ts

@@ -4,6 +4,7 @@
 id: empty-response-retry-budget-exhausted
 title: Empty-response retry budget exhausted
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.empty-response-recovery
@@ -24,6 +25,10 @@ execution:
   summary: Verify empty-response retry exhaustion still surfaces a visible failure.
   config:
     requiredProvider: mock-openai
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: https://github.com/openclaw/openclaw/issues/80319
+      reason: mock-openai drives this seeded retry-budget check through a replay-safe read; Codex owns read natively, so dynamic read-call shape is report-only and native/live proof is required for product claims
     promptSnippet: Empty response exhaustion QA check
     prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK."
     retryNeedle: The previous attempt did not produce a user-visible answer.

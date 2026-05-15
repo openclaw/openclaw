@@ -139,6 +139,13 @@ function resolveModelConfig(params: {
   );
 }
 
+/**
+ * Resolves the configured runtime policy for a provider/model pair.
+ *
+ * Test-only note: private QA builds may temporarily force the `pi` or `codex`
+ * runtime via `OPENCLAW_QA_FORCE_RUNTIME`, but only when
+ * `OPENCLAW_BUILD_PRIVATE_QA === "1"`.
+ */
 export function resolveModelRuntimePolicy(params: {
   config?: OpenClawConfig;
   provider?: string;
@@ -146,6 +153,15 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
+  // Test-only QA seam for Phase 1 runtime forcing. This must remain inert
+  // outside private QA builds.
+  if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
+    const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
+    if (forcedRuntime === "pi" || forcedRuntime === "codex") {
+      return { policy: { id: forcedRuntime }, source: "model" };
+    }
+  }
+
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy(params);
   if (agentModelPolicy.policy) {
     return agentModelPolicy;

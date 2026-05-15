@@ -4,6 +4,7 @@
 id: cron-single-run-no-duplicate
 title: Cron single run no duplicate
 surface: cron
+runtimeParityTier: live-only
 coverage:
   primary:
     - scheduling.cron

@@ -4,6 +4,7 @@
 id: subagent-handoff
 title: Subagent handoff
 surface: subagents
+runtimeParityTier: standard
 coverage:
   primary:
     - agents.subagents

@@ -5,6 +5,10 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
+import {
+  formatGatewayLogSentinelSummary,
+  type GatewayLogSentinelFinding,
+} from "./gateway-log-sentinel.js";
 import type {
   QaLabLatestReport,
   QaLabScenarioOutcome,
@@ -29,6 +33,18 @@ import {
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode } from "./run-config.js";
+import {
+  captureRuntimeParityCell,
+  runRuntimeParityScenario,
+  type RuntimeId,
+  type RuntimeParityCell,
+  type RuntimeParityResult,
+} from "./runtime-parity.js";
+import {
+  readScenarioRuntimeToolCoverageMetadata,
+  runtimeToolComparisonModeForScenario,
+  type QaCodexToolLoading,
+} from "./runtime-tool-metadata.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
@@ -47,7 +63,11 @@ import {
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
+import {
+  countQaSuiteFailedScenarios,
+  countQaSuiteSkippedScenarios,
+  type QaSuiteSummaryJson,
+} from "./suite-summary.js";
 import { closeQaWebSessions } from "./web-runtime.js";
 
 type QaSuiteStep = {
@@ -57,9 +77,11 @@ type QaSuiteStep = {
 
 export type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: QaReportCheck[];
   details?: string;
+  runtimeParity?: RuntimeParityResult;
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
 };
 
 type QaSuiteEnvironment = {
@@ -84,8 +106,13 @@ export type QaSuiteRunParams = {
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
   enabledPluginIds?: string[];
+  gatewayConfigPatch?: Record<string, unknown>;
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
+  forcedRuntime?: RuntimeId;
+  runtimePair?: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
+  captureRuntimeParityCell?: boolean;
 };
 
 function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
@@ -185,6 +212,7 @@ export type QaSuiteResult = {
   report: string;
   scenarios: QaSuiteScenarioResult[];
   watchUrl: string;
+  runtimeParityCell?: RuntimeParityCell;
 };
 
 async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteScenarioResult> {
@@ -263,6 +291,179 @@ async function runScenarioDefinition(
   });
 }
 
+function isRuntimeParityPass(result: RuntimeParityResult) {
+  return result.drift === "none" || result.drift === "text-only";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRuntimeParityReportOnlyReason(
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  codexToolLoading?: QaCodexToolLoading,
+): string | undefined {
+  const config = scenario.execution.config;
+  const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
+  const knownHarnessGap = isRecord(config?.knownHarnessGap) ? config.knownHarnessGap : undefined;
+  const knownBroken = isRecord(config?.knownBroken) ? config.knownBroken : undefined;
+  const readReason = (value: unknown) =>
+    typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  const metadata = readScenarioRuntimeToolCoverageMetadata(scenario);
+  const isSearchableDynamicIntegration =
+    scenario.sourcePath.startsWith("qa/scenarios/runtime/tools/") &&
+    metadata.bucket === "openclaw-dynamic-integration" &&
+    metadata.capabilityLayer === "openclaw-dynamic-searchable";
+  if (isSearchableDynamicIntegration && codexToolLoading === "direct") {
+    return undefined;
+  }
+  if (knownHarnessGap) {
+    const reason =
+      readReason(knownHarnessGap.reason) ??
+      "tracked QA harness limitation; do not treat as a product runtime regression";
+    if (isSearchableDynamicIntegration && codexToolLoading === "searchable") {
+      return `searchable/deferred Codex dynamic loading report lane: ${reason}`;
+    }
+    return reason;
+  }
+  if (isSearchableDynamicIntegration && codexToolLoading === "searchable") {
+    return (
+      readReason(toolCoverage?.reason) ??
+      "searchable/deferred Codex dynamic loading report lane; direct loading is the deterministic CI gate"
+    );
+  }
+  if (knownBroken) {
+    return readReason(knownBroken.reason) ?? "tracked known fixture limitation";
+  }
+  if (config?.expectedAvailable === false) {
+    return (
+      readReason(toolCoverage?.reason) ?? "tool is expected to be unavailable for this QA profile"
+    );
+  }
+  if (scenario.runtimeParityTier === "optional") {
+    return readReason(toolCoverage?.reason) ?? "optional runtime parity scenario";
+  }
+  return undefined;
+}
+
+function hasRuntimeParityBlockingCellFailure(result: RuntimeParityResult) {
+  return Object.values(result.cells).some(
+    (cell) =>
+      Boolean(cell.transportErrorClass) ||
+      (Boolean(cell.runtimeErrorClass) &&
+        cell.runtimeErrorClass !== "scenario-failure" &&
+        cell.runtimeErrorClass !== "timeout"),
+  );
+}
+
+function runtimeParityReportOnlyReason(params: {
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  result: RuntimeParityResult;
+  codexToolLoading?: QaCodexToolLoading;
+}) {
+  if (isRuntimeParityPass(params.result)) {
+    return undefined;
+  }
+  const reason = readRuntimeParityReportOnlyReason(params.scenario, params.codexToolLoading);
+  if (!reason || hasRuntimeParityBlockingCellFailure(params.result)) {
+    return undefined;
+  }
+  return reason;
+}
+
+function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
+  const errors = [cell.transportErrorClass, cell.runtimeErrorClass].filter(Boolean).join(", ");
+  return [
+    `runtime=${cell.runtime}`,
+    `wallMs=${cell.wallClockMs}`,
+    `toolCalls=${cell.toolCalls.length}`,
+    `finalChars=${cell.finalText.length}`,
+    `tokens=${cell.usage.totalTokens}`,
+    ...(errors ? [`errors=${errors}`] : []),
+  ].join(" ");
+}
+
+function collectRuntimeParityGatewayLogSentinels(result: RuntimeParityResult) {
+  return Object.values(result.cells).flatMap((cell) => cell.gatewayLogSentinels ?? []);
+}
+
+function buildRuntimeParityScenarioResult(params: {
+  scenarioName: string;
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  result: RuntimeParityResult;
+  codexToolLoading?: QaCodexToolLoading;
+}): QaSuiteScenarioResult {
+  const reportOnlyReason = runtimeParityReportOnlyReason({
+    scenario: params.scenario,
+    result: params.result,
+    codexToolLoading: params.codexToolLoading,
+  });
+  const driftStepStatus = isRuntimeParityPass(params.result)
+    ? "pass"
+    : reportOnlyReason
+      ? "skip"
+      : "fail";
+  const gatewayLogSentinels = collectRuntimeParityGatewayLogSentinels(params.result);
+  const hasGatewayLogSentinels = gatewayLogSentinels.length > 0;
+  const gatewayLogSentinelsEnvironmentOnly =
+    hasGatewayLogSentinels &&
+    gatewayLogSentinels.every((finding) => finding.verdict === "environment-blocked");
+  const gatewayLogSentinelStepStatus = gatewayLogSentinelsEnvironmentOnly ? "skip" : "fail";
+  const scenarioStatus =
+    driftStepStatus === "fail"
+      ? "fail"
+      : hasGatewayLogSentinels
+        ? gatewayLogSentinelStepStatus
+        : driftStepStatus;
+  const details = reportOnlyReason
+    ? `report-only runtime drift classified as ${params.result.drift}: ${reportOnlyReason}`
+    : hasGatewayLogSentinels
+      ? `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(gatewayLogSentinels)}`
+      : (params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`);
+  return {
+    name: params.scenarioName,
+    status: scenarioStatus,
+    details,
+    steps: [
+      {
+        name: params.result.cells.pi.runtime,
+        status:
+          params.result.cells.pi.runtimeErrorClass || params.result.cells.pi.transportErrorClass
+            ? "fail"
+            : "pass",
+        details: formatRuntimeParityCellDetails(params.result.cells.pi),
+      },
+      {
+        name: params.result.cells.codex.runtime,
+        status:
+          params.result.cells.codex.runtimeErrorClass ||
+          params.result.cells.codex.transportErrorClass
+            ? "fail"
+            : "pass",
+        details: formatRuntimeParityCellDetails(params.result.cells.codex),
+      },
+      {
+        name: reportOnlyReason ? "runtime drift report-only" : "runtime drift",
+        status: driftStepStatus,
+        details: reportOnlyReason
+          ? `${params.result.driftDetails ?? params.result.drift}\nreport-only: ${reportOnlyReason}`
+          : (params.result.driftDetails ?? params.result.drift),
+      },
+      ...(hasGatewayLogSentinels
+        ? [
+            {
+              name: "gateway log sentinel",
+              status: gatewayLogSentinelStepStatus,
+              details: formatGatewayLogSentinelSummary(gatewayLogSentinels),
+            } satisfies QaReportCheck,
+          ]
+        : []),
+    ],
+    runtimeParity: params.result,
+    ...(hasGatewayLogSentinels ? { gatewayLogSentinels } : {}),
+  };
+}
+
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
   providerMode: QaProviderMode;
@@ -279,6 +480,79 @@ function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
   return model && model.length > 0 ? model : fallback;
 }
 
+function remapModelRefForForcedRuntime(params: {
+  modelRef: string;
+  providerMode: QaProviderMode;
+  forcedRuntime?: RuntimeId;
+}) {
+  if (!params.forcedRuntime || params.providerMode !== "mock-openai") {
+    return params.modelRef;
+  }
+  const split = splitModelRef(params.modelRef);
+  if (!split || split.provider !== "mock-openai") {
+    return params.modelRef;
+  }
+  return `openai/${split.model}`;
+}
+
+function mergeQaGatewayConfigPatches(
+  ...patches: Array<Record<string, unknown> | undefined>
+): Record<string, unknown> | undefined {
+  let merged: Record<string, unknown> | undefined;
+  for (const patch of patches) {
+    if (!patch) {
+      continue;
+    }
+    merged = merged ? (applyQaMergePatch(merged, patch) as Record<string, unknown>) : patch;
+  }
+  return merged;
+}
+
+function buildQaCodexToolLoadingConfigPatch(
+  codexToolLoading: QaCodexToolLoading | undefined,
+): Record<string, unknown> | undefined {
+  if (!codexToolLoading) {
+    return undefined;
+  }
+  return {
+    plugins: {
+      entries: {
+        codex: {
+          config: {
+            codexDynamicToolsLoading: codexToolLoading,
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildQaRuntimeEnvPatch(params: {
+  providerMode: QaProviderMode;
+  forcedRuntime?: RuntimeId;
+  mockBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  const patch: NodeJS.ProcessEnv = {};
+  if (params.forcedRuntime) {
+    patch.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    patch.OPENCLAW_QA_FORCE_RUNTIME = params.forcedRuntime;
+  }
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return Object.keys(patch).length > 0 ? patch : undefined;
+  }
+  const mockBaseUrl = params.mockBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!mockBaseUrl) {
+    return Object.keys(patch).length > 0 ? patch : undefined;
+  }
+  // The forced codex lane uses the Codex app-server's native OpenAI provider
+  // path, so pin the managed app-server to the QA mock endpoint instead of
+  // leaking to the maintainer's real OpenAI config.
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${mockBaseUrl}/v1 --listen stdio://`;
+  patch.OPENAI_API_KEY = "qa-mock-openai-key";
+  patch.CODEX_API_KEY = "qa-mock-openai-key";
+  return patch;
+}
+
 export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -290,6 +564,8 @@ export type QaSuiteSummaryJsonParams = {
   fastMode: boolean;
   concurrency: number;
   scenarioIds?: readonly string[];
+  runtimePair?: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
 };
 
 /**
@@ -317,13 +593,18 @@ export type { QaSuiteSummaryJson } from "./suite-summary.js";
 export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
   const primarySplit = splitModelRef(params.primaryModel);
   const alternateSplit = splitModelRef(params.alternateModel);
+  const gatewayLogSentinels = params.scenarios.flatMap(
+    (scenario) => scenario.gatewayLogSentinels ?? [],
+  );
   return {
     scenarios: params.scenarios,
     counts: {
       total: params.scenarios.length,
       passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
+      skipped: countQaSuiteSkippedScenarios(params.scenarios),
       failed: countQaSuiteFailedScenarios(params.scenarios),
     },
+    ...(gatewayLogSentinels.length > 0 ? { gatewayLogSentinels } : {}),
     ...(params.metrics ? { metrics: params.metrics } : {}),
     run: {
       startedAt: params.startedAt.toISOString(),
@@ -339,8 +620,234 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       concurrency: params.concurrency,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
+      runtimePair: params.runtimePair ?? null,
+      codexToolLoading: params.codexToolLoading ?? null,
     },
   };
+}
+
+async function runQaRuntimeParitySuite(params: {
+  repoRoot: string;
+  outputDir: string;
+  startedAt: Date;
+  providerMode: QaProviderMode;
+  transportId: QaTransportId;
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  thinkingDefault?: QaThinkingLevel;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+  enabledPluginIds?: string[];
+  concurrency: number;
+  selectedCatalogScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  startLab?: QaSuiteStartLabFn;
+  lab?: QaLabServerHandle;
+  progressEnabled: boolean;
+  scenarioIds?: readonly string[];
+  runtimePair: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
+}) {
+  const ownsLab = !params.lab;
+  const startLab = requireQaSuiteStartLab(params.startLab);
+  const lab =
+    params.lab ??
+    (await startLab({
+      repoRoot: params.repoRoot,
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    }));
+  const transport = createQaTransportAdapter({
+    id: params.transportId,
+    state: lab.state,
+  });
+  const liveScenarioOutcomes: QaLabScenarioOutcome[] = params.selectedCatalogScenarios.map(
+    (scenario) => ({
+      id: scenario.id,
+      name: scenario.title,
+      status: "pending",
+    }),
+  );
+  lab.setScenarioRun({
+    kind: "suite",
+    status: "running",
+    startedAt: params.startedAt.toISOString(),
+    scenarios: [...liveScenarioOutcomes],
+  });
+
+  try {
+    const scenarios = await mapQaSuiteWithConcurrency(
+      params.selectedCatalogScenarios,
+      params.concurrency,
+      async (scenario, index): Promise<QaSuiteScenarioResult> => {
+        const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
+        writeQaSuiteProgress(
+          params.progressEnabled,
+          `runtime pair start (${index + 1}/${params.selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+        );
+        liveScenarioOutcomes[index] = {
+          id: scenario.id,
+          name: scenario.title,
+          status: "running",
+          startedAt: new Date().toISOString(),
+        };
+        lab.setScenarioRun({
+          kind: "suite",
+          status: "running",
+          startedAt: params.startedAt.toISOString(),
+          scenarios: [...liveScenarioOutcomes],
+        });
+
+        const parity = await runRuntimeParityScenario({
+          scenarioId: scenario.id,
+          comparisonMode: runtimeToolComparisonModeForScenario(scenario),
+          runCell: async (runtime) => {
+            const cellOutputDir = path.join(
+              params.outputDir,
+              "runtime-cells",
+              scenario.id,
+              runtime,
+            );
+            const cellStartedAt = Date.now();
+            const cellResult = await runQaSuite({
+              repoRoot: params.repoRoot,
+              outputDir: cellOutputDir,
+              providerMode: params.providerMode,
+              transportId: params.transportId,
+              primaryModel: remapModelRefForForcedRuntime({
+                modelRef: params.primaryModel,
+                providerMode: params.providerMode,
+                forcedRuntime: runtime,
+              }),
+              alternateModel: remapModelRefForForcedRuntime({
+                modelRef: params.alternateModel,
+                providerMode: params.providerMode,
+                forcedRuntime: runtime,
+              }),
+              fastMode: params.fastMode,
+              thinkingDefault: params.thinkingDefault,
+              claudeCliAuthMode: params.claudeCliAuthMode,
+              scenarioIds: [scenario.id],
+              concurrency: 1,
+              enabledPluginIds: params.enabledPluginIds,
+              codexToolLoading: params.codexToolLoading,
+              startLab,
+              controlUiEnabled: scenarioRequiresControlUi(scenario),
+              forcedRuntime: runtime,
+              captureRuntimeParityCell: true,
+            });
+            const scenarioResult =
+              cellResult.scenarios[0] ??
+              ({
+                name: scenario.title,
+                status: "fail",
+                details: "runtime parity cell returned no scenario result",
+                steps: [
+                  {
+                    name: "runtime parity cell",
+                    status: "fail",
+                    details: "runtime parity cell returned no scenario result",
+                  },
+                ],
+              } satisfies QaSuiteScenarioResult);
+            const fallbackCell = {
+              runtime,
+              transcriptBytes: "",
+              toolCalls: [],
+              finalText: "",
+              usage: {
+                inputTokens: 0,
+                outputTokens: 0,
+                totalTokens: 0,
+              },
+              wallClockMs: Math.max(1, Date.now() - cellStartedAt),
+              runtimeErrorClass: "capture-missing",
+              bootStateLines: [],
+            } satisfies RuntimeParityCell;
+            return {
+              scenarioStatus: scenarioResult.status,
+              scenarioDetails: scenarioResult.details,
+              cell: cellResult.runtimeParityCell ?? fallbackCell,
+            };
+          },
+        });
+
+        const result = buildRuntimeParityScenarioResult({
+          scenarioName: scenario.title,
+          scenario,
+          result: parity,
+          codexToolLoading: params.codexToolLoading,
+        });
+        liveScenarioOutcomes[index] = {
+          id: scenario.id,
+          name: scenario.title,
+          status: result.status,
+          details: result.details,
+          steps: result.steps,
+          startedAt: liveScenarioOutcomes[index]?.startedAt,
+          finishedAt: new Date().toISOString(),
+        };
+        lab.setScenarioRun({
+          kind: "suite",
+          status: "running",
+          startedAt: params.startedAt.toISOString(),
+          scenarios: [...liveScenarioOutcomes],
+        });
+        writeQaSuiteProgress(
+          params.progressEnabled,
+          `runtime pair ${result.status} (${index + 1}/${params.selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+        );
+        return result;
+      },
+      {
+        startStaggerMs: resolveQaSuiteWorkerStartStaggerMs(params.concurrency),
+      },
+    );
+
+    const finishedAt = new Date();
+    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+      outputDir: params.outputDir,
+      startedAt: params.startedAt,
+      finishedAt,
+      scenarios,
+      transport,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+      fastMode: params.fastMode,
+      concurrency: params.concurrency,
+      scenarioIds:
+        params.scenarioIds && params.scenarioIds.length > 0
+          ? params.selectedCatalogScenarios.map((scenario) => scenario.id)
+          : undefined,
+      runtimePair: params.runtimePair,
+      codexToolLoading: params.codexToolLoading,
+    });
+    lab.setLatestReport({
+      outputPath: reportPath,
+      markdown: report,
+      generatedAt: finishedAt.toISOString(),
+    } satisfies QaLabLatestReport);
+    lab.setScenarioRun({
+      kind: "suite",
+      status: "completed",
+      startedAt: params.startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      scenarios: [...liveScenarioOutcomes],
+    });
+    return {
+      outputDir: params.outputDir,
+      reportPath,
+      summaryPath,
+      report,
+      scenarios,
+      watchUrl: lab.baseUrl,
+    } satisfies QaSuiteResult;
+  } finally {
+    if (ownsLab) {
+      await lab.stop();
+    }
+  }
 }
 
 async function writeQaSuiteArtifacts(params: {
@@ -360,6 +867,8 @@ async function writeQaSuiteArtifacts(params: {
   fastMode: boolean;
   concurrency: number;
   scenarioIds?: readonly string[];
+  runtimePair?: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
 }) {
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
@@ -450,9 +959,25 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
       ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+      ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
     ]),
   ];
-  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const scenarioGatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const qaCodexToolLoadingConfigPatch =
+    params?.forcedRuntime === "codex"
+      ? buildQaCodexToolLoadingConfigPatch(params.codexToolLoading)
+      : undefined;
+  const requestedGatewayConfigPatch = mergeQaGatewayConfigPatches(
+    params?.gatewayConfigPatch,
+    qaCodexToolLoadingConfigPatch,
+  );
+  const gatewayConfigPatch =
+    requestedGatewayConfigPatch && scenarioGatewayConfigPatch
+      ? (applyQaMergePatch(scenarioGatewayConfigPatch, requestedGatewayConfigPatch) as Record<
+          string,
+          unknown
+        >)
+      : (requestedGatewayConfigPatch ?? scenarioGatewayConfigPatch);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
@@ -464,6 +989,30 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `run start: scenarios=${selectedCatalogScenarios.length} concurrency=${concurrency} transport=${transportId}`,
   );
+
+  if (params?.runtimePair) {
+    return await runQaRuntimeParitySuite({
+      repoRoot,
+      outputDir,
+      startedAt,
+      providerMode,
+      transportId,
+      primaryModel,
+      alternateModel,
+      fastMode,
+      thinkingDefault: params.thinkingDefault,
+      claudeCliAuthMode: params.claudeCliAuthMode,
+      enabledPluginIds: params.enabledPluginIds,
+      concurrency,
+      selectedCatalogScenarios,
+      startLab: params.startLab,
+      lab: params.lab,
+      progressEnabled,
+      scenarioIds: params.scenarioIds,
+      runtimePair: params.runtimePair,
+      codexToolLoading: params.codexToolLoading,
+    });
+  }
 
   if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
     const ownsLab = !params?.lab;
@@ -647,6 +1196,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       );
       await artifactWriteQueue;
       const finishedAt = new Date();
+      const passedCount = scenarios.filter((scenario) => scenario.status === "pass").length;
+      const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
       const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
       lab.setScenarioRun({
         kind: "suite",
@@ -684,7 +1235,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       } satisfies QaLabLatestReport);
       writeQaSuiteProgress(
         progressEnabled,
-        `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+        `run complete: passed=${passedCount} skipped=${skippedCount} failed=${failedCount} total=${scenarios.length}`,
       );
       return {
         outputDir,
@@ -743,6 +1294,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     mutateConfig: gatewayConfigPatch
       ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
       : undefined,
+    runtimeEnvPatch: buildQaRuntimeEnvPatch({
+      providerMode,
+      forcedRuntime: params?.forcedRuntime,
+      mockBaseUrl: mock?.baseUrl,
+    }),
   });
   writeQaSuiteProgress(
     progressEnabled,
@@ -840,6 +1396,19 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       });
     }
 
+    const runtimeParityCell =
+      params?.captureRuntimeParityCell &&
+      params.forcedRuntime &&
+      selectedCatalogScenarios.length === 1 &&
+      scenarios.length > 0
+        ? await captureRuntimeParityCell({
+            runtime: params.forcedRuntime,
+            gateway,
+            scenarioResult: scenarios[0],
+            wallClockMs: Math.max(1, Date.now() - startedAt.getTime()),
+            mockBaseUrl: mock?.baseUrl,
+          })
+        : undefined;
     const finishedAt = new Date();
     const metrics = buildQaSuiteRuntimeMetrics({
       startedAt,
@@ -849,6 +1418,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       gatewayProcessRssStartBytes,
       gatewayProcessRssEndBytes: gateway.getProcessRssBytes?.() ?? null,
     });
+    const passedCount = scenarios.filter((scenario) => scenario.status === "pass").length;
+    const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     if (scenarios.some((scenario) => scenario.status === "fail")) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
@@ -878,6 +1449,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         params?.scenarioIds && params.scenarioIds.length > 0
           ? selectedCatalogScenarios.map((scenario) => scenario.id)
           : undefined,
+      codexToolLoading: params?.codexToolLoading,
     });
     const latestReport = {
       outputPath: reportPath,
@@ -887,7 +1459,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     lab.setLatestReport(latestReport);
     writeQaSuiteProgress(
       progressEnabled,
-      `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+      `run complete: passed=${passedCount} skipped=${skippedCount} failed=${failedCount} total=${scenarios.length}`,
     );
 
     return {
@@ -897,6 +1469,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       report,
       scenarios,
       watchUrl: lab.baseUrl,
+      ...(runtimeParityCell ? { runtimeParityCell } : {}),
     } satisfies QaSuiteResult;
   } catch (error) {
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
@@ -923,8 +1496,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 }
 
 export const qaSuiteProgressTesting = {
+  buildQaCodexToolLoadingConfigPatch,
+  buildQaRuntimeEnvPatch,
   parseQaSuiteBooleanEnv,
+  remapModelRefForForcedRuntime,
   resolveQaSuiteTransportReadyTimeoutMs,
+  runtimeParityReportOnlyReason,
   sanitizeQaSuiteProgressValue,
   shouldLogQaSuiteProgress,
 };

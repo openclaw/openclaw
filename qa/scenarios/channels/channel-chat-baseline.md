@@ -4,6 +4,7 @@
 id: channel-chat-baseline
 title: Channel baseline conversation
 surface: channel
+runtimeParityTier: standard
 coverage:
   primary:
     - channels.group-messages
@@ -24,6 +25,7 @@ execution:
   kind: flow
   summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
   config:
+    runtimeParityComparison: outcome-only
     mentionPrompt: "@openclaw explain the QA lab"
 ```
 

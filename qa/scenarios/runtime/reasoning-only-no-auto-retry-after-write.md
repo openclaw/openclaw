@@ -4,6 +4,7 @@
 id: reasoning-only-no-auto-retry-after-write
 title: Reasoning-only no-auto-retry after write
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.reasoning-only-recovery
@@ -26,6 +27,10 @@ execution:
   summary: Verify reasoning-only turns after a write do not auto-retry.
   config:
     requiredProvider: mock-openai
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: https://github.com/openclaw/openclaw/issues/80319
+      reason: mock-openai drives this seeded no-retry safety check through a native workspace write; Codex owns write natively, so dynamic write-call shape is report-only and native/live proof is required for product claims
     promptSnippet: Reasoning-only after write safety check
     prompt: "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK."
     retryNeedle: recorded reasoning but did not produce a user-visible answer
