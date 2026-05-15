@@ -27,11 +27,6 @@ export function resolveSourceReplyDeliveryMode(params: {
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.requested) {
-    const overrideMentioned =
-      params.ctx.WasMentioned === true && params.requested === "message_tool_only";
-    if (overrideMentioned) {
-      return "automatic";
-    }
     return params.messageToolAvailable === false && params.requested === "message_tool_only"
       ? "automatic"
       : params.requested;
@@ -42,15 +37,16 @@ export function resolveSourceReplyDeliveryMode(params: {
   const chatType = normalizeChatType(params.ctx.ChatType);
   let mode: SourceReplyDeliveryMode;
   if (chatType === "group" || chatType === "channel") {
-    const configuredMode =
-      params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
+    const groupVisibleReplies = params.cfg.messages?.groupChat?.visibleReplies;
+    const globalVisibleReplies = params.cfg.messages?.visibleReplies;
+    const configuredMode = groupVisibleReplies ?? globalVisibleReplies;
     mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    if (params.ctx.WasMentioned === true && configuredMode === undefined) {
+      mode = "automatic";
+    }
   } else {
     const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
-  }
-  if (params.ctx.WasMentioned === true && mode === "message_tool_only") {
-    mode = "automatic";
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
     return "automatic";
