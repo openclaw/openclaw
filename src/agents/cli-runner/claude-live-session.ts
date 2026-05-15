@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ExecToolConfig } from "../../config/types.tools.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -46,6 +48,12 @@ type ClaudeLiveSession = {
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
   closing: boolean;
+  controlRequestPolicy: ClaudeLiveControlRequestPolicy;
+};
+type ClaudeLiveControlRequestPolicy = {
+  allowNativeBash: boolean;
+  security: "deny" | "allowlist" | "full";
+  ask: "off" | "on-miss" | "always";
 };
 type ClaudeLiveRunResult = {
   output: CliOutput;
@@ -286,6 +294,7 @@ function buildClaudeLiveFingerprint(params: {
     env: Object.keys(params.env)
       .toSorted()
       .map((key) => [key, params.env[key] ? sha256(params.env[key]) : ""]),
+    controlRequestPolicy: resolveClaudeLiveControlRequestPolicy(params.context),
   });
 }
 
@@ -449,6 +458,124 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function resolveExecPolicyForClaudeLiveSession(
+  context: PreparedCliRunContext,
+): ExecToolConfig | undefined {
+  const config: OpenClawConfig | undefined = context.params.config;
+  const agentId = context.params.agentId;
+  if (config && agentId) {
+    const agentEntry = config.agents?.list?.find((entry) => entry?.id === agentId);
+    const agentExec = agentEntry?.tools?.exec;
+    if (agentExec) {
+      return agentExec;
+    }
+  }
+  return config?.tools?.exec;
+}
+
+function resolveClaudeLiveControlRequestPolicy(
+  context: PreparedCliRunContext,
+): ClaudeLiveControlRequestPolicy {
+  const exec = resolveExecPolicyForClaudeLiveSession(context);
+  // Mirror the runtime fallbacks used by the node-host exec runner so the
+  // bridge's view of "what the user actually granted" matches what real
+  // Bash invocations would see.
+  const security: ClaudeLiveControlRequestPolicy["security"] =
+    exec?.security === "deny" || exec?.security === "allowlist" || exec?.security === "full"
+      ? exec.security
+      : "allowlist";
+  const ask: ClaudeLiveControlRequestPolicy["ask"] =
+    exec?.ask === "off" || exec?.ask === "on-miss" || exec?.ask === "always" ? exec.ask : "on-miss";
+  return {
+    allowNativeBash: security === "full" && ask === "off",
+    security,
+    ask,
+  };
+}
+
+function writeClaudeLiveControlResponse(
+  session: ClaudeLiveSession,
+  response: Record<string, unknown>,
+): void {
+  const stdin = session.managedRun.stdin;
+  if (!stdin) {
+    closeLiveSession(
+      session,
+      "abort",
+      new Error("Claude CLI live session stdin is unavailable for control response"),
+    );
+    return;
+  }
+  stdin.write(`${JSON.stringify(response)}\n`, (error) => {
+    if (error) {
+      closeLiveSession(session, "abort", error);
+    }
+  });
+}
+
+function buildClaudeLivePermissionResult(
+  session: ClaudeLiveSession,
+  request: Record<string, unknown>,
+): Record<string, unknown> {
+  const toolName = typeof request.tool_name === "string" ? request.tool_name : "";
+  const toolUseID = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
+  if (toolName === "Bash" && session.controlRequestPolicy.allowNativeBash) {
+    return {
+      behavior: "allow",
+      updatedInput: isRecord(request.input) ? request.input : {},
+      ...(toolUseID ? { toolUseID } : {}),
+    };
+  }
+  const message =
+    toolName === "Bash"
+      ? `OpenClaw denied Claude native Bash because the effective exec policy is security=${session.controlRequestPolicy.security}, ask=${session.controlRequestPolicy.ask}; this bridge only auto-allows Bash when OpenClaw exec is full/no-ask.`
+      : `OpenClaw denied Claude native ${toolName || "tool"}; this bridge only maps Claude native Bash permission prompts to OpenClaw exec policy. Use OpenClaw MCP tools instead.`;
+  return {
+    behavior: "deny",
+    message,
+    ...(toolUseID ? { toolUseID } : {}),
+    decisionClassification: "user_reject",
+  };
+}
+
+function handleClaudeLiveControlRequest(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): void {
+  const requestId = typeof parsed.request_id === "string" ? parsed.request_id : "";
+  const request = isRecord(parsed.request) ? parsed.request : null;
+  if (!requestId || !request) {
+    cliBackendLog.warn("claude live control_request ignored: malformed request");
+    return;
+  }
+  if (request.subtype === "can_use_tool") {
+    const permissionResult = buildClaudeLivePermissionResult(session, request);
+    const toolName = typeof request.tool_name === "string" ? request.tool_name : "unknown";
+    cliBackendLog.info(
+      `claude live control_request: subtype=can_use_tool tool=${toolName} decision=${permissionResult.behavior as string}`,
+    );
+    writeClaudeLiveControlResponse(session, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: requestId,
+        response: permissionResult,
+      },
+    });
+    return;
+  }
+  const subtype = typeof request.subtype === "string" ? request.subtype : "unknown";
+  cliBackendLog.warn(`claude live control_request denied: unsupported subtype=${subtype}`);
+  writeClaudeLiveControlResponse(session, {
+    type: "control_response",
+    response: {
+      subtype: "error",
+      request_id: requestId,
+      error: `OpenClaw Claude live bridge does not support control request subtype '${subtype}'.`,
+    },
+  });
+}
+
 function normalizePositiveInt(
   value: number | undefined,
   fallback: number,
@@ -528,6 +655,13 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   }
   const parsed = parseClaudeLiveJsonLine(session, trimmed);
   if (!parsed) {
+    return;
+  }
+  if (parsed.type === "control_request") {
+    handleClaudeLiveControlRequest(session, parsed);
+    return;
+  }
+  if (parsed.type === "control_response") {
     return;
   }
   if (session.drainingAbortedTurn) {
@@ -739,6 +873,7 @@ async function createClaudeLiveSession(params: {
     cleanup: params.cleanup,
     cleanupDone: false,
     closing: false,
+    controlRequestPolicy: resolveClaudeLiveControlRequestPolicy(params.context),
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),
