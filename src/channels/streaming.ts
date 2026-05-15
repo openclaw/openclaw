@@ -812,6 +812,14 @@ export function resolveChannelStreamingPreviewToolProgress(
   return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
 }
 
+export function resolveChannelProgressDraftAssistantPreview(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  return asBoolean(config?.progress?.assistantPreview) ?? defaultValue;
+}
+
 export function resolveChannelStreamingProgressCommentary(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = false,

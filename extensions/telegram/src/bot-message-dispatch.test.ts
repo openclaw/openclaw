@@ -2836,6 +2836,50 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: fullAnswer });
   });
 
+  it("can stream assistant previews in a separate lane while preserving progress drafts", async () => {
+    const progressDraftStream = createDraftStream(2001);
+    const assistantDraftStream = createDraftStream(2002);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => progressDraftStream)
+      .mockImplementationOnce(() => assistantDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onPartialReply?.({
+          text: "I am checking the logs and will report back shortly.",
+        });
+        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", assistantPreview: true },
+        },
+      },
+    });
+
+    expect(progressDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expect(progressDraftStream.update).not.toHaveBeenCalledWith(
+      "I am checking the logs and will report back shortly.",
+    );
+    expect(assistantDraftStream.update).toHaveBeenCalledWith(
+      "I am checking the logs and will report back shortly.",
+    );
+    expect(assistantDraftStream.clear).toHaveBeenCalled();
+    expect(assistantDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    const assistantClearOrder = assistantDraftStream.clear.mock.invocationCallOrder[0];
+    const assistantResetOrder = assistantDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    expect(assistantClearOrder).toBeLessThan(assistantResetOrder);
+    expectDeliveredReply(0, { text: "Branch is up to date" });
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("streams the first long final chunk and sends follow-up chunks", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const longText = "one ".repeat(80);
