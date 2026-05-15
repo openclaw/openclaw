@@ -16,13 +16,12 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
-  type HistoryMediaEntry,
-  recordPendingHistoryEntryWithMedia,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -169,7 +168,14 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
   isThreadReply: boolean;
   threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
-}): Promise<HistoryMediaEntry[]> {
+}): Promise<
+  Array<{
+    path: string;
+    contentType?: string;
+    kind: "image";
+    messageId?: string;
+  }>
+> {
   const mediaMessage = buildSlackHistoryMediaCandidateMessage(params.message);
   if (!mediaMessage) {
     return [];
@@ -813,28 +819,43 @@ export async function prepareSlackMessage(params: {
             client: ctx.app.client,
           })
         : null;
-    await recordPendingHistoryEntryWithMedia({
-      historyMap: ctx.channelHistories,
-      historyKey,
-      limit: ctx.historyLimit,
-      entry: pendingBody
-        ? {
-            sender: await resolveSenderName(),
-            body: pendingBody,
-            timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-            messageId: message.ts,
-          }
-        : null,
-      mediaLimit: SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS,
-      messageId: message.ts,
-      media: () =>
-        resolveSlackHistoryMediaForPendingRecord({
-          ctx,
-          message,
-          isThreadReply,
-          threadStarter: skippedThreadStarter,
-          isBotMessage,
-        }),
+    const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
+    const senderName = pendingBody ? await resolveSenderName() : undefined;
+    await recordDroppedChannelTurnHistory({
+      input: {
+        id: message.ts ?? `${message.channel}:${Date.now()}`,
+        timestamp,
+        rawText: pendingBody,
+        textForAgent: pendingBody,
+        raw: message,
+      },
+      admission: { kind: "drop", reason: "slack-no-mention", recordHistory: true },
+      preflight: {
+        message: pendingBody
+          ? {
+              rawBody: pendingBody,
+              body: pendingBody,
+              bodyForAgent: pendingBody,
+              senderLabel: senderName,
+              envelopeFrom: senderName,
+            }
+          : undefined,
+        history: {
+          key: historyKey,
+          historyMap: ctx.channelHistories,
+          limit: ctx.historyLimit,
+          recordOnDrop: true,
+          mediaLimit: SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS,
+        },
+        media: () =>
+          resolveSlackHistoryMediaForPendingRecord({
+            ctx,
+            message,
+            isThreadReply,
+            threadStarter: skippedThreadStarter,
+            isBotMessage,
+          }),
+      },
     });
     return null;
   }

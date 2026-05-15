@@ -8,13 +8,10 @@ import {
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
-import {
-  type HistoryEntry,
-  type HistoryMediaEntry,
-  recordPendingHistoryEntryWithMedia,
-} from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -110,7 +107,14 @@ function isDiscordImageAttachmentCandidate(attachment: {
 async function resolveDiscordHistoryMediaForPendingRecord(params: {
   preflight: DiscordMessagePreflightParams;
   message: DiscordMessagePreflightContext["message"];
-}): Promise<HistoryMediaEntry[]> {
+}): Promise<
+  Array<{
+    path: string;
+    contentType?: string;
+    kind: "image";
+    messageId: string;
+  }>
+> {
   const imageAttachments = (params.message.attachments ?? [])
     .filter(isDiscordImageAttachmentCandidate)
     .slice(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS);
@@ -172,19 +176,39 @@ async function recordDiscordPendingHistoryEntry(params: {
   if (params.preflight.historyLimit <= 0) {
     return;
   }
-  await recordPendingHistoryEntryWithMedia({
-    historyMap: params.preflight.guildHistories,
-    historyKey: params.historyKey,
-    limit: params.preflight.historyLimit,
-    entry: params.entry ?? null,
-    mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
-    messageId: params.message.id,
-    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
-    media: () =>
-      resolveDiscordHistoryMediaForPendingRecord({
-        preflight: params.preflight,
-        message: params.message,
-      }),
+  await recordDroppedChannelTurnHistory({
+    input: {
+      id: params.message.id,
+      timestamp: params.entry?.timestamp,
+      rawText: params.entry?.body ?? "",
+      textForAgent: params.entry?.body,
+      raw: params.message,
+    },
+    admission: { kind: "drop", reason: "discord-preflight", recordHistory: true },
+    preflight: {
+      message: params.entry
+        ? {
+            rawBody: params.entry.body,
+            body: params.entry.body,
+            bodyForAgent: params.entry.body,
+            senderLabel: params.entry.sender,
+            envelopeFrom: params.entry.sender,
+          }
+        : undefined,
+      history: {
+        key: params.historyKey,
+        historyMap: params.preflight.guildHistories,
+        limit: params.preflight.historyLimit,
+        recordOnDrop: true,
+        mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
+        shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+      },
+      media: () =>
+        resolveDiscordHistoryMediaForPendingRecord({
+          preflight: params.preflight,
+          message: params.message,
+        }),
+    },
   });
 }
 

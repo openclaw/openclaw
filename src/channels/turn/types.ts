@@ -3,7 +3,7 @@ import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.j
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
-import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
+import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
@@ -228,14 +228,22 @@ export type InboundMediaFacts = {
   contentType?: string;
   kind?: "image" | "video" | "audio" | "document" | "unknown";
   transcribed?: boolean;
+  messageId?: string;
 };
+
+type MaybePromise<T> = T | Promise<T>;
 
 export type PreflightFacts = {
   admission?: ChannelTurnAdmission;
   command?: CommandFacts;
   message?: Partial<MessageFacts>;
-  media?: InboundMediaFacts[];
+  media?:
+    | readonly InboundMediaFacts[]
+    | (() => MaybePromise<
+        readonly InboundMediaFacts[] | readonly HistoryMediaEntry[] | null | undefined
+      >);
   supplemental?: SupplementalContextFacts;
+  history?: ChannelTurnDroppedHistoryOptions;
 };
 
 export type ChannelDeliveryInfo = {
@@ -306,6 +314,15 @@ export type ChannelTurnHistoryFinalizeOptions = {
   historyKey?: string;
   historyMap?: Map<string, HistoryEntry[]>;
   limit?: number;
+};
+
+export type ChannelTurnDroppedHistoryOptions = {
+  key: string;
+  limit: number;
+  historyMap: Map<string, HistoryEntry[]>;
+  recordOnDrop?: boolean;
+  mediaLimit?: number;
+  shouldRecord?: () => boolean;
 };
 
 export type ChannelTurnDispatcherOptions = Omit<

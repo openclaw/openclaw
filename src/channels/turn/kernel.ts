@@ -1,5 +1,9 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+import {
+  clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryWithMedia,
+} from "../../auto-reply/reply/history.js";
+import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
@@ -38,6 +42,8 @@ import type {
   ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
+  InboundMediaFacts,
+  NormalizedTurnInput,
   PreparedChannelTurn,
   PreflightFacts,
   RunChannelTurnParams,
@@ -61,6 +67,7 @@ export type {
   ChannelTurnAdapter,
   ChannelTurnAdmission,
   ChannelTurnDeliveryAdapter,
+  ChannelTurnDroppedHistoryOptions,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnDispatcherOptions,
   ChannelTurnLogEvent,
@@ -149,6 +156,85 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
     historyMap: params.historyMap,
     historyKey: params.historyKey,
     limit: params.limit,
+  });
+}
+
+function historyMediaFromInboundFacts(
+  media: readonly InboundMediaFacts[] | readonly HistoryMediaEntry[] | null | undefined,
+  messageId: string,
+): HistoryMediaEntry[] {
+  if (!Array.isArray(media)) {
+    return [];
+  }
+  return media.map((entry) => ({
+    path: entry.path,
+    url: entry.url,
+    contentType: entry.contentType,
+    kind: entry.kind,
+    messageId: entry.messageId ?? messageId,
+  }));
+}
+
+function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
+  return (
+    preflight.message?.senderLabel ??
+    preflight.message?.envelopeFrom ??
+    (typeof input.raw === "object" &&
+    input.raw &&
+    "sender" in input.raw &&
+    typeof (input.raw as { sender?: unknown }).sender === "string"
+      ? (input.raw as { sender: string }).sender
+      : undefined) ??
+    "unknown"
+  );
+}
+
+function resolveDroppedHistoryBody(input: NormalizedTurnInput, preflight: PreflightFacts) {
+  return (
+    preflight.message?.bodyForAgent ??
+    preflight.message?.body ??
+    preflight.message?.rawBody ??
+    input.textForAgent ??
+    input.rawText
+  );
+}
+
+export async function recordDroppedChannelTurnHistory(params: {
+  input: NormalizedTurnInput;
+  preflight: PreflightFacts;
+  admission?: ChannelTurnAdmission;
+}): Promise<void> {
+  const admission = params.admission ?? params.preflight.admission;
+  if (admission?.kind !== "drop") {
+    return;
+  }
+  const history = params.preflight.history;
+  if (!history || history.limit <= 0 || !(history.recordOnDrop || admission.recordHistory)) {
+    return;
+  }
+  const body = resolveDroppedHistoryBody(params.input, params.preflight);
+  const entry =
+    body.trim().length > 0
+      ? {
+          sender: resolveDroppedHistorySender(params.input, params.preflight),
+          body,
+          timestamp: params.input.timestamp,
+          messageId: params.input.id,
+        }
+      : null;
+  const media = params.preflight.media;
+  await recordPendingHistoryEntryWithMedia({
+    historyMap: history.historyMap,
+    historyKey: history.key,
+    limit: history.limit,
+    entry,
+    mediaLimit: history.mediaLimit,
+    messageId: params.input.id,
+    shouldRecord: history.shouldRecord,
+    media:
+      typeof media === "function"
+        ? async () => historyMediaFromInboundFacts(await media(), params.input.id)
+        : historyMediaFromInboundFacts(media, params.input.id),
   });
 }
 
@@ -522,6 +608,11 @@ export async function runChannelTurn<
     preflightAdmission.kind !== "dispatch" &&
     preflightAdmission.kind !== "observeOnly"
   ) {
+    await recordDroppedChannelTurnHistory({
+      input,
+      preflight,
+      admission: preflightAdmission,
+    });
     emit({
       ...params,
       event: {
