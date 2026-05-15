@@ -1,5 +1,4 @@
 import type { OperatorScope } from "../operator-scopes.js";
-import type { GatewayRequestHandler } from "../server-methods/types.js";
 
 export const NODE_GATEWAY_METHOD_SCOPE = "node" as const;
 export const DYNAMIC_GATEWAY_METHOD_SCOPE = "dynamic" as const;
@@ -17,9 +16,11 @@ export type GatewayMethodOwner =
 
 export type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
 
+export type GatewayMethodHandler = (opts: never) => unknown;
+
 export type GatewayMethodDescriptor = {
   name: string;
-  handler: GatewayRequestHandler;
+  handler: GatewayMethodHandler;
   scope: GatewayMethodScope;
   owner: GatewayMethodOwner;
   startup?: GatewayMethodStartupAvailability;
@@ -30,4 +31,14 @@ export type GatewayMethodDescriptor = {
 
 export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "name"> & {
   name: string;
+};
+
+export type GatewayMethodRegistryView = {
+  getHandler: (name: string) => GatewayMethodHandler | undefined;
+  listMethods: () => string[];
+  listAdvertisedMethods: () => string[];
+  getScope: (name: string) => GatewayMethodScope | undefined;
+  isStartupUnavailable: (name: string) => boolean;
+  isControlPlaneWrite: (name: string) => boolean;
+  descriptors: () => readonly GatewayMethodDescriptor[];
 };

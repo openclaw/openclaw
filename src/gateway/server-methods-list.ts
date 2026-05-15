@@ -1,12 +1,7 @@
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 import { CORE_ADVERTISED_GATEWAY_METHODS } from "./methods/legacy-metadata.js";
-import {
-  createCoreGatewayMethodDescriptors,
-  createGatewayMethodRegistry,
-} from "./methods/registry.js";
 import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
-import { coreGatewayHandlers } from "./server-methods.js";
 
 type GatewayMethodChannelPlugin = {
   gatewayMethods?: readonly string[];
@@ -14,10 +9,7 @@ type GatewayMethodChannelPlugin = {
 };
 
 export function listCoreGatewayMethods(): string[] {
-  const registry = createGatewayMethodRegistry(
-    createCoreGatewayMethodDescriptors(coreGatewayHandlers),
-  );
-  return [...CORE_ADVERTISED_GATEWAY_METHODS].filter((method) => registry.getHandler(method));
+  return [...CORE_ADVERTISED_GATEWAY_METHODS];
 }
 
 function listChannelGatewayMethods(): string[] {

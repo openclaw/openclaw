@@ -1,12 +1,13 @@
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers } from "../server-methods/types.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
+  type GatewayMethodHandler,
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
+  type GatewayMethodRegistryView,
   type GatewayMethodScope,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
@@ -19,15 +20,7 @@ import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./legacy-metadata.js";
 
-export type GatewayMethodRegistry = {
-  getHandler: (name: string) => GatewayRequestHandler | undefined;
-  listMethods: () => string[];
-  listAdvertisedMethods: () => string[];
-  getScope: (name: string) => GatewayMethodScope | undefined;
-  isStartupUnavailable: (name: string) => boolean;
-  isControlPlaneWrite: (name: string) => boolean;
-  descriptors: () => readonly GatewayMethodDescriptor[];
-};
+export type GatewayMethodRegistry = GatewayMethodRegistryView;
 
 function normalizeMethodName(name: string): string {
   return name.trim();
@@ -93,7 +86,7 @@ export function createGatewayMethodRegistry(
 }
 
 export function createGatewayMethodDescriptorsFromHandlers(params: {
-  handlers: GatewayRequestHandlers;
+  handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
   defaultScope?: OperatorScope;
   scopes?: Partial<Record<string, OperatorScope>>;
@@ -125,7 +118,7 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
 }
 
 export function createCoreGatewayMethodDescriptors(
-  handlers: GatewayRequestHandlers,
+  handlers: Record<string, GatewayMethodHandler>,
 ): GatewayMethodDescriptorInput[] {
   return createGatewayMethodDescriptorsFromHandlers({
     handlers,
@@ -137,7 +130,7 @@ export function createCoreGatewayMethodDescriptors(
 export function createPluginGatewayMethodDescriptor(params: {
   pluginId: string;
   name: string;
-  handler: GatewayRequestHandler;
+  handler: GatewayMethodHandler;
   scope?: OperatorScope;
 }): GatewayMethodDescriptorInput {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
