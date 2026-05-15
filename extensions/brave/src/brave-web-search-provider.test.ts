@@ -293,6 +293,64 @@ describe("brave web search provider", () => {
     expect(requestUrl.pathname).toBe("/proxy/res/v1/llm/context");
   });
 
+  it("reports malformed Brave web search JSON as a provider error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
+      "Brave Search API error: malformed JSON response",
+    );
+  });
+
+  it("reports malformed Brave llm-context JSON as a provider error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
+      "Brave LLM Context API error: malformed JSON response",
+    );
+  });
+
   it("keeps Brave cache entries isolated by baseUrl", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {

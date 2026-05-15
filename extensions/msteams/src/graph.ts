@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 
@@ -118,7 +119,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
         `Graph ${params.url} failed (${response.status}): ${text || "unknown error"}`,
       );
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, `Graph ${params.url} failed`);
   } finally {
     await release();
   }

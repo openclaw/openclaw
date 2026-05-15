@@ -122,6 +122,7 @@ import {
   runUpdateStep,
   tryWriteCompletionCache,
   type UpdateCommandOptions,
+  type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
@@ -1774,6 +1775,138 @@ async function runPostCorePluginUpdate(params: {
     timeoutMs: params.timeoutMs,
     pluginInstallRecords: params.pluginInstallRecords,
   });
+}
+
+type UpdateFinalizeResult = {
+  status: "ok" | "warning" | "error";
+  mode: "finalize";
+  root: string;
+  channel: "stable" | "beta" | "dev";
+  restart: false;
+  postUpdate: {
+    doctor: {
+      status: "ok";
+    };
+    plugins: PostCorePluginUpdateResult;
+  };
+};
+
+function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  const previousParentSupportsDoctorConfigWrite =
+    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
+  return run().finally(() => {
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+    if (previousParentSupportsDoctorConfigWrite === undefined) {
+      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+    } else {
+      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
+        previousParentSupportsDoctorConfigWrite;
+    }
+  });
+}
+
+export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  suppressDeprecations();
+  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
+  if (timeoutMs === null) {
+    return;
+  }
+  assertConfigWriteAllowedInCurrentMode();
+
+  const root = await resolveUpdateRoot();
+  let configSnapshot = await readConfigFileSnapshot();
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel && !requestedChannel) {
+    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
+    defaultRuntime.exit(1);
+    return;
+  }
+  const storedChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+  const channel = requestedChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+  if (requestedChannel) {
+    configSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot,
+      requestedChannel,
+    });
+  }
+
+  const pluginUpdate = await withUpdateFinalizationEnv(async () => {
+    await createUpdateConfigSnapshot();
+    await doctorCommand(defaultRuntime, {
+      nonInteractive: true,
+      repair: true,
+      yes: opts.yes === true,
+    });
+    configSnapshot = await readConfigFileSnapshot();
+    if (requestedChannel) {
+      configSnapshot = await persistRequestedUpdateChannel({
+        configSnapshot,
+        requestedChannel,
+      });
+    }
+    const postDoctorStoredChannel = configSnapshot.valid
+      ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+      : null;
+    const postDoctorChannel =
+      requestedChannel ?? postDoctorStoredChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+    return await runPostCorePluginUpdate({
+      root,
+      channel: postDoctorChannel,
+      configSnapshot,
+      opts: {
+        json: opts.json,
+        timeout: opts.timeout,
+        yes: opts.yes,
+        restart: false,
+      },
+      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+      pluginInstallRecords,
+    });
+  });
+
+  const result: UpdateFinalizeResult = {
+    status:
+      pluginUpdate.status === "error"
+        ? "error"
+        : pluginUpdate.status === "warning"
+          ? "warning"
+          : "ok",
+    mode: "finalize",
+    root,
+    channel:
+      requestedChannel ??
+      (configSnapshot.valid
+        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+        : null) ??
+      channel,
+    restart: false,
+    postUpdate: {
+      doctor: {
+        status: "ok",
+      },
+      plugins: pluginUpdate,
+    },
+  };
+
+  await tryWriteCompletionCache(root, Boolean(opts.json));
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+  } else if (result.status === "ok") {
+    defaultRuntime.log(theme.muted("Update finalization completed."));
+  }
+  if (result.status === "error") {
+    defaultRuntime.exit(1);
+  }
 }
 
 async function persistRequestedUpdateChannel(params: {

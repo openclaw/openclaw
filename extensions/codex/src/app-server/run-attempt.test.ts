@@ -62,6 +62,12 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     provider: "codex",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
+    contextTokenBudget: 150_000,
+    contextWindowInfo: {
+      tokens: 150_000,
+      referenceTokens: 200_000,
+      source: "agentContextTokens",
+    },
     thinkLevel: "medium",
     disableTools: true,
     timeoutMs: 5_000,
@@ -2647,19 +2653,34 @@ describe("runCodexAppServerAttempt", () => {
         resolvedRef?: string;
         runId?: string;
         sessionId?: string;
+        contextTokenBudget?: number;
+        contextWindowSource?: string;
+        contextWindowReferenceTokens?: number;
       },
-      { runId?: string; sessionId?: string },
+      {
+        runId?: string;
+        sessionId?: string;
+        contextTokenBudget?: number;
+        contextWindowSource?: string;
+        contextWindowReferenceTokens?: number;
+      },
     ];
     expect(llmOutputPayload.runId).toBe("run-1");
     expect(llmOutputPayload.sessionId).toBe("session-1");
     expect(llmOutputPayload.provider).toBe("codex");
     expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
+    expect(llmOutputPayload.contextTokenBudget).toBe(150_000);
+    expect(llmOutputPayload.contextWindowSource).toBe("agentContextTokens");
+    expect(llmOutputPayload.contextWindowReferenceTokens).toBe(200_000);
     expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
     expect(llmOutputPayload.harnessId).toBe("codex");
     expect(llmOutputPayload.assistantTexts).toEqual(["hello back"]);
     expect(llmOutputPayload.lastAssistant?.role).toBe("assistant");
     expect(llmOutputContext.runId).toBe("run-1");
     expect(llmOutputContext.sessionId).toBe("session-1");
+    expect(llmOutputContext.contextTokenBudget).toBe(150_000);
+    expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+    expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
     const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
       { messages?: Array<{ role?: string }>; success?: boolean },
       { runId?: string; sessionId?: string },

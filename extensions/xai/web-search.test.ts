@@ -355,6 +355,36 @@ describe("xai web search config resolution", () => {
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/proxy/v1/responses");
   });
 
+  it("reports malformed xAI web search JSON as a provider error", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
+      "xAI web search failed: malformed JSON response",
+    );
+  });
+
   it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
     expect(
       resolveXaiWebSearchModel({
