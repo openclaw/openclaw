@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  type OAuthCredential,
   buildXaiOAuthAuthorizeUrl,
   fetchXaiOAuthDiscovery,
   isTrustedXaiOAuthEndpoint,
@@ -80,7 +79,8 @@ describe("xAI OAuth", () => {
   it("refreshes with the cached token endpoint and preserves refresh fallback", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.method).toBe("POST");
-      const body = String(init?.body);
+      expect(typeof init?.body).toBe("string");
+      const body = init?.body as string;
       expect(body).toContain("grant_type=refresh_token");
       expect(body).toContain(`client_id=${encodeURIComponent(XAI_OAUTH_CLIENT_ID)}`);
       expect(body).toContain("refresh_token=refresh-1");
@@ -98,7 +98,7 @@ describe("xAI OAuth", () => {
         refresh: "refresh-1",
         expires: 100,
         tokenEndpoint: "https://auth.x.ai/oauth2/token",
-      } as OAuthCredential & { tokenEndpoint: string },
+      } as unknown as Parameters<typeof refreshXaiOAuthCredential>[0],
       { fetchImpl, now: () => 1_000 },
     );
 

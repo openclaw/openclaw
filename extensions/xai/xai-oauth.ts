@@ -298,7 +298,7 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
     });
   } catch (err) {
     progress.stop("xAI OAuth failed");
-    throw new Error(`xAI OAuth failed: ${formatErrorMessage(err)}`);
+    throw new Error(`xAI OAuth failed: ${formatErrorMessage(err)}`, { cause: err });
   }
 }
 
