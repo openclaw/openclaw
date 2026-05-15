@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Bind shell script operands after combined options [AI]. (#81882) Thanks @pgondhi987.
 - fix(canvas): validate snapshot response formats [AI]. (#81881) Thanks @pgondhi987.
 - Constrain provider catalog entry paths [AI]. (#81884) Thanks @pgondhi987.
 - Require canonical node platform IDs [AI]. (#81880) Thanks @pgondhi987.
