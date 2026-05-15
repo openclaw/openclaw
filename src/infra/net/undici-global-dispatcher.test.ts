@@ -227,25 +227,16 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(undiciGlobalDispatcherModule._globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
-  it("replaces Proxyline managed dispatcher with a timed env proxy dispatcher", () => {
+  it("preserves Proxyline managed dispatcher during timeout tuning", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
-    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
-      httpProxy: "http://proxyline.example:3128",
-      httpsProxy: "http://proxyline.example:3128",
-    });
-    setCurrentDispatcher(new ManagedUndiciDispatcher());
+    const dispatcher = new ManagedUndiciDispatcher();
+    setCurrentDispatcher(dispatcher);
 
     ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
 
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
-    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
-    expect(next.options).toEqual({
-      httpProxy: "http://proxyline.example:3128",
-      httpsProxy: "http://proxyline.example:3128",
-      bodyTimeout: 1_900_000,
-      headersTimeout: 1_900_000,
-    });
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getCurrentDispatcher()).toBe(dispatcher);
+    expect(undiciGlobalDispatcherModule._globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
   it("is idempotent for unchanged dispatcher kind and network policy", () => {

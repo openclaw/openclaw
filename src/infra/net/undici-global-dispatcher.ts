@@ -124,9 +124,16 @@ function applyGlobalDispatcherStreamTimeouts(params: {
     return;
   }
 
+  if (kind === "proxyline-managed") {
+    // Proxyline owns the managed dispatcher and its bypass policy. Do not
+    // downgrade it to EnvHttpProxyAgent just to apply OpenClaw's timeout shim.
+    lastAppliedTimeoutKey = nextKey;
+    return;
+  }
+
   const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
-    if (kind === "env-proxy" || kind === "proxyline-managed") {
+    if (kind === "env-proxy") {
       const proxyOptions = {
         ...resolveEnvHttpProxyAgentOptions(),
         bodyTimeout: timeoutMs,
