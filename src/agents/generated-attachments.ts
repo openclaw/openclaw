@@ -73,7 +73,7 @@ export function formatGeneratedAttachmentLines(
     if (path) {
       parts.push(`path=${JSON.stringify(path)}`);
     } else if (url) {
-      parts.push(`url=${JSON.stringify(url)}`);
+      parts.push(`mediaUrl=${JSON.stringify(url)}`);
     }
     lines.push(parts.join(" "));
   }

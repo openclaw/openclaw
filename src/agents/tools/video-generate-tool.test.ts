@@ -501,7 +501,7 @@ describe("createVideoGenerateTool", () => {
 
     expect(saveSpy).not.toHaveBeenCalled();
     expect(text).toContain("Generated 1 video with vydra/veo3.");
-    expect(text).toContain('url="https://example.com/generated-lobster.mp4"');
+    expect(text).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
     expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("vydra");
@@ -552,7 +552,7 @@ describe("createVideoGenerateTool", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
-    expect(text).toContain('url="https://fal.run/files/generated-lobster.mp4"');
+    expect(text).toContain('mediaUrl="https://fal.run/files/generated-lobster.mp4"');
     expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("fal");
@@ -658,7 +658,7 @@ describe("createVideoGenerateTool", () => {
         name: "lobster.mp4",
       },
     ]);
-    expect(wake.result).toContain('url="https://example.com/generated-lobster.mp4"');
+    expect(wake.result).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
     expect(wake.result).not.toContain("MEDIA:");
   });
 
