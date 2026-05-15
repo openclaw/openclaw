@@ -73,7 +73,7 @@ function expectLastProxylineBypassPolicy(): ProxylineBypassPolicy {
   if (typeof bypassPolicy !== "function") {
     throw new Error("Expected Proxyline bypass policy");
   }
-  return (request) => Boolean(bypassPolicy(request));
+  return (request) => bypassPolicy(request);
 }
 
 describe("startProxy", () => {
