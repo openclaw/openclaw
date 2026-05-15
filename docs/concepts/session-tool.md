@@ -17,8 +17,9 @@ reading history, sending messages to other sessions, and spawning sub-agents.
 | ------------------ | ------------------------------------------------------- |
 | `sessions_list`    | List sessions with optional filters (kind, recency)     |
 | `sessions_history` | Read the transcript of a specific session               |
-| `sessions_send`    | Send a message to another session and optionally wait   |
-| `sessions_spawn`   | Spawn an isolated sub-agent session for background work |
+| `sessions_send`      | Send a message to another session and optionally wait                                   |
+| `sessions_broadcast` | Broadcast a system event to multiple sessions that match a filter (fan-out A2A)         |
+| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                                 |
 
 ## Listing and reading sessions
 
@@ -44,6 +45,70 @@ the response:
 After the target responds, OpenClaw can run a **reply-back loop** where the
 agents alternate messages (up to 5 turns). The target agent can reply
 `REPLY_SKIP` to stop early.
+
+## Broadcasting to multiple sessions
+
+`sessions_broadcast` delivers a system event to every session that matches the
+given filters. It is the multi-session fan-out counterpart to `sessions_send`.
+All delivery is fire-and-queue — there is no reply-wait in v1.
+
+### Parameters
+
+| Parameter               | Type       | Description                                                                |
+| ----------------------- | ---------- | -------------------------------------------------------------------------- |
+| `message`               | `string`   | **Required.** Text of the system event to deliver.                         |
+| `agentIds`              | `string[]` | Filter: only sessions belonging to these agent IDs.                        |
+| `kinds`                 | `string[]` | Filter: only sessions of these kinds (`main`, `cron`, `hook`, etc.).       |
+| `label`                 | `string`   | Filter: only the session with this exact label.                            |
+| `activeWithinMinutes`   | `number`   | Filter: only sessions active within the last N minutes.                    |
+| `excludeCurrentSession` | `boolean`  | Default `true`. Exclude the calling session from delivery.                 |
+
+At least one filter is required. An empty filter set returns an error without
+making any gateway calls — this prevents accidental cluster-wide broadcasts.
+
+### Return value
+
+```json
+{
+  "delivered": 3,
+  "failed": 0,
+  "skipped": 1,
+  "results": [
+    { "sessionKey": "agent:zero:tui-abc", "agentId": "zero", "kind": "main", "status": "delivered" },
+    { "sessionKey": "agent:zero:discord:thread:1", "status": "skipped", "reason": "thread-scoped" }
+  ]
+}
+```
+
+`status` is one of `"delivered"`, `"failed"`, or `"skipped"`. Skipped entries
+include a `reason`: `"self"` (excluded by `excludeCurrentSession`),
+`"thread-scoped"` (thread session excluded by design), or `"allow-list"` (target
+agent not in `tools.agentToAgent.allow`).
+
+### Security
+
+`sessions_broadcast` requires `tools.agentToAgent.enabled: true`. It respects
+the same `tools.agentToAgent.allow` allow-list and `tools.sessions.visibility`
+scoping as `sessions_send`.
+
+### Example: multi-agent restart coordination
+
+Notify all active sessions before a gateway restart:
+
+```json
+{
+  "name": "sessions_broadcast",
+  "parameters": {
+    "message": "gateway:pre-restart — save any in-progress state, restarting shortly",
+    "activeWithinMinutes": 60,
+    "excludeCurrentSession": true
+  }
+}
+```
+
+This delivers a system-event notice to all sessions active in the last hour,
+excluding the calling session. Each receiving agent sees the message prepended
+to its next prompt turn.
 
 ## Spawning sub-agents
 
