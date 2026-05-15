@@ -338,6 +338,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         region: config.region,
         voice: overrides.voice ?? config.voice,
         lang: overrides.lang ?? config.lang,
+        rate: overrides.rate ?? config.rate,
+        pitch: overrides.pitch ?? config.pitch,
+        volume: overrides.volume ?? config.volume,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
       });

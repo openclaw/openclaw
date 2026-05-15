@@ -239,9 +239,10 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body.model).toBe("tts-1");
+      expect(body.model).toBe("gpt-4o-mini-tts");
       expect(body.voice).toBe("nova");
       expect(body.speed).toBe(1.25);
+      expect(body.instructions).toBe("Persona: Alfred\n\nSpeak in a warm, upbeat, cheerful tone.");
       expect(body.response_format).toBe("pcm");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
@@ -252,14 +253,16 @@ describe("buildOpenAISpeechProvider", () => {
       cfg: {} as never,
       providerConfig: {
         apiKey: "sk-test",
-        model: "gpt-4o-mini-tts",
+        model: "tts-1",
         voice: "alloy",
         speed: 1,
+        instructions: "Persona: Alfred",
       },
       providerOverrides: {
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
         voice: "nova",
         speed: 1.25,
+        instructions: "Speak in a warm, upbeat, cheerful tone.",
       },
       timeoutMs: 1_000,
     });

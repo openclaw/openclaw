@@ -202,6 +202,9 @@ describe("buildAzureSpeechProvider", () => {
       providerOverrides: {
         voice: "en-US-AriaNeural",
         lang: "es-US",
+        rate: "+8%",
+        pitch: "+4%",
+        volume: "+0%",
       },
       timeoutMs: 30_000,
     });
@@ -214,6 +217,9 @@ describe("buildAzureSpeechProvider", () => {
       region: "eastus",
       voice: "en-US-AriaNeural",
       lang: "es-US",
+      rate: "+8%",
+      pitch: "+4%",
+      volume: "+0%",
       outputFormat: "raw-8khz-8bit-mono-mulaw",
       timeoutMs: 30_000,
     });

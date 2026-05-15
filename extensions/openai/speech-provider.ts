@@ -351,7 +351,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         model: overrides.model ?? config.model,
         voice: overrides.voice ?? config.voice,
         speed: overrides.speed ?? config.speed,
-        instructions: config.instructions,
+        instructions: mergeOpenAIInstructions(config.instructions, overrides.instructions),
         responseFormat: outputFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
