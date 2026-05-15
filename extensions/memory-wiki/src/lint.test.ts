@@ -205,4 +205,49 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
   });
+
+  it("flags path-based links whose case does not match the file on disk", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-path-case-",
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Alpha\n\n[Alpha Source](sources/Alpha.md)\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    const brokenLinks = result.issues.filter((issue) => issue.code === "broken-wikilink");
+    expect(brokenLinks.map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("sources/Alpha.md")]),
+    );
+  });
 });

@@ -51,43 +51,64 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
-function normalizeLintLinkTarget(value: string): string {
-  return normalizeLowercaseStringOrEmpty(
-    value
-      .trim()
-      .replace(/\\/g, "/")
-      .split("#")[0]
-      .split("?")[0]
-      .replace(/\.md$/i, "")
-      .replace(/^\.\/+/, "")
-      .replace(/\/+$/, ""),
-  );
+function trimLintLinkTarget(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, "/")
+    .split("#")[0]
+    .split("?")[0]
+    .replace(/\.md$/i, "")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+$/, "");
+}
+
+// Title/alias matching: case-insensitive (Obsidian-style wikilink resolution).
+function normalizeLintTitleTarget(value: string): string {
+  return normalizeLowercaseStringOrEmpty(trimLintLinkTarget(value));
+}
+
+// Path matching: case-sensitive. On a case-sensitive filesystem, `sources/Alpha.md`
+// and `sources/alpha.md` are distinct files; lowercasing would make the linter
+// silently accept a link that does not resolve.
+function normalizeLintPathTarget(value: string): string {
+  return trimLintLinkTarget(value);
+}
+
+function linkTargetLooksLikePath(value: string): boolean {
+  return /[/\\]/.test(value) || /\.md(?:[#?].*)?$/i.test(value);
 }
 
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
-  const validTargets = new Set<string>();
-  const addValidTarget = (target: string | undefined) => {
-    const normalized = target ? normalizeLintLinkTarget(target) : "";
-    if (normalized) {
-      validTargets.add(normalized);
-    }
+  const validPathTargets = new Set<string>();
+  const validTitleTargets = new Set<string>();
+  const addValidPath = (target: string | undefined) => {
+    const normalized = target ? normalizeLintPathTarget(target) : "";
+    if (normalized) validPathTargets.add(normalized);
+  };
+  const addValidTitle = (target: string | undefined) => {
+    const normalized = target ? normalizeLintTitleTarget(target) : "";
+    if (normalized) validTitleTargets.add(normalized);
   };
 
   for (const page of pages) {
     const withoutExtension = page.relativePath.replace(/\.md$/i, "");
-    addValidTarget(page.relativePath);
-    addValidTarget(withoutExtension);
-    addValidTarget(path.basename(withoutExtension));
-    addValidTarget(page.title);
+    addValidPath(page.relativePath);
+    addValidPath(withoutExtension);
+    addValidTitle(path.basename(withoutExtension));
+    addValidTitle(page.title);
     for (const alias of page.aliases) {
-      addValidTarget(alias);
+      addValidTitle(alias);
     }
   }
 
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(normalizeLintLinkTarget(linkTarget))) {
+      const looksLikePath = linkTargetLooksLikePath(linkTarget);
+      const matches = looksLikePath
+        ? validPathTargets.has(normalizeLintPathTarget(linkTarget))
+        : validTitleTargets.has(normalizeLintTitleTarget(linkTarget));
+      if (!matches) {
         issues.push({
           severity: "warning",
           category: "links",

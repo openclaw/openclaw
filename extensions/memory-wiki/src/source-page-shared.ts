@@ -8,14 +8,32 @@ import {
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 
-function importedSourcePageLooksComplete(text: string, sourcePath: string): boolean {
+function hasGroupProvenance(text: string, group: MemoryWikiImportedSourceGroup): boolean {
+  if (group === "bridge") {
+    return /^bridgeRelativePath:\s*\S+/m.test(text) && /^bridgeWorkspaceDir:\s*\S+/m.test(text);
+  }
+  if (group === "unsafe-local") {
+    return (
+      /^unsafeLocalConfiguredPath:\s*\S+/m.test(text) &&
+      /^unsafeLocalRelativePath:\s*\S+/m.test(text)
+    );
+  }
+  return false;
+}
+
+function importedSourcePageLooksComplete(
+  text: string,
+  sourcePath: string,
+  group: MemoryWikiImportedSourceGroup,
+): boolean {
   return (
     text.startsWith("---\n") &&
     /^pageType:\s*source\s*$/m.test(text) &&
     /^id:\s*\S+/m.test(text) &&
     /^updatedAt:\s*\S+/m.test(text) &&
     text.includes(`sourcePath: ${sourcePath}`) &&
-    /^## Content\s*$/m.test(text)
+    /^## Content\s*$/m.test(text) &&
+    hasGroupProvenance(text, group)
   );
 }
 
@@ -55,7 +73,7 @@ export async function writeImportedSourcePage(params: {
   });
   if (shouldSkip) {
     const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
-    if (importedSourcePageLooksComplete(existing, params.sourcePath)) {
+    if (importedSourcePageLooksComplete(existing, params.sourcePath, params.group)) {
       return { pagePath: params.pagePath, changed: false, created };
     }
   }
