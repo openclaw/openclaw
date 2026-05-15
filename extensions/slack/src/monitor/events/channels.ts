@@ -47,6 +47,7 @@ export function registerSlackChannelEvents(params: {
       sessionKey,
       contextKey: `slack:channel:${params.kind}:${params.channelId ?? params.channelName ?? "unknown"}`,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
   };
 

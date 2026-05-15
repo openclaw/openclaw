@@ -82,6 +82,7 @@ describe("registerSlackChannelEvents", () => {
       sessionKey: "agent:main:main",
       contextKey: "slack:channel:created:C1",
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
   });
 });

@@ -89,6 +89,7 @@ export function registerSlackReactionEvents(params: {
         sessionKey: ingressContext.sessionKey,
         contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       });
     } catch (err) {
       ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));

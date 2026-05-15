@@ -489,6 +489,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       sessionKey: route.sessionKey,
       contextKey,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     return true;
   }

@@ -344,6 +344,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     sessionKey: resolveEventSessionKey(sessionKey, session.mainKey, session.sessionScope),
     deliveryContext: session.notifyDeliveryContext,
     forceSenderIsOwnerFalse: true,
+    trusted: false,
   });
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
@@ -447,6 +448,7 @@ export function emitExecSystemEvent(
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
     forceSenderIsOwnerFalse: true,
+    trusted: false,
   });
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.

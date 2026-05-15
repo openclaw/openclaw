@@ -141,6 +141,7 @@ describe("agent components", () => {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello:123456789",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     if (params.expectPairingStoreRead) {
@@ -269,6 +270,7 @@ describe("agent components", () => {
         sessionKey: defaultGroupDmSessionKey,
         contextKey: "discord:agent-button:group-dm-channel:hello:123456789",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
@@ -350,6 +352,7 @@ describe("agent components", () => {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-select:dm-channel:hello:123456789",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -374,6 +377,7 @@ describe("agent components", () => {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello_cid:123456789",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -398,6 +402,7 @@ describe("agent components", () => {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello%2G:123456789",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();

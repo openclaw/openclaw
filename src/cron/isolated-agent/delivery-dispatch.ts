@@ -407,6 +407,7 @@ async function queueCronAwarenessSystemEvent(params: {
       }),
       contextKey: params.deliveryIdempotencyKey,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
   } catch (err) {
     await logCronDeliveryWarn(

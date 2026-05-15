@@ -562,6 +562,7 @@ export async function startGatewayServer(
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
   };
   const { createRuntimeSecretsActivator } = await startupConfigModulePromise;

@@ -221,6 +221,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       contextKey,
       deliveryContext: params.deliveryContext,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     wake();
   };

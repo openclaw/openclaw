@@ -502,6 +502,7 @@ async function handleDiscordReactionEvent(
         sessionKey: route.sessionKey,
         contextKey,
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       });
     };
     const shouldNotifyReaction = (options: {

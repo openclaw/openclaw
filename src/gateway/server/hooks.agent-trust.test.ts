@@ -166,6 +166,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "agent:main:main",
           forceSenderIsOwnerFalse: true,
+          trusted: false,
         },
       ),
     );
@@ -211,6 +212,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "agent:main:main",
           forceSenderIsOwnerFalse: true,
+          trusted: false,
         },
       ),
     );
@@ -259,6 +261,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "agent:main:main",
           forceSenderIsOwnerFalse: true,
+          trusted: false,
         },
       ),
     );
@@ -284,6 +287,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "agent:main:main",
           forceSenderIsOwnerFalse: true,
+          trusted: false,
         },
       ),
     );
@@ -302,6 +306,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Email (error): failed", {
         sessionKey: "agent:hooks:main",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       }),
     );
   });
@@ -335,6 +340,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "agent:main:main",
           forceSenderIsOwnerFalse: true,
+          trusted: false,
         },
       ),
     );
@@ -351,6 +357,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "agent:hooks:main",
           forceSenderIsOwnerFalse: true,
+          trusted: false,
         },
       ),
     );

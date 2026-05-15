@@ -146,6 +146,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
           sessionKey?: string;
           deliveryContext?: unknown;
           forceSenderIsOwnerFalse?: boolean;
+          trusted?: boolean;
         },
       ]
     >;
@@ -155,6 +156,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         sessionKey: options.sessionKey,
         deliveryContext: options.deliveryContext,
         forceSenderIsOwnerFalse: options.forceSenderIsOwnerFalse,
+        trusted: options.trusted,
       })),
     ).toEqual([
       {
@@ -162,18 +164,21 @@ describe("startAcpSpawnParentStreamRelay", () => {
         sessionKey: "agent:main:main",
         deliveryContext,
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
       {
         contextKey: "acp-spawn:run-1:progress",
         sessionKey: "agent:main:main",
         deliveryContext,
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
       {
         contextKey: "acp-spawn:run-1:done",
         sessionKey: "agent:main:main",
         deliveryContext,
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     ]);
     const heartbeatCalls = requestHeartbeatMock.mock.calls as Array<

@@ -490,6 +490,7 @@ describe("emitExecSystemEvent", () => {
         threadId: 47,
       },
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -508,6 +509,7 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "agent:ops:primary",
       contextKey: "exec:run-cron",
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
@@ -529,6 +531,7 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "global",
       contextKey: "exec:run-global",
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
@@ -550,6 +553,7 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "global",
       contextKey: "exec:run-global",
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -577,6 +581,7 @@ describe("emitExecSystemEvent", () => {
       contextKey: "exec:run-sub",
       deliveryContext: undefined,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });

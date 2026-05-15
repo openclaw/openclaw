@@ -105,6 +105,7 @@ export class AgentComponentButton extends Button {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
@@ -198,6 +199,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
       forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });

@@ -809,6 +809,7 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
     forceSenderIsOwnerFalse: true,
+    trusted: false,
   });
 
   const envelopeFrom =

@@ -288,6 +288,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-1",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -375,6 +376,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-seq",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
@@ -384,6 +386,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-seq",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenNthCalledWith(1, {
@@ -426,6 +429,7 @@ describe("node exec events", () => {
         sessionKey: "node-node-2",
         contextKey: "exec:run-2",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
@@ -461,6 +465,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         contextKey: "exec",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -496,6 +501,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-dup-finished",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
   });
@@ -523,6 +529,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:node-node-2",
         contextKey: "exec:run-2",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -585,6 +592,7 @@ describe("node exec events", () => {
         sessionKey: "agent:demo:main",
         contextKey: "exec:run-3",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -683,6 +691,7 @@ describe("node exec events", () => {
         sessionKey: "agent:demo:main",
         contextKey: "exec:run-4",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
   });
@@ -958,6 +967,7 @@ describe("notifications changed events", () => {
         sessionKey: "node-node-n1",
         contextKey: "notification:notif-1",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -985,6 +995,7 @@ describe("notifications changed events", () => {
         sessionKey: "node-node-n2",
         contextKey: "notification:notif-2",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -1035,6 +1046,7 @@ describe("notifications changed events", () => {
         sessionKey: "agent:main:node-node-n5",
         contextKey: "notification:notif-5",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -1076,6 +1088,7 @@ describe("notifications changed events", () => {
         sessionKey: "node-node-n8",
         contextKey: "notification:notif-8",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
   });

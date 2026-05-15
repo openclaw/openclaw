@@ -649,6 +649,7 @@ export const handleNodeEvent = async (
         sessionKey,
         contextKey: `notification:${keyRaw}`,
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       });
       if (queued) {
         requestHeartbeat({
@@ -770,6 +771,7 @@ export const handleNodeEvent = async (
         sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
         contextKey: runId ? `exec:${runId}` : "exec",
         forceSenderIsOwnerFalse: true,
+        trusted: false,
       });
       if (queued) {
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
