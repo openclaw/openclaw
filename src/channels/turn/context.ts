@@ -7,6 +7,7 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
+import { buildChannelTurnMediaPayload } from "./media.js";
 import type {
   AccessFacts,
   CommandFacts,
@@ -54,18 +55,6 @@ export type BuiltChannelTurnContext = FinalizedMsgContext & {
   SessionKey: string;
   To: string;
 };
-
-function compactStrings(values: Array<string | undefined>): string[] | undefined {
-  const compacted = values.filter((value): value is string => Boolean(value));
-  return compacted.length > 0 ? compacted : undefined;
-}
-
-function mediaTranscribedIndexes(media: InboundMediaFacts[]): number[] | undefined {
-  const indexes = media
-    .map((item, index) => (item.transcribed ? index : undefined))
-    .filter((index): index is number => index !== undefined);
-  return indexes.length > 0 ? indexes : undefined;
-}
 
 function keepSupplementalContext(params: {
   mode?: ContextVisibilityMode;
@@ -158,6 +147,7 @@ export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): BuiltChannelTurnContext {
   const media = params.media ?? [];
+  const mediaPayload = buildChannelTurnMediaPayload(media);
   const supplemental = filterChannelTurnSupplementalContext({
     supplemental: params.supplemental,
     contextVisibility: params.contextVisibility,
@@ -197,13 +187,7 @@ export function buildChannelTurnContext(
     ThreadStarterBody: supplemental?.thread?.starterBody,
     ThreadHistoryBody: supplemental?.thread?.historyBody,
     ThreadLabel: supplemental?.thread?.label,
-    MediaPath: media[0]?.path,
-    MediaUrl: media[0]?.url ?? media[0]?.path,
-    MediaType: media[0]?.contentType ?? media[0]?.kind,
-    MediaPaths: compactStrings(media.map((item) => item.path)),
-    MediaUrls: compactStrings(media.map((item) => item.url ?? item.path)),
-    MediaTypes: compactStrings(media.map((item) => item.contentType ?? item.kind)),
-    MediaTranscribedIndexes: mediaTranscribedIndexes(media),
+    ...mediaPayload,
     ChatType: params.conversation.kind,
     ConversationLabel: params.conversation.label,
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,

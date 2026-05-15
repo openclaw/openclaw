@@ -58,7 +58,13 @@ export type {
   BuildChannelTurnContextParams,
   BuiltChannelTurnContext,
 } from "../channels/turn/context.js";
-export type { CommandFacts } from "../channels/turn/types.js";
+export {
+  buildChannelTurnMediaPayload,
+  toHistoryMediaEntries,
+  toInboundMediaFacts,
+} from "../channels/turn/media.js";
+export type { ChannelTurnMediaInput, ChannelTurnMediaPayload } from "../channels/turn/media.js";
+export type { CommandFacts, InboundMediaFacts } from "../channels/turn/types.js";
 export {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,

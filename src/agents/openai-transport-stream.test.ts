@@ -5540,6 +5540,55 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     },
   );
 
+  it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "read config" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-pro",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "reasoning_content",
+              },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read_file",
+                arguments: { path: "config.json" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            content: [{ type: "text", text: "{ }" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "continue" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: Array<Record<string, unknown>> };
+
+    const assistantMessages = params.messages.filter((msg) => msg.role === "assistant");
+    for (const msg of assistantMessages) {
+      expect(msg).not.toHaveProperty("reasoning_content");
+    }
+  });
+
   it("normalizes OpenRouter reasoning_text to reasoning", () => {
     const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
 

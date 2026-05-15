@@ -1,3 +1,4 @@
+import { canonicalizeBase64 } from "../media/base64.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -93,7 +94,11 @@ export function parseImageDataUrl(
   if (!mimeType || !base64) {
     return undefined;
   }
-  return { mimeType, base64 };
+  const canonicalBase64 = canonicalizeBase64(base64);
+  if (!canonicalBase64) {
+    return undefined;
+  }
+  return { mimeType, base64: canonicalBase64 };
 }
 
 export function generatedImageAssetFromBase64(params: {
@@ -106,10 +111,11 @@ export function generatedImageAssetFromBase64(params: {
   sniffMimeType?: boolean;
 }): GeneratedImageAsset | undefined {
   const base64 = normalizeOptionalString(params.base64);
-  if (!base64) {
+  const canonicalBase64 = base64 ? canonicalizeBase64(base64) : undefined;
+  if (!canonicalBase64) {
     return undefined;
   }
-  const buffer = Buffer.from(base64, "base64");
+  const buffer = Buffer.from(canonicalBase64, "base64");
   const explicitMimeType = normalizeOptionalString(params.mimeType);
   const defaultMimeType =
     normalizeOptionalString(params.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;

@@ -150,7 +150,7 @@ describe("buildChannelTurnContext", () => {
       MediaPath: "/tmp/image.png",
       MediaUrl: "/tmp/image.png",
       MediaType: "image/png",
-      MediaPaths: ["/tmp/image.png"],
+      MediaPaths: ["/tmp/image.png", ""],
       MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
       MediaTypes: ["image/png", "audio/mpeg"],
       MediaTranscribedIndexes: [1],

@@ -244,7 +244,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
-    | `plugin-sdk/reply-history` | Shared short-window reply-history helpers and markers such as `buildHistoryContext`, `HISTORY_CONTEXT_MARKER`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
+    | `plugin-sdk/reply-history` | Shared short-window reply-history compatibility helpers. New message-turn code should use `createChannelHistoryWindow` rather than the lower-level map helpers |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session store path, session-key, updated-at, and store mutation helpers |

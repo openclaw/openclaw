@@ -2458,6 +2458,93 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("times out promptly when the last completed non-assistant current-turn item is not followed by turn completion", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+      { interval: 1 },
+    );
+    await notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          tool: "sessions_list",
+          arguments: {},
+          status: "inProgress",
+        },
+      },
+    });
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          tool: "sessions_list",
+          arguments: {},
+          status: "completed",
+          success: true,
+          contentItems: [],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          { timeoutMs: 5_000 },
+        ),
+      { interval: 1 },
+    );
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",

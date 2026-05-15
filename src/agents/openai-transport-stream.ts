@@ -2448,10 +2448,14 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
     delete record.reasoning_details;
   }
 
-  if ("reasoning" in record && typeof record.reasoning !== "string") {
+  // Empty reasoning artifacts are rejected by OpenRouter/DeepSeek replay.
+  if ("reasoning" in record && (typeof record.reasoning !== "string" || record.reasoning === "")) {
     delete record.reasoning;
   }
-  if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
+  if (
+    "reasoning_content" in record &&
+    (typeof record.reasoning_content !== "string" || record.reasoning_content === "")
+  ) {
     delete record.reasoning_content;
   }
 

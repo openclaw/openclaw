@@ -1,4 +1,9 @@
-/** Shared reply-history helpers for plugins that keep short per-thread context windows. */
+/**
+ * Shared reply-history helpers for plugins that keep short per-thread context windows.
+ *
+ * Prefer `createChannelHistoryWindow` for message-turn code. The lower-level map helpers remain
+ * exported for older plugins and adapter bridges that have not migrated to the channel turn kernel.
+ */
 export type { HistoryEntry, HistoryMediaEntry } from "../auto-reply/reply/history.types.js";
 export {
   createChannelHistoryWindow,
