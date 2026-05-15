@@ -564,6 +564,7 @@ See [Inferred commitments](/concepts/commitments).
 
 ### OpenAI-compatible endpoints
 
+- Admin HTTP RPC: off by default as the `admin-http-rpc` plugin. Enable the plugin to register `POST /api/v1/admin/rpc`. See [Admin HTTP RPC](/plugins/admin-http-rpc).
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
 - Responses URL-input hardening:
