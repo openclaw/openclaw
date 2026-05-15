@@ -948,8 +948,9 @@ describe("tryDispatchAcpReply", () => {
         BodyForAgent: "hello",
       }),
       runtime: {
-        MediaAttachmentCache:
-          class {} as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+        MediaAttachmentCache: class {
+          readonly __mock = true;
+        } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
         isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
           false,
         normalizeAttachments,
