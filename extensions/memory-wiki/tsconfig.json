@@ -1,16 +1,1 @@
-{
-  "extends": "../tsconfig.package-boundary.base.json",
-  "compilerOptions": {
-    "rootDir": "."
-  },
-  "include": ["./*.ts", "./src/**/*.ts"],
-  "exclude": [
-    "./**/*.test.ts",
-    "./dist/**",
-    "./node_modules/**",
-    "./src/test-support/**",
-    "./src/**/*test-helpers.ts",
-    "./src/**/*test-harness.ts",
-    "./src/**/*test-support.ts"
-  ]
-}
+ewogICJjb21waWxlck9wdGlvbnMiOiB7CiAgICAidGFyZ2V0IjogImVzMjAyMiIsCiAgICAibW9kdWxlIjogImVzbmV4dCIsCiAgICAibW9kdWxlUmVzb2x1dGlvbiI6ICJidW5kbGVyIiwKICAgICJzdHJpY3QiOiB0cnVlLAogICAgImVzTW9kdWxlSW50ZXJvcCI6IHRydWUsCiAgICAic2tpcExpYkNoZWNrIjogdHJ1ZSwKICAgICJyb290RGlyIjogIi4iCiAgfSwKICAiaW5jbHVkZSI6IFsiLi8qLnRzIiwgIi4vc3JjLyoqLyoudHMiXSwKICAiZXhjbHVkZSI6IFsKICAgICIuL25vZGVfbW9kdWxlcy8qKiIKICBdCn0K
