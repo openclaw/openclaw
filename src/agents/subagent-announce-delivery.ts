@@ -640,6 +640,9 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin: effectiveDirectOrigin,
         requesterSessionOrigin,
       });
+    const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
+      ? "message_tool_only"
+      : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     const requesterQueueSettings = resolveQueueSettings({
@@ -658,6 +661,9 @@ async function sendSubagentAnnounceDirectly(params: {
         params.triggerMessage,
         {
           steeringMode: "all",
+          ...(completionSourceReplyDeliveryMode
+            ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
+            : {}),
           ...(requesterQueueSettings.debounceMs !== undefined
             ? { debounceMs: requesterQueueSettings.debounceMs }
             : {}),
@@ -669,7 +675,9 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      if (requesterActivity.isActive) {
+      const shouldFallbackToForcedAgentHandoff =
+        requiresMessageToolDelivery && wakeOutcome.reason === "source_reply_delivery_mode_mismatch";
+      if (requesterActivity.isActive && !shouldFallbackToForcedAgentHandoff) {
         // Active requester sessions should receive completion data through their
         // running agent turn. If wake fails, let the dispatch layer steer/retry;
         // do not bypass the requester agent with raw child output.
@@ -717,6 +725,9 @@ async function sendSubagentAnnounceDirectly(params: {
         sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
         sourceTool: params.sourceTool ?? "subagent_announce",
       },
+      ...(completionSourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
+        : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
     let directAnnounceResponse: unknown;

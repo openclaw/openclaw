@@ -119,6 +119,18 @@ Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 `openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
 do not write new `openai-codex/gpt-*` model refs.
 
+Do not set `compaction.model` or `compaction.provider` on Codex-backed agents.
+Codex owns compaction through its native app-server thread state, so OpenClaw
+ignores those local summarizer overrides at runtime and `openclaw doctor --fix`
+removes them when the agent uses Codex.
+
+Lossless remains supported as a context engine. Configure it through
+`plugins.slots.contextEngine: "lossless-claw"` and
+`plugins.entries.lossless-claw.config.summaryModel`, not through
+`agents.defaults.compaction.provider`. `openclaw doctor --fix` migrates the old
+`compaction.provider: "lossless-claw"` shape to the Lossless context-engine slot
+when Codex is the active runtime.
+
 ```json5
 {
   auth: {

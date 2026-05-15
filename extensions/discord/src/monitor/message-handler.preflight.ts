@@ -4,6 +4,7 @@ import {
   buildMentionRegexes,
   logInboundDrop,
   resolveInboundMentionDecision,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
@@ -107,14 +108,7 @@ function isDiscordImageAttachmentCandidate(attachment: {
 async function resolveDiscordHistoryMediaForPendingRecord(params: {
   preflight: DiscordMessagePreflightParams;
   message: DiscordMessagePreflightContext["message"];
-}): Promise<
-  Array<{
-    path: string;
-    contentType?: string;
-    kind: "image";
-    messageId: string;
-  }>
-> {
+}) {
   const imageAttachments = (params.message.attachments ?? [])
     .filter(isDiscordImageAttachmentCandidate)
     .slice(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS);
@@ -159,12 +153,7 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  return mediaList.map((media) => ({
-    path: media.path,
-    contentType: media.contentType,
-    kind: "image" as const,
-    messageId: params.message.id,
-  }));
+  return toInboundMediaFacts(mediaList, { kind: "image", messageId: params.message.id });
 }
 
 async function recordDiscordPendingHistoryEntry(params: {

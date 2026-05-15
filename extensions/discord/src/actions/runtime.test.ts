@@ -389,6 +389,14 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("rejects unexpected readMessages payloads with a boundary error", async () => {
+    readMessagesDiscord.mockResolvedValueOnce({ ok: true } as never);
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions),
+    ).rejects.toThrow("Discord message read returned object with keys ok instead of an array.");
+  });
+
   it("threads provided cfg into readMessages calls", async () => {
     const cfg = {
       channels: {
@@ -653,6 +661,23 @@ describe("handleDiscordMessagingAction", () => {
         name: "new-thread",
       },
     });
+  });
+
+  it("forwards sendMessage suppressEmbeds overrides", async () => {
+    sendMessageDiscord.mockClear();
+
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "https://example.com",
+        suppressEmbeds: false,
+      },
+      enableAllActions,
+    );
+
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(sendOptions.suppressEmbeds).toBe(false);
   });
 
   it("warns instead of renaming when threadName is provided but channel management is disabled", async () => {

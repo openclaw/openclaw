@@ -452,7 +452,7 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+  it("suppresses exact NO_REPLY for direct Telegram sessions", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -464,13 +464,10 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const text = firstSendText(sendMessage);
-    expect(text).not.toBe("");
-    expect(text.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses the policy session key for exact NO_REPLY policy", async () => {
+  it("uses the policy session key when suppressing exact NO_REPLY", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -483,10 +480,7 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const text = firstSendText(sendMessage);
-    expect(text).not.toBe("");
-    expect(text.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("suppresses exact NO_REPLY for group Telegram sessions", async () => {

@@ -45,6 +45,7 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { initSessionState } from "./session.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -386,7 +387,7 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sessionEntry.pendingFinalDeliveryText;
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
 
     // If it's a heartbeat, we definitely want to try delivering the lost reply now.
     // If it's a user message, we deliver the lost reply first, then continue.
@@ -429,7 +430,8 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
         sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
         sessionEntry.pendingFinalDeliveryLastError = null;
-        sessionEntry.pendingFinalDeliveryText = heartbeatPending.replayText;
+        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+        sessionEntry.pendingFinalDeliveryText = replayText;
         sessionEntry.updatedAt = updatedAt;
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -440,7 +442,7 @@ export async function getReplyFromConfig(
             storePath,
             sessionKey,
             update: async () => ({
-              pendingFinalDeliveryText: heartbeatPending.replayText,
+              pendingFinalDeliveryText: replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,
               pendingFinalDeliveryAttemptCount: attemptCount,
               pendingFinalDeliveryLastError: null,
@@ -448,7 +450,7 @@ export async function getReplyFromConfig(
             }),
           });
         }
-        return { text: heartbeatPending.replayText };
+        return { text: replayText };
       }
     }
   }
