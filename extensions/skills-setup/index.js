@@ -175,27 +175,49 @@ function stripWrappingQuotes(raw) {
   return value;
 }
 
-function readSetupScriptFromObject(value) {
+function mergeSetupMetadata(...items) {
+  const merged = {};
+  for (const item of items) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    if (typeof item.script === "string" && item.script) {
+      merged.script = item.script;
+    }
+    if (typeof item.skillKey === "string" && item.skillKey) {
+      merged.skillKey = item.skillKey;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function readSetupMetadataFromObject(value) {
   if (!isRecord(value)) {
     return undefined;
   }
   const openclaw = value.openclaw;
-  if (!isRecord(openclaw) || !isRecord(openclaw.setup)) {
+  if (!isRecord(openclaw)) {
     return undefined;
   }
-  return typeof openclaw.setup.script === "string" ? openclaw.setup.script.trim() : undefined;
+  return mergeSetupMetadata({
+    script:
+      isRecord(openclaw.setup) && typeof openclaw.setup.script === "string"
+        ? openclaw.setup.script.trim()
+        : undefined,
+    skillKey: typeof openclaw.skillKey === "string" ? openclaw.skillKey.trim() : undefined,
+  });
 }
 
-function parseSetupScriptFromManifestText(raw) {
+function parseSetupMetadataFromManifestText(raw) {
   const value = stripWrappingQuotes(raw);
   if (!value) {
     return undefined;
   }
   try {
     const parsed = JSON.parse(value);
-    const script = readSetupScriptFromObject(parsed);
-    if (script) {
-      return script;
+    const metadata = readSetupMetadataFromObject(parsed);
+    if (metadata) {
+      return metadata;
     }
   } catch {
     // Existing skill metadata is JSON-shaped but historically parsed as JSON5.
@@ -206,11 +228,22 @@ function parseSetupScriptFromManifestText(raw) {
     return undefined;
   }
   const openclawText = value.slice(openclawMatch.index);
-  const match =
+  const scriptMatch =
     /(?:^|[,{]\s*)["']?setup["']?\s*:\s*\{[\s\S]*?["']?script["']?\s*:\s*(?:"([^"]+)"|'([^']+)'|([^\s,}]+))/u.exec(
       openclawText,
     );
-  return match ? normalizeScalar(match[1] ?? match[2] ?? match[3] ?? "") : undefined;
+  const skillKeyMatch =
+    /(?:^|[,{]\s*)["']?skillKey["']?\s*:\s*(?:"([^"]+)"|'([^']+)'|([^\s,}]+))/u.exec(
+      openclawText,
+    );
+  return mergeSetupMetadata({
+    script: scriptMatch
+      ? normalizeScalar(scriptMatch[1] ?? scriptMatch[2] ?? scriptMatch[3] ?? "")
+      : undefined,
+    skillKey: skillKeyMatch
+      ? normalizeScalar(skillKeyMatch[1] ?? skillKeyMatch[2] ?? skillKeyMatch[3] ?? "")
+      : undefined,
+  });
 }
 
 function extractFrontmatterBlock(markdown) {
@@ -222,9 +255,10 @@ function extractFrontmatterBlock(markdown) {
   return endIndex > 0 ? lines.slice(1, endIndex).join("\n") : undefined;
 }
 
-function parseIndentedSetupScript(frontmatter) {
+function parseIndentedSetupMetadata(frontmatter) {
   const lines = frontmatter.split(/\r?\n/);
   const stack = [];
+  const metadata = {};
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     if (!line.trim() || line.trimStart().startsWith("#")) {
@@ -241,21 +275,25 @@ function parseIndentedSetupScript(frontmatter) {
       stack.pop();
     }
     const pathKeys = [...stack.map((entry) => entry.key), key];
-    if (pathKeys.join(".") === "metadata.openclaw.setup.script" && rawValue.trim()) {
-      return normalizeScalar(rawValue);
+    const pathKey = pathKeys.join(".");
+    if (pathKey === "metadata.openclaw.setup.script" && rawValue.trim()) {
+      metadata.script = normalizeScalar(rawValue);
+    }
+    if (pathKey === "metadata.openclaw.skillKey" && rawValue.trim()) {
+      metadata.skillKey = normalizeScalar(rawValue);
     }
     if (!rawValue.trim()) {
       stack.push({ indent, key });
     }
   }
-  return undefined;
+  return mergeSetupMetadata(metadata);
 }
 
 function isYamlBlockScalarIndicator(value) {
   return /^[|>][+-]?(\d+)?[+-]?$/u.test(value.trim());
 }
 
-function parseMetadataValueSetupScript(frontmatter) {
+function parseMetadataValueSetupMetadata(frontmatter) {
   const lines = frontmatter.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
@@ -265,7 +303,7 @@ function parseMetadataValueSetupScript(frontmatter) {
     }
     const rawValue = match[1] ?? "";
     if (rawValue.trim() && !isYamlBlockScalarIndicator(rawValue)) {
-      return parseSetupScriptFromManifestText(rawValue);
+      return parseSetupMetadataFromManifestText(rawValue);
     }
 
     const valueLines = [];
@@ -276,17 +314,20 @@ function parseMetadataValueSetupScript(frontmatter) {
       }
       valueLines.push(nextLine.trim());
     }
-    return parseSetupScriptFromManifestText(valueLines.join("\n"));
+    return parseSetupMetadataFromManifestText(valueLines.join("\n"));
   }
   return undefined;
 }
 
-function parseSetupScriptFromSkillMarkdown(markdown) {
+function parseSetupMetadataFromSkillMarkdown(markdown) {
   const frontmatter = extractFrontmatterBlock(markdown);
   if (!frontmatter) {
     return undefined;
   }
-  return parseIndentedSetupScript(frontmatter) ?? parseMetadataValueSetupScript(frontmatter);
+  return mergeSetupMetadata(
+    parseMetadataValueSetupMetadata(frontmatter),
+    parseIndentedSetupMetadata(frontmatter),
+  );
 }
 
 // #endregion
@@ -298,7 +339,8 @@ function parseSetupScriptFromSkillMarkdown(markdown) {
 // that reads the supported metadata shape and enforces the same path boundary.
 async function resolveSetupScriptPath(skillDir) {
   const skillMarkdown = await readFile(path.join(skillDir, "SKILL.md"), "utf8");
-  const script = parseSetupScriptFromSkillMarkdown(skillMarkdown);
+  const metadata = parseSetupMetadataFromSkillMarkdown(skillMarkdown);
+  const script = metadata?.script;
   if (!script) {
     return undefined;
   }
@@ -314,7 +356,7 @@ async function resolveSetupScriptPath(skillDir) {
     throw new Error("setup.script resolves outside the skill directory");
   }
   await access(scriptPathReal);
-  return scriptPathReal;
+  return { scriptPath: scriptPathReal, skillKey: metadata.skillKey };
 }
 
 // #endregion
@@ -343,11 +385,11 @@ function normalizeEnvMap(value) {
   return env;
 }
 
-function readSkillConfigEnv(config, slug) {
+function readSkillConfigEnv(config, skillKey) {
   if (!isRecord(config?.skills) || !isRecord(config.skills.entries)) {
     return {};
   }
-  const entry = config.skills.entries[slug];
+  const entry = config.skills.entries[skillKey];
   return isRecord(entry) ? normalizeEnvMap(entry.env) : {};
 }
 
@@ -420,8 +462,8 @@ export default definePluginEntry({
           const config = context.getRuntimeConfig();
           const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(config, agentId);
           const skillDir = await resolveInstalledSkillDir({ workspaceDir, slug });
-          const scriptPath = await resolveSetupScriptPath(skillDir);
-          if (!scriptPath) {
+          const setupScript = await resolveSetupScriptPath(skillDir);
+          if (!setupScript) {
             api.logger.debug(
               `skills.setup ${slug} (agent=${agentId}) skipped: no setup script declared`,
             );
@@ -429,6 +471,7 @@ export default definePluginEntry({
             return;
           }
 
+          const { scriptPath, skillKey = slug } = setupScript;
           const timeoutMs = resolveTimeoutMs({ config, params });
           api.logger.debug(
             `skills.setup ${slug} (agent=${agentId}) started: script=${path.relative(skillDir, scriptPath)} timeoutMs=${timeoutMs}`,
@@ -438,7 +481,7 @@ export default definePluginEntry({
             argv: ["bash", scriptPath],
             cwd: skillDir,
             env: buildSetupEnv({
-              configEnv: readSkillConfigEnv(config, slug),
+              configEnv: readSkillConfigEnv(config, skillKey),
               overlayEnv: normalizeEnvMap(params?.env),
               skillDir,
             }),
