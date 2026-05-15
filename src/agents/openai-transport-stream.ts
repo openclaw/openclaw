@@ -2481,10 +2481,15 @@ function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): 
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "deepseek-v4-flash",
   "deepseek-v4-pro",
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2-thinking",
+  "kimi-k2-thinking-turbo",
   "mimo-v2-pro",
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
 ]);
 
 function normalizeReasoningContentReplayModelId(modelId: unknown): string | undefined {
