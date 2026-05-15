@@ -9,15 +9,15 @@ const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown) => {
     void agentDir;
     void options;
-    return { profiles: {} };
+    return { version: 1, profiles: {} };
   }),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn((agentDir?: string) => {
     void agentDir;
-    return { profiles: {} };
+    return { version: 1, profiles: {} };
   }),
   listProfilesForProvider: vi.fn((): string[] => []),
   removeProviderAuthProfilesWithLock: vi.fn(
-    async (): Promise<AuthProfileStore | null> => ({ profiles: {} }),
+    async (): Promise<AuthProfileStore | null> => ({ version: 1, profiles: {} }),
   ),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
@@ -191,10 +191,13 @@ describe("models.authStatus", () => {
     vi.clearAllMocks();
     invalidateModelAuthStatusCache();
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {} });
-    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({ profiles: {} });
+    mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
     mocks.listProfilesForProvider.mockReturnValue([]);
-    mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ profiles: {} });
+    mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
       (params: { agentDir?: string }) => params.agentDir,
     );
@@ -585,10 +588,13 @@ describe("models.authLogout", () => {
     vi.clearAllMocks();
     invalidateModelAuthStatusCache();
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {} });
-    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({ profiles: {} });
+    mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
     mocks.listProfilesForProvider.mockReturnValue([]);
-    mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ profiles: {} });
+    mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
       (params: { agentDir?: string }) => params.agentDir,
     );
