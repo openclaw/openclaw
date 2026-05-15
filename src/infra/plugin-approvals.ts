@@ -170,6 +170,13 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
 const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
 const CURL_NETRC_FILE_FLAGS = new Set(["--netrc-file"]);
 const CURL_NETRC_FLAGS = new Set(["-n", "--netrc", "--netrc-optional"]);
+const CURL_CREDENTIAL_FILE_FLAGS = new Set([
+  "-E",
+  "--cert",
+  "--key",
+  "--proxy-cert",
+  "--proxy-key",
+]);
 const CURL_AUTH_VALUE_FLAGS = new Set([
   "-u",
   "-U",
@@ -178,15 +185,21 @@ const CURL_AUTH_VALUE_FLAGS = new Set([
   "--ftp-user",
   "--http-password",
   "--http-user",
+  "--pass",
   "--oauth2-bearer",
   "--password",
+  "--proxy-pass",
   "--proxy-password",
+  "--proxy-tlspassword",
+  "--proxy-tlsuser",
   "--proxy-user",
+  "--tlspassword",
+  "--tlsuser",
   "--user",
 ]);
 const CURL_COOKIE_FLAGS = new Set(["-b", "--cookie"]);
 const CURL_COOKIE_JAR_FLAGS = new Set(["-c", "--cookie-jar"]);
-const CURL_HEADER_FLAGS = new Set(["-H", "--header"]);
+const CURL_HEADER_FLAGS = new Set(["-H", "--header", "--proxy-header"]);
 const CURL_OUTPUT_FLAGS = new Set([
   "-D",
   "-o",
@@ -195,6 +208,7 @@ const CURL_OUTPUT_FLAGS = new Set([
   "--output",
   "--output-dir",
 ]);
+const WGET_CONFIG_FLAGS = new Set(["--config"]);
 const WGET_UPLOAD_FILE_FLAGS = new Set(["--body-file", "--post-file"]);
 const WGET_AUTH_VALUE_FLAGS = new Set([
   "--ftp-password",
@@ -206,6 +220,7 @@ const WGET_AUTH_VALUE_FLAGS = new Set([
   "--proxy-user",
   "--user",
 ]);
+const WGET_CREDENTIAL_FILE_FLAGS = new Set(["--certificate", "--private-key"]);
 const WGET_COOKIE_FLAGS = new Set(["--load-cookies"]);
 const WGET_COOKIE_JAR_FLAGS = new Set(["--save-cookies"]);
 const WGET_HEADER_FLAGS = new Set(["--header"]);
@@ -390,9 +405,15 @@ function redactSensitiveCommandText(command: string): string {
       "$1[redacted]",
     )
     .replace(
-      /(--(?:api[-_]?key|auth[-_]?token|oauth2[-_]?bearer|password|passwd|secret|token)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      /(--(?:api[-_]?key|auth[-_]?token|oauth2[-_]?bearer|password|passwd|secret|token|pass|proxy-pass|tlsuser|tlspassword|proxy-tlsuser|proxy-tlspassword)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
       "$1[redacted]",
     )
+    .replace(
+      /(--(?:cert|key|proxy-cert|proxy-key|certificate|private-key)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(^|\s)(-E)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
+    .replace(/(^|\s)(-E)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
     .replace(/(^|\s)(-u|-U)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
     .replace(/(^|\s)(-u|-U)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2[redacted]")
     .replace(/(^|\s)(-b)(\s+|=)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1$2$3[redacted]")
@@ -1884,7 +1905,11 @@ function collectNetworkTransferOperands(
     }
 
     const configValue =
-      command === "curl" ? takeFlagValue(args, index, CURL_CONFIG_FLAGS, ["-K"]) : null;
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_CONFIG_FLAGS, ["-K"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_CONFIG_FLAGS)
+          : null;
     if (configValue) {
       const files = extractPlainLocalFileOperands(configValue.value);
       if (files.length > 0) {
@@ -1915,6 +1940,30 @@ function collectNetworkTransferOperands(
 
     if (command === "curl" && CURL_NETRC_FLAGS.has(arg)) {
       usesDefaultCredentialSource = true;
+      continue;
+    }
+
+    const credentialFileValue =
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_CREDENTIAL_FILE_FLAGS, ["-E"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_CREDENTIAL_FILE_FLAGS)
+          : null;
+    if (credentialFileValue) {
+      const files = extractCredentialFileOperands(credentialFileValue.value);
+      if (files.length > 0) {
+        credentialFiles.push(...files);
+      } else {
+        usesAmbiguousCredentialSource = true;
+      }
+      index = Math.max(index, credentialFileValue.nextIndex);
+      continue;
+    }
+    if (
+      (command === "curl" && CURL_CREDENTIAL_FILE_FLAGS.has(arg)) ||
+      (command === "wget" && WGET_CREDENTIAL_FILE_FLAGS.has(arg))
+    ) {
+      usesAmbiguousCredentialSource = true;
       continue;
     }
 
@@ -2099,6 +2148,15 @@ function extractPlainLocalFileOperands(value: string): string[] {
   return file && file !== "-" ? [file] : [];
 }
 
+function extractCredentialFileOperands(value: string): string[] {
+  const trimmed = stripShellWordQuotes(value.trim());
+  if (!trimmed || trimmed === "-") {
+    return [];
+  }
+  const filePart = /^[A-Za-z]:[\\/]/.test(trimmed) ? trimmed : (trimmed.split(":")[0] ?? "");
+  return extractPlainLocalFileOperands(filePart);
+}
+
 function isNetworkStdinOperand(value: string): boolean {
   return stripNetworkFileOperandPrefix(value.trim()) === "-";
 }
@@ -2196,7 +2254,7 @@ function buildNetworkTransferRiskReason(
     return "This network command can overwrite sensitive or system paths.";
   }
   if (configFiles.length > 0 || usesAmbiguousConfig) {
-    return "curl config files can add hidden upload, output, or credential options.";
+    return "Network config files can add hidden upload, output, or credential options.";
   }
   if (usesAmbiguousStdinUpload) {
     return "This network command can send piped or redirected input outside this machine.";
