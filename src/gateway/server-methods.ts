@@ -8,6 +8,7 @@ import {
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
+  isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
@@ -145,7 +146,13 @@ function createRequestGatewayMethodRegistry(
   const activePluginHandlers = activePluginRegistry?.gatewayHandlers ?? {};
   const extraHandlerEntries = Object.entries(extraHandlers ?? {});
   const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
-  const coreDescriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+  const coreDescriptorHandlers = { ...coreGatewayHandlers };
+  for (const [method, extraHandler] of extraHandlerEntries) {
+    if (!pluginMethodNames.has(method) && isCoreGatewayMethodClassified(method)) {
+      coreDescriptorHandlers[method] = extraHandler;
+    }
+  }
+  const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers);
   for (const descriptor of coreDescriptors) {
     const extraHandler = extraHandlers?.[descriptor.name];
     if (extraHandler && !pluginMethodNames.has(descriptor.name)) {

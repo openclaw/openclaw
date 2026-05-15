@@ -254,7 +254,7 @@ export function createCoreGatewayMethodDescriptors(
     specNames.add(spec.name);
     const handler = handlers[spec.name];
     if (!handler) {
-      throw new Error(`gateway method descriptor is missing a handler: ${spec.name}`);
+      continue;
     }
     descriptors.push({
       name: spec.name,

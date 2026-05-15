@@ -63,6 +63,7 @@ import {
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
+  isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import {
@@ -1095,16 +1096,26 @@ export async function startGatewayServer(
     let attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
     const buildAttachedGatewayMethodRegistry = (
       nextPluginRegistry: typeof pluginRegistry,
-    ): GatewayMethodRegistry =>
-      createGatewayMethodRegistry([
-        ...createCoreGatewayMethodDescriptors(coreGatewayHandlers),
+    ): GatewayMethodRegistry => {
+      const coreDescriptorHandlers: GatewayRequestHandlers = { ...coreGatewayHandlers };
+      const auxHandlers: GatewayRequestHandlers = {};
+      for (const [method, handler] of Object.entries(extraHandlers)) {
+        if (isCoreGatewayMethodClassified(method)) {
+          coreDescriptorHandlers[method] = handler;
+        } else {
+          auxHandlers[method] = handler;
+        }
+      }
+      return createGatewayMethodRegistry([
+        ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
         ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
         ...createGatewayMethodDescriptorsFromHandlers({
-          handlers: extraHandlers,
+          handlers: auxHandlers,
           owner: { kind: "aux", area: "gateway-extra" },
           defaultScope: ADMIN_SCOPE,
         }),
       ]);
+    };
     let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRegistry);
     const listAttachedGatewayMethods = () => {
       const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
