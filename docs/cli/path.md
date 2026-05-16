@@ -11,9 +11,9 @@ title: "Path"
 
 Plugin-provided shell access to the `oc://` addressing substrate: one
 kind-dispatched path scheme for inspecting and editing addressable workspace
-files (markdown, jsonc, jsonl, yaml/yml/lobster). Self-hosters, plugin authors, and editor
-extensions use it to read, find, or update a narrow location without
-hand-rolling per-file parsers.
+files (markdown, jsonc, jsonl, yaml/yml/lobster). Self-hosters, plugin
+authors, and editor extensions use it to read, find, or update a narrow
+location without hand-rolling per-file parsers.
 
 The CLI mirrors the substrate's public verbs:
 
@@ -177,12 +177,12 @@ Non-canonical query parameters are ignored except for the first non-empty
 
 ## Addressing by file kind
 
-| Kind       | Addressing model                                                                                    |
-| ---------- | --------------------------------------------------------------------------------------------------- |
-| Markdown   | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`.                 |
-| JSONC/JSON | Object keys and array indexes; dots split nested sub-segments unless quoted.                        |
-| JSONL      | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
-| YAML/YML/.lobster | Map keys and sequence indexes; comments and flow style are handled by the YAML document API. |
+| Kind              | Addressing model                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------- |
+| Markdown          | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`.                 |
+| JSONC/JSON        | Object keys and array indexes; dots split nested sub-segments unless quoted.                        |
+| JSONL             | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
+| YAML/YML/.lobster | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as text
