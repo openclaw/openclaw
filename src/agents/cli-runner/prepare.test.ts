@@ -17,6 +17,12 @@ import {
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
 
+const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: getRuntimeConfigMock,
+}));
+
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
@@ -176,12 +182,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
+    getRuntimeConfigMock.mockReturnValue({});
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(undefined);
   });
 
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
+    getRuntimeConfigMock.mockReset();
     mockGetGlobalHookRunner.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
@@ -602,6 +610,66 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(factory).not.toHaveBeenCalled();
       expect(dispose).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses runtime config when resolving the CLI context engine", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const engineId = `cli-runtime-config-engine-${Date.now().toString(36)}`;
+    const runtimeConfig = {
+      plugins: { slots: { contextEngine: engineId } },
+    } satisfies OpenClawConfig;
+    const factory = vi.fn((_ctx: unknown): ContextEngine => {
+      return {
+        info: { id: engineId, name: "CLI runtime config engine" },
+        ingest: vi.fn(async () => ({ ingested: true })),
+        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+        compact: vi.fn(async () => ({ ok: true, compacted: false })),
+      };
+    });
+    registerContextEngine(engineId, factory);
+    getRuntimeConfigMock.mockReturnValue(runtimeConfig);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            systemPromptArg: "--system-prompt",
+            systemPromptWhen: "first",
+            sessionMode: "existing",
+            output: "text",
+            input: "arg",
+          },
+        },
+      ],
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-runtime-config-context-engine",
+      });
+
+      expect(context.contextEngine?.info.id).toBe(engineId);
+      expect(factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: runtimeConfig,
+          workspaceDir: dir,
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

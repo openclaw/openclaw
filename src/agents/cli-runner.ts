@@ -626,11 +626,7 @@ export async function runPreparedCliAgent(
       return toCliRunFailure(err);
     }
   } finally {
-    try {
-      await context.preparedBackend.cleanup?.();
-    } finally {
-      await context.contextEngine?.dispose?.();
-    }
+    await context.preparedBackend.cleanup?.();
   }
 }
 

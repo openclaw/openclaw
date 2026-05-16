@@ -477,8 +477,9 @@ export async function prepareCliRunContext(
       runtimeContextChars: 0,
     },
   });
+  const contextEngineConfig = params.config ?? getRuntimeConfig();
   ensureContextEnginesInitialized();
-  const resolvedContextEngine = await resolveContextEngine(params.config, {
+  const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
     agentDir,
     workspaceDir,
   });

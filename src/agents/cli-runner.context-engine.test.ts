@@ -184,7 +184,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
         llm: { complete: expect.any(Function) },
       },
     });
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("falls back to ingestBatch and still runs turn maintenance", async () => {
@@ -210,10 +210,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expectMessageText(ingestBatchParams?.messages[0], "transcript visible ask");
     expectMessageText(ingestBatchParams?.messages[1], "final answer");
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("does not finalize or maintain failed CLI attempts but still disposes the engine", async () => {
+  it("does not finalize, maintain, or dispose the engine on failed CLI attempts", async () => {
     executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
     const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
     const ingestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async () => ({
@@ -233,6 +233,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(afterTurn).not.toHaveBeenCalled();
     expect(ingestBatch).not.toHaveBeenCalled();
     expect(maintain).not.toHaveBeenCalled();
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 });
