@@ -716,6 +716,45 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("recovers unowned processing claims after the initial drain", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(40, 11, "warmup topic 11 turn")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        handleUpdate: async (update) => {
+          events.push(`handled:${update.update_id}`);
+          if (update.update_id === 42) {
+            abort.abort();
+          }
+        },
+      });
+
+      await vi.waitFor(() => expect(events).toEqual(["handled:40"]));
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir)).toEqual([]));
+
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "interrupted topic 10 turn"),
+        topicUpdate(43, 10, "later topic 10 turn"),
+      ]);
+      const interrupted = (await listTelegramSpooledUpdates({ spoolDir: tempDir })).find(
+        (update) => update.updateId === 42,
+      );
+      if (!interrupted) {
+        throw new Error("Expected interrupted update");
+      }
+      await claimTelegramSpooledUpdate(interrupted);
+
+      await runPromise;
+      expect(events).toEqual(["handled:40", "handled:42"]);
+      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
+      stopWorker();
+    });
+  });
+
   it("scans past active-lane backlogs to start unrelated lanes", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();

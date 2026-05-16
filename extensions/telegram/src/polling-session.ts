@@ -148,7 +148,6 @@ export class TelegramPollingSession {
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
   #spooledUpdateHandlerKeys = new Set<string>();
-  #recoveredRestartSpooledClaims = false;
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
   #stallThresholdMs: number;
@@ -421,10 +420,9 @@ export class TelegramPollingSession {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
     await recoverStaleTelegramSpooledUpdateClaims({
       spoolDir: params.spoolDir,
-      staleMs: this.#recoveredRestartSpooledClaims ? undefined : 0,
+      staleMs: 0,
       shouldRecover: (claim) => !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)),
     });
-    this.#recoveredRestartSpooledClaims = true;
     const claimedLaneKeys = new Set(
       (
         await listTelegramSpooledUpdateClaims({
