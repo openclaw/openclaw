@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
 import { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
@@ -10,7 +11,6 @@ import {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
-import { BotLoopProtectionSchema } from "./zod-schema.providers-core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export const GoogleChatDmSchema = z
@@ -43,7 +43,7 @@ export const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
-    botLoopProtection: BotLoopProtectionSchema.optional(),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
   })
@@ -56,7 +56,7 @@ export const GoogleChatAccountSchema = z
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     allowBots: z.boolean().optional(),
-    botLoopProtection: BotLoopProtectionSchema.optional(),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
