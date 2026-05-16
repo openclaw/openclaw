@@ -619,9 +619,11 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
     return true;
   }
+  const normalizedModelApi = normalizeLowercaseStringOrEmpty(params.modelApi ?? "");
   if (
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions" ||
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages"
+    normalizedModelApi === "openai-completions" ||
+    normalizedModelApi === "anthropic-messages" ||
+    normalizedModelApi === "bedrock-converse-stream"
   ) {
     return true;
   }

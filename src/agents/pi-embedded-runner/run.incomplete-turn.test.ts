@@ -1398,6 +1398,38 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("retries signed reasoning-only Bedrock Converse turns with a visible-answer continuation instruction", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "amazon-bedrock",
+      modelId: "openai.gpt-oss-120b-1:0",
+      modelApi: "bedrock-converse-stream",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "amazon-bedrock",
+          model: "openai.gpt-oss-120b-1:0",
+          content: [
+            {
+              type: "text",
+              text: "",
+            },
+            {
+              type: "thinking",
+              thinking: "internal reasoning about calling web_search",
+              thinkingSignature: "",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it("retries unsigned-thinking Ollama turns via the empty-response path", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "ollama",
