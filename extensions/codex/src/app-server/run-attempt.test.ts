@@ -1604,6 +1604,8 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 100;
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
 
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 300,
@@ -1649,6 +1651,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    const progressReasons = onRunProgress.mock.calls.map(([info]) => info.reason);
+    expect(progressReasons).toContain("turn:start");
+    expect(
+      progressReasons.filter((reason) => reason === "notification:rawResponseItem/completed"),
+    ).toHaveLength(2);
   });
 
   it("does not count non-turn app-server requests as turn attempt progress", async () => {
@@ -1659,6 +1666,8 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 100;
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
 
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 500,
@@ -1689,6 +1698,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(warnData?.timeoutMs).toBe(100);
     expect(warnData?.lastActivityReason).toBe("turn:start");
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
+    expect(onRunProgress.mock.calls.map(([info]) => info.reason)).toEqual(["turn:start"]);
   });
 
   it("keeps the turn attempt timeout armed while non-turn requests are pending", async () => {
