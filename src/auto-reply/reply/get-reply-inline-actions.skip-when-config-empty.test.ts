@@ -921,6 +921,65 @@ describe("handleInlineActions", () => {
     expect(sessionsExecute).not.toHaveBeenCalled();
   });
 
+  it("applies sender-specific tool policy to inline tool dispatch", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ content: "sent" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "message",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/send_status hello",
+      CommandBody: "/send_status hello",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "send_status",
+        skillName: "send-status",
+        description: "Send a status update",
+        dispatch: {
+          kind: "tool",
+          toolName: "message",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/send-status.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/send_status hello",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/send_status hello",
+          commandBodyNormalized: "/send_status hello",
+        },
+        overrides: {
+          cfg: {
+            commands: { text: true },
+            tools: { toolsBySender: { "id:sender-1": { deny: ["message"] } } },
+          },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool not available: message" },
+    });
+    expect(toolExecute).not.toHaveBeenCalled();
+  });
+
   it("applies subagent policy to ACP envelope inline dispatch sessions", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inline-acp-policy-"));
     try {
@@ -1052,7 +1111,7 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
+    expect(result).toEqual({ kind: "reply", reply: { text: "listed" } });
     expect(createOpenClawToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sandboxed: true,

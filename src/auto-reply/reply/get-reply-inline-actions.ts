@@ -287,14 +287,13 @@ export async function handleInlineActions(params: {
         cfg,
         agentId,
         agentDir,
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionKey,
         workspaceDir,
         provider,
         model,
         senderId: command.senderId,
         senderIsOwner: command.senderIsOwner,
-        sessionId: targetSessionEntry?.sessionId,
         currentChannelId: command.channelId,
       });
 

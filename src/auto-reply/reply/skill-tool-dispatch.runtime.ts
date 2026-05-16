@@ -2,10 +2,12 @@ import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/pi-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/pi-tools.types.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSenderToolPolicy } from "../../agents/sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -18,7 +20,9 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitDenylist,
   collectExplicitAllowlist,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "../../agents/tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -46,6 +50,7 @@ export function resolveSkillDispatchTools(params: {
   model: string;
   senderId?: string;
   senderIsOwner: boolean;
+  currentChannelId?: string;
 }): AnyAgentTool[] {
   const channel =
     resolveGatewayMessageChannel(params.ctx.Surface) ??
@@ -90,6 +95,15 @@ export function resolveSkillDispatchTools(params: {
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
   });
+  const senderPolicy = resolveSenderToolPolicy({
+    config: params.cfg,
+    agentId: resolvedAgentId,
+    messageProvider: channel,
+    senderId: params.ctx.SenderId ?? params.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+  });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -106,6 +120,23 @@ export function resolveSkillDispatchTools(params: {
         store: subagentStore,
       })
     : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(params.cfg, params.sessionKey, {
+    store: subagentStore,
+  });
+  const explicitPolicyList = [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    senderPolicy,
+    sandboxPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  ];
+  const inheritedToolAllowlist: string[] = [];
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -125,31 +156,14 @@ export function resolveSkillDispatchTools(params: {
     requesterSenderId: params.senderId,
     senderIsOwner: params.senderIsOwner,
     sessionId: params.sessionEntry?.sessionId,
+    currentChannelId: params.currentChannelId,
     modelProvider: params.provider,
     modelId: params.model,
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-    ]),
-    pluginToolDenylist: collectExplicitDenylist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-    ]),
-  }) as AnyAgentTool[];
+    pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
+    pluginToolDenylist: collectExplicitDenylist(explicitPolicyList),
+    inheritedToolAllowlist,
+    inheritedToolDenylist: collectExplicitDenylist(explicitPolicyList),
+  });
   const policyFiltered = applyToolPolicyPipeline({
     tools,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -167,11 +181,17 @@ export function resolveSkillDispatchTools(params: {
         agentPolicy,
         agentProviderPolicy,
         groupPolicy,
+        senderPolicy,
         agentId: resolvedAgentId,
       }),
       { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
+      { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
   });
-  return applyOwnerOnlyToolPolicy(policyFiltered, params.senderIsOwner) as AnyAgentTool[];
+  const authorizedTools = applyOwnerOnlyToolPolicy(policyFiltered, params.senderIsOwner);
+  if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
+  }
+  return authorizedTools;
 }
