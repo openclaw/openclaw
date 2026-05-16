@@ -477,6 +477,42 @@ async function authorizeGatewayConnectCore(
       }
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
+    // Local-direct password fallback: per docs/gateway/trusted-proxy-auth.md,
+    // an internal same-host caller may authenticate with `gateway.auth.password`
+    // when (1) `trustedProxy.allowLoopback` is true, (2) the request originates
+    // from loopback with no forwarded headers (`isLocalDirectRequest`), and
+    // (3) the connect carries a matching password. Without this fallback,
+    // internal callers (backend RPC, CLI, subagent spawn, plugin approval
+    // channel) are rejected with `trusted_proxy_missing_header_*` even though
+    // the documentation promises the path works. See #82607.
+    if (
+      auth.trustedProxy.allowLoopback === true &&
+      localDirect &&
+      auth.password &&
+      connectAuth?.password
+    ) {
+      if (limiter) {
+        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+        if (!rlCheck.allowed) {
+          return {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: rlCheck.retryAfterMs,
+          };
+        }
+      }
+      const passwordResult = authorizePasswordAuth({
+        authPassword: auth.password,
+        connectPassword: connectAuth.password,
+        limiter,
+        ip,
+        rateLimitScope,
+      });
+      if (passwordResult.ok) {
+        return passwordResult;
+      }
+    }
     return { ok: false, reason: result.reason };
   }
 

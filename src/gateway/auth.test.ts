@@ -1272,5 +1272,75 @@ describe("trusted-proxy auth", () => {
       expect(res.ok).toBe(false);
       expect(res.reason).toBe("trusted_proxy_no_proxies_configured");
     });
+
+    it("accepts local-direct password when trustedProxy.allowLoopback is true (#82607)", async () => {
+      // Per docs/gateway/trusted-proxy-auth.md: internal same-host callers
+      // (backend RPC, CLI, subagent spawn, plugin approval channel) may use
+      // gateway.auth.password as a local-direct fallback when
+      // trustedProxy.allowLoopback === true and the request originates from
+      // loopback with no forwarded headers. Without this fallback the
+      // documented behaviour was contradicted by the runtime, which rejected
+      // every internal loopback connect with trusted_proxy_missing_header_*.
+      const res = await authorizeLocalDirect({
+        password: "shared-secret", // pragma: allowlist secret
+        connectPassword: "shared-secret", // pragma: allowlist secret
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["cf-access-jwt-assertion"],
+          allowUsers: [],
+          allowLoopback: true,
+        },
+      });
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("password");
+    });
+
+    it("checks shared-secret limiter before accepting local-direct trusted-proxy password fallback", async () => {
+      const limiter = createLimiterSpy();
+      limiter.check.mockReturnValueOnce({
+        allowed: false,
+        remaining: 0,
+        retryAfterMs: 2500,
+      });
+
+      const res = await authorizeLocalDirect({
+        password: "shared-secret", // pragma: allowlist secret
+        connectPassword: "shared-secret", // pragma: allowlist secret
+        rateLimiter: limiter,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["cf-access-jwt-assertion"],
+          allowUsers: [],
+          allowLoopback: true,
+        },
+      });
+
+      expect(res).toEqual({
+        ok: false,
+        reason: "rate_limited",
+        rateLimited: true,
+        retryAfterMs: 2500,
+      });
+      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+      expect(limiter.reset).not.toHaveBeenCalled();
+      expect(limiter.recordFailure).not.toHaveBeenCalled();
+    });
+
+    it("does not allow loopback password fallback when password is wrong", async () => {
+      const res = await authorizeLocalDirect({
+        password: "shared-secret", // pragma: allowlist secret
+        connectPassword: "wrong-secret", // pragma: allowlist secret
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["cf-access-jwt-assertion"],
+          allowUsers: [],
+          allowLoopback: true,
+        },
+      });
+      expect(res.ok).toBe(false);
+      // Surfaces the underlying trusted-proxy rejection reason rather than
+      // leaking that a password mismatched.
+      expect(res.reason).toBe("trusted_proxy_missing_header_cf-access-jwt-assertion");
+    });
   });
 });
