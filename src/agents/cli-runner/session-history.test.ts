@@ -81,6 +81,19 @@ function expectCompactionSummary(value: unknown, summary: string) {
   expect(message.summary).toBe(summary);
 }
 
+function expectCustomMessage(value: unknown, expected: { customType: string; content: string }) {
+  const message = requireRecord(value, "custom message");
+  expect(message.role).toBe("custom");
+  expect(message.customType).toBe(expected.customType);
+  expect(message.content).toBe(expected.content);
+}
+
+function expectBranchSummary(value: unknown, summary: string) {
+  const message = requireRecord(value, "branch summary");
+  expect(message.role).toBe("branchSummary");
+  expect(message.summary).toBe(summary);
+}
+
 describe("loadCliSessionHistoryMessages", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -198,14 +211,39 @@ describe("loadCliSessionHistoryMessages", () => {
     fs.appendFileSync(
       sessionFile,
       `${JSON.stringify({
+        type: "custom_message",
+        id: "custom-tail",
+        parentId: "compaction-1",
+        timestamp: new Date(3).toISOString(),
+        customType: "runtime-note",
+        content: "tail custom context",
+        display: false,
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "branch_summary",
+        id: "branch-tail",
+        parentId: "custom-tail",
+        fromId: "custom-tail",
+        timestamp: new Date(4).toISOString(),
+        summary: "tail branch context",
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
         type: "message",
         id: "msg-tail",
-        parentId: "compact-1",
-        timestamp: new Date(3).toISOString(),
+        parentId: "branch-tail",
+        timestamp: new Date(5).toISOString(),
         message: {
           role: "assistant",
           content: "tail answer",
-          timestamp: 3,
+          timestamp: 5,
         },
       })}\n`,
       "utf-8",
@@ -218,9 +256,14 @@ describe("loadCliSessionHistoryMessages", () => {
         sessionKey: "agent:main:main",
         agentId: "main",
       });
-      expect(history).toHaveLength(2);
+      expect(history).toHaveLength(4);
       expectCompactionSummary(history[0], "Earlier compacted context");
-      expectMessageFields(history[1], { role: "assistant", content: "tail answer" });
+      expectCustomMessage(history[1], {
+        customType: "runtime-note",
+        content: "tail custom context",
+      });
+      expectBranchSummary(history[2], "tail branch context");
+      expectMessageFields(history[3], { role: "assistant", content: "tail answer" });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

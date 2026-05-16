@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { migrateSessionEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
@@ -26,6 +27,15 @@ type HistoryEntry = {
   type?: unknown;
   message?: unknown;
   summary?: unknown;
+  customType?: unknown;
+  content?: unknown;
+  display?: unknown;
+  details?: unknown;
+  timestamp?: unknown;
+  fromId?: unknown;
+  firstKeptEntryId?: unknown;
+  tokensBefore?: unknown;
+  tokensAfter?: unknown;
 };
 
 type RawTranscriptReseedReason =
@@ -60,6 +70,48 @@ function coerceHistoryText(content: unknown): string {
     })
     .join("\n")
     .trim();
+}
+
+function coerceHistoryTimestamp(value: unknown): number | string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return 0;
+}
+
+function historyEntryToContextEngineMessage(entry: HistoryEntry): AgentMessage | undefined {
+  if (entry.type === "message") {
+    return entry.message as AgentMessage;
+  }
+  if (entry.type === "custom_message") {
+    return {
+      role: "custom",
+      customType: typeof entry.customType === "string" ? entry.customType : "custom",
+      content: entry.content,
+      display: entry.display !== false,
+      details: entry.details,
+      timestamp: coerceHistoryTimestamp(entry.timestamp),
+    } as AgentMessage;
+  }
+  if (entry.type === "branch_summary") {
+    return {
+      role: "branchSummary",
+      summary: typeof entry.summary === "string" ? entry.summary : "",
+      fromId: typeof entry.fromId === "string" ? entry.fromId : "root",
+      timestamp: coerceHistoryTimestamp(entry.timestamp),
+    } as AgentMessage;
+  }
+  return undefined;
+}
+
+function loadContextEngineMessagesFromEntries(entries: unknown[]): AgentMessage[] {
+  return entries.flatMap((entry) => {
+    const message = historyEntryToContextEngineMessage(entry as HistoryEntry);
+    return message ? [message] : [];
+  });
 }
 
 export function buildCliSessionHistoryPrompt(params: {
@@ -212,29 +264,31 @@ export async function loadCliSessionContextEngineMessages(params: {
     return candidate.type === "compaction" && typeof candidate.summary === "string";
   });
   if (latestCompactionIndex < 0) {
-    return entries.flatMap((entry) => {
-      const candidate = entry as HistoryEntry;
-      return candidate.type === "message" ? [candidate.message] : [];
-    });
+    return loadContextEngineMessagesFromEntries(entries);
   }
 
   const compaction = entries[latestCompactionIndex] as HistoryEntry;
   const summary = typeof compaction.summary === "string" ? compaction.summary.trim() : "";
   if (!summary) {
-    return entries.flatMap((entry) => {
-      const candidate = entry as HistoryEntry;
-      return candidate.type === "message" ? [candidate.message] : [];
-    });
+    return loadContextEngineMessagesFromEntries(entries);
   }
 
-  const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {
-    const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
-  });
+  const tailMessages = loadContextEngineMessagesFromEntries(
+    entries.slice(latestCompactionIndex + 1),
+  );
   return [
     {
       role: "compactionSummary",
       summary,
+      timestamp: coerceHistoryTimestamp(compaction.timestamp),
+      tokensBefore: typeof compaction.tokensBefore === "number" ? compaction.tokensBefore : 0,
+      ...(typeof compaction.tokensAfter === "number"
+        ? { tokensAfter: compaction.tokensAfter }
+        : {}),
+      ...(typeof compaction.firstKeptEntryId === "string"
+        ? { firstKeptEntryId: compaction.firstKeptEntryId }
+        : {}),
+      ...(compaction.details !== undefined ? { details: compaction.details } : {}),
     },
     ...tailMessages,
   ];
