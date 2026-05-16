@@ -182,6 +182,50 @@ describe("provider operation deadlines", () => {
     ).rejects.toThrow("model rejected");
   });
 
+  it("wraps malformed provider status JSON while polling", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
+
+    await expect(
+      pollProviderOperationJson<{ status?: string }>({
+        url: "https://api.example.com/v1/videos/task-1",
+        headers: new Headers(),
+        deadline: createProviderOperationDeadline({
+          label: "video generation task task-1",
+        }),
+        defaultTimeoutMs: 5_000,
+        fetchFn,
+        maxAttempts: 3,
+        pollIntervalMs: 1_000,
+        requestFailedMessage: "status failed",
+        timeoutMessage: "task timed out",
+        isComplete: (payload) => payload.status === "completed",
+      }),
+    ).rejects.toThrow("status failed: malformed JSON response");
+  });
+
+  it("wraps wrong-shaped provider status JSON roots while polling", async () => {
+    for (const payload of ["[]", '"completed"', "null"]) {
+      const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(payload));
+
+      await expect(
+        pollProviderOperationJson<{ status?: string }>({
+          url: "https://api.example.com/v1/videos/task-1",
+          headers: new Headers(),
+          deadline: createProviderOperationDeadline({
+            label: "video generation task task-1",
+          }),
+          defaultTimeoutMs: 5_000,
+          fetchFn,
+          maxAttempts: 3,
+          pollIntervalMs: 1_000,
+          requestFailedMessage: "status failed",
+          timeoutMessage: "task timed out",
+          isComplete: (body) => body.status === "completed",
+        }),
+      ).rejects.toThrow("status failed: malformed JSON response");
+    }
+  });
+
   it("retries transient provider status failures while polling", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

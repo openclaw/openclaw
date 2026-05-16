@@ -6,7 +6,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { modelKey, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -19,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -44,6 +45,7 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { initSessionState } from "./session.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -217,16 +219,14 @@ export async function getReplyFromConfig(
     cfg,
     isFastTestEnv,
   });
-  const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
-  const agentSessionKey = targetSessionKey || ctx.SessionKey;
+  const finalized = finalizeInboundContext(ctx);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const agentSessionKey = targetSessionKey || finalized.SessionKey;
   const traceAttributes = {
-    surface: normalizeOptionalString(ctx.Surface ?? ctx.Provider) ?? "unknown",
+    surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
     isHeartbeat: opts?.isHeartbeat === true,
-    hasMedia: hasInboundMedia(ctx),
+    hasMedia: hasInboundMedia(finalized),
   };
   const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     measureDiagnosticsTimelineSpan(name, run, {
@@ -253,7 +253,28 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  let hasAppliedImageModelOverride = false;
+  let imageModelFallbacksOverride: string[] | undefined;
+  const modelOverrideRaw = normalizeOptionalString(opts?.modelOverride);
+  if (modelOverrideRaw) {
+    const modelOverrideRef = resolveModelRefFromString({
+      raw: modelOverrideRaw,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (modelOverrideRef) {
+      provider = modelOverrideRef.ref.provider;
+      model = modelOverrideRef.ref.model;
+      hasAppliedImageModelOverride = true;
+      imageModelFallbacksOverride = opts?.modelOverrideFallbacks?.filter(
+        (fallback): fallback is string => normalizeOptionalString(fallback) !== undefined,
+      );
+    } else {
+      defaultRuntime.log?.(
+        `[image-model-switch] Failed to resolve image model override ${modelOverrideRaw}; using default model ${modelKey(defaultProvider, defaultModel)}`,
+      );
+    }
+  } else if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
@@ -291,7 +312,6 @@ export async function getReplyFromConfig(
   });
   opts?.onTypingController?.(typing);
 
-  const finalized = finalizeInboundContext(ctx);
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
     () =>
@@ -388,7 +408,7 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sessionEntry.pendingFinalDeliveryText;
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
 
     // If it's a heartbeat, we definitely want to try delivering the lost reply now.
     // If it's a user message, we deliver the lost reply first, then continue.
@@ -431,7 +451,8 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
         sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
         sessionEntry.pendingFinalDeliveryLastError = null;
-        sessionEntry.pendingFinalDeliveryText = heartbeatPending.replayText;
+        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+        sessionEntry.pendingFinalDeliveryText = replayText;
         sessionEntry.updatedAt = updatedAt;
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -442,7 +463,7 @@ export async function getReplyFromConfig(
             storePath,
             sessionKey,
             update: async () => ({
-              pendingFinalDeliveryText: heartbeatPending.replayText,
+              pendingFinalDeliveryText: replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,
               pendingFinalDeliveryAttemptCount: attemptCount,
               pendingFinalDeliveryLastError: null,
@@ -450,7 +471,7 @@ export async function getReplyFromConfig(
             }),
           });
         }
-        return { text: heartbeatPending.replayText };
+        return { text: replayText };
       }
     }
   }
@@ -530,6 +551,7 @@ export async function getReplyFromConfig(
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
+    !hasAppliedImageModelOverride &&
     !staleHeartbeatAutoFallbackOverride
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
@@ -540,11 +562,32 @@ export async function getReplyFromConfig(
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasEffectiveSessionModelOverride &&
+    !hasAppliedImageModelOverride &&
     resolvedChannelModelOverride
   ) {
     provider = resolvedChannelModelOverride.ref.provider;
     model = resolvedChannelModelOverride.ref.model;
   }
+  const imageModelOverrideBaseProvider = hasAppliedImageModelOverride
+    ? (() => {
+        if (
+          storedModelOverride?.model &&
+          !hasResolvedHeartbeatModelOverride &&
+          !staleHeartbeatAutoFallbackOverride
+        ) {
+          return storedModelOverride.provider ?? defaultProvider;
+        }
+        if (!hasEffectiveSessionModelOverride && resolvedChannelModelOverride) {
+          return resolvedChannelModelOverride.ref.provider;
+        }
+        const runtimeProvider = normalizeOptionalString(sessionEntry.modelProvider);
+        const runtimeModel = normalizeOptionalString(sessionEntry.model);
+        if (runtimeProvider && runtimeModel) {
+          return runtimeProvider;
+        }
+        return defaultProvider;
+      })()
+    : undefined;
 
   if (
     shouldUseReplyFastDirectiveExecution({
@@ -619,6 +662,9 @@ export async function getReplyFromConfig(
         storePath,
         workspaceDir,
         abortedLastRun,
+        hasAppliedImageModelOverride,
+        imageModelOverrideBaseProvider,
+        imageModelFallbacksOverride,
       }),
     );
   }
@@ -649,6 +695,7 @@ export async function getReplyFromConfig(
       aliasIndex,
       provider,
       model,
+      hasOneTurnModelOverride: hasAppliedImageModelOverride,
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: resolvedOpts,
@@ -760,6 +807,7 @@ export async function getReplyFromConfig(
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
@@ -858,6 +906,9 @@ export async function getReplyFromConfig(
       storePath,
       workspaceDir,
       abortedLastRun,
+      hasAppliedImageModelOverride,
+      imageModelOverrideBaseProvider,
+      imageModelFallbacksOverride,
     }),
   );
 }

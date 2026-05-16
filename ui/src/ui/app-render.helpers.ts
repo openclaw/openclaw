@@ -8,11 +8,9 @@ import {
 } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
-  isCronSessionKey,
-  parseSessionKey,
   renderChatSessionSelect as renderChatSessionSelectBase,
-  resolveSessionDisplayName,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -21,11 +19,13 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -140,8 +140,6 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
-  state.compactionStatus = null;
-  state.fallbackStatus = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
@@ -149,9 +147,13 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
-  state.chatRunId = null;
-  host.chatSideResultTerminalRuns.clear();
-  host.resetToolStream();
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    clearRunStatus: true,
+  });
   host.resetChatScroll();
   state.applySettings({
     ...state.settings,
@@ -258,6 +260,55 @@ export function renderChatSessionSelect(state: AppViewState) {
   return renderChatSessionSelectBase(state, switchChatSession);
 }
 
+function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
+  switch (mode) {
+    case "always":
+      return t("chat.autoScrollAlways");
+    case "off":
+      return t("chat.autoScrollOff");
+    case "near-bottom":
+      return t("chat.autoScrollNearBottom");
+  }
+  return t("chat.autoScrollNearBottom");
+}
+
+function nextChatAutoScrollMode(mode: ChatAutoScrollMode): ChatAutoScrollMode {
+  switch (mode) {
+    case "near-bottom":
+      return "always";
+    case "always":
+      return "off";
+    case "off":
+      return "near-bottom";
+  }
+  return "near-bottom";
+}
+
+function renderChatAutoScrollToggle(state: AppViewState) {
+  const mode = normalizeChatAutoScrollMode(state.settings.chatAutoScroll);
+  const label = `${t("chat.autoScrollMode")}: ${chatAutoScrollLabel(mode)}`;
+  const active = mode !== "off";
+  return html`
+    <button
+      class="btn btn--sm btn--icon ${active ? "active" : ""}"
+      data-chat-auto-scroll-toggle="true"
+      data-chat-auto-scroll-mode=${mode}
+      data-tooltip=${label}
+      aria-label=${label}
+      aria-pressed=${active}
+      title=${label}
+      @click=${() => {
+        state.applySettings({
+          ...state.settings,
+          chatAutoScroll: nextChatAutoScrollMode(mode),
+        });
+      }}
+    >
+      ${icons.scrollText}
+    </button>
+  `;
+}
+
 export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
@@ -347,6 +398,7 @@ export function renderChatControls(state: AppViewState) {
         ${refreshIcon}
       </button>
       <span class="chat-controls__separator">|</span>
+      ${renderChatAutoScrollToggle(state)}
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
@@ -511,6 +563,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         <div class="chat-controls">
           ${renderChatSessionSelectBase(state, switchChatSession)}
           <div class="chat-controls__thinking">
+            ${renderChatAutoScrollToggle(state)}
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
               ?disabled=${disableThinkingToggle}

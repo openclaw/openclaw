@@ -173,7 +173,7 @@ export async function readTailAssistantTextFromSessionTranscript(
     try {
       return parseAssistantTranscriptText(line);
     } catch {
-      return undefined;
+      continue;
     }
   }
   return undefined;
@@ -302,7 +302,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (latestEquivalentAssistantId) {
     return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
   }
-
   const message = {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),

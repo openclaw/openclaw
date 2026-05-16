@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -131,13 +132,84 @@ function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
 
 function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
+  return listRepoBundledPluginManifestDirs().flatMap((dirName) => {
+    const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
+    return result.ok ? [{ dirName, manifest: result.manifest }] : [];
+  });
+}
+
+function listRepoBundledPluginManifestDirs(): string[] {
+  const externalDirs = listExternalRepoBundledPluginManifestDirs();
+  if (externalDirs) {
+    return externalDirs;
+  }
+  const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
-      return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
-    });
+    .map((entry) => entry.name)
+    .toSorted();
+}
+
+function listExternalRepoBundledPluginManifestDirs(): string[] | null {
+  const manifestFiles =
+    listGitRepoBundledPluginManifestFiles() ?? listFindRepoBundledPluginManifestFiles();
+  if (!manifestFiles) {
+    return null;
+  }
+  return manifestFiles
+    .flatMap((file) => {
+      const match = /^extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(file);
+      return match?.[1] ? [match[1]] : [];
+    })
+    .toSorted();
+}
+
+function listGitRepoBundledPluginManifestFiles(): string[] | null {
+  const result = spawnSync("git", ["ls-files", "--", "extensions/*/openclaw.plugin.json"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .toSorted();
+}
+
+function listFindRepoBundledPluginManifestFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      path.join(repoRoot, "extensions"),
+      "-maxdepth",
+      "2",
+      "-type",
+      "f",
+      "-name",
+      "openclaw.plugin.json",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
+    .toSorted();
 }
 
 function listRepoBundledPluginManifests() {
@@ -261,6 +333,19 @@ function createInstalledPluginIndexForManifests(
 }
 
 describe("bundled plugin metadata", () => {
+  it("lists bundled plugin manifests without scanning extension directories in-process", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const manifests = listRepoBundledPluginManifestsUncached();
+
+      expect(manifests.length).toBeGreaterThan(0);
+      expect(manifests.every((entry) => entry.dirName.length > 0)).toBe(true);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it(
     "matches the runtime metadata snapshot",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
@@ -543,6 +628,22 @@ describe("bundled plugin metadata", () => {
     fs.mkdirSync(distPluginRoot, { recursive: true });
     fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
     expectGeneratedPathResolution(tempRoot, path.join("dist", "extensions", "plugin", "index.js"));
+  });
+
+  it("uses dist-runtime generated paths before source fallback when packaged dist is absent", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-runtime-metadata-");
+    const pluginRoot = path.join(tempRoot, "extensions", "plugin");
+    const runtimePluginRoot = path.join(tempRoot, "dist-runtime", "extensions", "plugin");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(runtimePluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(runtimePluginRoot, "index.js"), "export {};\n", "utf8");
+
+    expectGeneratedPathResolution(
+      tempRoot,
+      path.join("dist-runtime", "extensions", "plugin", "index.js"),
+    );
   });
 
   it("resolves plugin-local generated entry paths when the plugin dir is provided", () => {

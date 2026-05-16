@@ -181,6 +181,7 @@ type ConfigHealthState = {
 };
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
 export type ConfigWriteOptions = {
   /**
    * Read-time env snapshot used to validate `${VAR}` restoration decisions.
@@ -2367,10 +2368,12 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 
 export async function readConfigFileSnapshot(options?: {
   measure?: ConfigSnapshotReadMeasure;
+  skipPluginValidation?: boolean;
 }): Promise<ConfigFileSnapshot> {
-  return await createConfigIO(
-    options?.measure ? { measure: options.measure } : {},
-  ).readConfigFileSnapshot();
+  return await createConfigIO({
+    ...(options?.measure ? { measure: options.measure } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+  }).readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotWithPluginMetadata(options?: {
@@ -2404,8 +2407,12 @@ export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
 
-export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
-  return await createConfigIO().readConfigFileSnapshotForWrite();
+export async function readConfigFileSnapshotForWrite(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<ReadConfigFileSnapshotForWriteResult> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readConfigFileSnapshotForWrite();
 }
 
 export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
@@ -2415,7 +2422,7 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
-): Promise<void> {
+): Promise<ConfigWriteResult> {
   const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
   assertConfigWriteAllowedInCurrentMode({ configPath: io.configPath });
   let nextCfg = cfg;
@@ -2428,6 +2435,7 @@ export async function writeConfigFile(
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const writeResult = await io.writeConfigFile(nextCfg, {
+    baseSnapshot: options.baseSnapshot,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
@@ -2438,6 +2446,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
@@ -2449,7 +2458,7 @@ export async function writeConfigFile(
     !hadRuntimeSnapshot &&
     !getRuntimeConfigSnapshotRefreshHandlerState()
   ) {
-    return;
+    return writeResult;
   }
   // Re-read the freshly persisted file so the sourceConfig we publish matches
   // exactly what readConfigFileSnapshot() will produce when the file-watcher
@@ -2503,4 +2512,5 @@ export async function writeConfigFile(
         { cause },
       ),
   });
+  return { ...writeResult, persistedConfig: canonicalSourceConfig };
 }

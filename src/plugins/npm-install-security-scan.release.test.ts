@@ -1,9 +1,9 @@
-import { execFile } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
 
 type NpmPackFile = {
@@ -26,6 +26,7 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
+  "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
   "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
@@ -38,6 +39,7 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
   "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
   "@openclaw/google-meet:dangerous-exec:dist/index.js",
+  "@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js",
   "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
 ]);
 
@@ -89,12 +91,22 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
 }
 
 function normalizePackedFindingPath(packedPath: string): string {
-  for (const prefix of ["client", "runtime-entry", "service"]) {
+  for (const prefix of ["client", "outbound-payload.test-harness", "runtime-entry", "service"]) {
     if (packedPath.startsWith(`dist/${prefix}-`) && packedPath.endsWith(".js")) {
       return `dist/${prefix}-<hash>.js`;
     }
   }
   return packedPath;
+}
+
+function expectedOptionalReviewedFindingsForPackedPath(
+  packageName: string,
+  packedPath: string,
+): string[] {
+  const normalizedPath = normalizePackedFindingPath(packedPath);
+  return [...OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS].filter(
+    (key) => key.startsWith(`${packageName}:`) && key.endsWith(`:${normalizedPath}`),
+  );
 }
 
 function stageScannerRelevantPackedFiles(
@@ -118,11 +130,73 @@ function stageScannerRelevantPackedFiles(
   return stageDir;
 }
 
-function collectPublishablePluginPackages(): PublishablePluginPackage[] {
-  return readdirSync("extensions", { withFileTypes: true })
+function listPublishablePluginPackageDirs(): string[] {
+  const externalDirs = listExternalPluginPackageDirs();
+  if (externalDirs) {
+    return externalDirs;
+  }
+  return fs
+    .readdirSync("extensions", { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const packageDir = join("extensions", entry.name);
+    .map((entry) => join("extensions", entry.name))
+    .toSorted();
+}
+
+function listExternalPluginPackageDirs(): string[] | null {
+  const packageFiles = listGitExtensionPackageFiles() ?? listFindExtensionPackageFiles();
+  if (!packageFiles) {
+    return null;
+  }
+  return packageFiles
+    .flatMap((file) => {
+      const match = /^extensions\/([^/]+)\/package\.json$/u.exec(file);
+      return match?.[1] ? [join("extensions", match[1])] : [];
+    })
+    .toSorted();
+}
+
+function listGitExtensionPackageFiles(): string[] | null {
+  const result = spawnSync("git", ["ls-files", "--", "extensions/*/package.json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .toSorted();
+}
+
+function listFindExtensionPackageFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [resolve("extensions"), "-maxdepth", "2", "-type", "f", "-name", "package.json"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((file) => relative(process.cwd(), file).split(sep).join("/"))
+    .toSorted();
+}
+
+function collectPublishablePluginPackages(): PublishablePluginPackage[] {
+  return listPublishablePluginPackageDirs()
+    .flatMap((packageDir) => {
       const packageJsonPath = join(packageDir, "package.json");
       let packageJson: {
         name?: unknown;
@@ -180,8 +254,10 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
   const unexpectedCriticalFindings: string[] = [];
   const packedFiles = await collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
   for (const packedFile of packedFiles) {
-    const key = `${plugin.packageName}:dangerous-exec:${normalizePackedFindingPath(packedFile)}`;
-    if (OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS.has(key)) {
+    for (const key of expectedOptionalReviewedFindingsForPackedPath(
+      plugin.packageName,
+      packedFile,
+    )) {
       expectedReviewedCriticalFindings.push(key);
     }
   }
@@ -217,6 +293,23 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 }
 
 describe("publishable plugin npm package install security scan", () => {
+  it("lists publishable plugin packages without scanning extension directories in-process", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const packages = collectPublishablePluginPackages();
+
+      expect(packages.length).toBeGreaterThan(0);
+      expect(
+        packages.every((plugin) =>
+          plugin.packageDir.split(sep).join("/").startsWith("extensions/"),
+        ),
+      ).toBe(true);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("keeps npm-published plugin files clear of unexpected critical hits", async () => {
     const unexpectedCriticalFindings: string[] = [];
     const reviewedCriticalFindings = new Set<string>();

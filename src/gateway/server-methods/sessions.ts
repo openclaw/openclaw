@@ -32,8 +32,6 @@ import {
   createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
-  type SessionPatchHookContext,
-  type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -58,6 +56,7 @@ import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
+  type SessionOperationEvent,
   validateSessionsAbortParams,
   validateSessionsCleanupParams,
   validateSessionsCompactParams,
@@ -84,6 +83,7 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
+import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -336,6 +336,25 @@ function emitSessionsChanged(
   );
 }
 
+function emitSessionOperation(
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
+  payload: Omit<SessionOperationEvent, "ts">,
+) {
+  const connIds = context.getSessionEventSubscriberConnIds();
+  if (connIds.size === 0) {
+    return;
+  }
+  context.broadcastToConnIds(
+    "session.operation",
+    {
+      ...payload,
+      ts: Date.now(),
+    } satisfies SessionOperationEvent,
+    connIds,
+    { dropIfSlow: true },
+  );
+}
+
 function rejectWebchatSessionMutation(params: {
   action: "patch" | "delete" | "compact" | "restore";
   client: GatewayClient | null;
@@ -401,6 +420,87 @@ function cloneCheckpointSessionEntry(params: {
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
+  };
+}
+
+function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return sessionKey === resolveAgentMainSessionKey({ cfg, agentId: parsed.agentId });
+}
+
+async function createAgentMainSessionForSend(params: {
+  req: GatewayRequestHandlerOptions["req"];
+  canonicalKey: string;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+}): Promise<
+  | {
+      ok: true;
+      entry: SessionEntry;
+      canonicalKey: string;
+      storePath: string;
+    }
+  | { ok: false; error: ReturnType<typeof errorShape> }
+> {
+  const agentId = parseAgentSessionKey(params.canonicalKey)?.agentId;
+  if (!agentId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${params.canonicalKey}`),
+    };
+  }
+
+  let createResult:
+    | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
+    | undefined;
+  await sessionsHandlers["sessions.create"]({
+    req: params.req,
+    params: {
+      key: params.canonicalKey,
+      agentId,
+    },
+    respond: (ok, payload, error) => {
+      createResult = {
+        ok,
+        payload: payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+        error,
+      };
+    },
+    context: params.context,
+    client: params.client,
+    isWebchatConnect: params.isWebchatConnect,
+  });
+
+  if (!createResult) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
+    };
+  }
+  if (!createResult.ok) {
+    return {
+      ok: false,
+      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+    };
+  }
+
+  const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
+  const loaded = loadSessionEntry(createdKey);
+  if (!loaded.entry?.sessionId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, `session not created: ${createdKey}`),
+    };
+  }
+  return {
+    ok: true,
+    entry: loaded.entry,
+    canonicalKey: loaded.canonicalKey,
+    storePath: loaded.storePath,
   };
 }
 
@@ -641,7 +741,9 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { cfg, entry, canonicalKey, storePath } = loadSessionEntry(key);
+  const loaded = loadSessionEntry(key);
+  const { cfg } = loaded;
+  let { entry, canonicalKey, storePath } = loaded;
   // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
   if (deletedAgentId !== null) {
@@ -654,6 +756,22 @@ async function handleSessionSend(params: {
       ),
     );
     return;
+  }
+  if (!entry?.sessionId && !params.interruptIfActive && isAgentMainSessionKey(cfg, canonicalKey)) {
+    const created = await createAgentMainSessionForSend({
+      req: params.req,
+      canonicalKey,
+      context: params.context,
+      client: params.client,
+      isWebchatConnect: params.isWebchatConnect,
+    });
+    if (!created.ok) {
+      params.respond(false, undefined, created.error);
+      return;
+    }
+    entry = created.entry;
+    canonicalKey = created.canonicalKey;
+    storePath = created.storePath;
   }
   if (!entry?.sessionId) {
     params.respond(
@@ -1795,22 +1913,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (hasInternalHookListeners("session", "patch")) {
-      const hookContext: SessionPatchHookContext = structuredClone({
-        sessionEntry: applied.entry,
-        patch: p,
-        cfg,
-      });
-      const hookEvent: SessionPatchHookEvent = {
-        type: "session",
-        action: "patch",
-        sessionKey: target.canonicalKey ?? key,
-        context: hookContext,
-        timestamp: new Date(),
-        messages: [],
-      };
-      void triggerInternalHook(hookEvent);
-    }
+    triggerSessionPatchHook({
+      cfg,
+      sessionEntry: applied.entry,
+      sessionKey: target.canonicalKey ?? key,
+      patch: p,
+    });
 
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
@@ -1827,6 +1935,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolvedDisplayModel.provider,
       model: resolvedDisplayModel.model,
       sessionKey: target.canonicalKey ?? key,
+      acpRuntime: applied.entry?.acp != null,
+      acpBackend: applied.entry?.acp?.backend,
     });
     const result: SessionsPatchResult = {
       ok: true,
@@ -2161,24 +2271,52 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const workspaceDir =
         normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
         resolveAgentWorkspaceDir(cfg, target.agentId);
-      const result = await compactEmbeddedPiSession({
-        sessionId,
+      const operationId = randomUUID();
+      emitSessionOperation(context, {
+        operationId,
+        operation: "compact",
+        phase: "start",
         sessionKey: target.canonicalKey,
-        allowGatewaySubagentBinding: true,
-        sessionFile: filePath,
-        workspaceDir,
-        config: cfg,
-        provider: resolvedModel.provider,
-        model: resolvedModel.model,
-        agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
-        thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
-        reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        trigger: "manual",
+      });
+      let result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
+      try {
+        result = await compactEmbeddedPiSession({
+          sessionId,
+          sessionKey: target.canonicalKey,
+          allowGatewaySubagentBinding: true,
+          sessionFile: filePath,
+          workspaceDir,
+          config: cfg,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
+          thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+          reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          trigger: "manual",
+        });
+      } catch (err) {
+        emitSessionOperation(context, {
+          operationId,
+          operation: "compact",
+          phase: "end",
+          sessionKey: target.canonicalKey,
+          completed: false,
+          reason: formatErrorMessage(err),
+        });
+        throw err;
+      }
+      emitSessionOperation(context, {
+        operationId,
+        operation: "compact",
+        phase: "end",
+        sessionKey: target.canonicalKey,
+        completed: result.ok && result.compacted,
+        reason: result.reason,
       });
 
       if (result.ok && result.compacted) {

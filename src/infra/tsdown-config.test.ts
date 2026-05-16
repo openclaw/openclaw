@@ -99,6 +99,7 @@ describe("tsdown config", () => {
       "index",
       "commands/status.summary.runtime",
       "provider-dispatcher.runtime",
+      "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
       "plugins/provider-runtime.runtime",
       "plugins/runtime/index",
@@ -110,6 +111,16 @@ describe("tsdown config", () => {
     ]) {
       expect(keys).toContain(entry);
     }
+  });
+
+  it("keeps root-package-excluded external plugins out of the root dist graph", () => {
+    const distGraph = requireUnifiedDistGraph();
+    const keys = entryKeys(distGraph);
+    const hasPluginEntry = (pluginId: string) =>
+      keys.some((entry) => entry.startsWith(`${bundledPluginRoot(pluginId)}/`));
+
+    expect(hasPluginEntry("amazon-bedrock")).toBe(false);
+    expect(hasPluginEntry("amazon-bedrock-mantle")).toBe(false);
   });
 
   it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
@@ -125,6 +136,22 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["provider-dispatcher.runtime"]).toBe(
       "src/auto-reply/reply/provider-dispatcher.runtime.ts",
+    );
+  });
+
+  it("keeps gateway shutdown hook runner behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
+      "src/plugins/hook-runner-global.ts",
+    );
+  });
+
+  it("keeps Telegram ingress worker behind one root stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["telegram-ingress-worker.runtime"]).toBe(
+      "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
     );
   });
 
@@ -156,16 +183,19 @@ describe("tsdown config", () => {
     expect(hookEntries).toStrictEqual([]);
   });
 
-  it("externalizes known heavy native dependencies", () => {
+  it("externalizes known heavy native and declaration-fragile dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
     const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
+      expect(neverBundle("@anthropic-ai/vertex-sdk")).toBe(true);
       expect(neverBundle("@discordjs/voice")).toBe(true);
       expect(neverBundle("@lancedb/lancedb")).toBe(true);
       expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("@slack/bolt")).toBe(true);
+      expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("prism-media")).toBe(true);
@@ -174,9 +204,12 @@ describe("tsdown config", () => {
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
       for (const dependency of [
+        "@anthropic-ai/vertex-sdk",
         "@discordjs/voice",
         "@lancedb/lancedb",
         "@larksuiteoapi/node-sdk",
+        "@slack/bolt",
+        "@slack/web-api",
         "@vitest/expect",
         "matrix-js-sdk",
         "prism-media",

@@ -1,3 +1,4 @@
+import { MessageFlags } from "discord-api-types/v10";
 import {
   formatReasoningMessage,
   resolveAckReaction,
@@ -24,7 +25,8 @@ import {
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   hasFinalInboundReplyDispatch,
-  runInboundReplyTurn,
+  recordChannelBotPairLoopAndCheckSuppression,
+  runPreparedInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -140,9 +142,19 @@ export async function processDiscordMessage(
     route,
     discordRestFetch,
     abortSignal,
+    botLoopProtection,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
+  }
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before dispatch setup, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return;
+    }
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
@@ -417,6 +429,8 @@ export async function processDiscordMessage(
     chunkMode,
     log: logVerbose,
   });
+  const finalPreviewFlags =
+    (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
   const notifyFinalReplyStart = () => {
     if (finalReplyStartNotified) {
@@ -451,7 +465,6 @@ export async function processDiscordMessage(
           isFinal &&
           (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
         ) {
-          draftPreview.markFinalDeliveryHandled();
           const reply = resolveSendableOutboundReplyParts(payload);
           const hasMedia = reply.hasMedia;
           const finalText = payload.text;
@@ -481,7 +494,10 @@ export async function processDiscordMessage(
                 ) {
                   return undefined;
                 }
-                return { content: previewFinalText };
+                return {
+                  content: previewFinalText,
+                  ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
+                };
               },
               editFinal: async (previewMessageId, edit) => {
                 if (isProcessAborted(abortSignal)) {
@@ -495,6 +511,7 @@ export async function processDiscordMessage(
                 });
               },
               onPreviewFinalized: () => {
+                draftPreview.markFinalReplyDelivered();
                 draftPreview.markPreviewFinalized();
                 replyReference.markSent();
                 observer?.onFinalReplyDelivered?.();
@@ -529,9 +546,12 @@ export async function processDiscordMessage(
                 threadBindings,
                 mediaLocalRoots,
               });
+              return true;
+            },
+            onNormalDelivered: () => {
+              draftPreview.markFinalReplyDelivered();
               replyReference.markSent();
               observer?.onFinalReplyDelivered?.();
-              return true;
             },
           });
           if (result.kind !== "normal-skipped") {
@@ -611,183 +631,169 @@ export async function processDiscordMessage(
       await settleDispatchBeforeStart();
       return;
     }
-    const preparedResult = await runInboundReplyTurn({
+    const preparedResult = await runPreparedInboundReplyTurn({
       channel: "discord",
       accountId: route.accountId,
-      raw: ctx,
-      adapter: {
-        ingest: () => ({
-          id: message.id,
-          timestamp: message.timestamp ? Date.parse(message.timestamp) : undefined,
-          rawText: text,
-          textForAgent: ctxPayload.BodyForAgent,
-          textForCommands: ctxPayload.CommandBody,
-          raw: message,
-        }),
-        resolveTurn: () => ({
-          channel: "discord",
-          accountId: route.accountId,
-          routeSessionKey: persistedSessionKey,
-          storePath: turn.storePath,
-          ctxPayload,
-          recordInboundSession,
-          record: turn.record,
-          history: {
-            isGroup: isGuildMessage,
-            historyKey: messageChannelId,
-            historyMap: guildHistories,
-            limit: historyLimit,
-          },
-          onPreDispatchFailure: settleDispatchBeforeStart,
-          runDispatch: async () => {
-            return await dispatchInboundMessage({
-              ctx: ctxPayload,
-              cfg,
-              dispatcher,
-              replyOptions: {
-                ...replyOptions,
-                abortSignal,
-                skillFilter: channelConfig?.skills,
-                sourceReplyDeliveryMode,
-                disableBlockStreaming: sourceRepliesAreToolOnly
-                  ? true
-                  : (draftPreview.disableBlockStreamingForDraft ??
-                    (typeof resolvedBlockStreamingEnabled === "boolean"
-                      ? !resolvedBlockStreamingEnabled
-                      : undefined)),
-                onPartialReply: draftPreview.draftStream
-                  ? (payload) => draftPreview.updateFromPartial(payload.text)
-                  : undefined,
-                onAssistantMessageStart: draftPreview.draftStream
-                  ? () => draftPreview.handleAssistantMessageBoundary()
-                  : undefined,
-                onReasoningEnd: draftPreview.draftStream
-                  ? () => draftPreview.handleAssistantMessageBoundary()
-                  : undefined,
-                onModelSelected,
-                suppressDefaultToolProgressMessages:
-                  draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
-                onReasoningStream: async (payload) => {
-                  await statusReactions.setThinking();
-                  const formattedText = payload?.text
-                    ? formatReasoningMessage(payload.text)
-                    : undefined;
-                  await draftPreview.pushReasoningProgress(formattedText);
-                },
-                onToolStart: async (payload) => {
-                  if (isProcessAborted(abortSignal)) {
-                    return;
-                  }
-                  await maybeBindStatusReactionsToToolReaction(payload);
-                  await statusReactions.setTool(payload.name);
-                  await draftPreview.pushToolProgress(
-                    buildChannelProgressDraftLineForEntry(
-                      discordConfig,
-                      {
-                        event: "tool",
-                        name: payload.name,
-                        phase: payload.phase,
-                        args: payload.args,
-                      },
-                      payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                    ),
-                    { toolName: payload.name },
-                  );
-                },
-                onItemEvent: async (payload) => {
-                  await draftPreview.pushToolProgress(
-                    buildChannelProgressDraftLineForEntry(discordConfig, {
-                      event: "item",
-                      itemKind: payload.kind,
-                      title: payload.title,
-                      name: payload.name,
-                      phase: payload.phase,
-                      status: payload.status,
-                      summary: payload.summary,
-                      progressText: payload.progressText,
-                      meta: payload.meta,
-                    }),
-                  );
-                },
-                onPlanUpdate: async (payload) => {
-                  if (payload.phase !== "update") {
-                    return;
-                  }
-                  await draftPreview.pushToolProgress(
-                    buildChannelProgressDraftLine({
-                      event: "plan",
-                      phase: payload.phase,
-                      title: payload.title,
-                      explanation: payload.explanation,
-                      steps: payload.steps,
-                    }),
-                  );
-                },
-                onApprovalEvent: async (payload) => {
-                  if (payload.phase !== "requested") {
-                    return;
-                  }
-                  await draftPreview.pushToolProgress(
-                    buildChannelProgressDraftLine({
-                      event: "approval",
-                      phase: payload.phase,
-                      title: payload.title,
-                      command: payload.command,
-                      reason: payload.reason,
-                      message: payload.message,
-                    }),
-                  );
-                },
-                onCommandOutput: async (payload) => {
-                  if (payload.phase !== "end") {
-                    return;
-                  }
-                  await draftPreview.pushToolProgress(
-                    buildChannelProgressDraftLine({
-                      event: "command-output",
-                      phase: payload.phase,
-                      title: payload.title,
-                      name: payload.name,
-                      status: payload.status,
-                      exitCode: payload.exitCode,
-                    }),
-                  );
-                },
-                onPatchSummary: async (payload) => {
-                  if (payload.phase !== "end") {
-                    return;
-                  }
-                  await draftPreview.pushToolProgress(
-                    buildChannelProgressDraftLine({
-                      event: "patch",
-                      phase: payload.phase,
-                      title: payload.title,
-                      name: payload.name,
-                      added: payload.added,
-                      modified: payload.modified,
-                      deleted: payload.deleted,
-                      summary: payload.summary,
-                    }),
-                  );
-                },
-                onCompactionStart: async () => {
-                  if (isProcessAborted(abortSignal)) {
-                    return;
-                  }
-                  await statusReactions.setCompacting();
-                },
-                onCompactionEnd: async () => {
-                  if (isProcessAborted(abortSignal)) {
-                    return;
-                  }
-                  statusReactions.cancelPending();
-                  await statusReactions.setThinking();
-                },
-              },
-            });
-          },
-        }),
+      routeSessionKey: persistedSessionKey,
+      storePath: turn.storePath,
+      ctxPayload,
+      recordInboundSession,
+      record: turn.record,
+      history: {
+        isGroup: isGuildMessage,
+        historyKey: messageChannelId,
+        historyMap: guildHistories,
+        limit: historyLimit,
       },
+      onPreDispatchFailure: settleDispatchBeforeStart,
+      runDispatch: async () =>
+        await dispatchInboundMessage({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            abortSignal,
+            skillFilter: channelConfig?.skills,
+            sourceReplyDeliveryMode,
+            disableBlockStreaming: sourceRepliesAreToolOnly
+              ? true
+              : (draftPreview.disableBlockStreamingForDraft ??
+                (typeof resolvedBlockStreamingEnabled === "boolean"
+                  ? !resolvedBlockStreamingEnabled
+                  : undefined)),
+            onPartialReply: draftPreview.draftStream
+              ? (payload) => draftPreview.updateFromPartial(payload.text)
+              : undefined,
+            onAssistantMessageStart: draftPreview.draftStream
+              ? () => draftPreview.handleAssistantMessageBoundary()
+              : undefined,
+            onReasoningEnd: draftPreview.draftStream
+              ? () => draftPreview.handleAssistantMessageBoundary()
+              : undefined,
+            onModelSelected,
+            suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
+              ? true
+              : undefined,
+            onReasoningStream: async (payload) => {
+              await statusReactions.setThinking();
+              const formattedText = payload?.text
+                ? formatReasoningMessage(payload.text)
+                : undefined;
+              await draftPreview.pushReasoningProgress(formattedText);
+            },
+            onToolStart: async (payload) => {
+              if (isProcessAborted(abortSignal)) {
+                return;
+              }
+              await maybeBindStatusReactionsToToolReaction(payload);
+              await statusReactions.setTool(payload.name);
+              await draftPreview.pushToolProgress(
+                buildChannelProgressDraftLineForEntry(
+                  discordConfig,
+                  {
+                    event: "tool",
+                    name: payload.name,
+                    phase: payload.phase,
+                    args: payload.args,
+                  },
+                  payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                ),
+                { toolName: payload.name },
+              );
+            },
+            onItemEvent: async (payload) => {
+              await draftPreview.pushToolProgress(
+                buildChannelProgressDraftLineForEntry(discordConfig, {
+                  event: "item",
+                  itemId: payload.itemId,
+                  itemKind: payload.kind,
+                  title: payload.title,
+                  name: payload.name,
+                  phase: payload.phase,
+                  status: payload.status,
+                  summary: payload.summary,
+                  progressText: payload.progressText,
+                  meta: payload.meta,
+                }),
+              );
+            },
+            onPlanUpdate: async (payload) => {
+              if (payload.phase !== "update") {
+                return;
+              }
+              await draftPreview.pushToolProgress(
+                buildChannelProgressDraftLine({
+                  event: "plan",
+                  phase: payload.phase,
+                  title: payload.title,
+                  explanation: payload.explanation,
+                  steps: payload.steps,
+                }),
+              );
+            },
+            onApprovalEvent: async (payload) => {
+              if (payload.phase !== "requested") {
+                return;
+              }
+              await draftPreview.pushToolProgress(
+                buildChannelProgressDraftLine({
+                  event: "approval",
+                  phase: payload.phase,
+                  title: payload.title,
+                  command: payload.command,
+                  reason: payload.reason,
+                  message: payload.message,
+                }),
+              );
+            },
+            onCommandOutput: async (payload) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await draftPreview.pushToolProgress(
+                buildChannelProgressDraftLine({
+                  event: "command-output",
+                  phase: payload.phase,
+                  title: payload.title,
+                  name: payload.name,
+                  status: payload.status,
+                  exitCode: payload.exitCode,
+                }),
+              );
+            },
+            onPatchSummary: async (payload) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await draftPreview.pushToolProgress(
+                buildChannelProgressDraftLine({
+                  event: "patch",
+                  phase: payload.phase,
+                  title: payload.title,
+                  name: payload.name,
+                  added: payload.added,
+                  modified: payload.modified,
+                  deleted: payload.deleted,
+                  summary: payload.summary,
+                }),
+              );
+            },
+            onCompactionStart: async () => {
+              if (isProcessAborted(abortSignal)) {
+                return;
+              }
+              await statusReactions.setCompacting();
+            },
+            onCompactionEnd: async () => {
+              if (isProcessAborted(abortSignal)) {
+                return;
+              }
+              statusReactions.cancelPending();
+              await statusReactions.setThinking();
+            },
+          },
+        }),
     });
     if (!preparedResult.dispatched) {
       return;
