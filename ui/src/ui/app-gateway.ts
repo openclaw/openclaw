@@ -113,6 +113,7 @@ type GatewayHost = {
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
+  sessionsLoading?: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
@@ -142,6 +143,8 @@ type GatewayHostWithSideResults = GatewayHost & {
 };
 
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
+const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
+const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
 
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
@@ -721,7 +724,13 @@ function resolveChatEventSessionListAgentId(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
 ): string {
-  const sessionKey = payload?.sessionKey?.trim() || host.sessionKey;
+  return resolveSessionListAgentIdForSessionKey(
+    host,
+    payload?.sessionKey?.trim() || host.sessionKey,
+  );
+}
+
+function resolveSessionListAgentIdForSessionKey(host: GatewayHost, sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
@@ -801,6 +810,41 @@ function handleSessionMessageGatewayEvent(
   // first LLM delta arrives.
   if (host.chatRunId) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    void loadSessions(host as unknown as SessionsState, {
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      agentId: resolveSessionListAgentIdForSessionKey(host, sessionKey),
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
+    }).finally(() =>
+      replayDeferredSessionMessageReloadAfterSessionsRefresh(host, sessionKey, Date.now()),
+    );
+    return;
+  }
+  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  void loadChatHistory(host as unknown as ChatState);
+}
+
+function replayDeferredSessionMessageReloadAfterSessionsRefresh(
+  host: GatewayHost,
+  sessionKey: string,
+  startedAt: number,
+) {
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+  if (
+    deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim() !== sessionKey ||
+    host.sessionKey !== sessionKey
+  ) {
+    return;
+  }
+  if (host.chatRunId) {
+    if (
+      host.sessionsLoading === true &&
+      Date.now() - startedAt < DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS
+    ) {
+      globalThis.setTimeout(
+        () => replayDeferredSessionMessageReloadAfterSessionsRefresh(host, sessionKey, startedAt),
+        DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS,
+      );
+    }
     return;
   }
   deferredReloadHost.pendingSessionMessageReloadSessionKey = null;

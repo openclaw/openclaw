@@ -45,30 +45,76 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
   if (defaults?.workspace) {
-    rows.push(shortenHomeInString(`workspace: ${defaults.workspace}`));
+    rows.push(shortenHomeInString(`Workspace: ${defaults.workspace}`));
   }
   if (defaults?.model) {
     const model = resolveAgentModelPrimaryValue(defaults.model);
     if (model) {
-      rows.push(shortenHomeInString(`model: ${model}`));
+      rows.push(shortenHomeInString(`Model: ${model}`));
     }
   }
-  if (config.gateway?.mode) {
-    rows.push(shortenHomeInString(`gateway.mode: ${config.gateway.mode}`));
-  }
-  if (typeof config.gateway?.port === "number") {
-    rows.push(shortenHomeInString(`gateway.port: ${config.gateway.port}`));
-  }
-  if (config.gateway?.bind) {
-    rows.push(shortenHomeInString(`gateway.bind: ${config.gateway.bind}`));
-  }
-  if (config.gateway?.remote?.url) {
-    rows.push(shortenHomeInString(`gateway.remote.url: ${config.gateway.remote.url}`));
+  const gatewaySummary = summarizeGatewayConfig(config);
+  if (gatewaySummary) {
+    rows.push(shortenHomeInString(gatewaySummary));
   }
   if (config.skills?.install?.nodeManager) {
-    rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
+    rows.push(shortenHomeInString(`Node manager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
+}
+
+function summarizeGatewayConfig(config: OpenClawConfig): string | null {
+  const gateway = config.gateway;
+  if (
+    !gateway?.mode &&
+    typeof gateway?.port !== "number" &&
+    !gateway?.bind &&
+    !gateway?.remote?.url
+  ) {
+    return null;
+  }
+  const mode = normalizeOptionalString(gateway.mode);
+  const bind = formatGatewayBind(gateway.bind);
+  const remoteUrl = normalizeOptionalString(gateway.remote?.url);
+  const useRemoteUrl = remoteUrl !== undefined && mode !== "local";
+  const endpoint =
+    useRemoteUrl && remoteUrl
+      ? remoteUrl
+      : typeof gateway.port === "number"
+        ? `:${gateway.port}`
+        : undefined;
+  const words: string[] = [];
+  if (mode) {
+    words.push(mode);
+  }
+  if (bind) {
+    words.push(mode ? `via ${bind}` : bind);
+  }
+  if (mode === "remote" && !remoteUrl) {
+    words.push("(missing remote URL)");
+    return `Gateway: ${words.join(" ")}`;
+  }
+  if (endpoint) {
+    words.push(`${useRemoteUrl ? "at" : "on"} ${endpoint}`);
+  }
+  return `Gateway: ${words.length > 0 ? words.join(" ") : "configured"}`;
+}
+
+function formatGatewayBind(value: string | undefined): string | undefined {
+  switch (value) {
+    case "lan":
+      return "LAN";
+    case "loopback":
+      return "loopback";
+    case "tailnet":
+      return "tailnet";
+    case "auto":
+      return "auto";
+    case "custom":
+      return "custom";
+    default:
+      return normalizeOptionalString(value);
+  }
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {

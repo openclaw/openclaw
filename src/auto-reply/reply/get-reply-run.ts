@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  hasSessionAutoModelFallbackProvenance,
+  type AutoFallbackPrimaryProbe,
+} from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -71,6 +75,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
@@ -353,6 +358,7 @@ type RunPreparedReplyParams = {
   hasAppliedImageModelOverride?: boolean;
   imageModelOverrideBaseProvider?: string;
   imageModelFallbacksOverride?: string[];
+  autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
 };
 
 export async function runPreparedReply(
@@ -880,6 +886,7 @@ export async function runPreparedReply(
       ? listOpenAIAuthProfileProvidersForAgentRuntime({
           provider,
           harnessRuntime: agentHarnessPolicy.runtime,
+          config: cfg,
         })
       : [provider];
   const resolveActiveSessionProviderForAuthProfile = (): string => {
@@ -914,12 +921,17 @@ export async function runPreparedReply(
         authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
       };
     }
-    const shouldUseEphemeralSession = shouldResolveEphemeralAuthProfileForImageOverride();
+    const shouldUseEphemeralSession =
+      shouldResolveEphemeralAuthProfileForImageOverride() ||
+      params.autoFallbackPrimaryProbe !== undefined;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =
       shouldUseEphemeralSession && preparedSessionState.sessionEntry
         ? { ...preparedSessionState.sessionEntry }
         : preparedSessionState.sessionEntry;
+    if (params.autoFallbackPrimaryProbe && authSessionEntry) {
+      clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
+    }
     const authSessionStore =
       shouldUseEphemeralSession && authSessionEntry
         ? { [authSessionKey]: authSessionEntry }
@@ -1019,6 +1031,10 @@ export async function runPreparedReply(
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
     hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
+  const originatingThreadId = resolveRoutedDeliveryThreadId({
+    ctx,
+    sessionKey,
+  });
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -1036,7 +1052,7 @@ export async function runPreparedReply(
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: sessionCtx.AccountId,
-    originatingThreadId: ctx.MessageThreadId,
+    originatingThreadId,
     originatingChatType: ctx.ChatType,
     run: {
       agentId,
@@ -1076,6 +1092,7 @@ export async function runPreparedReply(
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
       imageModelFallbacksOverride,
+      autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,

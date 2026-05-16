@@ -857,6 +857,39 @@ describe("run-node script", () => {
       expect(postBuildParams?.cwd).toBe(tmp);
       expect(postBuildParams?.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
       expect(postBuildParams?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+      expect(postBuildParams?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("0");
+    });
+  });
+
+  it("preserves an explicit bundled plugin disable flag for QA runs", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      });
+
+      expect(exitCode).toBe(0);
+      const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
+        | { cwd?: string; env?: Record<string, string | undefined> }
+        | undefined;
+      expect(postBuildParams?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("1");
     });
   });
 

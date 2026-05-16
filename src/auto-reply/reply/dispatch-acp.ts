@@ -254,6 +254,7 @@ async function finalizeAcpTurnOutput(params: {
           mediaUrl: ttsSyntheticReply.mediaUrl,
           audioAsVoice: ttsSyntheticReply.audioAsVoice,
           spokenText: accumulatedBlockTtsText,
+          trustedLocalMedia: true,
         });
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = delivered;

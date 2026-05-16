@@ -423,6 +423,80 @@ describe("buildAuthChoiceOptions", () => {
     expect(ollamaGroup.options.map((option) => option.value)).toContain("ollama");
   });
 
+  it("orders common auth provider groups before the alphabetical remainder", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "google",
+        providerId: "google",
+        methodId: "api-key",
+        choiceId: "gemini-api-key",
+        choiceLabel: "Gemini API key",
+        groupId: "google",
+        groupLabel: "Google",
+      },
+      {
+        pluginId: "xai",
+        providerId: "xai",
+        methodId: "api-key",
+        choiceId: "xai-api-key",
+        choiceLabel: "xAI API key",
+        groupId: "xai",
+        groupLabel: "xAI (Grok)",
+      },
+      {
+        pluginId: "litellm",
+        providerId: "litellm",
+        methodId: "api-key",
+        choiceId: "litellm-api-key",
+        choiceLabel: "LiteLLM API key",
+        groupId: "litellm",
+        groupLabel: "LiteLLM",
+      },
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+      },
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "api-key",
+        choiceId: "apiKey",
+        choiceLabel: "Anthropic API key",
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+      },
+      {
+        pluginId: "byteplus",
+        providerId: "byteplus",
+        methodId: "api-key",
+        choiceId: "byteplus-api-key",
+        choiceLabel: "BytePlus API key",
+        groupId: "byteplus",
+        groupLabel: "BytePlus",
+      },
+    ]);
+
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+
+    expect(groups.map((group) => group.label)).toEqual([
+      "OpenAI",
+      "Anthropic",
+      "xAI (Grok)",
+      "Google",
+      "BytePlus",
+      "Custom Provider",
+      "LiteLLM",
+    ]);
+  });
+
   it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {

@@ -1,4 +1,8 @@
-import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import type { EmbeddedPiRunResult } from "../types.js";
 
 type EmbeddedRunPayload = NonNullable<EmbeddedPiRunResult["payloads"]>[number];
@@ -8,6 +12,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): EmbeddedRunPayload[] | undefined {
   const mediaUrls = Array.from(
     new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
@@ -20,6 +25,12 @@ export function mergeAttemptToolMediaPayloads(params: {
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
     const payload = payloads[payloadIndex];
+    if (
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror
+    ) {
+      return payloads;
+    }
     const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));
     payloads[payloadIndex] = copyReplyPayloadMetadata(payload, {
       ...payload,

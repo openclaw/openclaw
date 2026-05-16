@@ -1199,6 +1199,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceTool: "music_generate",
       internalEvents: [
         {
           type: "task_completion",
@@ -1219,14 +1220,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
+      error: "completion agent did not deliver through the message tool",
     });
     expectGatewayAgentParams(callGateway, {
-      deliver: true,
+      deliver: false,
       channel: "discord",
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1243,6 +1245,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceTool: "music_generate",
       internalEvents: [
         {
           type: "task_completion",
@@ -1265,14 +1268,27 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("delivers generated media completions through the announce agent in automatic DMs", async () => {
+  it("requires generated media completion DMs to use the message tool", async () => {
     const callGateway = createGatewayMock({
       result: {
-        payloads: [
+        payloads: [],
+        messagingToolSentTargets: [
           {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
             text: "The track is ready.",
             mediaUrls: ["/tmp/generated-night-drive.mp3"],
           },
@@ -1298,6 +1314,111 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           mediaUrls: ["/tmp/generated-night-drive.mp3"],
           replyInstruction:
             "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires generated image completion DMs to use the message tool", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-robot.png"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "small watercolor robot",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
+          mediaUrls: ["/tmp/generated-robot.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts failed generated media completion notices without requiring message-tool delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "Music generation failed: provider failed.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "error",
+          statusLabel: "failed",
+          result: "provider failed",
+          replyInstruction: "Deliver the failure through the message tool.",
         },
       ],
     });
@@ -1358,9 +1479,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not deliver generated media",
+      error: "completion agent did not deliver through the message tool",
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows visible direct delivery for media generation failure summaries without generated media", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Music generation failed. Provider timed out." }],
+      },
+    });
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "error",
+          statusLabel: "failed",
+          result: "All music generation models failed.",
+          replyInstruction: "Tell the user music generation failed.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+    });
   });
 
   it("reports generated media group completions that miss required message-tool delivery", async () => {

@@ -256,6 +256,7 @@ async function resolveRuntimeModel(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       }).runtime,
+      config: params.cfg,
     }),
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,

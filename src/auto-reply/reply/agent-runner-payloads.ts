@@ -324,7 +324,7 @@ export async function buildReplyPayloads(params: {
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError) {
+    if (payload.isError || payload.isFallbackNotice) {
       return payload;
     }
     const reply = resolveSendableOutboundReplyParts(payload);

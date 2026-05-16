@@ -13,6 +13,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { __testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
+import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -50,6 +51,16 @@ vi.mock("../video-generation-task-status.js", () => ({
   isActiveVideoGenerationTask: vi.fn(() => false),
 }));
 
+vi.mock("../image-generation-task-status.js", () => ({
+  IMAGE_GENERATION_TASK_KIND: "image_generation",
+  buildActiveImageGenerationTaskPromptContextForSession: vi.fn(() => undefined),
+  buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildImageGenerationTaskStatusText: vi.fn(() => ""),
+  findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
+  getImageGenerationTaskProviderId: vi.fn(() => undefined),
+  isActiveImageGenerationTask: vi.fn(() => false),
+}));
+
 vi.mock("../music-generation-task-status.js", () => ({
   MUSIC_GENERATION_TASK_KIND: "music_generation",
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
@@ -61,6 +72,9 @@ vi.mock("../music-generation-task-status.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockBuildActiveVideoGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveVideoGenerationTaskPromptContextForSession,
+);
+const mockBuildActiveImageGenerationTaskPromptContextForSession = vi.mocked(
+  buildActiveImageGenerationTaskPromptContextForSession,
 );
 const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
@@ -187,6 +201,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
+    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(undefined);
   });
@@ -195,6 +210,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     cliBackendsTesting.resetDepsForTest();
     getRuntimeConfigMock.mockReset();
     mockGetGlobalHookRunner.mockReset();
+    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
     vi.unstubAllEnvs();
@@ -887,6 +903,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("applies direct-run prepend system context helpers on the CLI path", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+        "active image task",
+      );
       mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
         "active video task",
       );
@@ -915,7 +934,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        "active video task\n\nhook prepend system\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        "active image task\n\nactive video task\n\nhook prepend system\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+      );
+      expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
+        "agent:main:test",
       );
       expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
