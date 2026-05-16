@@ -513,6 +513,67 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
   });
 
+  it("adopts successor transcript handles after owning context-engine compaction", async () => {
+    const sessionFile = await writeTestBinding();
+    const successorFile = path.join(tempDir, "session.compacted.jsonl");
+    await writeCodexAppServerBinding(successorFile, {
+      threadId: "thread-successor",
+      cwd: tempDir,
+    });
+    const compact = vi.fn(async () => ({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 55,
+        sessionId: "session-1-compacted",
+        sessionFile: successorFile,
+      },
+    }));
+    const maintain = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["maintain"]>>[0]) => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }),
+    );
+    const contextEngine: ContextEngine = {
+      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+      assemble: vi.fn() as never,
+      ingest: vi.fn() as never,
+      compact,
+      maintain,
+    };
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        contextEngine,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result?.sessionId).toBe("session-1-compacted");
+    expect(result.result?.sessionFile).toBe(successorFile);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    expect(await readCodexAppServerBinding(successorFile)).toBeUndefined();
+    expect(maintain).toHaveBeenCalledTimes(1);
+    const [maintainCall] = maintain.mock.calls[0] ?? [];
+    const maintainParams = maintainCall as
+      | {
+          sessionId?: string;
+          sessionFile?: string;
+        }
+      | undefined;
+    expect(maintainParams?.sessionId).toBe("session-1-compacted");
+    expect(maintainParams?.sessionFile).toBe(successorFile);
+  });
+
   it("returns context-engine compaction success when maintenance fails", async () => {
     const sessionFile = await writeTestBinding();
     const compact = vi.fn(async () => ({

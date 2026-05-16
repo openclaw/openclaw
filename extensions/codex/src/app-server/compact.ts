@@ -105,24 +105,29 @@ async function compactOwningContextEngine(
   }
 
   if (result.ok && result.compacted) {
+    const compactedSessionId = result.result?.sessionId ?? params.sessionId;
+    const compactedSessionFile = result.result?.sessionFile ?? params.sessionFile;
     try {
       await runHarnessContextEngineMaintenance({
         contextEngine,
-        sessionId: params.sessionId,
+        sessionId: compactedSessionId,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: compactedSessionFile,
         reason: "compaction",
         runtimeContext: params.contextEngineRuntimeContext,
         config: params.config,
       });
     } catch (error) {
       embeddedAgentLog.warn("context engine compaction maintenance failed", {
-        sessionId: params.sessionId,
+        sessionId: compactedSessionId,
         engineId: contextEngine.info.id,
         error: formatErrorMessage(error),
       });
     }
     await clearCodexAppServerBinding(params.sessionFile);
+    if (compactedSessionFile !== params.sessionFile) {
+      await clearCodexAppServerBinding(compactedSessionFile);
+    }
   }
 
   embeddedAgentLog.info("completed context-engine-owned Codex app-server compaction", {
