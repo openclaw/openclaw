@@ -1977,7 +1977,13 @@ export async function runAgentTurnWithFallback(params: {
                       }
                     }
                     if (phase === "end") {
-                      const completed = evt.data?.completed === true;
+                      // Treat `completed: undefined` as success: not every
+                      // backend that emits `phase: "end"` populates the flag
+                      // (e.g. Codex app-server `contextCompaction` bridge emits
+                      // `{ phase: "end" }` without `completed`). Only treat the
+                      // run as incomplete when the emitter explicitly sets
+                      // `completed: false`. See #82470.
+                      const completed = evt.data?.completed !== false;
                       if (completed) {
                         attemptCompactionCount += 1;
                         if (params.opts?.onCompactionEnd) {

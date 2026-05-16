@@ -2599,6 +2599,61 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("treats compaction end without an explicit completed flag as success (#82470)", async () => {
+    // Codex app-server contextCompaction bridge emits `{ phase: "end" }`
+    // without a `completed` boolean. Before #82470 this fell into the
+    // "incomplete" branch and surfaced "🧹 Compaction incomplete" even when
+    // the native compaction succeeded. The consumer now treats missing
+    // `completed` as success and only surfaces "incomplete" when the
+    // emitter explicitly sets `completed: false`.
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: { defaults: { compaction: { notifyUser: true } } },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onBlockReply },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction complete",
+      isCompactionNotice: true,
+    });
+  });
+
   it("emits an incomplete compaction notice when compaction ends without completing", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
