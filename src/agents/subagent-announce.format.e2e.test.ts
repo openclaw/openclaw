@@ -535,7 +535,7 @@ describe("subagent announce formatting", () => {
 
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("completed successfully");
+    expect(msg).toContain("completed; ready for parent review");
   });
 
   it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
@@ -591,7 +591,9 @@ describe("subagent announce formatting", () => {
       };
     };
     expect(call?.params?.internalEvents?.[0]?.status).toBe("ok");
-    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe("completed successfully");
+    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe(
+      "completed; ready for parent review",
+    );
     expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
   });
 

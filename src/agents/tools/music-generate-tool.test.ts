@@ -379,6 +379,8 @@ describe("createMusicGenerateTool", () => {
     expect(details.count).toBe(1);
     expect(details.instrumental).toBe(true);
     expect(details.lyrics).toEqual(["wake the city up"]);
+    expect(details.timeoutMs).toBe(300_000);
+    expect(generateMusicOptions().timeoutMs).toBe(300_000);
     expect((details.media as { mediaUrls?: unknown }).mediaUrls).toEqual([
       "/tmp/generated-night-drive.mp3",
     ]);

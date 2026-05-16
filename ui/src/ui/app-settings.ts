@@ -198,7 +198,45 @@ function applySessionSelection(host: SettingsHost, session: string) {
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
+declare global {
+  interface Window {
+    __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+      gatewayUrl?: string | null;
+      token?: string | null;
+      password?: string | null;
+    };
+  }
+}
+
+function applyNativeControlAuth(host: SettingsHost) {
+  const nativeAuth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+  if (!nativeAuth) {
+    return;
+  }
+  try {
+    delete window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+  } catch {
+    window.__OPENCLAW_NATIVE_CONTROL_AUTH__ = undefined;
+  }
+
+  const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
+  const token = normalizeOptionalString(nativeAuth.token);
+  const password = normalizeOptionalString(nativeAuth.password);
+  const nextSettings = {
+    ...host.settings,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+    ...(token ? { token } : {}),
+  };
+  if (gatewayUrl || (token && token !== host.settings.token)) {
+    applySettings(host, nextSettings);
+  }
+  if (password && password !== host.password) {
+    host.password = password;
+  }
+}
+
 export function applySettingsFromUrl(host: SettingsHost) {
+  applyNativeControlAuth(host);
   if (!window.location.search && !window.location.hash) {
     return;
   }

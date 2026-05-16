@@ -81,6 +81,7 @@ const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
 const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
+const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
 const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
 
 const MusicGenerateToolSchema = Type.Object({
@@ -251,7 +252,7 @@ function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined): {
   message?: string;
 } {
   if (timeoutMs === undefined) {
-    return {};
+    return { timeoutMs: DEFAULT_MUSIC_GENERATION_TIMEOUT_MS };
   }
   if (timeoutMs >= MIN_MUSIC_GENERATION_TIMEOUT_MS) {
     return { timeoutMs };

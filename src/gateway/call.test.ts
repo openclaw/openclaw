@@ -862,8 +862,7 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
-  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("allows ws:// private remote URLs for trusted LAN and Tailnet configs", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
         mode: "remote",
