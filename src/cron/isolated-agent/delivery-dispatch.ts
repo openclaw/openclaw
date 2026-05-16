@@ -792,6 +792,26 @@ export async function dispatchCronDelivery(
     });
   };
 
+  const buildNormalizedDirectDeliveryPayloads = (): ReplyPayload[] => {
+    const rawPayloads =
+      deliveryPayloads.length > 0
+        ? deliveryPayloads
+        : synthesizedText
+          ? [{ text: synthesizedText }]
+          : [];
+    return rawPayloads
+      .map((p) => {
+        if (!p.text) {
+          return p;
+        }
+        const normalized = normalizeSilentReplyText(p.text);
+        return Object.assign({}, p, {
+          text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+        });
+      })
+      .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+  };
+
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
     options?: { retryTransient?: boolean },
@@ -809,23 +829,7 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const rawPayloads =
-        deliveryPayloads.length > 0
-          ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [];
-      const normalizedPayloads = rawPayloads
-        .map((p) => {
-          if (!p.text) {
-            return p;
-          }
-          const normalized = normalizeSilentReplyText(p.text);
-          return Object.assign({}, p, {
-            text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          });
-        })
-        .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      const normalizedPayloads = buildNormalizedDirectDeliveryPayloads();
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
@@ -1232,10 +1236,17 @@ export async function dispatchCronDelivery(
       };
     }
 
-    // Finalize descendant/subagent output first for text-only cron runs, then
-    // send through the real outbound adapter so delivered=true always reflects
-    // an actual channel send instead of internal announce routing.
-    const finalizedDescendantResult = await finalizeDescendantOutputBeforeDelivery();
+    const useDirectDelivery =
+      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+    const shouldFinalizeDescendantOutput =
+      !useDirectDelivery ||
+      params.emptyOutputHadFreshDescendants === true ||
+      buildNormalizedDirectDeliveryPayloads().length === 0;
+    // Finalize descendant/subagent output for text-only cron runs and for
+    // empty direct-delivery results, but preserve non-empty direct payloads.
+    const finalizedDescendantResult = shouldFinalizeDescendantOutput
+      ? await finalizeDescendantOutputBeforeDelivery()
+      : null;
     if (finalizedDescendantResult) {
       return {
         result: finalizedDescendantResult,
@@ -1247,8 +1258,6 @@ export async function dispatchCronDelivery(
         deliveryPayloads,
       };
     }
-    const useDirectDelivery =
-      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
       const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
       if (directResult) {

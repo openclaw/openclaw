@@ -593,6 +593,71 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("preserves non-empty structured direct delivery while descendants are active", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(
+      "descendant text should not replace the structured parent payload",
+    );
+
+    const params = makeBaseParams({
+      synthesizedText: "Structured parent report",
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        text: "Structured parent report",
+        mediaUrl: "https://example.com/report.png",
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          text: "Structured parent report",
+          mediaUrl: "https://example.com/report.png",
+        },
+      ],
+    });
+  });
+
+  it("preserves non-empty threaded direct delivery while descendants are active", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(
+      "descendant text should not replace the threaded parent payload",
+    );
+
+    const params = makeBaseParams({
+      synthesizedText: "Threaded parent report",
+      runStartedAt: 1_000,
+    });
+    params.resolvedDelivery = makeResolvedDelivery({
+      mode: "implicit",
+      threadId: 42,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      threadId: 42,
+      payloads: [{ text: "Threaded parent report" }],
+    });
+  });
+
   it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
     const params = makeBaseParams({
       synthesizedText: "Morning briefing complete.",
