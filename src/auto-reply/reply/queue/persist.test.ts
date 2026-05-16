@@ -10,7 +10,7 @@ import {
   resolveFollowupQueueStatePath,
   restoreFollowupQueues,
 } from "./persist.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
+import { FOLLOWUP_QUEUES } from "./state.js";
 import { getFollowupQueue } from "./state.js";
 import type { QueueSettings } from "./types.js";
 import type { FollowupRun } from "./types.js";
@@ -67,12 +67,12 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-persist-test-"));
     originalEnv = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    clearFollowupQueue(TEST_KEY);
+    FOLLOWUP_QUEUES.clear();
     clearRestoredPendingDrainKeysForTest();
   });
 
   afterEach(() => {
-    clearFollowupQueue(TEST_KEY);
+    FOLLOWUP_QUEUES.clear();
     if (originalEnv === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -126,7 +126,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     queue.items.push(run);
     persistFollowupQueues();
 
-    clearFollowupQueue(TEST_KEY);
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
     restoreFollowupQueues();
     const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
     expect(restored?.items[0].abortSignal).toBeUndefined();
