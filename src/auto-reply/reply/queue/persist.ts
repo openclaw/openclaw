@@ -5,8 +5,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import type { FollowupQueueState } from "./state.js";
-import type { FollowupRun, QueueDropPolicy, QueueMode } from "./types.js";
+import type { FollowupQueueState, FollowupRun, QueueDropPolicy, QueueMode } from "./types.js";
 
 const FOLLOWUP_QUEUE_STATE_FILENAME = "live-chat-followup-queues.json";
 

@@ -20,6 +20,20 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 
 export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 
+export type FollowupQueueState = {
+  items: FollowupRun[];
+  draining: boolean;
+  lastEnqueuedAt: number;
+  mode: QueueMode;
+  debounceMs: number;
+  cap: number;
+  dropPolicy: QueueDropPolicy;
+  droppedCount: number;
+  summaryLines: string[];
+  summarySources: FollowupRun[];
+  lastRun?: FollowupRun["run"];
+};
+
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
 export type QueueSettings = {
