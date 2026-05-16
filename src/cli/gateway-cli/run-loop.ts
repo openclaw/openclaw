@@ -10,6 +10,7 @@ import {
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { appendGatewayRestartAuditLine } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -543,11 +544,24 @@ export async function runGatewayLoop(params: {
     void (async () => {
       const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      appendGatewayRestartAuditLine({
+        phase: "signal-received",
+        signal: "SIGTERM",
+        audit: restartIntent?.audit,
+        oldPid: process.pid,
+        extra: { action: restartIntent ? "restart" : "stop" },
+      });
       request(restartIntent ? "restart" : "stop", "SIGTERM", undefined, restartIntent ?? undefined);
     })();
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");
+    appendGatewayRestartAuditLine({
+      phase: "signal-received",
+      signal: "SIGINT",
+      oldPid: process.pid,
+      extra: { action: "stop" },
+    });
     request("stop", "SIGINT");
   };
   const onSigusr1 = () => {
@@ -562,6 +576,13 @@ export async function runGatewayLoop(params: {
         scheduleGatewaySigusr1Restart,
       } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      appendGatewayRestartAuditLine({
+        phase: "signal-received",
+        signal: "SIGUSR1",
+        audit: restartIntent?.audit,
+        oldPid: process.pid,
+        extra: { action: "restart" },
+      });
       if (restartIntent) {
         request("restart", "SIGUSR1", "gateway.restart", restartIntent);
         return;
@@ -618,8 +639,56 @@ export async function runGatewayLoop(params: {
     let isFirstStart = true;
     for (;;) {
       await onIteration();
+      // Always attempt to read the restart-sentinel BEFORE params.start().
+      // The supervisor-restart case (launchctl/systemd kickstart -k) is the
+      // common path X for /restart: a brand-new Node process is launched
+      // by the supervisor, so isFirstStart is true on iteration 1 — which
+      // is exactly when the predecessor's sentinel exists and must be read
+      // to attribute the post-boot `restart-completed` audit line. Cold
+      // boot with no predecessor is handled naturally: readRestartSentinel
+      // returns null when the file is absent, and the .catch falls null
+      // on read errors. loadRestartSentinelStartupTask reads + removes the
+      // sentinel inside params.start(), so this read is strictly before
+      // the cleanup. readRestartSentinel is lazy-loaded through the
+      // existing gateway lifecycle runtime boundary so the gateway run
+      // chunk doesn't statically pull restart-sentinel into the cold path.
+      const { readRestartSentinel } = await loadGatewayLifecycleRuntimeModule();
+      const preStartSentinelAudit = await readRestartSentinel()
+        .catch(() => null)
+        .then((s) => s?.payload.audit ?? null);
+      // Defensive pid-collision guard: ignore an oldPid that matches
+      // process.pid. A self-pid match would indicate a stale-from-this-
+      // process sentinel (only reachable via a same-process replay, which
+      // is nonsense), so suppress the field rather than emit a misleading
+      // `old_pid=new_pid` row.
+      const validOldPid =
+        preStartSentinelAudit?.oldPid && preStartSentinelAudit.oldPid !== process.pid
+          ? preStartSentinelAudit.oldPid
+          : undefined;
       try {
         server = await params.start({ startupStartedAt });
+        // Boot-time completion line. Closes the old_pid -> new_pid linkage
+        // in gateway-restart.log. When the predecessor wrote a sentinel
+        // with audit context (e.g. /restart slash command), we inherit
+        // source/sender_id/session_key/old_pid from it. For supervisor
+        // restarts that did not write a sentinel (CLI `openclaw restart`,
+        // external SIGTERM), audit stays undefined and the line falls back
+        // to source=external, which is honest signaling.
+        appendGatewayRestartAuditLine({
+          phase: "completed",
+          signal: "boot",
+          audit: preStartSentinelAudit
+            ? {
+                source: preStartSentinelAudit.source,
+                senderId: preStartSentinelAudit.senderId,
+                sessionKey: preStartSentinelAudit.sessionKey,
+                actionLabel: preStartSentinelAudit.actionLabel,
+              }
+            : undefined,
+          oldPid: validOldPid,
+          newPid: process.pid,
+          extra: { first_start: isFirstStart ? "true" : "false" },
+        });
         isFirstStart = false;
       } catch (err) {
         // On initial startup, let the error propagate so the outer handler

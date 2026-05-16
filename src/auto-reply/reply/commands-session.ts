@@ -53,6 +53,12 @@ function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSenti
     return null;
   }
   const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const senderId = normalizeOptionalString(params.command.senderId);
+  // Sender attribution carried across the process boundary so the post-boot
+  // `restart-completed` audit line in gateway-restart.log can name the
+  // /restart trigger surface + predecessor pid instead of `source=external`.
+  // Field set is intentionally a small subset of `triggerAudit` (no full
+  // delivery context / no wsConnId) to bound sentinel payload growth.
   const payload: RestartSentinelPayload = {
     kind: "restart",
     status: "ok",
@@ -66,6 +72,13 @@ function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSenti
     stats: {
       mode: "gateway.restart",
       reason: "/restart",
+    },
+    audit: {
+      source: "slash-command",
+      actionLabel: "/restart",
+      sessionKey,
+      oldPid: process.pid,
+      ...(senderId ? { senderId } : {}),
     },
   };
   return payload;
@@ -694,10 +707,26 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
+  // Capture sender attribution so post-restart audit lines (gateway-restart.log)
+  // can correlate the trigger surface back to the chat command + sender, not
+  // just `source=external`.
+  const triggerAudit = {
+    source: "slash-command",
+    actionLabel: "/restart",
+    senderId: normalizeOptionalString(params.command.senderId),
+    sessionKey: normalizeOptionalString(params.sessionKey),
+    // RestartAuditContext.deliveryContext is a coarse channel-name string
+    // (e.g. "telegram"), not the structured {channel, to, accountId}
+    // object on RestartSentinelPayload.deliveryContext. Pin to the channel
+    // sub-field so the audit-log line gets `delivery_context=telegram`
+    // instead of a stringified object.
+    deliveryContext: sentinelPayload?.deliveryContext?.channel,
+  };
   if (hasSigusr1Listener) {
     let sentinelPath: string | null = null;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
+      triggerAudit,
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
@@ -730,7 +759,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  const restartMethod = triggerOpenClawRestart();
+  const restartMethod = triggerOpenClawRestart({ audit: triggerAudit });
   if (!restartMethod.ok) {
     await removeRestartSentinelFile(sentinelPath);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";

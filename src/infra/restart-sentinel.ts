@@ -40,6 +40,22 @@ export type RestartSentinelContinuation =
       message: string;
     };
 
+/**
+ * Sender attribution captured at restart-dispatch time so the post-boot
+ * `restart-completed` audit line in `gateway-restart.log` can name the
+ * trigger surface, sender, and predecessor pid instead of falling back to
+ * `source=external`. All fields are optional and additive; old sentinel
+ * files without this struct still parse and produce the historical
+ * `source=external` completion line.
+ */
+export type RestartSentinelAudit = {
+  source?: string;
+  senderId?: string;
+  sessionKey?: string;
+  actionLabel?: string;
+  oldPid?: number;
+};
+
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
@@ -57,6 +73,11 @@ export type RestartSentinelPayload = {
   continuation?: RestartSentinelContinuation | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
+  /**
+   * Sender attribution for the post-boot `restart-completed` audit line.
+   * Optional and additive. See `RestartSentinelAudit` for field semantics.
+   */
+  audit?: RestartSentinelAudit;
 };
 
 export type RestartSentinel = {

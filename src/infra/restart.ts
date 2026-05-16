@@ -8,6 +8,10 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import {
+  resolveGatewayRestartLogPath,
+  shellEscapeRestartLogValue,
+} from "../daemon/restart-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
@@ -87,18 +91,85 @@ export type RestartAuditInfo = {
   changedPaths?: string[];
 };
 
+/**
+ * Sender-supplied audit context attached to a restart intent or to a
+ * supervisor-mediated restart attempt. Captured so the receiver-side signal
+ * handler and post-boot completion line can attribute the restart back to
+ * its trigger surface (slash-command, WS method, CLI, etc.) instead of
+ * recording every external SIGTERM as `source=external`.
+ *
+ * All fields are optional and additive. Existing intent files / call sites
+ * that pre-date this struct keep working with `source` defaulting to
+ * `external` at read time.
+ */
+export type RestartAuditContext = {
+  source?: string;
+  senderId?: string;
+  sessionKey?: string;
+  deliveryContext?: string;
+  wsConnId?: string;
+  actionLabel?: string;
+};
+
 type GatewayRestartIntentPayload = {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
   force?: boolean;
   waitMs?: number;
+  audit?: RestartAuditContext;
 };
 
 export type GatewayRestartIntent = {
   force?: boolean;
   waitMs?: number;
+  audit?: RestartAuditContext;
 };
+
+function normalizeAuditString(value: unknown, maxLen = 256): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > maxLen ? trimmed.slice(0, maxLen) : trimmed;
+}
+
+function sanitizeRestartAuditContext(
+  audit: RestartAuditContext | undefined,
+): RestartAuditContext | undefined {
+  if (!audit) {
+    return undefined;
+  }
+  const result: RestartAuditContext = {};
+  const source = normalizeAuditString(audit.source, 64);
+  if (source) {
+    result.source = source;
+  }
+  const senderId = normalizeAuditString(audit.senderId, 128);
+  if (senderId) {
+    result.senderId = senderId;
+  }
+  const sessionKey = normalizeAuditString(audit.sessionKey, 256);
+  if (sessionKey) {
+    result.sessionKey = sessionKey;
+  }
+  const deliveryContext = normalizeAuditString(audit.deliveryContext, 64);
+  if (deliveryContext) {
+    result.deliveryContext = deliveryContext;
+  }
+  const wsConnId = normalizeAuditString(audit.wsConnId, 128);
+  if (wsConnId) {
+    result.wsConnId = wsConnId;
+  }
+  const actionLabel = normalizeAuditString(audit.actionLabel, 200);
+  if (actionLabel) {
+    result.actionLabel = actionLabel;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
 
 function resolveGatewayRestartIntentPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), GATEWAY_RESTART_INTENT_FILENAME);
@@ -133,6 +204,7 @@ export function writeGatewayRestartIntentSync(opts: {
   const env = opts.env ?? process.env;
   try {
     const intentPath = resolveGatewayRestartIntentPath(env);
+    const sanitizedAudit = sanitizeRestartAuditContext(opts.intent?.audit);
     const payload: GatewayRestartIntentPayload = {
       kind: "gateway-restart",
       pid: targetPid,
@@ -143,6 +215,7 @@ export function writeGatewayRestartIntentSync(opts: {
       opts.intent.waitMs >= 0
         ? { waitMs: Math.floor(opts.intent.waitMs) }
         : {}),
+      ...(sanitizedAudit ? { audit: sanitizedAudit } : {}),
     };
     replaceFileAtomicSync({
       filePath: intentPath,
@@ -174,12 +247,17 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
       (parsed.waitMs === undefined ||
         (typeof parsed.waitMs === "number" && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0))
     ) {
+      const sanitizedAudit =
+        parsed.audit && typeof parsed.audit === "object"
+          ? sanitizeRestartAuditContext(parsed.audit)
+          : undefined;
       return {
         kind: "gateway-restart",
         pid: parsed.pid,
         createdAt: parsed.createdAt,
         ...(parsed.force ? { force: true } : {}),
         ...(typeof parsed.waitMs === "number" ? { waitMs: Math.floor(parsed.waitMs) } : {}),
+        ...(sanitizedAudit ? { audit: sanitizedAudit } : {}),
       };
     }
   } catch {
@@ -219,6 +297,7 @@ export function consumeGatewayRestartIntentPayloadSync(
   return {
     ...(payload.force ? { force: true } : {}),
     ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
+    ...(payload.audit ? { audit: payload.audit } : {}),
   };
 }
 
@@ -552,6 +631,83 @@ function formatSpawnDetail(result: {
   return "unknown error";
 }
 
+/**
+ * Phase tag for `appendGatewayRestartAuditLine`. Disjoint from the existing
+ * shell-wrapper vocabulary in `restart-logs.ts`
+ * (`openclaw restart {attempt|done|fallback|finished}`) so downstream parsers
+ * that grep on the legacy phrasing keep working unchanged.
+ *
+ * - `dispatch`         — sender-side line; trigger surface decided to restart
+ * - `signal-received`  — receiver-side line; gateway got the SIGTERM/SIGUSR1/SIGINT
+ * - `completed`        — boot-time line; new process is up, links new_pid
+ */
+type GatewayRestartLogPhase = "dispatch" | "signal-received" | "completed";
+
+/**
+ * Append one structured audit line to `gateway-restart.log`. Best-effort:
+ * any I/O error is logged at warn level and otherwise swallowed so a log-write
+ * failure never blocks restart logic. The line vocabulary is intentionally
+ * disjoint from the existing shell-wrapper vocabulary so legacy parsers keep
+ * working.
+ */
+export function appendGatewayRestartAuditLine(opts: {
+  env?: NodeJS.ProcessEnv;
+  phase: GatewayRestartLogPhase;
+  signal?: "SIGTERM" | "SIGUSR1" | "SIGINT" | "boot";
+  audit?: RestartAuditContext;
+  oldPid?: number;
+  newPid?: number;
+  method?: string;
+  extra?: Record<string, string | number | boolean | undefined>;
+}): void {
+  try {
+    const env = opts.env ?? process.env;
+    const logPath = resolveGatewayRestartLogPath(env);
+    const ts = new Date().toISOString();
+    const fields: string[] = [`[${ts}]`, `gateway restart-${opts.phase}`];
+    if (opts.signal) {
+      fields.push(`signal=${opts.signal}`);
+    }
+    fields.push(`source=${shellEscapeRestartLogValue(opts.audit?.source ?? "external")}`);
+    if (opts.audit?.senderId) {
+      fields.push(`sender_id=${shellEscapeRestartLogValue(opts.audit.senderId)}`);
+    }
+    if (opts.audit?.sessionKey) {
+      fields.push(`session_key=${shellEscapeRestartLogValue(opts.audit.sessionKey)}`);
+    }
+    if (opts.audit?.deliveryContext) {
+      fields.push(`delivery_context=${shellEscapeRestartLogValue(opts.audit.deliveryContext)}`);
+    }
+    if (opts.audit?.wsConnId) {
+      fields.push(`ws_conn_id=${shellEscapeRestartLogValue(opts.audit.wsConnId)}`);
+    }
+    if (opts.audit?.actionLabel) {
+      fields.push(`action=${shellEscapeRestartLogValue(opts.audit.actionLabel)}`);
+    }
+    if (opts.method) {
+      fields.push(`method=${shellEscapeRestartLogValue(opts.method)}`);
+    }
+    if (typeof opts.oldPid === "number" && Number.isFinite(opts.oldPid) && opts.oldPid > 0) {
+      fields.push(`old_pid=${opts.oldPid}`);
+    }
+    if (typeof opts.newPid === "number" && Number.isFinite(opts.newPid) && opts.newPid > 0) {
+      fields.push(`new_pid=${opts.newPid}`);
+    }
+    if (opts.extra) {
+      for (const [key, value] of Object.entries(opts.extra)) {
+        if (value === undefined) {
+          continue;
+        }
+        fields.push(`${key}=${shellEscapeRestartLogValue(String(value))}`);
+      }
+    }
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, `${fields.join(" ")}\n`, { encoding: "utf8", mode: 0o644 });
+  } catch (err) {
+    restartLog.warn(`failed to append gateway restart audit line: ${String(err)}`);
+  }
+}
+
 function normalizeSystemdUnit(raw?: string, profile?: string): string {
   const unit = raw?.trim();
   if (!unit) {
@@ -560,12 +716,15 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
-export function triggerOpenClawRestart(): RestartAttempt {
+export function triggerOpenClawRestart(opts?: { audit?: RestartAuditContext }): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
 
   cleanStaleGatewayProcessesSync();
+
+  const sanitizedAudit = sanitizeRestartAuditContext(opts?.audit);
+  const oldPid = process.pid;
 
   const tried: string[] = [];
   if (process.platform === "linux") {
@@ -573,6 +732,13 @@ export function triggerOpenClawRestart(): RestartAttempt {
       process.env.OPENCLAW_SYSTEMD_UNIT,
       process.env.OPENCLAW_PROFILE,
     );
+    appendGatewayRestartAuditLine({
+      phase: "dispatch",
+      audit: sanitizedAudit,
+      oldPid,
+      method: "systemctl-user-restart",
+      extra: { unit },
+    });
     const userArgs = ["--user", "restart", unit];
     tried.push(`systemctl ${userArgs.join(" ")}`);
     const userRestart = spawnSync("systemctl", userArgs, {
@@ -599,6 +765,12 @@ export function triggerOpenClawRestart(): RestartAttempt {
   }
 
   if (process.platform === "win32") {
+    appendGatewayRestartAuditLine({
+      phase: "dispatch",
+      audit: sanitizedAudit,
+      oldPid,
+      method: "windows-task-handoff",
+    });
     return relaunchGatewayScheduledTask(process.env);
   }
 
@@ -616,6 +788,13 @@ export function triggerOpenClawRestart(): RestartAttempt {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
+  appendGatewayRestartAuditLine({
+    phase: "dispatch",
+    audit: sanitizedAudit,
+    oldPid,
+    method: "launchctl-kickstart",
+    extra: { target },
+  });
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);
   const res = spawnSync("launchctl", args, {
@@ -685,10 +864,23 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  triggerAudit?: RestartAuditContext;
   emitHooks?: RestartEmitHooks;
   skipDeferral?: boolean;
   skipCooldown?: boolean;
 }): ScheduledRestart {
+  // Best-effort audit-log dispatch line for the SIGUSR1 path. Mirrors the
+  // sender-side line that `triggerOpenClawRestart` writes for supervisor-
+  // mediated restarts so receiver-side correlation works for both paths.
+  if (opts?.triggerAudit) {
+    appendGatewayRestartAuditLine({
+      phase: "dispatch",
+      audit: opts.triggerAudit,
+      oldPid: process.pid,
+      method: "sigusr1-in-process",
+      extra: opts?.reason ? { reason: opts.reason } : undefined,
+    });
+  }
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
       ? Math.floor(opts.delayMs)
