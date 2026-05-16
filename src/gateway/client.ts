@@ -13,7 +13,7 @@ import {
 } from "../infra/device-identity.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  withManagedProxyGatewayLoopbackRouting,
+  registerManagedProxyGatewayLoopbackBypass,
 } from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -38,6 +38,7 @@ import {
   formatConnectErrorMessage,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
+  readPairingConnectErrorDetails,
   type ConnectErrorRecoveryAdvice,
 } from "./protocol/connect-error-details.js";
 import {
@@ -73,6 +74,7 @@ type SelectedConnectAuth = {
   authBootstrapToken?: string;
   authDeviceToken?: string;
   authPassword?: string;
+  authApprovalRuntimeToken?: string;
   signatureToken?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
@@ -129,6 +131,7 @@ export type GatewayClientOptions = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
@@ -220,8 +223,11 @@ export class GatewayClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private approvalRuntimeTokenCompatibilityDisabled = false;
+  private approvalRuntimeTokenRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
+  private pendingConnectErrorDetails: unknown = null;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -311,10 +317,13 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const ws = withManagedProxyGatewayLoopbackRouting(
-      url,
-      () => new WebSocket(url, wsOptions as ClientOptions),
-    );
+    const unregisterGatewayLoopbackBypass = registerManagedProxyGatewayLoopbackBypass(url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url, wsOptions as ClientOptions);
+    } finally {
+      unregisterGatewayLoopbackBypass?.();
+    }
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
@@ -337,7 +346,9 @@ export class GatewayClient {
     ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
+      const connectErrorDetails = this.pendingConnectErrorDetails;
       this.pendingConnectErrorDetailCode = null;
+      this.pendingConnectErrorDetails = null;
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -369,7 +380,12 @@ export class GatewayClient {
         }
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
-      if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
+      if (
+        this.shouldPauseReconnectAfterAuthFailure({
+          detailCode: connectErrorDetailCode,
+          details: connectErrorDetails,
+        })
+      ) {
         this.opts.onReconnectPaused?.({
           code,
           reason: reasonText,
@@ -428,6 +444,7 @@ export class GatewayClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingStartupReconnectDelayMs = null;
     this.pendingConnectErrorDetailCode = null;
+    this.pendingConnectErrorDetails = null;
     this.clearReconnectTimer();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
@@ -496,6 +513,7 @@ export class GatewayClient {
       authBootstrapToken,
       authDeviceToken,
       authPassword,
+      authApprovalRuntimeToken,
       signatureToken,
       resolvedDeviceToken,
       storedToken,
@@ -506,12 +524,17 @@ export class GatewayClient {
       this.pendingDeviceTokenRetry = false;
     }
     const auth =
-      authToken || authBootstrapToken || authPassword || resolvedDeviceToken
+      authToken ||
+      authBootstrapToken ||
+      authPassword ||
+      resolvedDeviceToken ||
+      authApprovalRuntimeToken
         ? {
             token: authToken,
             bootstrapToken: authBootstrapToken,
             deviceToken: authDeviceToken ?? resolvedDeviceToken,
             password: authPassword,
+            approvalRuntimeToken: authApprovalRuntimeToken,
           }
         : undefined;
     const signedAtMs = Date.now();
@@ -576,6 +599,7 @@ export class GatewayClient {
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
+        this.pendingConnectErrorDetails = null;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           storeDeviceAuthToken({
@@ -598,6 +622,8 @@ export class GatewayClient {
       .catch((err) => {
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
+        this.pendingConnectErrorDetails =
+          err instanceof GatewayClientRequestError ? err.details : null;
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
           error: err,
           explicitGatewayToken: normalizeOptionalString(this.opts.token),
@@ -631,6 +657,19 @@ export class GatewayClient {
           this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
           logDebug(`gateway connect failed: ${String(err)}`);
           this.ws?.close(1013, "gateway starting");
+          return;
+        }
+        if (
+          this.shouldRetryWithoutApprovalRuntimeToken({
+            error: err,
+            authApprovalRuntimeToken,
+          })
+        ) {
+          this.approvalRuntimeTokenCompatibilityDisabled = true;
+          this.approvalRuntimeTokenRetryBudgetUsed = true;
+          this.backoffMs = Math.min(this.backoffMs, 250);
+          logDebug("gateway rejected approval runtime auth field; retrying without it");
+          this.ws?.close(1008, "connect retry");
           return;
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
@@ -682,8 +721,20 @@ export class GatewayClient {
     };
   }
 
-  private shouldPauseReconnectAfterAuthFailure(detailCode: string | null): boolean {
+  private shouldPauseReconnectAfterAuthFailure(params: {
+    detailCode: string | null;
+    details?: unknown;
+  }): boolean {
+    const { detailCode, details } = params;
     if (!detailCode) {
+      return false;
+    }
+    const pairingDetails = readPairingConnectErrorDetails(details);
+    if (
+      detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+      (pairingDetails?.pauseReconnect === false ||
+        pairingDetails?.recommendedNextStep === "wait_then_retry")
+    ) {
       return false;
     }
     if (
@@ -700,18 +751,10 @@ export class GatewayClient {
     ) {
       return true;
     }
-    if (detailCode !== ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
-      return false;
+    if (detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+      return !this.pendingDeviceTokenRetry;
     }
-    if (this.pendingDeviceTokenRetry) {
-      return false;
-    }
-    // If the endpoint is not trusted for retry, mismatch is terminal until operator action.
-    if (!this.isTrustedDeviceRetryEndpoint()) {
-      return true;
-    }
-    // Pause mismatch reconnect loops once the one-shot device-token retry is consumed.
-    return this.deviceTokenRetryBudgetUsed;
+    return false;
   }
 
   private shouldRetryWithStoredDeviceToken(params: {
@@ -746,6 +789,26 @@ export class GatewayClient {
     );
   }
 
+  private shouldRetryWithoutApprovalRuntimeToken(params: {
+    error: unknown;
+    authApprovalRuntimeToken?: string;
+  }): boolean {
+    if (this.approvalRuntimeTokenRetryBudgetUsed) {
+      return false;
+    }
+    if (!params.authApprovalRuntimeToken) {
+      return false;
+    }
+    if (!(params.error instanceof GatewayClientRequestError)) {
+      return false;
+    }
+    if (params.error.gatewayCode !== "INVALID_REQUEST") {
+      return false;
+    }
+    const message = normalizeLowercaseStringOrEmpty(params.error.message);
+    return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
+  }
+
   private isTrustedDeviceRetryEndpoint(): boolean {
     const rawUrl = this.opts.url ?? "ws://127.0.0.1:18789";
     try {
@@ -770,6 +833,9 @@ export class GatewayClient {
     const explicitBootstrapToken = normalizeOptionalString(this.opts.bootstrapToken);
     const explicitDeviceToken = normalizeOptionalString(this.opts.deviceToken);
     const authPassword = normalizeOptionalString(this.opts.password);
+    const authApprovalRuntimeToken = this.approvalRuntimeTokenCompatibilityDisabled
+      ? undefined
+      : normalizeOptionalString(this.opts.approvalRuntimeToken);
     const storedAuth = this.loadStoredDeviceAuth(role);
     const storedToken = storedAuth?.token ?? null;
     const storedScopes = storedAuth?.scopes;
@@ -802,6 +868,7 @@ export class GatewayClient {
       authBootstrapToken,
       authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
       authPassword,
+      authApprovalRuntimeToken,
       signatureToken: authToken ?? authBootstrapToken ?? undefined,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,

@@ -10,6 +10,7 @@ import {
   isEmbeddedPiRunHandleActive,
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedPiMessageWithOutcomeAsync,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
@@ -72,16 +73,46 @@ describe("pi-embedded runner run registry", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-steer", {
       ...createRunHandle(),
+      sourceReplyDeliveryMode: "message_tool_only",
       queueMessage,
     });
 
     expect(
       queueEmbeddedPiMessageWithOutcome("session-steer", "continue", {
-        steeringMode: "one-at-a-time",
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
       }).queued,
     ).toBe(true);
 
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "one-at-a-time" });
+    expect(queueMessage).toHaveBeenCalledWith("continue", {
+      steeringMode: "all",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("rejects message-tool-only steering for active runs created without that mode", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-automatic-source-reply", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = queueEmbeddedPiMessageWithOutcome(
+      "session-automatic-source-reply",
+      "continue",
+      {
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-automatic-source-reply",
+      reason: "source_reply_delivery_mode_mismatch",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("defaults active embedded steering to all pending messages", () => {
@@ -128,6 +159,28 @@ describe("pi-embedded runner run registry", () => {
       reason: "compacting",
       gatewayHealth: "live",
     });
+  });
+
+  it("returns runtime rejection details when async queue delivery fails", async () => {
+    setActiveEmbeddedRun("session-rejected", {
+      ...createRunHandle(),
+      queueMessage: async () => {
+        throw new Error("cannot steer a compact turn");
+      },
+    });
+
+    const outcome = await queueEmbeddedPiMessageWithOutcomeAsync("session-rejected", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-rejected",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+      errorMessage: "cannot steer a compact turn",
+    });
+    expect(formatEmbeddedPiQueueFailureSummary(outcome)).toBe(
+      "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
+    );
   });
 
   it("force-clears an aborted run that does not drain", async () => {

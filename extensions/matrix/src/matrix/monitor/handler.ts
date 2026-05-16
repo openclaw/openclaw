@@ -5,11 +5,15 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-message";
 import {
+  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
+  type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
+  normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
 } from "openclaw/plugin-sdk/channel-streaming";
 import {
@@ -18,6 +22,9 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -395,6 +402,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     core,
     cfg,
     accountId,
+    accountConfig,
     runtime,
     logger,
     logVerboseMessage,
@@ -690,6 +698,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await commitInboundEventIfClaimed();
           return undefined;
         }
+        const botLoopProtection: ChannelBotLoopProtectionFacts | undefined =
+          isConfiguredBotSender && senderId !== selfUserId
+            ? {
+                scopeId: accountId,
+                conversationId: roomId,
+                senderId,
+                receiverId: selfUserId,
+                config: mergePairLoopGuardConfig(
+                  accountConfig?.botLoopProtection,
+                  roomConfig?.botLoopProtection,
+                ),
+                defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+                defaultEnabled: true,
+                nowMs: eventTs ?? undefined,
+              }
+            : undefined;
 
         if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
           logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
@@ -1114,7 +1138,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 messageId,
               })
             : undefined;
-        const inboundHistory = preparedTrigger?.history;
+        const inboundHistory = preparedTrigger
+          ? buildInboundHistoryFromEntries({
+              entries: preparedTrigger.history,
+              limit: historyLimit,
+            })
+          : undefined;
         const triggerSnapshot = preparedTrigger;
 
         return {
@@ -1138,6 +1167,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId,
           thread,
+          botLoopProtection,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1192,6 +1222,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId,
         thread,
+        botLoopProtection,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1472,7 +1503,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       let currentDraftReplyToId = draftReplyToId;
       let previewToolProgressSuppressed = false;
-      let previewToolProgressLines: string[] = [];
+      let previewToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
       const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
       const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
@@ -1498,7 +1529,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         onStart: renderProgressDraft,
       });
 
-      const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+      const pushPreviewToolProgress = async (
+        line?: string | ChannelProgressDraftLine,
+        options?: { toolName?: string },
+      ) => {
         if (!draftStream) {
           return;
         }
@@ -1508,18 +1542,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ) {
           return;
         }
-        const normalized = line?.replace(/\s+/g, " ").trim();
+        const normalized = normalizeChannelProgressDraftLineIdentity(line);
+        const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
         if (!progressDraftStreaming) {
           if (!shouldStreamPreviewToolProgress || previewToolProgressSuppressed || !normalized) {
             return;
           }
-          const previous = previewToolProgressLines.at(-1);
-          if (previous === normalized) {
+          const nextLines = mergeChannelProgressDraftLine(previewToolProgressLines, progressLine, {
+            maxLines: resolveChannelProgressDraftMaxLines(progressConfigEntry),
+          });
+          if (nextLines === previewToolProgressLines) {
             return;
           }
-          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-            -resolveChannelProgressDraftMaxLines(progressConfigEntry),
-          );
+          previewToolProgressLines = nextLines;
           draftStream.update(
             formatChannelProgressDraftText({
               entry: progressConfigEntry,
@@ -1532,12 +1567,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return;
         }
         if (shouldStreamPreviewToolProgress && !previewToolProgressSuppressed && normalized) {
-          const previous = previewToolProgressLines.at(-1);
-          if (previous !== normalized) {
-            previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-              -resolveChannelProgressDraftMaxLines(progressConfigEntry),
-            );
-          }
+          previewToolProgressLines = mergeChannelProgressDraftLine(
+            previewToolProgressLines,
+            progressLine,
+            {
+              maxLines: resolveChannelProgressDraftMaxLines(progressConfigEntry),
+            },
+          );
         }
         const alreadyStarted = progressDraftGate.hasStarted;
         await progressDraftGate.noteWork();
@@ -1589,8 +1625,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           },
           onItemEvent: async (payload) => {
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLineForEntry(progressConfigEntry, {
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "item",
+                itemId: payload.itemId,
                 itemKind: payload.kind,
                 title: payload.title,
                 name: payload.name,
@@ -2013,6 +2050,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             storePath,
             ctxPayload,
             recordInboundSession: core.channel.session.recordInboundSession,
+            botLoopProtection,
             record: {
               updateLastRoute: isDirectMessage
                 ? {
@@ -2133,6 +2171,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       if (!turnResult.dispatched) {
+        if (
+          turnResult.admission.kind === "drop" &&
+          turnResult.admission.reason === "bot-loop-protection"
+        ) {
+          await commitInboundEventIfClaimed();
+        }
         return;
       }
       const { dispatchResult } = turnResult;

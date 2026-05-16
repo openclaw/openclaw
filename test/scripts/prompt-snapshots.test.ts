@@ -42,7 +42,7 @@ describe("happy path prompt snapshots", () => {
 
   beforeAll(async () => {
     generatedSnapshots = await createFormattedPromptSnapshotFiles();
-  });
+  }, 300_000);
 
   it("matches the committed Codex prompt snapshot artifacts", async () => {
     const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));

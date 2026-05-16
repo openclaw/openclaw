@@ -548,6 +548,34 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am before continuing.");
   });
 
+  it("skips bootstrap preload on completed continuation-skip turns", async () => {
+    hoisted.resolveContextInjectionModeMock.mockReturnValue("continuation-skip");
+    hoisted.hasCompletedBootstrapTurnMock.mockResolvedValue(true);
+    hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValue(false);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        trigger: "user",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(hoisted.hasCompletedBootstrapTurnMock).toHaveBeenCalledOnce();
+    expect(hoisted.isWorkspaceBootstrapPendingMock).toHaveBeenCalledOnce();
+    expect(hoisted.resolveBootstrapFilesForRunMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
+  });
+
   it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
     let seenPrompt: string | undefined;
 
@@ -691,6 +719,57 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toBe("Continue the OpenClaw runtime event.");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+  });
+
+  it("submits suppressed room event context as the model prompt", async () => {
+    let seenPrompt: string | undefined;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      trajectory: true,
+      attemptOverrides: {
+        prompt: "[OpenClaw room event]",
+        transcriptPrompt: "",
+        currentTurnKind: "room_event",
+        currentTurnContext: {
+          text: [
+            "[OpenClaw turn]",
+            "kind: room_event",
+            "visible_reply_contract: message_tool_only",
+            "Room context:\n#2001 Alice: lunch at 2?\n#2002 Bob: works",
+            "Current event:\n#2003 Bob: hey claw summarize the plan",
+            "Treat this as observed room activity. Decide whether to act.",
+          ].join("\n\n"),
+        },
+        suppressNextUserMessagePersistence: true,
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toContain("[OpenClaw turn]");
+    expect(seenPrompt).toContain("kind: room_event");
+    expect(seenPrompt).toContain("visible_reply_contract: message_tool_only");
+    expect(seenPrompt).toContain("Current event:\n#2003 Bob: hey claw summarize the plan");
+    expect(seenPrompt?.trim().endsWith("[OpenClaw room event]")).toBe(true);
+    expect(seenPrompt).not.toBe("Continue the OpenClaw runtime event.");
+    expect(result.finalPromptText).toBe(seenPrompt);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    expect(contextCompiled?.data?.prompt).toContain("visible_reply_contract: message_tool_only");
+    expect(contextCompiled?.data?.prompt).toContain("[OpenClaw room event]");
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {

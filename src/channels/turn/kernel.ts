@@ -1,15 +1,28 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+import {
+  clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryWithMedia,
+} from "../../auto-reply/reply/history.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
+import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
+import { toHistoryMediaEntries } from "./media.js";
 export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
 export type { BuildChannelTurnContextParams } from "./context.js";
+export {
+  clearChannelBotPairLoopGuardForTests,
+  listTrackedChannelBotPairsForTests,
+  recordChannelBotPairLoopAndCheckSuppression,
+} from "./bot-loop-protection.js";
+export { createChannelHistoryWindow } from "./history-window.js";
+export type { ChannelHistoryWindow } from "./history-window.js";
+export type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 export {
   deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
@@ -31,6 +44,7 @@ import type {
   ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
+  NormalizedTurnInput,
   PreparedChannelTurn,
   PreflightFacts,
   RunChannelTurnParams,
@@ -54,6 +68,7 @@ export type {
   ChannelTurnAdapter,
   ChannelTurnAdmission,
   ChannelTurnDeliveryAdapter,
+  ChannelTurnDroppedHistoryOptions,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnDispatcherOptions,
   ChannelTurnLogEvent,
@@ -63,7 +78,6 @@ export type {
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   ConversationFacts,
-  InboundMediaFacts,
   MessageFacts,
   NormalizedTurnInput,
   PreflightFacts,
@@ -75,6 +89,7 @@ export type {
   SenderFacts,
   SupplementalContextFacts,
 } from "./types.js";
+export type { InboundMediaFacts } from "./types.js";
 
 const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   kind: "message",
@@ -145,6 +160,69 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
   });
 }
 
+function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
+  return (
+    preflight.message?.senderLabel ??
+    preflight.message?.envelopeFrom ??
+    (typeof input.raw === "object" &&
+    input.raw &&
+    "sender" in input.raw &&
+    typeof (input.raw as { sender?: unknown }).sender === "string"
+      ? (input.raw as { sender: string }).sender
+      : undefined) ??
+    "unknown"
+  );
+}
+
+function resolveDroppedHistoryBody(input: NormalizedTurnInput, preflight: PreflightFacts) {
+  return (
+    preflight.message?.bodyForAgent ??
+    preflight.message?.body ??
+    preflight.message?.rawBody ??
+    input.textForAgent ??
+    input.rawText
+  );
+}
+
+export async function recordDroppedChannelTurnHistory(params: {
+  input: NormalizedTurnInput;
+  preflight: PreflightFacts;
+  admission?: ChannelTurnAdmission;
+}): Promise<void> {
+  const admission = params.admission ?? params.preflight.admission;
+  if (admission?.kind !== "drop") {
+    return;
+  }
+  const history = params.preflight.history;
+  if (!history || history.limit <= 0 || !(history.recordOnDrop || admission.recordHistory)) {
+    return;
+  }
+  const body = resolveDroppedHistoryBody(params.input, params.preflight);
+  const entry =
+    body.trim().length > 0
+      ? {
+          sender: resolveDroppedHistorySender(params.input, params.preflight),
+          body,
+          timestamp: params.input.timestamp,
+          messageId: params.input.id,
+        }
+      : null;
+  const media = params.preflight.media;
+  await recordPendingHistoryEntryWithMedia({
+    historyMap: history.historyMap,
+    historyKey: history.key,
+    limit: history.limit,
+    entry,
+    mediaLimit: history.mediaLimit,
+    messageId: params.input.id,
+    shouldRecord: history.shouldRecord,
+    media:
+      typeof media === "function"
+        ? async () => toHistoryMediaEntries(await media(), { messageId: params.input.id })
+        : toHistoryMediaEntries(media, { messageId: params.input.id }),
+  });
+}
+
 function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
@@ -182,9 +260,59 @@ function resolveObserveOnlyDispatchResult<TDispatchResult>(
   }) as TDispatchResult;
 }
 
+function resolveBotLoopProtectionDrop<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): ChannelTurnResult<TDispatchResult> | undefined {
+  if (!params.botLoopProtection) {
+    return undefined;
+  }
+  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
+  if (!botLoopResult.suppressed) {
+    return undefined;
+  }
+  const admission: ChannelTurnAdmission = { kind: "drop", reason: "bot-loop-protection" };
+  emit({
+    ...params,
+    event: {
+      stage: "authorize",
+      event: "drop",
+      messageId: params.messageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: admission.kind,
+      reason: admission.reason,
+    },
+  });
+  return {
+    admission,
+    dispatched: false,
+    ctxPayload: params.ctxPayload,
+    routeSessionKey: params.routeSessionKey,
+  };
+}
+
+type AssembledChannelTurnWithBotLoopProtection = AssembledChannelTurn & {
+  botLoopProtection: NonNullable<AssembledChannelTurn["botLoopProtection"]>;
+};
+
+type AssembledChannelTurnWithoutBotLoopProtection = Omit<
+  AssembledChannelTurn,
+  "botLoopProtection"
+> & {
+  botLoopProtection?: undefined;
+};
+
+export function dispatchAssembledChannelTurn(
+  params: AssembledChannelTurnWithBotLoopProtection,
+): Promise<ChannelTurnResult>;
+export function dispatchAssembledChannelTurn(
+  params: AssembledChannelTurnWithoutBotLoopProtection,
+): Promise<DispatchedChannelTurnResult>;
+export function dispatchAssembledChannelTurn(
+  params: AssembledChannelTurn,
+): Promise<ChannelTurnResult>;
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
-): Promise<DispatchedChannelTurnResult> {
+): Promise<ChannelTurnResult> {
   const replyPipeline = resolveAssembledReplyPipeline(params);
   return await runPreparedChannelTurnCore(
     {
@@ -197,6 +325,7 @@ export async function dispatchAssembledChannelTurn(
       record: params.record,
       history: params.history,
       admission: params.admission,
+      botLoopProtection: params.botLoopProtection,
       log: params.log,
       messageId: params.messageId,
       runDispatch: async () =>
@@ -258,13 +387,11 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
     log?: (event: ChannelTurnLogEvent) => void;
     messageId?: string;
   },
-): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+): Promise<ChannelTurnResult<TDispatchResult>> {
   if (isPreparedChannelTurn(params)) {
     return await runPreparedChannelTurn(params);
   }
-  return (await dispatchAssembledChannelTurn(
-    params,
-  )) as DispatchedChannelTurnResult<TDispatchResult>;
+  return (await dispatchAssembledChannelTurn(params)) as ChannelTurnResult<TDispatchResult>;
 }
 
 async function runPreparedChannelTurnCore<
@@ -272,8 +399,13 @@ async function runPreparedChannelTurnCore<
 >(
   params: PreparedChannelTurn<TDispatchResult>,
   options: { suppressObserveOnlyDispatch: boolean },
-): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+): Promise<ChannelTurnResult<TDispatchResult>> {
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
+  const botLoopDrop = resolveBotLoopProtectionDrop(params);
+  if (botLoopDrop) {
+    clearPendingHistoryAfterTurn(params.history);
+    return botLoopDrop;
+  }
   emit({
     ...params,
     event: {
@@ -376,11 +508,34 @@ async function runPreparedChannelTurnCore<
   };
 }
 
-export async function runPreparedChannelTurn<
+type PreparedChannelTurnWithBotLoopProtection<TDispatchResult> =
+  PreparedChannelTurn<TDispatchResult> & {
+    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
+  };
+
+type PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
+  PreparedChannelTurn<TDispatchResult>,
+  "botLoopProtection"
+> & {
+  botLoopProtection?: undefined;
+};
+
+export function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+  params: PreparedChannelTurnWithBotLoopProtection<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export function runPreparedChannelTurn<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult>,
+): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
+export function runPreparedChannelTurn<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
+export async function runPreparedChannelTurn<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
 
@@ -439,6 +594,11 @@ export async function runChannelTurn<
     preflightAdmission.kind !== "dispatch" &&
     preflightAdmission.kind !== "observeOnly"
   ) {
+    await recordDroppedChannelTurnHistory({
+      input,
+      preflight,
+      admission: preflightAdmission,
+    });
     emit({
       ...params,
       event: {
@@ -484,10 +644,7 @@ export async function runChannelTurn<
             messageId: input.id,
           },
     );
-    result = {
-      ...dispatchResult,
-      admission,
-    };
+    result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;
   } catch (err) {
     const failedResult: ChannelTurnResult<TDispatchResult> = {
       admission,

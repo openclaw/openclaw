@@ -196,7 +196,8 @@ function expectObjectOrArrayFields(value: unknown, fields: Record<string, unknow
 }
 
 function getLastResolvePluginProvidersParams() {
-  return requireRecord(resolvePluginProvidersMock.mock.calls.at(-1)?.[0], "provider load params");
+  const calls = resolvePluginProvidersMock.mock.calls;
+  return requireRecord(calls[calls.length - 1]?.[0], "provider load params");
 }
 
 function expectProviderRuntimePluginLoad(params: { provider: string; expectedPluginId?: string }) {

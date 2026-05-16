@@ -52,7 +52,7 @@ function fetchRequest(fetchMock: ReturnType<typeof vi.fn>): {
   method?: string;
   url: string;
 } {
-  const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit | undefined];
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
   expect(typeof url).toBe("string");
   if (!init) {
     throw new Error("Expected fetch init");
@@ -201,6 +201,56 @@ describe("Google image-generation provider", () => {
     expect(postJsonRequestOptions(postJsonRequest).ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+  });
+
+  it("wraps wrong-shape successful Gemini image responses", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ candidates: { content: { parts: [] } } }),
+      }),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google image generation response malformed");
+  });
+
+  it("rejects invalid inline image data in successful Gemini responses", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "image/png", data: "not-base64!" } }],
+              },
+            },
+          ],
+        }),
+      }),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google image generation response malformed");
   });
 
   it("accepts OAuth JSON auth and inline_data responses", async () => {

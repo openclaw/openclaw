@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +58,19 @@ function replaceFilePreservingSizeAndMtime(filePath: string, contents: string) {
   expect(Buffer.byteLength(contents)).toBe(previous.size);
   fs.writeFileSync(filePath, contents, "utf8");
   fs.utimesSync(filePath, previous.atime, previous.mtime);
+}
+
+function fileHash(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function fileSignature(filePath: string) {
+  const stat = fs.statSync(filePath);
+  return {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
 }
 
 function createManifestlessClaudeBundleIndex(params: {
@@ -148,6 +162,29 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
+  it("keeps vanished recovered install records on the persisted fast path", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const goneDir = path.join(tempRoot, "gone");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    writePersistedInstalledPluginIndexSync(
+      {
+        ...loadInstalledPluginIndex({ config: {}, env, stateDir, installRecords: {} }),
+        installRecords: { gone: { source: "npm", spec: "gone@1.0.0", installPath: goneDir } },
+      },
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+  });
+
   it("keeps persisted manifestless Claude bundles on the fast path", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
@@ -205,6 +242,112 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
   });
+
+  it("keeps persisted package plugins with dot-prefixed package metadata paths", () => {
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: [rootDir] },
+      },
+    };
+    writePackagePlugin(rootDir);
+    const metaDir = path.join(rootDir, "..meta");
+    fs.mkdirSync(metaDir, { recursive: true });
+    const packageJsonPath = path.join(metaDir, "package.json");
+    fs.writeFileSync(packageJsonPath, JSON.stringify({ name: "demo", version: "1.0.0" }), "utf8");
+    const index = loadInstalledPluginIndex({ config, env });
+    const [plugin] = index.plugins;
+    if (!plugin) {
+      throw new Error("expected test plugin");
+    }
+    writePersistedInstalledPluginIndexSync(
+      {
+        ...index,
+        plugins: [
+          {
+            ...plugin,
+            packageJson: {
+              path: "..meta/package.json",
+              hash: fileHash(packageJsonPath),
+              fileSignature: fileSignature(packageJsonPath),
+            },
+          },
+          ...index.plugins.slice(1),
+        ],
+      },
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "treats persisted package metadata symlinks outside the plugin root as stale",
+    () => {
+      const tempRoot = makeTempDir();
+      const rootDir = path.join(tempRoot, "workspace");
+      const stateDir = path.join(tempRoot, "state");
+      const outsideDir = path.join(tempRoot, "outside");
+      const packageJsonPath = path.join(rootDir, "package.json");
+      const outsidePackageJsonPath = path.join(outsideDir, "package.json");
+      const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+      const config = {
+        plugins: {
+          load: { paths: [rootDir] },
+        },
+      };
+      writePackagePlugin(rootDir);
+      fs.mkdirSync(outsideDir, { recursive: true });
+      fs.rmSync(packageJsonPath);
+      fs.writeFileSync(
+        outsidePackageJsonPath,
+        JSON.stringify({ name: "demo", version: "1.0.0" }),
+        "utf8",
+      );
+      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+      const index = loadInstalledPluginIndex({ config, env });
+      const [plugin] = index.plugins;
+      if (!plugin) {
+        throw new Error("expected test plugin");
+      }
+      writePersistedInstalledPluginIndexSync(
+        {
+          ...index,
+          plugins: [
+            {
+              ...plugin,
+              packageJson: {
+                path: "package.json",
+                hash: fileHash(packageJsonPath),
+                fileSignature: fileSignature(packageJsonPath),
+              },
+            },
+            ...index.plugins.slice(1),
+          ],
+        },
+        { stateDir },
+      );
+
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        config,
+        env,
+        stateDir,
+      });
+
+      expect(result.source).toBe("derived");
+      expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    },
+  );
 
   it("detects same-size same-mtime manifest replacements", () => {
     const tempRoot = makeTempDir();
