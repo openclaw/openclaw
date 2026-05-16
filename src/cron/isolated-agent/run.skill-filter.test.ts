@@ -370,6 +370,35 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(getFirstMockArg(runCliAgentMock, "CLI run")).toHaveProperty("cliSessionId", undefined);
     });
 
+    it("forwards runtime toolsAllow into CLI cron runs so native CLI tools fail closed", async () => {
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: {
+          agentMeta: { sessionId: "cli-tools-allow-session", usage: { input: 5, output: 10 } },
+        },
+      });
+      mockCliFallbackInvocation();
+
+      await runCronIsolatedAgentTurn(
+        makeSkillParams({
+          job: makeSkillJob({
+            payload: {
+              kind: "agentTurn",
+              message: "fetch weather",
+              toolsAllow: ["web_fetch", "message"],
+            },
+          }),
+        }),
+      );
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      expect(getFirstMockArg(runCliAgentMock, "CLI run")).toHaveProperty("toolsAllow", [
+        "web_fetch",
+        "message",
+      ]);
+    });
+
     it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
       getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
       isCliProviderMock.mockReturnValue(true);

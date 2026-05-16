@@ -210,6 +210,7 @@ export function createCronPromptExecutor(params: {
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: params.senderIsOwner,
+            toolsAllow: params.agentPayload?.toolsAllow,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
