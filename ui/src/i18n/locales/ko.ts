@@ -362,6 +362,8 @@ export const ko: TranslationMap = {
     rawModeUnavailable: "Raw mode unavailable for this snapshot",
     rawModeDisabledNotice: "Raw mode disabled (snapshot cannot safely round-trip raw text).",
     unsavedChanges: "Unsaved changes",
+    unsavedChangeCount: "{count} unsaved change",
+    unsavedChangesCount: "{count} unsaved changes",
     noChanges: "No changes",
     open: "Open",
     openConfigFile: "Open config file",

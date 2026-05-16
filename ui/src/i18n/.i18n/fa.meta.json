@@ -16,15 +16,17 @@
     "settings.rawModeUnavailable",
     "settings.searchAriaLabel",
     "settings.searchPlaceholder",
+    "settings.unsavedChangeCount",
     "settings.unsavedChanges",
+    "settings.unsavedChangesCount",
     "settings.update"
   ],
-  "generatedAt": "2026-05-16T08:44:21.403Z",
+  "generatedAt": "2026-05-16T09:31:06.131Z",
   "locale": "fa",
   "model": "claude-opus-4-6",
   "provider": "anthropic",
-  "sourceHash": "6bc799811b08b3243880ab12bb8e08a91a6e741075b5dac7703392ce27155224",
-  "totalKeys": 1133,
+  "sourceHash": "5b20a61122ab9168039484aa4ba46474a3be49a4846e9dc1c0dedd91d58faf5f",
+  "totalKeys": 1135,
   "translatedKeys": 1115,
   "workflow": 1
 }

@@ -361,6 +361,8 @@ export const zh_TW: TranslationMap = {
     rawModeUnavailable: "目前快照不支援原始模式",
     rawModeDisabledNotice: "原始模式已停用（快照無法安全地往返原始文字）。",
     unsavedChanges: "未儲存的變更",
+    unsavedChangeCount: "{count} 項未儲存的變更",
+    unsavedChangesCount: "{count} 項未儲存的變更",
     noChanges: "無變更",
     open: "開啟",
     openConfigFile: "開啟設定檔",

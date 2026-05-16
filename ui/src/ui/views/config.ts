@@ -1438,7 +1438,9 @@ export function renderConfig(props: ConfigProps) {
                   <span class="config-changes-badge"
                     >${formMode === "raw"
                       ? t("settings.unsavedChanges")
-                      : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span
+                      : diff.length === 1
+                        ? t("settings.unsavedChangeCount", { count: String(diff.length) })
+                        : t("settings.unsavedChangesCount", { count: String(diff.length) })}</span
                   >
                 `
               : html` <span class="config-status muted">${t("settings.noChanges")}</span> `}
