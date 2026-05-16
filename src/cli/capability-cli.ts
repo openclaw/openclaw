@@ -87,6 +87,8 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "./command-secret-targets.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -1526,8 +1528,23 @@ async function runTtsStateMutation(params: {
   return { provider };
 }
 
-async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
+async function resolveCapabilityCommandConfig(params: {
+  commandName: string;
+  runtime?: RuntimeEnv;
+}): Promise<OpenClawConfig> {
   const cfg = getRuntimeConfig();
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: params.commandName,
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    runtime: params.runtime,
+    autoEnable: true,
+  });
+  return effectiveConfig;
+}
+
+async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
+  const cfg = await resolveCapabilityCommandConfig({ commandName: "infer web search" });
   const result = await runWebSearch({
     config: cfg,
     providerId: params.provider,
@@ -1548,7 +1565,7 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveCapabilityCommandConfig({ commandName: "infer web fetch" });
   const resolved = resolveWebFetchDefinition({
     config: cfg,
     providerId: params.provider,
