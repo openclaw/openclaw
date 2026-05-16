@@ -210,7 +210,7 @@ async function expectTtsPayloadResult(params: {
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
-    expect(result.trustedLocalMedia).toBe(true);
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {
@@ -453,7 +453,7 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(synthesizeMock).not.toHaveBeenCalled();
-    expect(result.trustedLocalMedia).toBeUndefined();
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
     expect(result.text).toBe("WebChat block stream chunks defer TTS to the final tail.");
   });
 
@@ -468,7 +468,7 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(synthesizeMock).not.toHaveBeenCalled();
-    expect(result.trustedLocalMedia).toBeUndefined();
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
     expect(result.text).toBe("Intermediate tool output should not be spoken.");
   });
 

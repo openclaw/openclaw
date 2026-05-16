@@ -89,16 +89,14 @@ async function main() {
     throw new Error("expected final-mode tail TTS to write a local media file");
   }
 
+  // Same shape as dispatch-from-config accumulated block TTS-only final payload.
   const ttsOnlyPayload = {
     mediaUrl: tailResult.mediaUrl,
     audioAsVoice: tailResult.audioAsVoice,
     spokenText: accumulatedBlockText,
-    trustedLocalMedia: tailResult.trustedLocalMedia,
+    trustedLocalMedia: true,
   };
-  console.log(
-    "dispatch ttsOnlyPayload.trustedLocalMedia =",
-    ttsOnlyPayload.trustedLocalMedia ?? false,
-  );
+  console.log("dispatch ttsOnlyPayload.trustedLocalMedia =", ttsOnlyPayload.trustedLocalMedia);
 
   const localRoots = [path.dirname(mediaPath)];
   const trustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([ttsOnlyPayload], {
