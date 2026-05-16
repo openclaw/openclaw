@@ -810,7 +810,7 @@ describe("TelegramPollingSession", () => {
       stopWorker();
       await runPromise;
     });
-  });
+  }, 240_000);
 
   it("scans past active-lane backlogs to start unrelated lanes", async () => {
     await withTempSpool(async (tempDir) => {

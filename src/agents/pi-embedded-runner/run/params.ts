@@ -177,6 +177,12 @@ export type RunEmbeddedPiAgentParams = {
     itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  onRunProgress?: (info: {
+    reason: string;
+    provider?: string;
+    model?: string;
+    backend?: string;
+  }) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;

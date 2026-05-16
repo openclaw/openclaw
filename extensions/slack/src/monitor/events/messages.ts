@@ -1,6 +1,6 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
@@ -107,6 +107,11 @@ function resolveAssistantMessageChangedInbound(params: {
     botUserId: params.ctx.botUserId,
   });
   if (!senderId) {
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `slack: assistant_app_thread message_changed in DM channel=${changed.channel} dropped: no sender resolved from metadata`,
+      );
+    }
     return undefined;
   }
   return {

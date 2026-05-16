@@ -231,7 +231,6 @@ function listBundledPluginEntryBaseDirs(params: {
   const baseDirs = [
     ...(params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : []),
     path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
-    path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
     path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
   ];
   return baseDirs.filter((entry, index, all) => all.indexOf(entry) === index);

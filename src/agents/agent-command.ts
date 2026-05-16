@@ -894,6 +894,7 @@ async function agentCommandInternal(
         const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
           provider: providerForAuthProfileValidation,
           harnessRuntime: validationHarnessPolicy.runtime,
+          config: cfg,
         }).map((candidateProvider) =>
           resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
         );

@@ -631,22 +631,6 @@ describe("bundled plugin metadata", () => {
     expectGeneratedPathResolution(tempRoot, path.join("dist", "extensions", "plugin", "index.js"));
   });
 
-  it("uses dist-runtime generated paths before source fallback when packaged dist is absent", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-runtime-metadata-");
-    const pluginRoot = path.join(tempRoot, "extensions", "plugin");
-    const runtimePluginRoot = path.join(tempRoot, "dist-runtime", "extensions", "plugin");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.mkdirSync(runtimePluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
-    fs.writeFileSync(path.join(runtimePluginRoot, "index.js"), "export {};\n", "utf8");
-
-    expectGeneratedPathResolution(
-      tempRoot,
-      path.join("dist-runtime", "extensions", "plugin", "index.js"),
-    );
-  });
-
   it("resolves plugin-local generated entry paths when the plugin dir is provided", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-local-");
     const pluginRoot = path.join(tempRoot, "extensions", "alpha");

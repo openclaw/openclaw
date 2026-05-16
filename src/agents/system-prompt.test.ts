@@ -907,12 +907,11 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("private by default for this source channel");
-    expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
     expect(prompt).toContain("Attach media with message-tool attachment fields");
     expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
     expect(prompt).toContain("The target defaults to the current source channel");
-    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).toContain("do not repeat that visible content in your final answer");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
     expect(prompt).not.toContain(
