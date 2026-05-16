@@ -463,6 +463,11 @@ export function runAgentAttempt(params: {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
   });
+  const embeddedPiHarnessOverride =
+    requestedAgentHarnessId ??
+    (agentHarnessPolicy.runtime === "pi" && embeddedPiProvider !== params.providerOverride
+      ? "pi"
+      : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
@@ -609,7 +614,8 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    agentHarnessId: requestedAgentHarnessId,
+    agentHarnessId: embeddedPiHarnessOverride,
+    agentHarnessRuntimeOverride: embeddedPiHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,

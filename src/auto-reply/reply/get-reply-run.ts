@@ -880,6 +880,7 @@ export async function runPreparedReply(
       ? listOpenAIAuthProfileProvidersForAgentRuntime({
           provider,
           harnessRuntime: agentHarnessPolicy.runtime,
+          config: cfg,
         })
       : [provider];
   const resolveActiveSessionProviderForAuthProfile = (): string => {
