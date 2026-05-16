@@ -303,6 +303,33 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getBlockCount()).toBe(1);
   });
 
+  it("keeps final fallback notices out of ACP transcript accumulation", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    expect(coordinator.getAccumulatedFinalText()).toBe("");
+  });
+
   it("prefers provider over surface when detecting direct channel visibility", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),

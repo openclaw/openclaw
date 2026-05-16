@@ -340,7 +340,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
     }
-    const rawFinalText = kind === "final" ? normalizeOptionalString(payload.text) : undefined;
+    const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+    const rawFinalText =
+      kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
     if (rawFinalText) {
       if (state.accumulatedFinalText.length > 0) {
         state.accumulatedFinalText += "\n";
