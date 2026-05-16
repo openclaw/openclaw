@@ -829,7 +829,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }
       const firstContent = message.content[0];
       return typeof firstContent === "object" && firstContent !== null && "text" in firstContent
-        ? String(firstContent.text)
+        ? firstContent.text
         : "";
     });
     expect(retryAssembleMessageTexts).toEqual(["successor compacted context"]);
