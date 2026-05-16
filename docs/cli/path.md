@@ -11,7 +11,7 @@ title: "Path"
 
 Plugin-provided shell access to the `oc://` addressing substrate: one
 kind-dispatched path scheme for inspecting and editing addressable workspace
-files (markdown, jsonc, jsonl, yaml). Self-hosters, plugin authors, and editor
+files (markdown, jsonc, jsonl, yaml/yml/lobster). Self-hosters, plugin authors, and editor
 extensions use it to read, find, or update a narrow location without
 hand-rolling per-file parsers.
 
@@ -106,7 +106,7 @@ result.
 1. Parses the `oc://` address into slots: file, section, item, field, and
    optional session.
 2. Chooses the file-kind adapter from the target extension (`.md`, `.jsonc`,
-   `.jsonl`, `.yaml`, and related aliases).
+   `.jsonl`, `.yaml`, `.yml`, `.lobster`, and related aliases).
 3. Resolves the slots against that file kind's AST: markdown headings/items,
    JSONC object keys/array indexes, JSONL line records, or YAML map/sequence
    nodes.
@@ -182,7 +182,7 @@ Non-canonical query parameters are ignored except for the first non-empty
 | Markdown   | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`.                 |
 | JSONC/JSON | Object keys and array indexes; dots split nested sub-segments unless quoted.                        |
 | JSONL      | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
-| YAML/YML   | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
+| YAML/YML/.lobster | Map keys and sequence indexes; comments and flow style are handled by the YAML document API. |
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as text
@@ -205,7 +205,8 @@ the per-kind AST shape.
   LF/CRLF line-ending convention.
 - YAML leaf writes coerce to the existing scalar type (`string`, finite
   `number`, `true`/`false`, or `null`). YAML insertions use the bundled
-  `yaml` package's document API for map/sequence updates.
+  `yaml` package's document API for map/sequence updates. Malformed YAML
+  documents with parser errors are refused before mutation with `parse-error`.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. The
 substrate preserves byte-identical output for parse/emit round-trips, but a
@@ -393,7 +394,8 @@ steps:
 
 YAML uses the `yaml` package's `Document` API rather than a hand-rolled parser,
 so ordinary parse/emit round-trips preserve comments and authoring shape while
-resolved paths use the same map-key / sequence-index model as JSONC.
+resolved paths use the same map-key / sequence-index model as JSONC. The same
+adapter handles `.yaml`, `.yml`, and `.lobster` files.
 
 ## Subcommand reference
 
