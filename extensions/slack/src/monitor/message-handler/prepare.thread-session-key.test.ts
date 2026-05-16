@@ -559,7 +559,7 @@ describe("thread-level session keys", () => {
       isGroupDm: false,
       isRoom: false,
       isRoomish: false,
-      isAssistantThread: true,
+      assistantThreadTs: "1770408530.000000",
     });
 
     expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");

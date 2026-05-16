@@ -45,6 +45,51 @@ export type SlackAssistantThreadContext = {
   updatedAt: number;
 };
 
+export const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+
+export function buildSlackAssistantThreadMetadata(
+  context: Omit<SlackAssistantThreadContext, "updatedAt">,
+) {
+  const eventPayload: Record<string, string> = {};
+  if (context.channelId) {
+    eventPayload.channel_id = context.channelId;
+  }
+  if (context.teamId) {
+    eventPayload.team_id = context.teamId;
+  }
+  if (context.enterpriseId) {
+    eventPayload.enterprise_id = context.enterpriseId;
+  }
+  return {
+    event_type: SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT,
+    event_payload: eventPayload,
+  };
+}
+
+export function parseSlackAssistantThreadMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const metadata = value as Record<string, unknown>;
+  if (metadata.event_type !== SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT) {
+    return undefined;
+  }
+  const payload = metadata.event_payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const stringField = (key: string) => {
+    const raw = record[key];
+    return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  };
+  return {
+    channelId: stringField("channel_id"),
+    teamId: stringField("team_id"),
+    enterpriseId: stringField("enterprise_id"),
+  };
+}
+
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
   accountId: string;
