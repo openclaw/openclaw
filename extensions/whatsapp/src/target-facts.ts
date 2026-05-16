@@ -4,7 +4,7 @@ import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
   normalizeWhatsAppTarget,
-} from "./normalize.js";
+} from "./normalize-target.js";
 import { toWhatsappJid, toWhatsappJidWithLid, type JidToE164Options } from "./targets-runtime.js";
 
 const TARGET_FORMAT_HINT = "<E.164|group JID|newsletter JID>";
