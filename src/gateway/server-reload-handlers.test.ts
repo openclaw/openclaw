@@ -6564,8 +6564,12 @@ describe("gateway plugin hot reload handlers", () => {
     expect(logChannels.error).toHaveBeenCalledWith(
       "failed to stop discord channel before plugin reload: stop failed",
     );
-    expect(startChannel).toHaveBeenCalledWith("telegram");
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
+      includeKnownAccounts: true,
+    });
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      includeKnownAccounts: true,
+    });
     expect(startRootCounts).toEqual([1, 1]);
     expect(setState).not.toHaveBeenCalled();
   });
@@ -6821,10 +6825,10 @@ describe("gateway plugin hot reload handlers", () => {
     try {
       await applyHotReload(
         {
-          changedPaths: ["plugins.openclaw-weixin.enabled"],
+          changedPaths: ["plugins.entries.openclaw-weixin.enabled"],
           restartGateway: false,
           restartReasons: [],
-          hotReasons: ["plugins.openclaw-weixin.enabled"],
+          hotReasons: ["plugins.entries.openclaw-weixin.enabled"],
           reloadHooks: false,
           restartGmailWatcher: false,
           restartCron: false,
@@ -6835,7 +6839,7 @@ describe("gateway plugin hot reload handlers", () => {
           disposeMcpRuntimes: false,
           noopPaths: [],
         },
-        { plugins: { "openclaw-weixin": { enabled: true } } },
+        { plugins: { entries: { "openclaw-weixin": { enabled: true } } } },
       );
     } finally {
       if (previousSkipChannels === undefined) {
