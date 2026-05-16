@@ -146,11 +146,16 @@ export async function readPostCompactionContext(
     // "Session Startup" sequence explicitly. When custom sections are configured,
     // use generic prose — referencing a hardcoded "Session Startup" sequence
     // would be misleading for deployments that use different section names.
+    // IMPORTANT: The prose must instruct the agent to CONTINUE the unfinished task,
+    // not to restart or reinitialize. The compaction summary contains task progress.
     const prose = isDefaultSections
-      ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-        "Run your Session Startup sequence - read the required files before responding to the user."
-      : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
-        `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
+      ? "Session was just compacted. The conversation summary above contains task progress. " +
+        "CONTINUE the unfinished task immediately using the summary context. " +
+        "Do NOT restart, reinitialize, or execute any startup sequence."
+      : `Session was just compacted. The conversation summary above contains task progress. ` +
+        `CONTINUE the unfinished task immediately using the summary context. ` +
+        `Do NOT restart, reinitialize, or execute any startup procedure. ` +
+        `The injected sections (${displayNames.join(", ")}) provide additional guidance for task continuation.`;
 
     const sectionLabel = isDefaultSections
       ? "Critical rules from AGENTS.md:"
