@@ -668,6 +668,11 @@ describe("voice-call plugin", () => {
         from: "user",
       }),
     ).rejects.toThrow(/Invalid numeric value for --port/);
+    await expect(
+      program.parseAsync(["voicecall", "expose", "--port", "3334.9", "--mode", "off"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/Invalid numeric value for --port/);
 
     const tmpFile = path.join(os.tmpdir(), `voicecall-invalid-${Date.now()}.jsonl`);
     fs.writeFileSync(tmpFile, "{}\n", "utf8");
@@ -679,6 +684,11 @@ describe("voice-call plugin", () => {
       ).rejects.toThrow(/Invalid numeric value for --last/);
       await expect(
         program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "Infinity"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Invalid numeric value for --last/);
+      await expect(
+        program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "1.5"], {
           from: "user",
         }),
       ).rejects.toThrow(/Invalid numeric value for --last/);

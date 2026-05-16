@@ -79,10 +79,10 @@ function parseVoiceCallIntOption(
 ): number {
   const min = opts?.min ?? 0;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || Math.trunc(parsed) < min) {
+  if (!Number.isInteger(parsed) || parsed < min) {
     throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
   }
-  return Math.trunc(parsed);
+  return parsed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
