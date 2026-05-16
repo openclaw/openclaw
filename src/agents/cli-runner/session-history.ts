@@ -237,6 +237,35 @@ async function loadCliSessionEntries(params: {
   }
 }
 
+export async function hasCliSessionTranscript(params: {
+  sessionId: string;
+  sessionFile: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+}): Promise<boolean> {
+  try {
+    const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
+    const entryStat = await fsp.lstat(sessionFile);
+    if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
+      return false;
+    }
+    const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
+    const realSessionFile = await safeRealpath(sessionFile);
+    if (
+      !realSessionFile ||
+      realSessionFile === realSessionsDir ||
+      !isPathInside(realSessionsDir, realSessionFile)
+    ) {
+      return false;
+    }
+    const stat = await fsp.stat(realSessionFile);
+    return stat.isFile() && stat.size <= MAX_CLI_SESSION_HISTORY_FILE_BYTES;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadCliSessionHistoryMessages(params: {
   sessionId: string;
   sessionFile: string;

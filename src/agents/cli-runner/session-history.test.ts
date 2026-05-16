@@ -5,6 +5,7 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliSessionHistoryPrompt,
+  hasCliSessionTranscript,
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
@@ -124,6 +125,37 @@ describe("loadCliSessionHistoryMessages", () => {
       });
       expect(history).toHaveLength(1);
       expectMessageFields(history[0], { role: "user", content: "expected history" });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects canonical transcripts when callers pass stale external session paths", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-test",
+      messages: ["expected history"],
+    });
+    const outsideFile = createSessionTranscript({
+      rootDir: outsideDir,
+      sessionId: "session-test",
+      filePath: path.join(outsideDir, "stale.jsonl"),
+      messages: ["stale history"],
+    });
+
+    try {
+      await expect(
+        hasCliSessionTranscript({
+          sessionId: "session-test",
+          sessionFile: outsideFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+      ).resolves.toBe(true);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
