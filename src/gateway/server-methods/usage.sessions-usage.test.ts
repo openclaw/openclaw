@@ -442,7 +442,7 @@ describe("sessions.usage", () => {
         expect(
           vi
             .mocked(loadSessionCostSummaryFromCache)
-            .mock.calls.every((call) => call[0]?.refreshMode === "sync-when-empty"),
+            .mock.calls.every((call) => call[0]?.refreshMode === "background"),
         ).toBe(true);
       });
     } finally {

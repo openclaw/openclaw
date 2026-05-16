@@ -744,7 +744,7 @@ async function loadCostUsageSummaryCached(params: {
     endMs: params.endMs,
     config: params.config,
     requestRefresh: true,
-    refreshMode: "sync-when-empty",
+    refreshMode: "background",
   })
     .then((summary) => {
       setCostUsageCache(cacheKey, {
@@ -1130,7 +1130,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
-          refreshMode: "sync-when-empty",
+          refreshMode: "background",
         });
         cacheStatus = mergeUsageCacheStatus(cacheStatus, cachedUsage.cacheStatus);
         const includedUsage = cachedUsage.summary;
