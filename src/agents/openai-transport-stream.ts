@@ -2552,6 +2552,7 @@ function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): 
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "deepseek-v4-flash",
   "deepseek-v4-pro",
+  "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",
   "kimi-k2-thinking",
@@ -2563,16 +2564,22 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 
-function normalizeReasoningContentReplayModelId(modelId: unknown): string | undefined {
+function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] {
   if (typeof modelId !== "string") {
-    return undefined;
+    return [];
   }
-  const normalized = modelId.trim().toLowerCase().split(":", 1)[0];
+  const normalized = modelId.trim().toLowerCase();
   if (!normalized) {
-    return undefined;
+    return [];
   }
   const parts = normalized.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? normalized;
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  const candidates = [finalPart];
+  const colonParts = finalPart.split(":").filter(Boolean);
+  if (colonParts.length > 1) {
+    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  return [...new Set(candidates.filter(Boolean))];
 }
 
 function shouldPreserveReasoningContentReplay(
@@ -2586,9 +2593,8 @@ function shouldPreserveReasoningContentReplay(
   ) {
     return true;
   }
-  const normalizedModelId = normalizeReasoningContentReplayModelId(model.id);
-  return (
-    normalizedModelId !== undefined && REASONING_CONTENT_REPLAY_MODEL_IDS.has(normalizedModelId)
+  return getReasoningContentReplayModelIdCandidates(model.id).some((modelId) =>
+    REASONING_CONTENT_REPLAY_MODEL_IDS.has(modelId),
   );
 }
 
