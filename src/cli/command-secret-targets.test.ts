@@ -12,11 +12,14 @@ const REGISTRY_IDS = [
   "gateway.remote.token",
   "gateway.remote.password",
   "models.providers.openai.apiKey",
+  "models.providers.google.apiKey",
   "messages.tts.providers.openai.apiKey",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
   "plugins.entries.exa.config.webSearch.apiKey",
+  "plugins.entries.searxng.config.webSearch.baseUrl",
   "skills.entries.demo.apiKey",
   "tools.web.search.apiKey",
+  "tools.web.search.*.apiKey",
 ] as const;
 
 vi.mock("../secrets/target-registry.js", () => ({
@@ -86,9 +89,16 @@ describe("command secret target ids", () => {
   it("scopes web search command targets to search credentials only", () => {
     const ids = getWebSearchCommandSecretTargetIds();
     expect(ids).toEqual(
-      new Set(["plugins.entries.exa.config.webSearch.apiKey", "tools.web.search.apiKey"]),
+      new Set([
+        "models.providers.google.apiKey",
+        "plugins.entries.exa.config.webSearch.apiKey",
+        "plugins.entries.searxng.config.webSearch.baseUrl",
+        "tools.web.search.*.apiKey",
+        "tools.web.search.apiKey",
+      ]),
     );
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
+    expect(ids.has("models.providers.openai.apiKey")).toBe(false);
   });
 
   it("includes channel targets for agent runtime when delivery needs them", () => {

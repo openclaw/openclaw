@@ -94,9 +94,16 @@ export const __testing = {
   },
 };
 
-function pluginIdFromRuntimeWebPath(path: string): string | undefined {
-  const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
-  return match?.[1];
+function parsePluginRuntimeWebPath(
+  path: string,
+): { pluginId: string; kind: "webSearch" | "webFetch" } | undefined {
+  const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\..+$/.exec(path);
+  const pluginId = match?.[1];
+  const kind = match?.[2];
+  if (!pluginId || (kind !== "webSearch" && kind !== "webFetch")) {
+    return undefined;
+  }
+  return { pluginId, kind };
 }
 
 function normalizeCommandSecretResolutionMode(
@@ -141,9 +148,9 @@ function classifyRuntimeWebTargetPathState(params: {
     return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
   }
 
-  const pluginId = pluginIdFromRuntimeWebPath(params.path);
-  if (pluginId) {
-    if (params.path.endsWith(".config.webFetch.apiKey")) {
+  const pluginPath = parsePluginRuntimeWebPath(params.path);
+  if (pluginPath) {
+    if (pluginPath.kind === "webFetch") {
       const fetch = params.config.tools?.web?.fetch;
       if (fetch?.enabled === false) {
         return "inactive";
@@ -157,7 +164,7 @@ function classifyRuntimeWebTargetPathState(params: {
         value: configuredProvider,
         origin: "bundled",
         config: params.config,
-      }) === pluginId
+      }) === pluginPath.pluginId
         ? "active"
         : "inactive";
     }
@@ -174,7 +181,7 @@ function classifyRuntimeWebTargetPathState(params: {
       value: configuredProvider,
       origin: "bundled",
       config: params.config,
-    }) === pluginId
+    }) === pluginPath.pluginId
       ? "active"
       : "inactive";
   }
@@ -207,9 +214,9 @@ function describeInactiveRuntimeWebTargetPath(params: {
       : undefined;
   }
 
-  const pluginId = pluginIdFromRuntimeWebPath(params.path);
-  if (pluginId) {
-    if (params.path.endsWith(".config.webFetch.apiKey")) {
+  const pluginPath = parsePluginRuntimeWebPath(params.path);
+  if (pluginPath) {
+    if (pluginPath.kind === "webFetch") {
       const fetch = params.config.tools?.web?.fetch;
       if (fetch?.enabled === false) {
         return "tools.web.fetch is disabled.";
@@ -233,7 +240,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
           config: params.config,
         })
       : undefined;
-    if (configuredPluginId && configuredPluginId !== pluginId) {
+    if (configuredPluginId && configuredPluginId !== pluginPath.pluginId) {
       return `tools.web.search.provider is "${configuredProvider}".`;
     }
     return undefined;
@@ -345,6 +352,26 @@ function classifyConfiguredTargetRefs(params: {
       hasActiveConfiguredRef = true;
       continue;
     }
+    const runtimeState = classifyRuntimeWebTargetPathState({
+      config: params.config,
+      path,
+    });
+    if (runtimeState === "active") {
+      hasActiveConfiguredRef = true;
+      continue;
+    }
+    if (runtimeState === "inactive") {
+      const inactiveDetail = describeInactiveRuntimeWebTargetPath({
+        config: params.config,
+        path,
+      });
+      diagnostics.add(
+        inactiveDetail
+          ? `${path}: ${inactiveDetail}`
+          : `${path}: secret ref is configured on an inactive surface.`,
+      );
+      continue;
+    }
     const inactiveWarning = inactiveWarningsByPath.get(path);
     if (inactiveWarning) {
       diagnostics.add(inactiveWarning);
@@ -407,7 +434,7 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
-    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
+    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\..+$/.test(path) ||
     /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
   );
 }
@@ -484,12 +511,14 @@ async function resolveCommandSecretRefsLocally(params: {
       continue;
     }
     if (runtimeState === "active") {
+      inactiveRefPaths.delete(target.path);
       runtimeWebActivePaths.add(target.path);
     }
   }
   const inactiveWarningDiagnostics = context.warnings
     .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
     .filter((warning) => !params.allowedPaths || params.allowedPaths.has(warning.path))
+    .filter((warning) => inactiveRefPaths.has(warning.path))
     .map((warning) => warning.message);
   const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
   for (const target of discoveredTargets) {

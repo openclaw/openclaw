@@ -32,6 +32,12 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
+  "tools.web.search.*.apiKey",
+] as const;
+const STATIC_WEB_SEARCH_TARGET_IDS = [
+  "models.providers.google.apiKey",
+  "tools.web.search.apiKey",
+  "tools.web.search.*.apiKey",
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
@@ -81,7 +87,7 @@ function isPluginWebSearchCredentialTargetId(id: string): boolean {
   if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
     return false;
   }
-  return segments.slice(4).join(".") === "webSearch.apiKey";
+  return segments[4] === "webSearch";
 }
 
 function getAgentRuntimeBaseTargetIds(): string[] {
@@ -246,7 +252,7 @@ export function getModelsCommandSecretTargetIds(): Set<string> {
 
 export function getWebSearchCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet([
-    "tools.web.search.apiKey",
+    ...STATIC_WEB_SEARCH_TARGET_IDS,
     ...listSecretTargetRegistryEntries()
       .map((entry) => entry.id)
       .filter(isPluginWebSearchCredentialTargetId)

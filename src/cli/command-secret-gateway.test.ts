@@ -370,6 +370,104 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   }, 300_000);
 
+  it("falls back to local resolution for provider-selected web search config SecretRefs", async () => {
+    const path = "plugins.entries.searxng.config.webSearch.baseUrl";
+    const pathSegments = ["plugins", "entries", "searxng", "config", "webSearch", "baseUrl"];
+    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
+      analyzeCommandSecretAssignmentsFromSnapshot: ({ resolvedConfig }) => {
+        const pluginConfig = resolvedConfig.plugins?.entries?.searxng?.config as
+          | { webSearch?: { baseUrl?: unknown } }
+          | undefined;
+        if (pluginConfig?.webSearch?.baseUrl === "https://search.example.test") {
+          return {
+            assignments: [
+              {
+                path,
+                pathSegments,
+                value: "https://search.example.test",
+              },
+            ],
+            diagnostics: [],
+            inactive: [],
+            unresolved: [],
+          };
+        }
+        return {
+          assignments: [],
+          diagnostics: [],
+          inactive: [],
+          unresolved: [{ path, pathSegments }],
+        };
+      },
+      collectConfigAssignments: ({ context }) => {
+        context.warnings.push({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path,
+          message: `${path}: plugin "searxng": plugin is disabled.`,
+        });
+      },
+      discoverConfigSecretTargetsByIds: () =>
+        [
+          {
+            entry: { expectedResolvedValue: "string" },
+            path,
+            pathSegments,
+            value: {
+              source: "env",
+              provider: "default",
+              id: "WEB_SEARCH_SEARXNG_BASE_URL_LOCAL_FALLBACK",
+            },
+          },
+        ] as never,
+      resolveManifestContractOwnerPluginId: (params) =>
+        params.contract === "webSearchProviders" && params.value === "searxng"
+          ? "searxng"
+          : undefined,
+    });
+    const envKey = "WEB_SEARCH_SEARXNG_BASE_URL_LOCAL_FALLBACK";
+    await withEnvValue(envKey, "https://search.example.test", async () => {
+      try {
+        callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+        const result = await resolveCommandSecretRefsViaGateway({
+          config: {
+            plugins: {
+              entries: {
+                searxng: {
+                  config: {
+                    webSearch: {
+                      baseUrl: { source: "env", provider: "default", id: envKey },
+                    },
+                  },
+                },
+              },
+            },
+            tools: {
+              web: {
+                search: {
+                  provider: "searxng",
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          commandName: "web.search",
+          targetIds: new Set([path]),
+        });
+
+        const searxngConfig = result.resolvedConfig.plugins?.entries?.searxng?.config as
+          | { webSearch?: { baseUrl?: unknown } }
+          | undefined;
+        expect(searxngConfig?.webSearch?.baseUrl).toBe("https://search.example.test");
+        expect(result.targetStatesByPath[path]).toBe("resolved_local");
+        expect(result.diagnostics.some((entry) => entry.includes("plugin is disabled"))).toBe(
+          false,
+        );
+        expectGatewayUnavailableLocalFallbackDiagnostics(result);
+      } finally {
+        restoreDeps();
+      }
+    });
+  });
+
   it("falls back to local resolution for web fetch provider SecretRefs when gateway is unavailable", async () => {
     const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
       collectConfigAssignments: ({ context }) => {

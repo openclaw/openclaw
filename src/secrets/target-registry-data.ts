@@ -261,6 +261,18 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     providerIdPathSegmentIndex: 2,
   },
   {
+    id: "models.providers.google.apiKey",
+    targetType: "models.providers.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "models.providers.google.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 2,
+  },
+  {
     id: "models.providers.*.request.headers.*",
     targetType: "models.providers.request.headers",
     targetTypeAliases: ["models.providers.*.request.headers.*"],
@@ -437,6 +449,18 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
+  },
+  {
+    id: "tools.web.search.*.apiKey",
+    targetType: "tools.web.search.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.search.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 3,
   },
 ];
 

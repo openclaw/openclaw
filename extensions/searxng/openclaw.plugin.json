@@ -20,6 +20,11 @@
   "contracts": {
     "webSearchProviders": ["searxng"]
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "webSearch.baseUrl", "expected": "string" }]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

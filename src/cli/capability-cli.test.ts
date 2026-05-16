@@ -2183,6 +2183,88 @@ describe("capability cli", () => {
     );
   });
 
+  it("uses the CLI web search provider override for SecretRef resolution", async () => {
+    const rawConfig = {
+      tools: { web: { search: { provider: "google" } } },
+      plugins: {
+        entries: {
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: { source: "file", provider: "tool-api-keys", id: "/exa" },
+              },
+            },
+          },
+          google: {
+            config: {
+              webSearch: {
+                apiKey: { source: "file", provider: "tool-api-keys", id: "/google" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      tools: { web: { search: { provider: "exa" } } },
+      plugins: {
+        entries: {
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-exa-key",
+              },
+            },
+          },
+          google: {
+            config: {
+              webSearch: {
+                apiKey: { source: "file", provider: "tool-api-keys", id: "/google" },
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "exa",
+      result: { results: [{ title: "OpenClaw" }] },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "web",
+        "search",
+        "--query",
+        "OpenClaw beta",
+        "--provider",
+        "exa",
+        "--json",
+      ],
+    });
+
+    const resolutionCall = mocks.resolveCommandConfigWithSecrets.mock.calls.at(0)?.[0] as
+      | { config?: { tools?: { web?: { search?: { provider?: unknown } } } } }
+      | undefined;
+    expect(resolutionCall?.config?.tools?.web?.search?.provider).toBe("exa");
+    expect(rawConfig.tools.web.search.provider).toBe("google");
+    expect(vi.mocked(webSearchRuntime.runWebSearch)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        providerId: "exa",
+      }),
+    );
+  });
+
   it("surfaces selected and configured embedding provider state", async () => {
     mocks.loadConfig.mockReturnValue({});
     mocks.resolveMemorySearchConfig.mockReturnValue({

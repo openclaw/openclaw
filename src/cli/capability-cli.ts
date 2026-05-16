@@ -1530,8 +1530,9 @@ async function runTtsStateMutation(params: {
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
   const cfg = getRuntimeConfig();
+  const commandConfig = withWebSearchProviderOverride(cfg, params.provider);
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
-    config: cfg,
+    config: commandConfig,
     commandName: "web.search",
     targetIds: getWebSearchCommandSecretTargetIds(),
     runtime: defaultRuntime,
@@ -1553,6 +1554,35 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
     attempts: [],
     outputs: [{ result: result.result }],
   } satisfies CapabilityEnvelope;
+}
+
+function withWebSearchProviderOverride(
+  config: OpenClawConfig,
+  providerRaw: string | undefined,
+): OpenClawConfig {
+  const provider = normalizeLowercaseStringOrEmpty(providerRaw);
+  if (!provider) {
+    return config;
+  }
+  const next = structuredClone(config) as OpenClawConfig;
+  const root = next as Record<string, unknown>;
+  const tools =
+    root.tools && typeof root.tools === "object" && !Array.isArray(root.tools)
+      ? (root.tools as Record<string, unknown>)
+      : {};
+  root.tools = tools;
+  const web =
+    tools.web && typeof tools.web === "object" && !Array.isArray(tools.web)
+      ? (tools.web as Record<string, unknown>)
+      : {};
+  tools.web = web;
+  const search =
+    web.search && typeof web.search === "object" && !Array.isArray(web.search)
+      ? (web.search as Record<string, unknown>)
+      : {};
+  web.search = search;
+  search.provider = provider;
+  return next;
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {

@@ -33,6 +33,7 @@ Scope intent:
 - `models.providers.*.request.tls.cert`
 - `models.providers.*.request.tls.key`
 - `models.providers.*.request.tls.passphrase`
+- `models.providers.google.apiKey`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].tts.providers.*.apiKey`
@@ -49,11 +50,13 @@ Scope intent:
 - `plugins.entries.perplexity.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.minimax.config.webSearch.apiKey`
+- `plugins.entries.searxng.config.webSearch.baseUrl`
 - `plugins.entries.tavily.config.webSearch.apiKey`
 - `plugins.entries.voice-call.config.realtime.providers.*.apiKey`
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
+- `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
