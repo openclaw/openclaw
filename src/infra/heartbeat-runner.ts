@@ -58,6 +58,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { enqueueHeartbeatPendingQuestion } from "../config/sessions/pending-question-context.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -1955,6 +1956,26 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
+    const visibleMainPayload =
+      shouldSkipMain || (!normalized.text.trim() && mediaUrls.length === 0)
+        ? undefined
+        : {
+            text: normalized.text,
+            mediaUrls,
+          };
+    const heartbeatMirror = visibleMainPayload
+      ? {
+          agentId,
+          sessionKey,
+          text: visibleMainPayload.text,
+          mediaUrls: visibleMainPayload.mediaUrls,
+          storePath,
+          idempotencyKey: dueCommitmentIds.length
+            ? `heartbeat:commitments:${sessionKey}:${dueCommitmentIds.join(",")}`
+            : `heartbeat:${sessionKey}:${startedAt}`,
+        }
+      : undefined;
+
     const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
@@ -1962,21 +1983,31 @@ export async function runHeartbeatOnce(opts: {
       accountId: deliveryAccountId,
       session: outboundSession,
       threadId: delivery.threadId,
-      payloads: [
-        ...reasoningPayloads,
-        ...(shouldSkipMain
-          ? []
-          : [
-              {
-                text: normalized.text,
-                mediaUrls,
-              },
-            ]),
-      ],
+      payloads: [...reasoningPayloads, ...(visibleMainPayload ? [visibleMainPayload] : [])],
+      mirror: heartbeatMirror,
       deps: opts.deps,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
+    }
+    if (send.status === "sent" && hasDueCommitments && visibleMainPayload) {
+      await enqueueHeartbeatPendingQuestion({
+        cfg,
+        sessionKey,
+        nowMs: startedAt,
+        question: {
+          id: `heartbeat:commitments:${sessionKey}:${dueCommitmentIds.join(",")}`,
+          text: visibleMainPayload.text,
+          commitmentIds: dueCommitmentIds,
+          sourceRunIds: preflight.dueCommitments
+            .map((commitment) => commitment.sourceRunId)
+            .filter((value): value is string => Boolean(value?.trim())),
+          sourceMessageIds: preflight.dueCommitments
+            .map((commitment) => commitment.sourceMessageId)
+            .filter((value): value is string => Boolean(value?.trim())),
+          createdAt: startedAt,
+        },
+      });
     }
     await markCommitmentsStatus({
       cfg,

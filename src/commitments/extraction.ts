@@ -3,12 +3,17 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
-import { listPendingCommitmentsForScope, upsertInferredCommitments } from "./store.js";
+import {
+  dismissPendingCommitmentsForScope,
+  listPendingCommitmentsForScope,
+  upsertInferredCommitments,
+} from "./store.js";
 import type {
   CommitmentCandidate,
   CommitmentExtractionBatchResult,
   CommitmentExtractionItem,
   CommitmentKind,
+  CommitmentResolutionCandidate,
   CommitmentSensitivity,
   CommitmentSource,
 } from "./types.js";
@@ -79,6 +84,25 @@ function parseCandidate(raw: unknown): CommitmentCandidate | undefined {
   };
 }
 
+function parseResolutionCandidate(raw: unknown): CommitmentResolutionCandidate | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const itemId = asString(raw.itemId);
+  const dedupeKey = asString(raw.dedupeKey);
+  const reason = asString(raw.reason);
+  const confidence = asNumber(raw.confidence);
+  if (!itemId || !dedupeKey || !reason || confidence === undefined) {
+    return undefined;
+  }
+  return {
+    itemId,
+    dedupeKey,
+    reason,
+    confidence,
+  };
+}
+
 function extractJsonObjectCandidates(raw: string): string[] {
   const out: string[] = [];
   let depth = 0;
@@ -124,6 +148,7 @@ function extractJsonObjectCandidates(raw: string): string[] {
 
 export function parseCommitmentExtractionOutput(raw: string): CommitmentExtractionBatchResult {
   const candidates: CommitmentCandidate[] = [];
+  const resolved: CommitmentResolutionCandidate[] = [];
   const trimmed = raw.trim();
   if (!trimmed) {
     return { candidates };
@@ -154,8 +179,15 @@ export function parseCommitmentExtractionOutput(raw: string): CommitmentExtracti
         candidates.push(parsed);
       }
     }
+    const rawResolved = Array.isArray(record.resolved) ? record.resolved : [];
+    for (const resolution of rawResolved) {
+      const parsed = parseResolutionCandidate(resolution);
+      if (parsed) {
+        resolved.push(parsed);
+      }
+    }
   }
-  return { candidates };
+  return resolved.length > 0 ? { candidates, resolved } : { candidates };
 }
 
 export async function hydrateCommitmentExtractionItem(params: {
@@ -209,10 +241,12 @@ Create inferred follow-up commitments only. Exact user requests such as "remind 
 Use these categories: event_check_in, deadline_check, care_check_in, open_loop.
 
 Create a candidate only when the latest exchange creates a useful future check-in opportunity that the user did not explicitly schedule. Prefer no candidate over weak candidates.
+Also resolve existing pending commitments when the latest exchange clearly closes that loop, especially when the assistant reports tool-verified completion or confirms the requested action succeeded.
 
 Rules:
-- Output JSON only, with top-level {"candidates":[...]}.
+- Output JSON only, with top-level {"candidates":[...],"resolved":[...]}.
 - Each candidate must include itemId, kind, sensitivity, source, dueWindow, reason, suggestedText, confidence, and dedupeKey.
+- Each resolved item must include itemId, dedupeKey, reason, and confidence.
 - kind is one of event_check_in, deadline_check, care_check_in, open_loop.
 - sensitivity is routine, personal, or care.
 - source is inferred_user_context or agent_promise.
@@ -220,6 +254,8 @@ Rules:
 - Skip explicit reminders/scheduling requests; those are cron-owned.
 - Skip if the assistant already clearly says a cron reminder was scheduled.
 - Skip if the topic is already resolved in the assistant response.
+- Resolve an existing pending commitment instead of repeating it when the latest exchange says the underlying task is complete, verified, no longer needed, or superseded.
+- Do not resolve on vague acknowledgements, partial progress, or if the user still appears to be waiting for completion.
 - Care check-ins must be gentle, rare, and high confidence. Avoid interrogating language.
 - Suggested text should be short, natural, and suitable to send in the same channel.
 - Dedupe keys should be stable within a session, like "interview:2026-04-29" or "sleep:2026-04-29".
@@ -311,6 +347,37 @@ export function validateCommitmentCandidates(params: {
   return validated;
 }
 
+export function validateCommitmentResolutions(params: {
+  cfg?: OpenClawConfig;
+  items: CommitmentExtractionItem[];
+  result: CommitmentExtractionBatchResult;
+}): Array<{
+  item: CommitmentExtractionItem;
+  resolution: CommitmentResolutionCandidate;
+}> {
+  const resolved = resolveCommitmentsConfig(params.cfg);
+  const itemsById = new Map(params.items.map((item) => [item.itemId, item]));
+  const validated: Array<{
+    item: CommitmentExtractionItem;
+    resolution: CommitmentResolutionCandidate;
+  }> = [];
+  for (const resolution of params.result.resolved ?? []) {
+    const item = itemsById.get(resolution.itemId);
+    if (!item || resolution.confidence < resolved.extraction.confidenceThreshold) {
+      continue;
+    }
+    if (
+      !item.existingPending.some(
+        (commitment) => commitment.dedupeKey === resolution.dedupeKey.trim(),
+      )
+    ) {
+      continue;
+    }
+    validated.push({ item, resolution });
+  }
+  return validated;
+}
+
 export async function persistCommitmentExtractionResult(params: {
   cfg?: OpenClawConfig;
   items: CommitmentExtractionItem[];
@@ -318,8 +385,30 @@ export async function persistCommitmentExtractionResult(params: {
   nowMs?: number;
 }) {
   const valid = validateCommitmentCandidates(params);
+  const resolutions = validateCommitmentResolutions(params);
+  const resolvedDedupeKeysByItemId = new Map<string, Set<string>>();
+  for (const entry of resolutions) {
+    const existing = resolvedDedupeKeysByItemId.get(entry.item.itemId) ?? new Set<string>();
+    existing.add(entry.resolution.dedupeKey.trim());
+    resolvedDedupeKeysByItemId.set(entry.item.itemId, existing);
+  }
+  for (const [itemId, dedupeKeys] of resolvedDedupeKeysByItemId.entries()) {
+    const item = params.items.find((candidate) => candidate.itemId === itemId);
+    if (!item) {
+      continue;
+    }
+    await dismissPendingCommitmentsForScope({
+      cfg: params.cfg,
+      scope: item,
+      dedupeKeys: [...dedupeKeys],
+      nowMs: params.nowMs,
+    });
+  }
   const byItem = new Map<string, typeof valid>();
   for (const entry of valid) {
+    if (resolvedDedupeKeysByItemId.get(entry.item.itemId)?.has(entry.candidate.dedupeKey.trim())) {
+      continue;
+    }
     const existing = byItem.get(entry.item.itemId) ?? [];
     existing.push(entry);
     byItem.set(entry.item.itemId, existing);

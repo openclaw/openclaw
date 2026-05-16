@@ -22,9 +22,14 @@ const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
+const pendingQuestionContextMocks = vi.hoisted(() => ({
+  drainHeartbeatPendingQuestionContext: vi.fn(),
+}));
+
 vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
+vi.mock("../../../config/sessions/pending-question-context.js", () => pendingQuestionContextMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
@@ -147,6 +152,10 @@ describe("resolvePromptSubmissionSkipReason", () => {
 describe("resolvePromptBuildHookResult drain cache", () => {
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockResolvedValue(
+      "pending heartbeat question",
+    );
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
       queuedInjections: [
         {
@@ -161,7 +170,7 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
     forgetPromptBuildDrainCacheForRun("run-cache-test");
 
-    const hookCtx = { runId: "run-cache-test", sessionKey: "agent:main:main" };
+    const hookCtx = { runId: "run-cache-test", sessionKey: "agent:main:main", trigger: "user" };
 
     const first = await resolvePromptBuildHookResult({
       config: {},
@@ -177,14 +186,19 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
-    expect(first.prependContext).toBe("first attempt context");
-    expect(second.prependContext).toBe("first attempt context");
+    expect(pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(first.prependContext).toBe("pending heartbeat question\n\nfirst attempt context");
+    expect(second.prependContext).toBe("pending heartbeat question\n\nfirst attempt context");
 
     forgetPromptBuildDrainCacheForRun("run-cache-test");
   });
 
   it("re-drains after the run-scoped cache is forgotten", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockResolvedValue(undefined);
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValueOnce({
       queuedInjections: [],
       prependContext: undefined,
@@ -207,6 +221,8 @@ describe("resolvePromptBuildHookResult drain cache", () => {
 
   it("drains every call when no runId is provided (no caching key)", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockResolvedValue(undefined);
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
       queuedInjections: [],
       prependContext: undefined,
@@ -226,5 +242,42 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+  });
+
+  it("only drains heartbeat pending questions for user-triggered turns", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+      prependContext: undefined,
+    });
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockReset();
+    pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext.mockResolvedValue(
+      "pending heartbeat question",
+    );
+
+    const heartbeat = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: {
+        runId: "heartbeat-drain-test",
+        sessionKey: "agent:main:main",
+        trigger: "heartbeat",
+      },
+    });
+    forgetPromptBuildDrainCacheForRun("heartbeat-drain-test");
+    const user = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { runId: "user-drain-test", sessionKey: "agent:main:main", trigger: "user" },
+    });
+
+    expect(heartbeat.prependContext).toBeUndefined();
+    expect(user.prependContext).toBe("pending heartbeat question");
+    expect(pendingQuestionContextMocks.drainHeartbeatPendingQuestionContext).toHaveBeenCalledTimes(
+      1,
+    );
+    forgetPromptBuildDrainCacheForRun("user-drain-test");
   });
 });
