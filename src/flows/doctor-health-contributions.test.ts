@@ -299,7 +299,9 @@ describe("doctor health contributions", () => {
 
       await contribution.run({
         cfg: {},
+        cfgForPersistence: {},
         configResult: { cfg: {} },
+        configPath: "/tmp/fake-openclaw.json",
         sourceConfigValid: true,
         prompter: buildDoctorPrompter(true),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -319,7 +321,9 @@ describe("doctor health contributions", () => {
 
       await contribution.run({
         cfg: {},
+        cfgForPersistence: {},
         configResult: { cfg: {} },
+        configPath: "/tmp/fake-openclaw.json",
         sourceConfigValid: true,
         prompter: buildDoctorPrompter(true),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },

@@ -453,6 +453,26 @@ describe("session store writer queue", () => {
     });
   });
 
+  it("normalizes malformed persisted session entry fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": {
+        sessionId: " s-good ",
+        updatedAt: "definitely-not-a-time",
+        sessionFile: { path: "bad.jsonl" },
+      },
+      "agent:main:object-id": { sessionId: { nested: "bad" }, updatedAt: Date.now() },
+      "agent:main:unsafe-id": { sessionId: "../etc/passwd", updatedAt: Date.now() },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:good"]?.updatedAt).toBe(0);
+    expect(store["agent:main:good"]?.sessionFile).toBeUndefined();
+    expect(store["agent:main:object-id"]).toBeUndefined();
+    expect(store["agent:main:unsafe-id"]).toBeUndefined();
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({

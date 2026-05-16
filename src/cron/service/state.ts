@@ -162,6 +162,11 @@ export type CronServiceState = {
    * single broken job does not spam the log on every scheduler cycle.
    */
   warnedMissingSessionTargetJobIds: Set<string>;
+  /**
+   * Persisted job rows with non-canonical storage shape are skipped in memory
+   * until doctor/fix or an explicit config write repairs the store.
+   */
+  warnedInvalidPersistedJobKeys: Set<string>;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
 };
@@ -175,6 +180,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
+    warnedInvalidPersistedJobKeys: new Set<string>(),
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
   };

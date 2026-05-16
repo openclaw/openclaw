@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- MCP plugin tools: forward host MCP `tools/call` `AbortSignal` through `createPluginToolsMcpHandlers().callTool` into plugin `tool.execute`, so host cancellation actually cancels in-flight plugin tool calls instead of letting them run to completion. (#82443) Thanks @joshavant.
 - Update/doctor: avoid materializing `groupAllowFrom` for channel schemas that reject it, so package-swap doctor repairs do not fail on externalized Slack configs.
 - Gateway/media: prevent image filenames from overriding generic non-image byte sniffing, so zip/octet-stream payloads mislabeled as images are offloaded or rejected before they become inline image attachments.
 - Plugins/web search: downgrade stale optional provider installs to warnings so Gateway and doctor repair paths keep running after startup provider selection. Refs #82313. Thanks @crackmac.
@@ -25,6 +26,11 @@ Docs: https://docs.openclaw.ai
 - Update: carry plugin-validation bypasses into config mutation pre-write reads, so package update doctor repairs can finish while externalized plugin schemas are converging.
 - Agents/subagents: warn and continue completion announce cleanup when lifecycle cleanup fails, preventing ended subagent runs from becoming silent ghosts. Fixes #82306. Thanks @SebTardif.
 - Telegram: let authorized text `/stop` commands use the fast-abort path before queued agent work, so active turns stop immediately instead of processing the abort after the turn finishes; foreign-bot `/stop@otherbot` mentions now stay on the regular topic lane instead of being routed into our control lane. Fixes #82162. Thanks @civiltox.
+- Sessions: drop persisted entries with invalid session ids and strip malformed transcript file metadata before hydrating session runtime state.
+- Commitments: strip malformed optional reminder scope metadata from persisted commitments before matching pending follow-ups.
+- Config persistence: normalize malformed auth profile credential fields/state, skip JSON-valid garbage transcript checkpoint rows, and let `openclaw doctor --fix` remove unrepairable cron job rows.
+- Cron: skip persisted job rows with malformed schedule or payload shapes in memory, leaving the store for `openclaw doctor --fix` instead of hydrating them into runtime state.
+- Task persistence: drop malformed array/scalar requester-origin JSON from task and task-flow SQLite sidecars instead of restoring it as delivery metadata.
 - Agents/timeouts: clarify model idle-timeout errors and docs so provider `timeoutSeconds` is shown as bounded by the whole agent/run timeout ceiling.
 - Release tooling: align the published launcher Node floor, `npm start`, package script checks, sharded lint locking, Vitest root project coverage, and plugin-SDK declaration build cache metadata so release/package validation does not silently skip or ship stale surfaces.
 - Cron/agents: honor configured subagent model fallbacks for isolated scheduled runs and forward that fallback policy into embedded agent timeout failover. Fixes #74985. Thanks @chrisgwynne.
