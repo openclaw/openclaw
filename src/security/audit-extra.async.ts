@@ -252,6 +252,12 @@ async function getCodeSafetySummary(params: {
     const skillScanner = await loadSkillScannerModule();
     const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
+      // Plugin code-safety scans the runtime entry tree. Test files
+      // (`*.test.ts` / `__tests__/`) are never loaded at runtime, but
+      // legitimately use `process.env` for fixtures and contain `fetch(` /
+      // `.post(` in `it()` descriptions, which produces critical-severity
+      // env-harvesting false positives. See #82469.
+      excludeTestFiles: true,
     });
     cache.set(cacheKey, pending);
     return await pending;
@@ -259,6 +265,7 @@ async function getCodeSafetySummary(params: {
   const skillScanner = await loadSkillScannerModule();
   return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
     includeFiles: params.includeFiles,
+    excludeTestFiles: true,
   });
 }
 
