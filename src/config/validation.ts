@@ -1557,8 +1557,11 @@ function validateConfigObjectWithPluginsBase(
     memorySlot.trim() &&
     !knownIds.has(memorySlot)
   ) {
+    const isMissingOfficialExternalMemorySlot = Boolean(
+      formatMissingOfficialExternalPluginWarning(memorySlot),
+    );
     pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
-      warnOnly: Boolean(formatMissingOfficialExternalPluginWarning(memorySlot)),
+      warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(memorySlot),
     });
   }
 
