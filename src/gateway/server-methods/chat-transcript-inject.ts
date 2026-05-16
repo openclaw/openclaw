@@ -50,6 +50,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  openclawTtsSupplement?: {
+    spokenText: string;
+  };
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
   config?: OpenClawConfig;
@@ -91,6 +94,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.openclawTtsSupplement
+      ? { openclawTtsSupplement: params.openclawTtsSupplement }
+      : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {

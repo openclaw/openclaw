@@ -501,6 +501,68 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("merges delayed TTS supplements into their original assistant message", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The answer is 42." }],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "thanks" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            label: "tts.mp3",
+            source: { type: "url", url: "file:///tmp/tts.mp3", media_type: "audio/mpeg" },
+            isVoiceNote: true,
+          },
+        ],
+        openclawTtsSupplement: { spokenText: "The answer is 42." },
+        timestamp: 4,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "The answer is 42." },
+          {
+            type: "audio",
+            label: "tts.mp3",
+            source: { type: "url", url: "file:///tmp/tts.mp3", media_type: "audio/mpeg" },
+            isVoiceNote: true,
+          },
+        ],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "thanks" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
   it("keeps visible assistant progress text from mixed tool-use messages", () => {
     const result = projectRecentChatDisplayMessages([
       {

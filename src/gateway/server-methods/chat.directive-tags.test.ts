@@ -825,6 +825,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       : [];
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
+    expect(message?.openclawTtsSupplement).toEqual({
+      spokenText: "This text is already in the model transcript.",
+    });
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
     expect(content[1]).toEqual({
       type: "attachment",
@@ -836,9 +839,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         isVoiceNote: true,
       },
     });
-    expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
-      "This text is already in the model transcript.",
-    );
+    expect(JSON.stringify(content)).not.toContain("This text is already in the model transcript.");
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {

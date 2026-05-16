@@ -171,7 +171,9 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function isTtsSupplementPayload(payload: ReplyPayload): boolean {
+function isTtsSupplementPayload(
+  payload: ReplyPayload,
+): payload is ReplyPayload & { spokenText: string } {
   return (
     typeof payload.spokenText === "string" &&
     payload.spokenText.trim().length > 0 &&
@@ -1398,6 +1400,9 @@ async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  openclawTtsSupplement?: {
+    spokenText: string;
+  };
   abortMeta?: {
     aborted: true;
     origin: AbortOrigin;
@@ -1441,6 +1446,7 @@ async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    openclawTtsSupplement: params.openclawTtsSupplement,
     abortMeta: params.abortMeta,
     config: params.cfg,
   });
@@ -2530,6 +2536,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
+          ...(isTtsSupplementPayload(payload)
+            ? { openclawTtsSupplement: { spokenText: payload.spokenText.trim() } }
+            : {}),
           cfg,
         });
         if (appended.ok) {

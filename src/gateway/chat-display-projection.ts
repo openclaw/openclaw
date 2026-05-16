@@ -464,7 +464,117 @@ export function sanitizeChatHistoryMessages(
     }
     next.push(res.message);
   }
-  return changed ? next : messages;
+  const merged = mergeTtsSupplementMessages(next);
+  return changed || merged !== next ? merged : messages;
+}
+
+function normalizeAssistantVisibleText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const record = message as Record<string, unknown>;
+  if (record.role !== "assistant") {
+    return "";
+  }
+  const content = record.content;
+  if (typeof content === "string") {
+    return stripInlineDirectiveTagsForDisplay(content).text.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" ? stripInlineDirectiveTagsForDisplay(text).text.trim() : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function resolveTtsSupplementSpokenText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const marker = (message as { openclawTtsSupplement?: unknown }).openclawTtsSupplement;
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+    return undefined;
+  }
+  const spokenText = (marker as { spokenText?: unknown }).spokenText;
+  return typeof spokenText === "string" && spokenText.trim() ? spokenText.trim() : undefined;
+}
+
+function extractTtsSupplementContent(content: unknown): unknown[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type !== "text";
+  });
+}
+
+function appendContentBlocks(message: unknown, blocks: unknown[]): unknown {
+  if (!message || typeof message !== "object" || Array.isArray(message) || blocks.length === 0) {
+    return message;
+  }
+  const record = message as Record<string, unknown>;
+  const content = Array.isArray(record.content)
+    ? [...record.content, ...blocks]
+    : typeof record.content === "string"
+      ? [{ type: "text", text: record.content }, ...blocks]
+      : blocks;
+  return {
+    ...record,
+    content,
+  };
+}
+
+function mergeTtsSupplementMessages(messages: unknown[]): unknown[] {
+  let changed = false;
+  const out: unknown[] = [];
+  for (const message of messages) {
+    const spokenText = resolveTtsSupplementSpokenText(message);
+    const contentBlocks =
+      spokenText && typeof message === "object" && message
+        ? extractTtsSupplementContent((message as { content?: unknown }).content)
+        : [];
+    if (!spokenText || contentBlocks.length === 0) {
+      out.push(message);
+      continue;
+    }
+    const targetIndex = findTtsSupplementTargetIndex(out, spokenText);
+    if (targetIndex < 0) {
+      out.push(message);
+      continue;
+    }
+    out[targetIndex] = appendContentBlocks(out[targetIndex], contentBlocks);
+    changed = true;
+  }
+  return changed ? out : messages;
+}
+
+function findTtsSupplementTargetIndex(messages: unknown[], spokenText: string): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    if ((message as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    if (normalizeAssistantVisibleText(message) === spokenText) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 function asRoleContentMessage(message: Record<string, unknown>): RoleContentMessage | null {
