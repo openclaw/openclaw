@@ -270,6 +270,12 @@ export function createChannelApprovalNativeRuntimeAdapter<
                     await spec.interactions?.clearPendingActions?.(params as never),
                 }
               : {}),
+            ...(spec.interactions.cancelDelivered
+              ? {
+                  cancelDelivered: async (params) =>
+                    await spec.interactions?.cancelDelivered?.(params as never),
+                }
+              : {}),
           },
         }
       : {}),
@@ -516,10 +522,18 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           return null;
         }
         if (stopped) {
-          // onStopped 가 deliverPending 와 bindPending 사이에 fire. bindPending 시작 전
-          // 이라 wrapped 도 생성되지 않으므로 activeEntries leak 없음. entry 의 native
-          // cleanup 은 deliverPending 의 contract (timeout/expire) 에 위임. binding 없는
-          // 상태에서 unbindPending 을 호출하면 시그니처 위반이므로 생략.
+          // onStopped fired between deliverPending and bindPending. The wrapped
+          // entry is not yet in activeEntries, so there is no map leak, but
+          // adapters that register side-effects inside deliverPending (e.g. the
+          // Matrix reaction target store) need explicit cleanup. unbindPending
+          // would violate its contract without a binding, so route cleanup
+          // through the optional cancelDelivered hook, which takes the entry.
+          await nativeRuntime.interactions?.cancelDelivered?.({
+            ...baseContext,
+            entry,
+            request,
+            approvalKind,
+          });
           return null;
         }
         const binding = await nativeRuntime.interactions?.bindPending?.({
@@ -536,6 +550,17 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               ...baseContext,
               entry,
               binding,
+              request,
+              approvalKind,
+            });
+          } else {
+            // bindPending returned without a binding handle, but deliverPending
+            // may have left side-effects. Adapters that wire the same store
+            // from both deliverPending and bindPending (e.g. Matrix) drain it
+            // via the binding branch above; this branch covers the rest.
+            await nativeRuntime.interactions?.cancelDelivered?.({
+              ...baseContext,
+              entry,
               request,
               approvalKind,
             });
