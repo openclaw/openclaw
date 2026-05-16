@@ -98,6 +98,13 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:command-owner")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
+  it("places Core Harness Summary near the top of doctor output", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:core-harness")).toBeGreaterThan(-1);
+    expect(ids.indexOf("doctor:core-harness")).toBeLessThan(ids.indexOf("doctor:auth-profiles"));
+  });
+
   it("checks skill readiness before final config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 

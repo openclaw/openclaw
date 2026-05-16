@@ -1,0 +1,124 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
+import {
+  buildCoreHarnessSummary,
+  formatCoreHarnessSummary,
+  isIsolatedCodexHome,
+  noteCoreHarnessSummary,
+} from "./doctor-core-harness.js";
+
+const note = vi.hoisted(() => vi.fn());
+
+vi.mock("../terminal/note.js", () => ({
+  note,
+}));
+
+describe("Core Harness doctor summary", () => {
+  beforeEach(() => {
+    note.mockClear();
+  });
+
+  const approvals: ExecApprovalsFile = {
+    version: 1,
+    agents: {
+      main: {
+        allowlist: [
+          { pattern: "=command:abc123", source: "allow-always" },
+          { pattern: "git status", lastUsedAt: 1 },
+        ],
+      },
+    },
+  };
+
+  const readWrapper = (body: string) => ({
+    existsSync: () => true,
+    readFileSync: () => body,
+  });
+
+  it("detects isolated process homes and keeps a Japanese next action", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: {},
+      configPath: "/tmp/codex-home/.openclaw/openclaw.json",
+      env: {
+        HOME: "/tmp/codex-home",
+        OPENCLAW_HOME: "/Users/hide_aibo",
+      } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      ...readWrapper("openclaw-setup resolve_openclaw_home OPENCLAW_HOME"),
+    });
+
+    expect(isIsolatedCodexHome("/tmp/codex-home")).toBe(true);
+    expect(summary.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "core-harness.home.isolated",
+        severity: "error",
+        what_to_do_now: expect.stringContaining("OPENCLAW_HOME"),
+      }),
+    );
+  });
+
+  it("reports wrapper coverage, broad Discord elevated allowFrom, and approval drift", () => {
+    const cfg = {
+      tools: {
+        elevated: {
+          allowFrom: {
+            discord: ["*"],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            scope: "shared",
+            workspaceAccess: "rw",
+          },
+        },
+      },
+      commands: {
+        ownerAllowFrom: ["discord:123"],
+      },
+    } as OpenClawConfig;
+
+    const summary = buildCoreHarnessSummary({
+      cfg,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals,
+      ...readWrapper("openclaw-setup resolve_openclaw_home OPENCLAW_HOME"),
+    });
+
+    expect(summary.wrappers.openclawSetupAlias).toBe(true);
+    expect(summary.wrappers.homeResolver).toBe(true);
+    expect(summary.elevated.wildcardAllowFrom).toEqual(["tools.elevated.allowFrom.discord"]);
+    expect(summary.approvals).toMatchObject({
+      totalEntries: 2,
+      allowAlwaysEntries: 1,
+      opaqueCommandEntries: 1,
+    });
+    expect(summary.warnings.map((warning) => warning.code)).toEqual(
+      expect.arrayContaining([
+        "core-harness.elevated.allow-from-wildcard",
+        "core-harness.exec-approvals.drift",
+        "core-harness.sandbox-explain.resolver-followup",
+      ]),
+    );
+  });
+
+  it("emits a human-readable Core Harness Summary note", () => {
+    const summary = noteCoreHarnessSummary({
+      cfg: {},
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      ...readWrapper(""),
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Effective OpenClaw home"),
+      "Core Harness Summary",
+    );
+    expect(formatCoreHarnessSummary(summary)).toContain("Warnings:");
+  });
+});

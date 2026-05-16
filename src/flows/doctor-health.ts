@@ -6,8 +6,35 @@ import { stylePromptTitle } from "../terminal/prompt-style.js";
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
+async function runCoreHarnessJson(runtime: RuntimeEnv): Promise<void> {
+  try {
+    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { buildCoreHarnessSummary } = await import("../commands/doctor-core-harness.js");
+    const { writeRuntimeJson } = await import("../runtime.js");
+    const snapshot = await readConfigFileSnapshot();
+    const summary = buildCoreHarnessSummary({
+      cfg: snapshot.runtimeConfig,
+      configPath: snapshot.path,
+      sourceConfigValid: snapshot.valid,
+      configIssues: snapshot.issues,
+      env: process.env,
+    });
+    writeRuntimeJson(runtime, summary);
+    if (!snapshot.valid) {
+      runtime.exit(2);
+    }
+  } catch (err) {
+    runtime.error(`Core Harness Summary failed: ${(err as Error).message}`);
+    runtime.exit(2);
+  }
+}
+
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
+  if (options.json === true) {
+    await runCoreHarnessJson(effectiveRuntime);
+    return;
+  }
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
     assertConfigWriteAllowedInCurrentMode();

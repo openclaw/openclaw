@@ -114,6 +114,16 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
   }
 }
 
+async function runCoreHarnessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteCoreHarnessSummary } = await import("../commands/doctor-core-harness.js");
+  noteCoreHarnessSummary({
+    cfg: ctx.cfg,
+    configPath: ctx.configPath,
+    sourceConfigValid: ctx.sourceConfigValid,
+    env: ctx.env ?? process.env,
+  });
+}
+
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyFlatAuthProfileStores } =
     await import("../commands/doctor-auth-flat-profiles.js");
@@ -646,6 +656,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-config",
       label: "Gateway config",
       run: runGatewayConfigHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:core-harness",
+      label: "Core Harness Summary",
+      run: runCoreHarnessHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
