@@ -39,7 +39,11 @@ export function getCurrentDiagnosticPhase(): string | undefined {
 }
 
 export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] {
-  return recentPhases.slice(-Math.max(0, limit)).map((phase) => Object.assign({}, phase));
+  const normalizedLimit = Math.trunc(limit);
+  if (!Number.isFinite(normalizedLimit) || normalizedLimit <= 0) {
+    return [];
+  }
+  return recentPhases.slice(-normalizedLimit).map((phase) => Object.assign({}, phase));
 }
 
 export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
