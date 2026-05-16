@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/status: show plain empty-state messages instead of empty Channels and Sessions tables when no channels or sessions exist.
 - CLI/context engines: bootstrap and finalize non-legacy context engines for CLI turns while preserving transcript snapshots and deferred maintenance ownership. (#81869) Thanks @sahilsatralkar.
 - Telegram: persist polling updates through restart replay so queued same-topic messages resume in order instead of losing context after a gateway restart. (#82256) Thanks @VACInc.
 - Gateway/Gmail: abort in-flight Gmail watcher startup and hot-reload restarts before shutdown so reloads cannot spawn `gog serve` after the Gateway is closing. Thanks @frankekn.
