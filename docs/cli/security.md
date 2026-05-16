@@ -66,6 +66,11 @@ Each suppression matches an exact `checkId` and can be narrowed with
 
 Suppressed findings are removed from the active `summary` and `findings` list.
 JSON output keeps them under `suppressedFindings` for auditability.
+When suppressions are configured, active output also keeps an unsuppressible
+`security.audit.suppressions.active` info finding so readers can tell the audit
+was filtered. Dangerous config flags are emitted one flag per finding, so
+accepting one dangerous flag does not hide other enabled flags that share the
+same `config.insecure_or_dangerous_flags` checkId.
 Because suppressions can hide standing risk, adding or removing them through
 agent-run shell commands requires exec approval unless exec is already running
 with `security="full"` and `ask="off"` for trusted local automation.

@@ -302,7 +302,9 @@ does not extend to node-role Control UI sessions.
 
 `openclaw security audit` raises `config.insecure_or_dangerous_flags` when
 known insecure/dangerous debug switches are enabled. Keep these unset in
-production.
+production. Each enabled flag is reported as its own finding. If audit
+suppressions are configured, `security.audit.suppressions.active` remains in the
+active audit output even when matching findings move to `suppressedFindings`.
 
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">

@@ -215,6 +215,22 @@ function findingMatchesSuppression(
   return true;
 }
 
+function buildSecurityAuditSuppressionsActiveFinding(params: {
+  configuredCount: number;
+  suppressedCount: number;
+}): SecurityAuditFinding {
+  return {
+    checkId: "security.audit.suppressions.active",
+    severity: "info",
+    title: "Security audit suppressions configured",
+    detail:
+      `security.audit.suppressions has ${params.configuredCount} configured suppression(s); ` +
+      `${params.suppressedCount} finding(s) moved to suppressedFindings.`,
+    remediation:
+      "Review suppressedFindings and remove suppressions when the accepted risk no longer applies.",
+  };
+}
+
 export function applySecurityAuditSuppressions(
   findings: SecurityAuditFinding[],
   suppressions: SecurityAuditSuppression[] | undefined,
@@ -1148,12 +1164,24 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const deep = deepProbeResult?.deep;
   findings.push(...collectDeepProbeFindings({ deep, authWarning: deepProbeResult?.authWarning }));
 
-  const filtered = applySecurityAuditSuppressions(findings, cfg.security?.audit?.suppressions);
-  const summary = countBySeverity(filtered.findings);
+  const configuredSuppressions = cfg.security?.audit?.suppressions;
+  const filtered = applySecurityAuditSuppressions(findings, configuredSuppressions);
+  const configuredSuppressionCount = configuredSuppressions?.length ?? 0;
+  const activeFindings =
+    configuredSuppressionCount > 0
+      ? [
+          ...filtered.findings,
+          buildSecurityAuditSuppressionsActiveFinding({
+            configuredCount: configuredSuppressionCount,
+            suppressedCount: filtered.suppressedFindings.length,
+          }),
+        ]
+      : filtered.findings;
+  const summary = countBySeverity(activeFindings);
   return {
     ts: Date.now(),
     summary,
-    findings: filtered.findings,
+    findings: activeFindings,
     ...(filtered.suppressedFindings.length > 0
       ? { suppressedFindings: filtered.suppressedFindings }
       : {}),

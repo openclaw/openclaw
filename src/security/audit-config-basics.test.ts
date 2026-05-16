@@ -68,6 +68,14 @@ describe("security audit config basics", () => {
     expect(
       report.findings.some((finding) => finding.checkId === "gateway.trusted_proxies_missing"),
     ).toBe(false);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "security.audit.suppressions.active",
+          severity: "info",
+        }),
+      ]),
+    );
     expect(report.suppressedFindings).toEqual([
       expect.objectContaining({
         checkId: "gateway.trusted_proxies_missing",
@@ -75,5 +83,53 @@ describe("security audit config basics", () => {
       }),
     ]);
     expect(report.summary.warn).toBe(report.findings.filter((f) => f.severity === "warn").length);
+  });
+
+  it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        gateway: {
+          controlUi: { allowInsecureAuth: true },
+        },
+        tools: {
+          exec: {
+            applyPatch: { workspaceOnly: false },
+          },
+        },
+        security: {
+          audit: {
+            suppressions: [
+              {
+                checkId: "config.insecure_or_dangerous_flags",
+                detailIncludes: "gateway.controlUi.allowInsecureAuth=true",
+                reason: "accepted local-only browser auth testing",
+              },
+            ],
+          },
+        },
+      },
+      sourceConfig: {},
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(report.suppressedFindings).toEqual([
+      expect.objectContaining({
+        checkId: "config.insecure_or_dangerous_flags",
+        detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
+      }),
+    ]);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "config.insecure_or_dangerous_flags",
+          detail: expect.stringContaining("tools.exec.applyPatch.workspaceOnly=false"),
+        }),
+        expect.objectContaining({
+          checkId: "security.audit.suppressions.active",
+        }),
+      ]),
+    );
   });
 });
