@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingWorkspaces,
+  resolveMemoryRemDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -1239,6 +1242,13 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
 
       let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
       try {
+        // Bug #65374 (ClawSweeper P1 #2): Scope CLI promote ranking with
+        // agent identity and shared-workspace metadata so shared workspaces
+        // only rank the current agent's entries.
+        const workspaceEntries = resolveMemoryDreamingWorkspaces(cfg);
+        const isShared = workspaceEntries.some(
+          (entry) => entry.workspaceDir === workspaceDir && entry.shared,
+        );
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
           limit: opts.limit,
@@ -1248,6 +1258,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
           maxAgeDays: dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
+          ...(isShared ? { currentAgentId: agentId, isShared: true } : {}),
         });
       } catch (err) {
         defaultRuntime.error(`Memory promote ranking failed: ${formatErrorMessage(err)}`);
@@ -1423,6 +1434,12 @@ export async function runMemoryPromoteExplain(
 
       let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
       try {
+        // Bug #65374 (ClawSweeper P1 #2): Scope CLI promote-explain ranking
+        // with agent identity and shared-workspace metadata.
+        const workspaceEntries = resolveMemoryDreamingWorkspaces(cfg);
+        const isShared = workspaceEntries.some(
+          (entry) => entry.workspaceDir === workspaceDir && entry.shared,
+        );
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
           minScore: 0,
@@ -1431,6 +1448,7 @@ export async function runMemoryPromoteExplain(
           includePromoted: Boolean(opts.includePromoted),
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
           maxAgeDays: dreaming.maxAgeDays,
+          ...(isShared ? { currentAgentId: agentId, isShared: true } : {}),
         });
       } catch (err) {
         defaultRuntime.error(`Memory promote-explain failed: ${formatErrorMessage(err)}`);

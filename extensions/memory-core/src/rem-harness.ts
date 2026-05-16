@@ -33,6 +33,17 @@ export type PreviewRemHarnessOptions = {
   candidateLimit?: number;
   remPreviewLimit?: number;
   nowMs?: number;
+  /**
+   * Agent identity for shared-workspace isolation (Bug #65374).
+   * When provided alongside `isShared`, the ranking path filters candidates
+   * to only the current agent's corpus entries.
+   */
+  currentAgentId?: string;
+  /**
+   * Whether the workspace is shared across agents (Bug #65374).
+   * When true, the ranking path requires `currentAgentId` and filters accordingly.
+   */
+  isShared?: boolean;
 };
 
 export type PreviewRemHarnessResult = {
@@ -174,6 +185,11 @@ export async function previewRemHarness(
     maxAgeDays: deepConfig.maxAgeDays,
     nowMs,
     ...(candidateLimit ? { limit: candidateLimit + 1 } : {}),
+    // Bug #65374 (ClawSweeper P1 #2): Scope REM preview ranking with
+    // agent identity and shared-workspace metadata.
+    ...(params.isShared && params.currentAgentId
+      ? { currentAgentId: params.currentAgentId, isShared: true }
+      : {}),
   });
   const truncated = typeof candidateLimit === "number" && rankedCandidates.length > candidateLimit;
   const candidates =

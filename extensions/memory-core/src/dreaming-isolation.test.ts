@@ -49,10 +49,7 @@ function makeMultiWorkspaceConfig(
 describe("Bug #65374: Layer 1 — shared flag", () => {
   it("sets shared=true when multiple agents share a workspace directory", () => {
     const cfg = makeConfig(["alpha", "gamma"], "/shared/workspace");
-    const result = resolveMemoryDreamingWorkspaces(cfg, {
-      primaryWorkspaceDir: "/shared/workspace",
-      primaryAgentId: "main",
-    });
+    const result = resolveMemoryDreamingWorkspaces(cfg);
     // Find the workspace entry for our shared path
     const shared = result.find((w) => w.agentIds.includes("alpha") && w.agentIds.includes("gamma"));
     expect(shared).toBeDefined();
@@ -79,10 +76,7 @@ describe("Bug #65374: Layer 1 — shared flag", () => {
       { id: "alpha", workspaceDir: "/alpha/workspace" },
       { id: "gamma", workspaceDir: "/gamma/workspace" },
     ]);
-    const result = resolveMemoryDreamingWorkspaces(cfg, {
-      primaryWorkspaceDir: "/alpha/workspace",
-      primaryAgentId: "main",
-    });
+    const result = resolveMemoryDreamingWorkspaces(cfg);
     for (const workspace of result) {
       if (workspace.agentIds.length === 1) {
         expect(workspace.shared).toBe(false);

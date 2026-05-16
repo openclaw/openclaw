@@ -144,14 +144,8 @@ export type MemoryDreamingConfig = {
 export type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
-  /** True when multiple agents share this workspace directory.
-   *  Indicates a cross-agent dreaming contamination risk (Bug #65374). */
-  shared: boolean;
-};
-
-export type MemoryDreamingWorkspaceOptions = {
-  primaryWorkspaceDir?: string | null;
-  primaryAgentId?: string | null;
+  /** Whether this workspace is shared across multiple agents (Bug #65374). */
+  shared?: boolean;
 };
 
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
@@ -611,10 +605,7 @@ export function isSameMemoryDreamingDay(
   );
 }
 
-export function resolveMemoryDreamingWorkspaces(
-  cfg: OpenClawConfig,
-  options: MemoryDreamingWorkspaceOptions = {},
-): MemoryDreamingWorkspace[] {
+export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDreamingWorkspace[] {
   const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
@@ -634,30 +625,19 @@ export function resolveMemoryDreamingWorkspaces(
   }
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
-  const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
-    const workspaceDir = workspaceDirRaw?.trim();
+  for (const agentId of agentIds) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
     if (!workspaceDir) {
-      return;
+      continue;
     }
-    const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
     const key = normalizePathForComparison(workspaceDir);
     const existing = byWorkspace.get(key);
     if (existing) {
-      if (!existing.agentIds.includes(agentId)) {
-        existing.agentIds.push(agentId);
-        existing.shared = true; // Multiple agents share this workspace
-      }
-      return;
+      existing.agentIds.push(agentId);
+      existing.shared = true; // Multiple agents share this workspace
+      continue;
     }
     byWorkspace.set(key, { workspaceDir, agentIds: [agentId], shared: false });
-  };
-
-  for (const agentId of agentIds) {
-    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
   return [...byWorkspace.values()];
 }

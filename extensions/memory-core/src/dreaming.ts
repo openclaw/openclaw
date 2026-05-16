@@ -514,12 +514,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
-  const workspaceEntries = params.cfg
-    ? resolveMemoryDreamingWorkspaces(params.cfg, {
-        primaryWorkspaceDir: fallbackWorkspaceDir,
-        primaryAgentId: "main",
-      })
-    : [];
+  const workspaceEntries = params.cfg ? resolveMemoryDreamingWorkspaces(params.cfg) : [];
   // Warn on shared workspaces (Bug #65374 — cross-agent dreaming contamination risk)
   for (const entry of workspaceEntries) {
     if (entry.shared && entry.agentIds.length > 1) {
@@ -538,6 +533,27 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     seenWorkspaces.add(workspaceDir);
     return true;
   });
+  // Bug #65374: Build per-workspace isolation metadata from workspace entries.
+  const workspaceMeta = new Map<string, { isShared: boolean; agentIds: string[] }>();
+  for (const entry of workspaceEntries) {
+    const existing = workspaceMeta.get(entry.workspaceDir);
+    if (existing) {
+      // Merge agent IDs for the same workspace
+      for (const id of entry.agentIds) {
+        if (!existing.agentIds.includes(id)) {
+          existing.agentIds.push(id);
+        }
+      }
+      if (entry.shared) {
+        existing.isShared = true;
+      }
+    } else {
+      workspaceMeta.set(entry.workspaceDir, {
+        isShared: entry.shared,
+        agentIds: [...entry.agentIds],
+      });
+    }
+  }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
     workspaces.push(fallbackWorkspaceDir);
   }
@@ -594,6 +610,11 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         recencyHalfLifeDays,
         maxAgeDays: params.config.maxAgeDays,
         nowMs: sweepNowMs,
+        // Bug #65374: Fail-closed — do NOT synthesize a fallback agent ID.
+        // If no currentAgentId is available and the workspace is shared, the ranking
+        // path in short-term-promotion will return no candidates (safe default).
+        currentAgentId: params.currentAgentId,
+        isShared: workspaceMeta.get(workspaceDir)?.isShared ?? false,
       });
       totalCandidates += candidates.length;
       reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
@@ -903,6 +924,22 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
+
+      // Bug #65374: Validate ctx.agentId against configured agents (Ghost audit finding)
+      if (ctx.agentId) {
+        const configuredAgentIds = (currentConfig.agents?.list ?? []).map((a: any) =>
+          typeof a?.id === "string" ? a.id.toLowerCase() : "",
+        );
+        if (
+          configuredAgentIds.length > 0 &&
+          !configuredAgentIds.includes(ctx.agentId.toLowerCase())
+        ) {
+          api.logger.warn(
+            `memory-core: ctx.agentId "${ctx.agentId}" not in configured agents list — skipping dreaming`,
+          );
+          return undefined;
+        }
+      }
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });

@@ -786,6 +786,16 @@ async function appendSessionCorpusLines(params: {
         ? normalizedExisting.slice(0, -1).split("\n").length
         : normalizedExisting.split("\n").length;
   const payload = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
+  // Bug #65374 (ClawSweeper P1 #3): Use symlink-safe append for corpus files.
+  // Verify the target path is not a symlink before appending to prevent
+  // corpus writes from being redirected outside the workspace.
+  const realDir = await fs.realpath(path.dirname(absolutePath));
+  const expectedDir = path.resolve(path.dirname(absolutePath));
+  if (realDir !== expectedDir) {
+    throw new Error(
+      `memory-core: refusing to append corpus to symlinked directory: ${absolutePath}`,
+    );
+  }
   await fs.appendFile(absolutePath, payload, "utf-8");
   return params.lines.map((entry, index) => {
     const lineNumber = existingLineCount + index + 1;
