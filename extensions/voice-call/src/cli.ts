@@ -61,6 +61,7 @@ export const __testing = {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
   isGatewayUnavailableForLocalFallback,
+  parseBoundedIntegerOption,
 };
 
 function writeStdoutLine(...values: unknown[]): void {
@@ -221,6 +222,24 @@ function resolveDefaultStorePath(config: VoiceCallConfig): string {
     }) ?? resolvedPreferred;
   const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
   return path.join(base, "calls.jsonl");
+}
+
+function parseBoundedIntegerOption(
+  value: unknown,
+  fallback: number,
+  opts: { name: string; min: number },
+): number {
+  const raw = value ?? fallback;
+  const parsed =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${opts.name} must be a finite number`);
+  }
+  return Math.max(opts.min, Math.floor(parsed));
 }
 
 function percentile(values: number[], p: number): number {
@@ -708,8 +727,11 @@ export function registerVoiceCallCli(params: {
     .option("--poll <ms>", "Poll interval in ms", "250")
     .action(async (options: { file: string; since?: string; poll?: string }) => {
       const file = options.file;
-      const since = Math.max(0, Number(options.since ?? 0));
-      const pollMs = Math.max(50, Number(options.poll ?? 250));
+      const since = parseBoundedIntegerOption(options.since, 0, { name: "--since", min: 0 });
+      const pollMs = parseBoundedIntegerOption(options.poll, 250, {
+        name: "--poll",
+        min: 50,
+      });
 
       if (!fs.existsSync(file)) {
         logger.error(`No log file at ${file}`);
@@ -758,7 +780,7 @@ export function registerVoiceCallCli(params: {
     .option("--last <n>", "Analyze last N records", "200")
     .action(async (options: { file: string; last?: string }) => {
       const file = options.file;
-      const last = Math.max(1, Number(options.last ?? 200));
+      const last = parseBoundedIntegerOption(options.last, 200, { name: "--last", min: 1 });
 
       if (!fs.existsSync(file)) {
         throw new Error("No log file at " + file);
@@ -805,7 +827,10 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = Number(options.port ?? config.serve.port ?? 3334);
+        const servePort = parseBoundedIntegerOption(options.port ?? config.serve.port, 3334, {
+          name: "--port",
+          min: 1,
+        });
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
