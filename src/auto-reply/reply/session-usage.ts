@@ -88,6 +88,7 @@ export async function persistSessionUsageUpdate(params: {
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  preserveFreshTotalTokensOnStaleUsage?: boolean;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -154,10 +155,15 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          // Missing a last-call snapshot (and promptTokens fallback) means
-          // context utilization is stale/unknown.
-          patch.totalTokens = totalTokens;
-          patch.totalTokensFresh = typeof totalTokens === "number";
+          if (hasFreshContextSnapshot) {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = true;
+          } else if (
+            params.preserveFreshTotalTokensOnStaleUsage !== true ||
+            entry.totalTokensFresh !== true
+          ) {
+            patch.totalTokensFresh = false;
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });

@@ -1096,6 +1096,12 @@ describe("CodexAppServerEventProjector", () => {
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );
+    expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "end" }).data).toMatchObject(
+      {
+        itemId: "compact-1",
+        completed: true,
+      },
+    );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
