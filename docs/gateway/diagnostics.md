@@ -195,9 +195,7 @@ bundle write:
 ```json5
 {
   diagnostics: {
-    memoryPressureBundle: {
-      enabled: false,
-    },
+    memoryPressureBundle: false,
   },
 }
 ```

@@ -398,9 +398,9 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it("hot-reloads diagnostics memory pressure bundle toggles", () => {
-    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureBundle.enabled"]);
+    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureBundle"]);
     expect(plan.restartGateway).toBe(false);
-    expect(plan.hotReasons).toContain("diagnostics.memoryPressureBundle.enabled");
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureBundle");
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
@@ -895,7 +895,7 @@ describe("startGatewayConfigReloader", () => {
   it("hot-reloads direct diagnostics memory pressure bundle edits", async () => {
     const nextConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      diagnostics: { memoryPressureBundle: { enabled: false } },
+      diagnostics: { memoryPressureBundle: false },
     };
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
@@ -907,7 +907,7 @@ describe("startGatewayConfigReloader", () => {
     );
     const previousConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      diagnostics: { memoryPressureBundle: { enabled: true } },
+      diagnostics: { memoryPressureBundle: true },
     };
     const harness = createReloaderHarness(readSnapshot, {
       initialCompareConfig: previousConfig,
@@ -918,7 +918,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onRestart).not.toHaveBeenCalled();
     const [plan, hotConfig] = getOnlyHotReloadCall(harness);
-    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureBundle.enabled"]);
+    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureBundle"]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

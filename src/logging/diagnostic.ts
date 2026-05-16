@@ -140,7 +140,7 @@ function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] |
 }
 
 function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
-  return config?.diagnostics?.memoryPressureBundle?.enabled !== false;
+  return config?.diagnostics?.memoryPressureBundle !== false;
 }
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;

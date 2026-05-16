@@ -29,8 +29,6 @@ export const FIELD_HELP: Record<string, string> = {
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.memoryPressureBundle":
-    "Critical memory-pressure bundle settings. Keep this enabled to capture redacted pre-OOM stability evidence while preserving normal diagnostics events.",
-  "diagnostics.memoryPressureBundle.enabled":
     "Whether critical memory pressure automatically writes a redacted stability bundle. Default: true. Disable only when file-system scanning or bundle writes are not acceptable on this host.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",

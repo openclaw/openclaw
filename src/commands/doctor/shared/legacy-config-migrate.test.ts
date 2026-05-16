@@ -133,6 +133,42 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
+describe("legacy diagnostics memory pressure bundle migrate", () => {
+  it("moves nested enabled to a boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureBundle: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle object → boolean value.",
+    ]);
+  });
+
+  it("moves empty object form to the default boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: {},
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureBundle: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle object → boolean value.",
+    ]);
+  });
+});
+
 describe("legacy thread binding spawn migrate", () => {
   it("moves matching split spawn flags to unified spawnSessions", () => {
     const res = migrateLegacyConfigForTest({

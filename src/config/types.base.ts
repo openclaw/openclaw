@@ -303,11 +303,6 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
-export type DiagnosticsMemoryPressureBundleConfig = {
-  /** Persist a redacted stability bundle when memory pressure reaches critical. Default: true. */
-  enabled?: boolean;
-};
-
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -316,7 +311,8 @@ export type DiagnosticsConfig = {
   stuckSessionWarnMs?: number;
   /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
   stuckSessionAbortMs?: number;
-  memoryPressureBundle?: DiagnosticsMemoryPressureBundleConfig;
+  /** Persist a redacted stability bundle when memory pressure reaches critical. Default: true. */
+  memoryPressureBundle?: boolean;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };
