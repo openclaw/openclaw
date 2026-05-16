@@ -6,6 +6,7 @@ import {
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
+  codexSandboxPolicyForTurn,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -103,6 +104,24 @@ describe("Codex app-server config", () => {
     });
 
     expect(runtime.start).not.toHaveProperty("clearEnv");
+  });
+
+  it("keeps workspace-write network denied unless an OpenClaw sandbox wrapper opts in", () => {
+    expect(codexSandboxPolicyForTurn("workspace-write", "/work")).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/work"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(codexSandboxPolicyForTurn("workspace-write", "/work", { networkAccess: true })).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/work"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
   });
 
   it("normalizes app-server environment variables to clear", () => {

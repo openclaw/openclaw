@@ -104,6 +104,7 @@ export type CodexAppServerRuntimeOptions = {
   turnCompletionIdleTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
+  workspaceWriteNetworkAccess?: boolean;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
 };
@@ -473,6 +474,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
+  options: { networkAccess?: boolean } = {},
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -483,7 +485,7 @@ export function codexSandboxPolicyForTurn(
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
-    networkAccess: false,
+    networkAccess: options.networkAccess === true,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };

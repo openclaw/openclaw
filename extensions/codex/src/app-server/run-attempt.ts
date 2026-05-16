@@ -426,6 +426,7 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
   return {
     ...appServer,
     sandbox: "workspace-write",
+    workspaceWriteNetworkAccess: true,
   };
 }
 

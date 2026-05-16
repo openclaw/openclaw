@@ -6125,6 +6125,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(sandboxed).not.toBe(appServer);
     expect(sandboxed.approvalPolicy).toBe("never");
     expect(sandboxed.sandbox).toBe("workspace-write");
+    expect(sandboxed.workspaceWriteNetworkAccess).toBe(true);
 
     expect(__testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, null)).toBe(
       appServer,
