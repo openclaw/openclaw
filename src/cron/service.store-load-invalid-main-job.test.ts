@@ -32,7 +32,7 @@ describe("CronService store load", () => {
     tempDir = null;
   });
 
-  it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
+  it("skips invalid main jobs with blank agentTurn payloads loaded from disk", async () => {
     const { dir, storePath } = await makeStorePath();
     tempDir = dir;
     const enqueueSystemEvent = vi.fn();
@@ -46,7 +46,7 @@ describe("CronService store load", () => {
       schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
       sessionTarget: "main",
       wakeMode: "now",
-      payload: { kind: "agentTurn", message: "bad" },
+      payload: { kind: "agentTurn", message: "   " },
       state: {},
       name: "bad",
     } satisfies CronJob;
