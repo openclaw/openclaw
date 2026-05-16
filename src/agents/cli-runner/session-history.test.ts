@@ -177,6 +177,55 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
+  it("uses the latest compaction summary and complete tail for context-engine snapshots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-context-engine-compacted",
+      messages: ["old ask"],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "compaction",
+        id: "compact-1",
+        timestamp: new Date(2).toISOString(),
+        summary: "Earlier compacted context",
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "msg-tail",
+        parentId: "compact-1",
+        timestamp: new Date(3).toISOString(),
+        message: {
+          role: "assistant",
+          content: "tail answer",
+          timestamp: 3,
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    try {
+      const history = await loadCliSessionContextEngineMessages({
+        sessionId: "session-context-engine-compacted",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(history).toHaveLength(2);
+      expectCompactionSummary(history[0], "Earlier compacted context");
+      expectMessageFields(history[1], { role: "assistant", content: "tail answer" });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects symlinked transcripts instead of following them outside the sessions directory", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));

@@ -602,7 +602,7 @@ function scheduleDeferredTurnMaintenance(
         error: err,
       });
     })
-    .finally(() => {
+    .finally(async () => {
       schedulerAbort.dispose();
       const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
       if (current !== state) {
@@ -613,7 +613,7 @@ function scheduleDeferredTurnMaintenance(
         current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
       activeDeferredTurnMaintenanceRuns.delete(sessionKey);
       if (rerunParams) {
-        void scheduleDeferredTurnMaintenance(rerunParams);
+        await scheduleDeferredTurnMaintenance(rerunParams);
       }
     });
   state = {

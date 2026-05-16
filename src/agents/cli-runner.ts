@@ -262,15 +262,6 @@ export async function runPreparedCliAgent(
         config: params.config,
       })
     : [];
-  const contextEngineHistoryMessages = context.contextEngine
-    ? await loadCliSessionContextEngineMessages({
-        sessionId: params.sessionId,
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
-      })
-    : [];
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -548,6 +539,15 @@ export async function runPreparedCliAgent(
       config: context.contextEngineConfig,
       warn: (message) => log.warn(message),
     });
+    const contextEngineHistoryMessages = context.contextEngine
+      ? await loadCliSessionContextEngineMessages({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        })
+      : [];
 
     if (hasBeforeAgentRunHooks && hookRunner) {
       let beforeRunResult:

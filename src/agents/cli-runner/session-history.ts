@@ -206,10 +206,38 @@ export async function loadCliSessionContextEngineMessages(params: {
   agentId?: string;
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
-  return (await loadCliSessionEntries(params)).flatMap((entry) => {
+  const entries = await loadCliSessionEntries(params);
+  const latestCompactionIndex = entries.findLastIndex((entry) => {
+    const candidate = entry as HistoryEntry;
+    return candidate.type === "compaction" && typeof candidate.summary === "string";
+  });
+  if (latestCompactionIndex < 0) {
+    return entries.flatMap((entry) => {
+      const candidate = entry as HistoryEntry;
+      return candidate.type === "message" ? [candidate.message] : [];
+    });
+  }
+
+  const compaction = entries[latestCompactionIndex] as HistoryEntry;
+  const summary = typeof compaction.summary === "string" ? compaction.summary.trim() : "";
+  if (!summary) {
+    return entries.flatMap((entry) => {
+      const candidate = entry as HistoryEntry;
+      return candidate.type === "message" ? [candidate.message] : [];
+    });
+  }
+
+  const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "message" ? [candidate.message] : [];
   });
+  return [
+    {
+      role: "compactionSummary",
+      summary,
+    },
+    ...tailMessages,
+  ];
 }
 
 export async function loadCliSessionReseedMessages(params: {

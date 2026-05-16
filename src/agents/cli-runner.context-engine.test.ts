@@ -273,6 +273,33 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(afterTurnParams?.messages.slice(0, 101)).toEqual(fullHistory);
   });
 
+  it("loads context-engine history after bootstrap lifecycle runs", async () => {
+    const postBootstrapHistory = [textMessage("user", "post-bootstrap history", 9)];
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => {
+      loadCliSessionContextEngineMessagesMock.mockResolvedValueOnce(postBootstrapHistory);
+      return { bootstrapped: true };
+    });
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({ bootstrap, afterTurn, dispose });
+    const context = buildPreparedContext(contextEngine);
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await runPreparedCliAgent(context);
+
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledTimes(1);
+    const bootstrapOrder = bootstrap.mock.invocationCallOrder[0];
+    const loadHistoryOrder = loadCliSessionContextEngineMessagesMock.mock.invocationCallOrder[0];
+    if (typeof bootstrapOrder !== "number" || typeof loadHistoryOrder !== "number") {
+      throw new Error("Expected bootstrap and history load invocation order");
+    }
+    expect(bootstrapOrder).toBeLessThan(loadHistoryOrder);
+    const afterTurnParams = afterTurn.mock.calls[0]?.[0];
+    expect(afterTurnParams?.prePromptMessageCount).toBe(1);
+    expect(afterTurnParams?.messages[0]).toEqual(postBootstrapHistory[0]);
+  });
+
   it("falls back to ingestBatch and still runs turn maintenance", async () => {
     const ingestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async () => ({
       ingestedCount: 2,
