@@ -364,4 +364,44 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     expect(onDelivered).toHaveBeenCalledWith({ request: { id: "exec:1" } });
     expect(load).toHaveBeenCalledTimes(1);
   });
+
+  it("unbinds in-flight wrapped entry when stop() fires between deliverPending and bindPending", async () => {
+    const deliverGate = { resolve: () => {}, promise: Promise.resolve() };
+    const deliverPromise = new Promise<void>((resolve) => {
+      deliverGate.resolve = resolve;
+    });
+    deliverGate.promise = deliverPromise;
+    const deliverPending = vi.fn(async () => {
+      await deliverPromise;
+      return { messageId: "in-flight" };
+    });
+    const bindPending = vi.fn().mockResolvedValue({ bindingId: "bound-in-flight" });
+    const unbindPending = vi.fn();
+
+    const runtime = await createTestApprovalHandler(
+      makeNativeApprovalCapability({
+        deliverPending,
+        bindPending,
+        unbindPending,
+      }),
+    );
+    const approvalRuntime = expectApprovalRuntime(runtime);
+    const request = makeExecApprovalRequest("exec:in-flight");
+
+    const inflight = approvalRuntime.handleRequested(request);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // stop() while deliverPending is parked — onStopped flips the closure flag.
+    await approvalRuntime.stop();
+    deliverGate.resolve();
+    await inflight;
+
+    expect(unbindPending).toHaveBeenCalledTimes(1);
+    const unbind = firstCallArg(unbindPending) as
+      | { entry?: unknown; binding?: unknown; request?: unknown }
+      | undefined;
+    expect(unbind?.entry).toEqual({ messageId: "in-flight" });
+    expect(unbind?.request).toBe(request);
+    expect(bindPending).not.toHaveBeenCalled();
+  });
 });
