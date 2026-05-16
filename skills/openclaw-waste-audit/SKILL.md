@@ -61,9 +61,11 @@ python3 ~/.hermes/scripts/clawsetup_diagnostic.py
 
 Gives: token cost, error rate per job, job classification (EXEC_SCRIPT / LLM_NEEDED / UNCLEAR).
 
-### Step 3 — Deep-dive on top candidates (response_len, delivery rate)
+### Step 3 — Deep-dive on top candidates (summary_len, delivery rate)
 
-For D8 candidates, check response size pattern — tiny output every run = silent loop:
+For D8 candidates, check summary size pattern — tiny summaries every run = silent loop:
+
+**Note:** Use `summary` field (persisted in run-log schema), NOT `response` which does not exist in cron run JSONL.
 
 ```bash
 python3 -c "
@@ -71,7 +73,7 @@ import json, glob, os
 runs_dir = os.environ.get('OPENCLAW_HOME', os.path.expanduser('~/.openclaw'))
 runs_dir = os.path.join(runs_dir, 'cron', 'runs')
 f = os.path.join(runs_dir, '<job_id>.jsonl')
-total=0;count=0;errors=0;delivered=0;resp_lens=[]
+total=0;count=0;errors=0;delivered=0;summary_lens=[]
 with open(f) as fh:
     for line in fh:
         try:
@@ -80,16 +82,16 @@ with open(f) as fh:
             count+=1
             if d.get('error'): errors+=1
             if d.get('delivered'): delivered+=1
-            resp_lens.append(len(str(d.get('response',''))))
+            summary_lens.append(len(str(d.get('summary','') or '')))
         except: pass
 import statistics as s
 print(f'runs={count} tokens={total:,} errors={errors} delivered={delivered}')
-if resp_lens: print(f'response_len: min={min(resp_lens)} median={s.median(resp_lens):.0f} max={max(resp_lens)}')
+if summary_lens: print(f'summary_len: min={min(summary_lens)} median={s.median(summary_lens):.0f} max={max(summary_lens)}')
 "
 ```
 
 D8 signals:
-- `response_len` median ≤ 10 = job producing meaningless output every time
+- `summary_len` median ≤ 20 = job producing trivial summaries every time (CLEAN_LOOP pattern)
 - `delivered=0` on external channel = structurally silent
 - `errors < 10%` but `delivered=0` = "everything is fine" loop
 
@@ -149,7 +151,7 @@ Structure:
    - Runs: <N> | Tokens: <N>
    - Error rate: <Y>%
    - Delivery: delivered=<N> — <typical_summary>
-   - Response length: median=<N> (<all empty / short ok messages / etc.>)
+   - Summary: median_len=<N> chars (<typical_summary_excerpt>)
    - Waste reason: <why it's burning tokens — be specific, name the pattern>
    - Confidence: High/Medium/Low
    - **Recommended fix:** <specific actionable fix>
