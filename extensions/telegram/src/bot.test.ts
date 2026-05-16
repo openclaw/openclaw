@@ -1815,6 +1815,107 @@ describe("createTelegramBot", () => {
     expect(payload.UntrustedStructuredContext).toBeUndefined();
   });
 
+  it("marks every debounced direct source message as session-bound", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const flushLastDebounceTimer = async () => {
+        const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+          (call) => call[1] === DEBOUNCE_MS,
+        );
+        const flushTimer =
+          flushTimerCallIndex >= 0
+            ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+            : undefined;
+        if (flushTimerCallIndex >= 0) {
+          clearTimeout(
+            setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+          );
+        }
+        expect(flushTimer).toBeTypeOf("function");
+        await flushTimer?.();
+      };
+
+      const firstReply = waitForReplyCalls(1);
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+      const chat = { id: 42, type: "private", first_name: "Ada" };
+      const from = { id: 42, is_bot: false, first_name: "Ada" };
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          text: "first buffered direct message",
+          date: 1736380200,
+          message_id: 400,
+          from,
+        },
+      });
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          text: "second buffered direct message",
+          date: 1736380201,
+          message_id: 401,
+          from,
+        },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      await flushLastDebounceTimer();
+      await firstReply;
+
+      replySpy.mockClear();
+      const secondReply = waitForReplyCalls(1);
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          text: "what did I just send?",
+          date: 1736380300,
+          message_id: 402,
+          from,
+        },
+      });
+      await flushLastDebounceTimer();
+      await secondReply;
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      );
+      expect(payload.UntrustedStructuredContext).toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("omits stale Telegram topic context before the persisted session start", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

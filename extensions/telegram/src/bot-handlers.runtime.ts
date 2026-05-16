@@ -234,6 +234,30 @@ export const registerTelegramHandlers = ({
     const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
     return promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs };
   };
+  const sourceMessageIdOptions = (
+    messages: readonly Message[],
+  ): Pick<TelegramMessageContextOptions, "sourceMessageIds"> => {
+    const sourceMessageIds = messages
+      .map((msg) => (typeof msg.message_id === "number" ? String(msg.message_id) : undefined))
+      .filter((messageId): messageId is string => Boolean(messageId));
+    return sourceMessageIds.length > 0 ? { sourceMessageIds } : {};
+  };
+  const sessionBoundMessageIds = (
+    messageId: string,
+    sourceMessageIds?: readonly string[],
+  ): string[] => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const candidate of [...(sourceMessageIds ?? []), messageId]) {
+      const normalized = candidate.trim();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+    return ids;
+  };
   const latestPromptContextMinTimestampMs = (
     ...timestamps: Array<number | undefined>
   ): number | undefined => {
@@ -445,6 +469,7 @@ export const registerTelegramHandlers = ({
       }
       if (entries.length === 1) {
         await processMessageWithReplyChain(last.ctx, last.msg, last.allMedia, last.storeAllowFrom, {
+          ...sourceMessageIdOptions([last.msg]),
           receivedAtMs: last.receivedAtMs,
           ingressBuffer: "inbound-debounce",
           ...promptContextBoundaryOptions(last.promptContextMinTimestampMs),
@@ -478,6 +503,7 @@ export const registerTelegramHandlers = ({
         first.storeAllowFrom,
         {
           ...(messageIdOverride ? { messageIdOverride } : {}),
+          ...sourceMessageIdOptions(entries.map(({ msg }) => msg)),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "inbound-debounce",
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
@@ -795,7 +821,10 @@ export const registerTelegramHandlers = ({
         primaryEntry.msg,
         allMedia,
         entry.storeAllowFrom,
-        promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
+        {
+          ...sourceMessageIdOptions(messages.map(({ msg }) => msg)),
+          ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
+        },
       );
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
@@ -829,6 +858,7 @@ export const registerTelegramHandlers = ({
       const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
       await processMessageWithReplyChain(syntheticCtx, syntheticMessage, [], storeAllowFrom, {
         messageIdOverride: String(last.msg.message_id),
+        ...sourceMessageIdOptions(messages.map(({ msg }) => msg)),
         receivedAtMs: first.receivedAtMs,
         ingressBuffer: "text-fragment",
         ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
@@ -1010,12 +1040,17 @@ export const registerTelegramHandlers = ({
         options?.resolvePromptContext?.(params) ??
         buildPromptContextForMessage(msg, replyChainNodes, options, params.sessionKey),
       markSessionBoundMessage: (params) => {
-        messageCache.markSessionBound({
-          accountId,
-          chatId: msg.chat.id,
-          messageId: params.messageId,
-          sessionKey: params.sessionKey,
-        });
+        for (const messageId of sessionBoundMessageIds(
+          params.messageId,
+          options?.sourceMessageIds,
+        )) {
+          messageCache.markSessionBound({
+            accountId,
+            chatId: msg.chat.id,
+            messageId,
+            sessionKey: params.sessionKey,
+          });
+        }
         options?.markSessionBoundMessage?.(params);
       },
     };
