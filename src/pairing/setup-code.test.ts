@@ -8,9 +8,6 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-vi.unmock("../gateway/net.js");
-vi.resetModules();
-
 const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
 const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
