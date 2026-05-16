@@ -238,6 +238,7 @@ function createAppServerHarness(
   const requests: Array<{ method: string; params: unknown }> = [];
   let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
   let handleServerRequest: AppServerRequestHandler | undefined;
+  const closeHandlers = new Set<() => void>();
   const request = vi.fn(async (method: string, params?: unknown) => {
     requests.push({ method, params });
     return requestImpl(method, params);
@@ -254,6 +255,10 @@ function createAppServerHarness(
       addRequestHandler: (handler: AppServerRequestHandler) => {
         handleServerRequest = handler;
         return () => undefined;
+      },
+      addCloseHandler: (handler: () => void) => {
+        closeHandlers.add(handler);
+        return () => closeHandlers.delete(handler);
       },
     } as never;
   });
@@ -301,6 +306,11 @@ function createAppServerHarness(
           turn: { id: params.turnId, status: "completed" },
         },
       });
+    },
+    close() {
+      for (const handler of closeHandlers) {
+        handler();
+      }
     },
   };
 }
@@ -5020,6 +5030,23 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
+  it("releases completion when the app-server client closes during an active turn", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    harness.close();
+
+    const result = await run;
+    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
   });
 
   it("does not treat a user prompt containing the interrupted marker as terminal", async () => {

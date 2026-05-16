@@ -1038,6 +1038,7 @@ export async function runCodexAppServerAttempt(
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
   let turnCompletionIdleTimeoutMessage: string | undefined;
+  let clientClosedPromptError: string | undefined;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -1758,6 +1759,7 @@ export async function runCodexAppServerAttempt(
       }
     }
   });
+  let closeCleanup: (() => void) | undefined;
 
   const forceContextEngineCompactionForCodexOverflow = async (error: unknown): Promise<boolean> => {
     if (!activeContextEngine?.info.ownsCompaction) {
@@ -2016,6 +2018,30 @@ export async function runCodexAppServerAttempt(
     nativePostToolUseRelayEnabled:
       nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
   });
+  closeCleanup = (
+    client as {
+      addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
+    }
+  ).addCloseHandler?.(() => {
+    if (completed || runAbortController.signal.aborted) {
+      return;
+    }
+    clientClosedPromptError = "codex app-server client closed before turn completed";
+    trajectoryRecorder?.recordEvent("turn.client_closed", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    embeddedAgentLog.warn("codex app-server client closed before turn completed", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    completed = true;
+    clearTurnAttemptIdleTimer();
+    clearTurnCompletionIdleTimer();
+    clearTurnAssistantCompletionIdleTimer();
+    clearTurnTerminalIdleTimer();
+    resolveCompletion?.();
+  });
   emitLifecycleStart();
   const activeProjector = projector;
   turnTerminalIdleWatchArmed = true;
@@ -2081,11 +2107,13 @@ export async function runCodexAppServerAttempt(
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     const finalAborted = result.aborted || runAbortController.signal.aborted;
-    let finalPromptError = turnCompletionIdleTimedOut
-      ? turnCompletionIdleTimeoutMessage
-      : timedOut
-        ? "codex app-server attempt timed out"
-        : result.promptError;
+    let finalPromptError =
+      clientClosedPromptError ??
+      (turnCompletionIdleTimedOut
+        ? turnCompletionIdleTimeoutMessage
+        : timedOut
+          ? "codex app-server attempt timed out"
+          : result.promptError);
     const finalPromptErrorMessage =
       typeof finalPromptError === "string"
         ? finalPromptError
@@ -2104,7 +2132,8 @@ export async function runCodexAppServerAttempt(
         signal: runAbortController.signal,
       });
     }
-    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+    const finalPromptErrorSource =
+      timedOut || clientClosedPromptError ? "prompt" : result.promptErrorSource;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -2247,6 +2276,7 @@ export async function runCodexAppServerAttempt(
     clearTurnTerminalIdleTimer();
     notificationCleanup();
     requestCleanup();
+    closeCleanup?.();
     nativeHookRelay?.unregister();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
