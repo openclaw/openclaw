@@ -395,6 +395,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       context.unsubscribeAllSessionEvents(connId);
       for (const [runId, entry] of context.chatAbortControllers) {
         if (entry.ownerConnId === connId) {
+          logWsControl.info(
+            `aborting chat run on owner disconnect conn=${connId} runId=${runId} sessionKey=${entry.sessionKey}`,
+          );
           abortChatRunById(context, {
             runId,
             sessionKey: entry.sessionKey,
