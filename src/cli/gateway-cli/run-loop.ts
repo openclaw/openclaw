@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import {
+  captureGatewayRestartTraceHandoff,
+  createGatewayRestartTraceHandoffEnv,
   measureGatewayRestartTrace,
   markGatewayRestartTrace,
   startGatewayRestartTrace,
@@ -152,7 +154,10 @@ export async function runGatewayLoop(params: {
     } = await loadGatewayLifecycleRuntimeModule();
 
     if (isUpdateRestart) {
-      const respawn = respawnGatewayProcessForUpdate();
+      const restartTraceHandoff = captureGatewayRestartTraceHandoff();
+      const respawn = respawnGatewayProcessForUpdate({
+        env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
+      });
       if (respawn.mode === "spawned") {
         const port = params.lockPort;
         const healthy =
@@ -186,17 +191,18 @@ export async function runGatewayLoop(params: {
       }
       if (respawn.mode === "supervised") {
         const supervisorMode = detectRespawnSupervisor(process.env, process.platform);
-        writeGatewayRestartHandoffSync({
-          restartKind: "update-process",
-          reason: restartReason,
-          processInstanceId,
-          supervisorMode: supervisorMode ?? "external",
-        });
         markGatewayRestartTrace("restart.full-process-handoff", [
           ["kind", "update-process"],
           ["mode", respawn.mode],
           ["supervisorMode", supervisorMode ?? "external"],
         ]);
+        writeGatewayRestartHandoffSync({
+          restartKind: "update-process",
+          reason: restartReason,
+          processInstanceId,
+          supervisorMode: supervisorMode ?? "external",
+          restartTrace: captureGatewayRestartTraceHandoff(),
+        });
         gatewayLog.info("restart mode: update process respawn (supervisor restart)");
         if (supervisorMode === "launchd") {
           await new Promise((resolve) => {
@@ -227,7 +233,10 @@ export async function runGatewayLoop(params: {
     }
 
     // Release the lock BEFORE spawning so the child can acquire it immediately.
-    const respawn = restartGatewayProcessWithFreshPid();
+    const restartTraceHandoff = captureGatewayRestartTraceHandoff();
+    const respawn = restartGatewayProcessWithFreshPid({
+      env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
+    });
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
       const supervisorMode =
         respawn.mode === "supervised"
@@ -237,20 +246,21 @@ export async function runGatewayLoop(params: {
         respawn.mode === "spawned"
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
-      if (respawn.mode === "supervised") {
-        writeGatewayRestartHandoffSync({
-          restartKind: "full-process",
-          reason: restartReason,
-          processInstanceId,
-          supervisorMode: supervisorMode ?? "external",
-        });
-      }
       markGatewayRestartTrace("restart.full-process-handoff", [
         ["kind", "full-process"],
         ["mode", respawn.mode],
         ["pid", respawn.mode === "spawned" ? (respawn.pid ?? "unknown") : "none"],
         ["supervisorMode", supervisorMode ?? "none"],
       ]);
+      if (respawn.mode === "supervised") {
+        writeGatewayRestartHandoffSync({
+          restartKind: "full-process",
+          reason: restartReason,
+          processInstanceId,
+          supervisorMode: supervisorMode ?? "external",
+          restartTrace: captureGatewayRestartTraceHandoff(),
+        });
+      }
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
       if (supervisorMode === "launchd") {
         // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
