@@ -483,6 +483,7 @@ describe("update-cli", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     if (call?.[1] === undefined) {
       throw new Error("Expected package install command options");
@@ -2577,7 +2578,16 @@ describe("update-cli", () => {
       .map(([argv]) => argv)
       .filter((argv) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
     expect(installArgvs).toEqual([
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      [
+        "npm",
+        "i",
+        "-g",
+        "openclaw@latest",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+        "--min-release-age=0",
+      ],
       [
         "npm",
         "i",
@@ -2587,6 +2597,7 @@ describe("update-cli", () => {
         "--no-fund",
         "--no-audit",
         "--loglevel=error",
+        "--min-release-age=0",
       ],
     ]);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
