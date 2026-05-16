@@ -24,7 +24,6 @@ import {
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
-  SecretRefSchema,
   SecretInputSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
