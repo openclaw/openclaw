@@ -27,7 +27,7 @@ function resolveRuntimeSubagentMode(
   return "default";
 }
 
-export function installStandaloneRuntimePluginRegistry(
+function installStandaloneRuntimePluginRegistry(
   registry: PluginRegistry,
   params: {
     loadOptions: PluginLoadOptions;
