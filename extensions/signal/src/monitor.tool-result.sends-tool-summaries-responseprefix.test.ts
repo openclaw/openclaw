@@ -75,8 +75,9 @@ function hasQueuedReactionEventFor(sender: string) {
       typeof options === "object" &&
       options !== null &&
       "sessionKey" in options &&
-      (options as { sessionKey?: string; trusted?: boolean }).sessionKey === route.sessionKey &&
-      (options as { trusted?: boolean }).trusted === false
+      (options as { sessionKey?: string; forceSenderIsOwnerFalse?: boolean }).sessionKey ===
+        route.sessionKey &&
+      (options as { forceSenderIsOwnerFalse?: boolean }).forceSenderIsOwnerFalse === true
     );
   });
 }
@@ -140,7 +141,7 @@ describe("monitorSignalProvider tool results", () => {
     await vi.waitFor(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
+    expect(sendMock.mock.calls[0]?.[1]).toBe("PFX final reply");
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {

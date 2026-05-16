@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-function makeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
+function makeClient(
+  connId: string,
+  nodeId: string,
+  sent: string[] = [],
+  opts: {
+    clientId?: string;
+    platform?: string;
+    version?: string;
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
+    declaredCaps?: string[];
+    declaredCommands?: string[];
+    declaredPermissions?: Record<string, boolean>;
+  } = {},
+): GatewayWsClient {
   return {
     connId,
     usesSharedGatewayAuth: false,
@@ -14,7 +29,14 @@ function makeClient(connId: string, nodeId: string, sent: string[] = []): Gatewa
       },
     } as unknown as GatewayWsClient["socket"],
     connect: {
-      client: { id: "openclaw-macos", version: "1.0.0", platform: "darwin", mode: "node" },
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: opts.clientId ?? "openclaw-macos",
+        version: opts.version ?? "1.0.0",
+        platform: opts.platform ?? "darwin",
+        mode: "node",
+      },
       device: {
         id: nodeId,
         publicKey: "public-key",
@@ -22,7 +44,13 @@ function makeClient(connId: string, nodeId: string, sent: string[] = []): Gatewa
         signedAt: 1,
         nonce: "nonce",
       },
-    } as GatewayWsClient["connect"],
+      caps: opts.caps ?? [],
+      commands: opts.commands ?? [],
+      permissions: opts.permissions,
+      declaredCaps: opts.declaredCaps,
+      declaredCommands: opts.declaredCommands,
+      declaredPermissions: opts.declaredPermissions,
+    } as unknown as GatewayWsClient["connect"],
   };
 }
 
@@ -55,6 +83,345 @@ describe("gateway/node-registry", () => {
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
   });
 
+  it("matches pending system.run events to the issuing connection", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(
+      makeClient("conn-1", "node-1", frames, {
+        clientId: "openclaw-node-host",
+        platform: "linux",
+      }),
+      {},
+    );
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-1", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(true);
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-other",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(false);
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-other",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(false);
+
+    registry.handleInvokeResult({
+      id: request.payload?.id ?? "",
+      nodeId: "node-1",
+      connId: "conn-1",
+      ok: true,
+    });
+    await expect(invoke).resolves.toEqual({
+      ok: true,
+      payload: undefined,
+      payloadJSON: null,
+      error: null,
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps no-timeout system.run event authorization after invoke timeout", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    try {
+      registry.register(makeClient("conn-1", "node-1", frames), {});
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "system.run",
+        params: { runId: "run-timeout", sessionKey: "agent:main:main", timeoutMs: 0 },
+        timeoutMs: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-timeout",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("matches a single system.run event when legacy payload omits runId", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-legacy", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("rejects runId-less system.run events for non-legacy nodes", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(
+      makeClient("conn-1", "node-1", frames, {
+        clientId: "openclaw-node-host",
+        platform: "linux",
+      }),
+      {},
+    );
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-required", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("generates and forwards a runId when system.run params omit it", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { command: ["/bin/sh", "-lc", "printf ok"], sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { paramsJSON?: string | null };
+    };
+    const forwarded = JSON.parse(request.payload?.paramsJSON ?? "{}") as { runId?: unknown };
+
+    expect(typeof forwarded.runId).toBe("string");
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: forwarded.runId as string,
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("clears system.run event authorization when invoke result fails", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-failed", sessionKey: "agent:main:main", timeoutMs: 0 },
+      timeoutMs: 1_000,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "invalid params" },
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      payload: undefined,
+      payloadJSON: null,
+      error: { code: "INVALID_REQUEST", message: "invalid params" },
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-failed",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("matches legacy macOS exec events with runtime-generated runId when single pending run matches", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "gateway-run", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "legacy-runtime-run",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("rejects mismatched runId fallback for non-macOS nodes", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(
+      makeClient("conn-1", "node-1", frames, {
+        clientId: "openclaw-node-host",
+        platform: "linux",
+      }),
+      {},
+    );
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "gateway-run", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "runtime-run",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("matches system.run events with emitted session key when invoke omitted sessionKey", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-without-session" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-without-session",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("rejects runId-less system.run events when the connection has multiple matches", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const first = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-a", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const second = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-b", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+    registry.unregister("conn-1");
+    void first.catch(() => {});
+    void second.catch(() => {});
+  });
+
   it("sends raw event payload JSON without changing the envelope shape", () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
@@ -83,5 +450,52 @@ describe("gateway/node-registry", () => {
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
       '{"type":"event","event":"heartbeat"}',
     ]);
+  });
+
+  it("refreshes effective live surface within the declared surface", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      caps: [],
+      commands: [],
+      declaredCaps: ["talk"],
+      declaredCommands: ["talk.ptt.start"],
+      declaredPermissions: { microphone: true, camera: false },
+    });
+
+    const session = registry.register(client, {});
+    expect(session.caps).toEqual([]);
+    expect(session.commands).toEqual([]);
+
+    const updated = registry.updateSurface("node-1", {
+      caps: ["talk", "screen"],
+      commands: ["talk.ptt.start", "system.run"],
+      permissions: { microphone: true, camera: true },
+    });
+
+    expect(updated?.caps).toEqual(["talk"]);
+    expect(updated?.commands).toEqual(["talk.ptt.start"]);
+    expect(updated?.permissions).toEqual({ microphone: true, camera: false });
+    expect(client.connect.caps).toEqual(["talk"]);
+    expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+  });
+
+  it("clears effective permissions when explicitly removed", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      permissions: { camera: false },
+      declaredPermissions: { camera: false },
+    });
+
+    registry.register(client, {});
+    const updated = registry.updateSurface("node-1", {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+
+    expect(updated?.permissions).toBeUndefined();
+    expect(
+      (client.connect as { permissions?: Record<string, boolean> }).permissions,
+    ).toBeUndefined();
   });
 });

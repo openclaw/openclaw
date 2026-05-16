@@ -1,6 +1,7 @@
 import { createCodingTools, createReadTool } from "@earendil-works/pi-coding-agent";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import type { InboundTurnKind } from "../channels/turn/kind.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -38,6 +39,7 @@ import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import {
@@ -77,8 +79,10 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import {
@@ -406,6 +410,7 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inboundTurnKind?: InboundTurnKind;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Keep the message tool available even when the selected profile omits it. */
@@ -520,7 +525,9 @@ export function createOpenClawCodingTools(options?: {
     policy: TPolicy | undefined,
   ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
   const runtimeProfileAlsoAllow = [
-    ...(options?.forceMessageTool ? ["message"] : []),
+    ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
+      ? ["message"]
+      : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
@@ -553,6 +560,13 @@ export function createOpenClawCodingTools(options?: {
           store: subagentStore,
         })
       : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
+    options?.config,
+    options?.sessionKey,
+    {
+      store: subagentStore,
+    },
+  );
   const globalPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(globalPolicy);
   const globalProviderPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(globalProviderPolicy);
@@ -575,6 +589,7 @@ export function createOpenClawCodingTools(options?: {
     senderPolicyWithToolSearchControls,
     sandboxToolPolicyWithToolSearchControls,
     subagentPolicyWithToolSearchControls,
+    inheritedToolPolicy,
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
@@ -745,6 +760,7 @@ export function createOpenClawCodingTools(options?: {
     senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
+    inheritedToolPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ]);
   const pluginToolDenylist = collectExplicitDenylist([
@@ -758,7 +774,26 @@ export function createOpenClawCodingTools(options?: {
     senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
+    inheritedToolPolicy,
   ]);
+  const inheritedToolDenylist = [...pluginToolDenylist];
+  // Passed by reference to sessions_spawn and populated after the final policy
+  // pass so child sessions inherit the actual parent tool surface.
+  const inheritedToolAllowlist: string[] = [];
+  const shouldInheritEffectiveToolAllowlist = [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    senderPolicy,
+    sandboxToolPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
+  ].some(hasRestrictiveAllowPolicy);
   const pluginToolsOnly =
     includeOpenClawTools || !includePluginTools
       ? []
@@ -875,6 +910,7 @@ export function createOpenClawCodingTools(options?: {
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          inboundTurnKind: options?.inboundTurnKind,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
@@ -885,6 +921,8 @@ export function createOpenClawCodingTools(options?: {
           authProfileStore: options?.authProfileStore,
           senderIsOwner: options?.senderIsOwner,
           sessionId: options?.sessionId,
+          inheritedToolAllowlist,
+          inheritedToolDenylist,
           onYield: options?.onYield,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
@@ -960,8 +998,12 @@ export function createOpenClawCodingTools(options?: {
       }),
       { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },
       { policy: subagentPolicyWithToolSearchControls, label: "subagent tools.allow" },
+      { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
   });
+  if (shouldInheritEffectiveToolAllowlist) {
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+  }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.

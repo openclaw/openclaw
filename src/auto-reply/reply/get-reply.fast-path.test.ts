@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../agents/internal-runtime-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   buildFastReplyCommandContext,
@@ -66,6 +70,24 @@ async function loadGetReplyRuntimeForTest() {
     await import("./directive-handling.defaults.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
+}
+
+function requirePreparedReplyParams() {
+  const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+  if (!preparedReplyParams) {
+    throw new Error("expected prepared reply params");
+  }
+  return preparedReplyParams;
+}
+
+function requireDirectiveParams() {
+  const directiveParams = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
+    | { sessionKey?: string; workspaceDir?: string }
+    | undefined;
+  if (!directiveParams) {
+    throw new Error("expected directive params");
+  }
+  return directiveParams;
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
@@ -133,10 +155,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
-    if (!preparedReplyParams) {
-      throw new Error("expected prepared reply params");
-    }
+    const preparedReplyParams = requirePreparedReplyParams();
     expect(preparedReplyParams.cfg).toBe(cfg);
   });
 
@@ -248,6 +267,48 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("short");
+    expect(stored.pendingFinalDeliveryAttemptCount).toBe(1);
+  });
+
+  it("sanitizes stale heartbeat pending delivery before replay", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-sanitize-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-dirty-remainder",
+          updatedAt: Date.now(),
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: [
+            "HEARTBEAT_OK",
+            INTERNAL_RUNTIME_CONTEXT_BEGIN,
+            "internal recovery detail",
+            INTERNAL_RUNTIME_CONTEXT_END,
+            "notify the user",
+          ].join("\n"),
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+    ).resolves.toEqual({ text: "notify the user" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+    expect(stored.pendingFinalDeliveryText).toBe("notify the user");
     expect(stored.pendingFinalDeliveryAttemptCount).toBe(1);
   });
 
@@ -443,12 +504,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    const directiveParams = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
-      | { sessionKey?: string; workspaceDir?: string }
-      | undefined;
-    if (!directiveParams) {
-      throw new Error("expected directive params");
-    }
+    const directiveParams = requireDirectiveParams();
     expect(directiveParams.sessionKey).toBe(targetSessionKey);
     expect(directiveParams.workspaceDir).toBe("/tmp/workspace");
   });

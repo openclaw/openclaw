@@ -85,6 +85,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     ]) {
       expect(step.run).toContain("mantis-telegram-desktop-proof.yml");
       expect(step.run).toContain("mantis-telegram-live.yml");
+      expect(step.run).toContain('gh run list --repo "$GITHUB_REPOSITORY"');
       expect(step.run).toContain("GITHUB_RUN_ID");
       expect(step.run).toContain(".createdAt < $current_created");
       expect(step.run).toContain("sleep 60");
@@ -146,6 +147,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
+  });
+
+  it("runs the Mantis Codex agent in fast medium-effort mode", () => {
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+
+    expect(agent.uses).toContain("openai/codex-action@");
+    expect(agent.with?.effort).toBe("medium");
+    expect(agent.with?.["codex-args"]).toBe('["-c","service_tier=\\"fast\\""]');
   });
 
   it("derives refs from the PR instead of parsing comment prose", () => {

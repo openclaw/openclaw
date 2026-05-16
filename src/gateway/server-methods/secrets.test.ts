@@ -53,7 +53,7 @@ function expectRespondError(
   respond: ReturnType<typeof vi.fn>,
   expected: { code: string; message?: string },
 ): void {
-  const call = respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   const error = requireRecord(call?.[2]);
@@ -64,7 +64,7 @@ function expectRespondError(
 }
 
 function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): void {
-  expect(warn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 describe("secrets handlers", () => {

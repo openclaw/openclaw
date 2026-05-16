@@ -72,7 +72,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(plan.dockerLanes).not.toContain("openai-web-search-minimal");
     expect(plan.dockerLanes.some((lane) => lane.startsWith("live-"))).toBe(false);
-    expect(plan.staticChecks).toContainEqual({
+    expect(plan.staticChecks[2]).toEqual({
       check: "live-ish-availability",
       checkName: "checks-plugin-prerelease-live-ish-availability",
       command: "node scripts/plugin-prerelease-liveish-matrix.mjs",
@@ -236,7 +236,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       permissions: {
         contents: "read",
       },
-      "runs-on": "blacksmith-8vcpu-ubuntu-2404",
+      "runs-on":
+        "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
       steps: [
         {
           name: "Checkout",
@@ -313,7 +314,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
-    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+    expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
       runner: "ubuntu-24.04",

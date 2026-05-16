@@ -15,6 +15,7 @@ import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
 } from "../context-engine/registry.js";
+import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
@@ -124,7 +125,10 @@ export type {
   PluginSessionExtensionRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
-import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimePluginIdScope,
+  withPluginRuntimePluginScope,
+} from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
@@ -181,6 +185,9 @@ import type {
 export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
 };
+
+const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -709,12 +716,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
       });
     }
-    const effectiveScope = normalizedScope.scope;
-    if (effectiveScope) {
-      registry.gatewayMethodScopes ??= {};
-      registry.gatewayMethodScopes[trimmed] = effectiveScope;
-    }
-    record.gatewayMethods.push(trimmed);
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: record.id,
+        name: trimmed,
+        handler,
+        scope: normalizedScope.scope,
+      }),
+    );
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -722,6 +731,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const source = normalizeOptionalString(entry.source) || "unknown-source";
     return `${plugin} (${source})`;
   };
+
+  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+    (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
 
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
@@ -796,6 +808,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(params.gatewayRuntimeScopeSurface
           ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
           : {}),
+        ...(canDispatchGatewayMethodsFromHttpRoute(record)
+          ? { gatewayMethodDispatchAllowed: true }
+          : {}),
         ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
         source: record.source,
       };
@@ -811,6 +826,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       match,
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+        : {}),
+      ...(canDispatchGatewayMethodsFromHttpRoute(record)
+        ? { gatewayMethodDispatchAllowed: true }
         : {}),
       ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
@@ -2367,6 +2385,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
+        const runWithPluginScope = <T>(run: () => T): T => {
+          const record =
+            pluginRuntimeRecordById.get(pluginId) ??
+            registry.plugins.find((entry) => entry.id === pluginId);
+          return record?.source
+            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            : withPluginRuntimePluginScope({ pluginId }, run);
+        };
         if (prop === "state") {
           const baseState = Reflect.get(target, prop, receiver);
           return {
@@ -2383,6 +2409,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
           } satisfies PluginRuntime["state"];
+        }
+        if (prop === "config") {
+          const config = Reflect.get(target, prop, receiver);
+          return {
+            ...config,
+            current: () => runWithPluginScope(() => config.current()),
+            mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
+            replaceConfigFile: (params) =>
+              runWithPluginScope(() => config.replaceConfigFile(params)),
+          } satisfies PluginRuntime["config"];
         }
         if (prop === "llm") {
           const llm = Reflect.get(target, prop, receiver);

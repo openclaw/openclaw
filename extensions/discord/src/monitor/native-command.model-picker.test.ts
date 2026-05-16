@@ -172,6 +172,16 @@ function createDispatchSpy() {
   return vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({ accepted: true });
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 function createModelPickerFallbackButton(
   context: ModelPickerContext,
   dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
@@ -230,7 +240,9 @@ function expectDispatchedModelSelection(params: {
   model: string;
   runtime?: string;
 }) {
-  const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0];
+  const dispatchCall = firstMockArg(params.dispatchSpy, "dispatchCommandInteraction") as
+    | Parameters<DispatchDiscordCommandInteraction>[0]
+    | undefined;
   expect(dispatchCall?.prompt).toBe(
     params.runtime
       ? `/model ${params.model} --runtime ${params.runtime}`
@@ -485,7 +497,7 @@ describe("Discord model picker interactions", () => {
     expect(withTimeoutSpy).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(dispatchSpy).toHaveBeenCalledTimes(1));
     expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
-    const followUpPayload = submitInteraction.followUp.mock.calls[0]?.[0] as {
+    const followUpPayload = firstMockArg(submitInteraction.followUp, "interaction.followUp") as {
       components?: Array<{ components?: Array<{ content?: string }> }>;
     };
     const followUpText = JSON.stringify(followUpPayload);
@@ -521,10 +533,7 @@ describe("Discord model picker interactions", () => {
     await button.run(interaction as unknown as PickerButtonInteraction, data);
 
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
-    const updatePayload = interaction.editReply.mock.calls[0]?.[0];
-    if (!updatePayload) {
-      throw new Error("recents button did not emit an update payload");
-    }
+    const updatePayload = firstMockArg(interaction.editReply, "interaction.editReply");
     const updateText = JSON.stringify(updatePayload);
     expect(updateText).toContain("gpt-4o");
     expect(updateText).toContain("claude-sonnet-4-5");
@@ -655,9 +664,9 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
     });
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.",
-    );
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
   });
 
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {
@@ -699,9 +708,9 @@ describe("Discord model picker interactions", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
     expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "❌ Failed to apply openai/gpt-4o.",
-    );
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("❌ Failed to apply openai/gpt-4o.");
   });
 
   it("loads model picker data from the effective bound route", async () => {
@@ -777,7 +786,7 @@ describe("Discord model picker interactions", () => {
     });
 
     expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
-    const payload = JSON.stringify(interaction.reply.mock.calls[0]?.[0]);
+    const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
     expect(payload).toContain("openai-codex");
     expect(payload).toContain("gpt-5.5-codex");
     expect(payload).not.toContain("Provider not found");

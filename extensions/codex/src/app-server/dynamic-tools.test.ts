@@ -320,6 +320,76 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("records message tool media attachment aliases as delivery evidence", async () => {
+    const toolResult = {
+      content: [{ type: "text", text: "Sent." }],
+      details: { messageId: "message-1" },
+    } satisfies AgentToolResult<unknown>;
+    const tool = createTool({
+      name: "message",
+      execute: vi.fn(async () => toolResult),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      text: "song attached",
+      media: "/tmp/generated-song.mp3",
+      attachments: [{ filePath: "/tmp/generated-cover.png" }],
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([
+      "/tmp/generated-song.mp3",
+      "/tmp/generated-cover.png",
+    ]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "message",
+        to: undefined,
+        threadId: undefined,
+        text: "song attached",
+        mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+      },
+    ]);
+  });
+
+  it("records internal UI source replies separately from outbound messaging evidence", async () => {
+    const toolResult = textToolResult("Sent to current chat.", {
+      status: "ok",
+      deliveryStatus: "sent",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    });
+    const bridge = createBridgeWithToolResult("message", toolResult);
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "<think>private</think>visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent to current chat."));
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible reply",
+        mediaUrl: "/tmp/reply.png",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    ]);
+  });
+
   it("does not record messaging side effects when the send fails", async () => {
     const tool = createTool({
       name: "message",

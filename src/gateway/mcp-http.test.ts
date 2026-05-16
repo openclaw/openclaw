@@ -22,8 +22,10 @@ type ScopedToolsCall = {
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
+  inboundTurnKind?: string;
   senderIsOwner?: boolean;
   surface?: string;
+  excludeToolNames?: Iterable<string>;
 };
 
 type BeforeToolCallHookInput = {
@@ -153,7 +155,7 @@ afterEach(async () => {
 });
 
 describe("mcp loopback server", () => {
-  it("passes session, account, and message channel headers into shared tool resolution", async () => {
+  it("passes session, account, message channel, and inbound turn headers into shared tool resolution", async () => {
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
@@ -169,6 +171,7 @@ describe("mcp loopback server", () => {
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-inbound-turn-kind": "room_event",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
@@ -178,8 +181,41 @@ describe("mcp loopback server", () => {
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
+    expect(call.inboundTurnKind).toBe("room_event");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
+    expect(Array.from(call.excludeToolNames ?? [])).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+    ]);
+  });
+
+  it("keeps loopback tool cache entries separate by inbound turn kind", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const sendToolsList = async (inboundTurnKind: string) =>
+      await sendRaw({
+        port: server?.port ?? 0,
+        token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:telegram:group:chat123",
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-inbound-turn-kind": inboundTurnKind,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await sendToolsList("user_request")).status).toBe(200);
+    expect((await sendToolsList("room_event")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(getScopedToolsCall(0).inboundTurnKind).toBe("user_request");
+    expect(getScopedToolsCall(1).inboundTurnKind).toBe("room_event");
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -519,7 +555,7 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     expect(payload.result?.isError).toBe(false);
     expect(execute).toHaveBeenCalledTimes(1);
-    const [callId, params, signal] = execute.mock.calls[0] ?? [];
+    const [callId, params, signal] = execute.mock.calls.at(0) ?? [];
     expect(callId).toMatch(/^mcp-/);
     expect(params).toEqual({ body: "hello" });
     expect(signal).toBeInstanceOf(AbortSignal);

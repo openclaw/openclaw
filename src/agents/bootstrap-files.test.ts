@@ -118,9 +118,15 @@ describe("resolveBootstrapFilesForRun", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(
-      files.every((file) => typeof file.path === "string" && file.path.trim().length > 0),
-    ).toBe(true);
+    expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "BOOTSTRAP.md",
+    ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
@@ -505,5 +511,33 @@ describe("resolveContextInjectionMode", () => {
         agents: { defaults: { contextInjection: "continuation-skip" } },
       } as never),
     ).toBe("continuation-skip");
+  });
+
+  it("uses per-agent contextInjection before defaults", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "continuation-skip" },
+            list: [{ id: "strict", contextInjection: "always" }],
+          },
+        } as never,
+        "strict",
+      ),
+    ).toBe("always");
+  });
+
+  it("falls back to defaults when the agent has no contextInjection override", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "never" },
+            list: [{ id: "worker" }],
+          },
+        } as never,
+        "worker",
+      ),
+    ).toBe("never");
   });
 });

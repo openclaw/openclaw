@@ -413,6 +413,7 @@ export const ModelsConfigSchema = z
   .optional();
 
 const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
+const AmbientGroupTurnsSchema = z.enum(["user_request", "room_event"]);
 
 export const VisibleRepliesSchema = z
   .union([VisibleRepliesValueSchema, z.boolean()])
@@ -430,6 +431,7 @@ export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
+    ambientTurns: AmbientGroupTurnsSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
@@ -455,9 +457,6 @@ const QueueModeSchema = z.union([
   z.literal("steer"),
   z.literal("followup"),
   z.literal("collect"),
-  z.literal("steer-backlog"),
-  z.literal("steer+backlog"),
-  z.literal("queue"),
   z.literal("interrupt"),
 ]);
 const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);

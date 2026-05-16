@@ -19,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -44,6 +45,7 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { initSessionState } from "./session.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -217,16 +219,14 @@ export async function getReplyFromConfig(
     cfg,
     isFastTestEnv,
   });
-  const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
-  const agentSessionKey = targetSessionKey || ctx.SessionKey;
+  const finalized = finalizeInboundContext(ctx);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const agentSessionKey = targetSessionKey || finalized.SessionKey;
   const traceAttributes = {
-    surface: normalizeOptionalString(ctx.Surface ?? ctx.Provider) ?? "unknown",
+    surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
     isHeartbeat: opts?.isHeartbeat === true,
-    hasMedia: hasInboundMedia(ctx),
+    hasMedia: hasInboundMedia(finalized),
   };
   const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     measureDiagnosticsTimelineSpan(name, run, {
@@ -291,7 +291,6 @@ export async function getReplyFromConfig(
   });
   opts?.onTypingController?.(typing);
 
-  const finalized = finalizeInboundContext(ctx);
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
     () =>
@@ -388,7 +387,7 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sessionEntry.pendingFinalDeliveryText;
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
 
     // If it's a heartbeat, we definitely want to try delivering the lost reply now.
     // If it's a user message, we deliver the lost reply first, then continue.
@@ -431,7 +430,8 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
         sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
         sessionEntry.pendingFinalDeliveryLastError = null;
-        sessionEntry.pendingFinalDeliveryText = heartbeatPending.replayText;
+        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+        sessionEntry.pendingFinalDeliveryText = replayText;
         sessionEntry.updatedAt = updatedAt;
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -442,7 +442,7 @@ export async function getReplyFromConfig(
             storePath,
             sessionKey,
             update: async () => ({
-              pendingFinalDeliveryText: heartbeatPending.replayText,
+              pendingFinalDeliveryText: replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,
               pendingFinalDeliveryAttemptCount: attemptCount,
               pendingFinalDeliveryLastError: null,
@@ -450,7 +450,7 @@ export async function getReplyFromConfig(
             }),
           });
         }
-        return { text: heartbeatPending.replayText };
+        return { text: replayText };
       }
     }
   }
@@ -760,6 +760,7 @@ export async function getReplyFromConfig(
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.

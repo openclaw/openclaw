@@ -218,7 +218,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `identity` → `agents.list[].identity`
     - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
     - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks` → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
-    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts
+    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts, and keep the agent/run timeout above that value when the whole run must last longer
     - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
     - `browser.profiles.*.driver: "extension"` → `"existing-session"`
     - remove `browser.relayBindHost` (legacy extension relay setting)
@@ -360,7 +360,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
   </Accordion>
   <Accordion title="7b. Plugin install cleanup">
-    Doctor removes legacy OpenClaw-generated plugin dependency staging state in `openclaw doctor --fix` / `openclaw doctor --repair` mode. This covers stale generated dependency roots, old install-stage directories, package-local debris from earlier bundled-plugin dependency repair code, and orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins that can shadow the current bundled manifest.
+    Doctor removes legacy OpenClaw-generated plugin dependency staging state in `openclaw doctor --fix` / `openclaw doctor --repair` mode. This covers stale generated dependency roots, old install-stage directories, package-local debris from earlier bundled-plugin dependency repair code, and orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins that can shadow the current bundled manifest. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` keep resolving after updates or npm repairs.
 
     Doctor can also reinstall missing downloadable plugins when config references them but the local plugin registry cannot find them. Examples include material `plugins.entries`, configured channel/provider/search settings, and configured agent runtimes. During package updates, doctor avoids running package-manager plugin repair while the core package is being swapped; run `openclaw doctor --fix` again after the update if a configured plugin still needs recovery. Gateway startup and config reload do not run package managers; plugin installs remain explicit doctor/install/update work.
 

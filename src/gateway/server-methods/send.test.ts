@@ -1014,7 +1014,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-send-options",
     });
 
-    const options = mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
+    const options = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0];
     expect(options?.forceDocument).toBe(true);
     expect(options?.silent).toBe(true);
     expect(options?.formatting).toEqual({ parseMode: "HTML" });
@@ -1265,6 +1265,7 @@ describe("gateway send mirroring", () => {
         emoji: "✅",
       },
       requesterSenderId: "trusted-user",
+      inboundTurnKind: "room_event",
       toolContext: {
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",
@@ -1290,6 +1291,9 @@ describe("gateway send mirroring", () => {
       },
       undefined,
       { channel: "whatsapp" },
+    );
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ inboundTurnKind: "room_event" }),
     );
   });
 

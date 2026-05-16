@@ -94,8 +94,8 @@ describe("docker build helper", () => {
     expect(liveCliBackend).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
     );
-    expect(liveCliBackend).toContain("direct Codex CLI probe failed before OpenClaw gateway smoke");
-    expect(liveCliBackend).toContain("==> Direct Codex CLI probe ok");
+    expect(liveCliBackend).toContain("codex-cli is no longer a bundled CLI backend");
+    expect(liveCliBackend).not.toContain("==> Direct Codex CLI probe ok");
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
@@ -152,6 +152,7 @@ describe("docker build helper", () => {
     expect(runner).toContain('run_agent_turn_bg "image write"');
     expect(runner).toContain('run_agent_turn_logged "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300");
@@ -265,6 +266,7 @@ describe("docker build helper", () => {
       };
       expect(workspace).toContain('  "kept@1.0.0": "patches/kept.patch"');
       expect(workspace).toContain("allowUnusedPatches: true");
+      expect(workspace).toContain("minimumReleaseAge: 0");
       expect(workspace).toContain("allowBuilds:");
       expect(manifest.pnpm).toBeUndefined();
     } finally {

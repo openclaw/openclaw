@@ -307,6 +307,37 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("preserves inbound sender metadata on the mirrored user prompt", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
+      senderId: "user-123",
+      senderName: "Test User",
+      senderUsername: "testuser",
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "discord",
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toBe("hello");
+    expect(userMessage.sourceChannel).toBe("discord");
+    expect(userMessage.senderId).toBe("user-123");
+    expect(userMessage.senderName).toBe("Test User");
+    expect(userMessage.senderUsername).toBe("testuser");
+    expect(userMessage.senderLabel).toBe("Test User (user-123)");
+    expect(userMessage.provenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "discord",
+    });
+  });
+
   it("does not treat cumulative-only token usage as fresh context usage", async () => {
     const projector = await createProjector();
 
@@ -431,7 +462,8 @@ describe("CodexAppServerEventProjector", () => {
         },
       }),
     );
-    const toolProgressText = onToolResult.mock.calls[0]?.[0]?.text;
+    const toolProgressText = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string })
+      .text;
     expect(toolProgressText).toBe("🛠️ `run tests (workspace)`");
 
     await projector.handleNotification(
@@ -451,7 +483,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
   });
-
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const projector = await createProjector();
@@ -677,6 +708,99 @@ describe("CodexAppServerEventProjector", () => {
       },
     ]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("checking thread context");
+  });
+
+  it("streams commentary agent messages as keyed progress events", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Checking", "msg-commentary"));
+    await projector.handleNotification(
+      agentMessageDelta(" the app-server stream", "msg-commentary"),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "Checking the app-server stream",
+        },
+        {
+          type: "agentMessage",
+          id: "msg-final",
+          phase: "final_answer",
+          text: "final answer",
+        },
+      ]),
+    );
+
+    const progressEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(progressEvents.map((event) => event.data)).toEqual([
+      {
+        itemId: "msg-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking",
+        source: "codex-app-server",
+      },
+      {
+        itemId: "msg-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking the app-server stream",
+        source: "codex-app-server",
+      },
+    ]);
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["final answer"]);
+  });
+
+  it("does not resolve commentary-phase assistant text as the final reply", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-final",
+          phase: "final_answer",
+          text: "final answer",
+        },
+        {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "I am checking one more thing.",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["final answer"]);
   });
 
   it("ignores notifications for other turns", async () => {
@@ -1458,7 +1582,7 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
-    const text = onToolResult.mock.calls[0]?.[0]?.text;
+    const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
     expect(text).toContain("sk-123…ZZZZ");
     expect(text).not.toContain("sk-1234567890abcdefZZZZ");
   });
@@ -1590,7 +1714,10 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(onToolResult).toHaveBeenCalledTimes(21);
-    expect(onToolResult.mock.calls[19]?.[0]?.text).toContain("...(truncated)...");
+    const truncatedOutput = mockCallArg(onToolResult, 19, 0, "onToolResult") as {
+      text?: string;
+    };
+    expect(truncatedOutput.text).toContain("...(truncated)...");
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain(
       "final output should not duplicate",
     );

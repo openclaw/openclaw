@@ -54,11 +54,19 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
   }
 
   function expectWarnMessageWith(text: string): void {
-    expect(warnMessages().some((message) => message.includes(text))).toBe(true);
+    expect(warnMessages().join("\n")).toContain(text);
   }
 
   function expectNoWarnMessageWith(text: string): void {
-    expect(warnMessages().some((message) => message.includes(text))).toBe(false);
+    expect(warnMessages().join("\n")).not.toContain(text);
+  }
+
+  function runAttemptCall(index: number): { prompt?: string } {
+    const call = mockedRunEmbeddedAttempt.mock.calls[index];
+    if (!call) {
+      throw new Error(`Expected run embedded attempt call ${index}`);
+    }
+    return call[0] as { prompt?: string };
   }
 
   it("emits the before_agent_run hook block message as the agent payload", async () => {
@@ -437,7 +445,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -472,7 +480,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    const onlyCall = runAttemptCall(0);
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectNoWarnMessageWith("reasoning-only assistant turn detected");
@@ -641,7 +649,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -681,7 +689,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -735,7 +743,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -804,7 +812,76 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectWarnMessageWith("empty response detected");
+  });
+
+  it("retries empty Anthropic-compatible stop turns even when the provider is not Kimi", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "claude-opus-4-7",
+        provider: "sub2api",
+        contextWindow: 200000,
+        api: "anthropic-messages",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          api: "anthropic-messages",
+          stopReason: "stop",
+          provider: "sub2api",
+          model: "claude-opus-4-7",
+          content: [],
+          usage: {
+            input: 2048,
+            output: 3100,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 5148,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible Anthropic-compatible answer."],
+        lastAssistant: {
+          role: "assistant",
+          api: "anthropic-messages",
+          stopReason: "stop",
+          provider: "sub2api",
+          model: "claude-opus-4-7",
+          content: [{ type: "text", text: "Visible Anthropic-compatible answer." }],
+          usage: {
+            input: 2300,
+            output: 8,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2308,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "sub2api",
+      model: "claude-opus-4-7",
+      runId: "run-empty-anthropic-compatible-stop-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -1923,7 +2000,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    const onlyCall = runAttemptCall(0);
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);

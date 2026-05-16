@@ -82,14 +82,12 @@ describe("google provider plugin hooks", () => {
       } as ProviderSanitizeReplayHistoryContext),
     );
 
-    const bootstrapMessage = sanitized?.[0];
+    const bootstrapMessage = sanitized?.[0] as
+      | { role?: string; content?: unknown; timestamp?: unknown }
+      | undefined;
     expect(bootstrapMessage?.role).toBe("user");
-    expect(
-      bootstrapMessage && "content" in bootstrapMessage ? bootstrapMessage.content : undefined,
-    ).toBe("(session bootstrap)");
-    expect(typeof (bootstrapMessage as { timestamp?: unknown } | undefined)?.timestamp).toBe(
-      "number",
-    );
+    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
+    expect(typeof bootstrapMessage?.timestamp).toBe("number");
     expect(sanitized?.[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "hello" }],
