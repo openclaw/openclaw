@@ -1215,8 +1215,7 @@ async function compactEmbeddedPiSessionDirectOnce(
               messages: session.messages,
               observedTokenCount,
               contextWindowTokens: ctxInfo.tokens,
-              callerContextWindowTokens:
-                params.callerContextTokenBudget ?? params.contextTokenBudget,
+              callerContextWindowTokens: params.callerContextTokenBudget,
               reserveTokens:
                 typeof settingsManager.getCompactionReserveTokens === "function"
                   ? settingsManager.getCompactionReserveTokens()
