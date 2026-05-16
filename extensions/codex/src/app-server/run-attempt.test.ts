@@ -1684,6 +1684,173 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
   });
 
+  it("counts handled nullable-turn elicitations as turn attempt progress", async () => {
+    const harness = createStartedThreadHarness();
+    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 100;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 300,
+      turnAssistantCompletionIdleTimeoutMs: 300,
+      turnTerminalIdleTimeoutMs: 300,
+    });
+    await harness.waitForMethod("turn/start");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await harness.handleServerRequest({
+      id: "request-null-turn-elicitation",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: null,
+        mode: "form",
+        message: "Approve?",
+        requestedSchema: { type: "object", properties: {} },
+        serverName: "server-1",
+        _meta: null,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+  });
+
+  it("counts pending user input requests as turn attempt progress", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 100;
+    params.onBlockReply = vi.fn();
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 300,
+      turnAssistantCompletionIdleTimeoutMs: 300,
+      turnTerminalIdleTimeoutMs: 300,
+    });
+    await harness.waitForMethod("turn/start");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const response = harness.handleServerRequest({
+      id: "request-user-input",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "input-1",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), { interval: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: ["Deep"] } },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+  });
+
+  it("does not count mismatched turn-scoped requests as turn attempt progress", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 100;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await harness.handleServerRequest({
+      id: "request-foreign-elicitation",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-other",
+        mode: "form",
+        message: "Approve?",
+        requestedSchema: { type: "object", properties: {} },
+        serverName: "server-1",
+        _meta: null,
+      },
+    });
+    await harness.handleServerRequest({
+      id: "request-foreign-user-input",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-other",
+        itemId: "input-1",
+        questions: [],
+      },
+    });
+    await harness.handleServerRequest({
+      id: "request-foreign-approval",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-other",
+        itemId: "command-1",
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const warnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    const warnData = warnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(warnData?.timeoutMs).toBe(100);
+    expect(warnData?.lastActivityReason).toBe("turn:start");
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
+  });
+
   it("does not count account rate-limit updates as turn completion activity", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:

@@ -1596,8 +1596,10 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       if (request.method === "mcpServer/elicitation/request") {
-        armCompletionWatchOnResponse = true;
-        requestCountsAsTurnActivity = true;
+        if (isCurrentThreadOptionalTurnRequestParams(request.params, thread.threadId, turnId)) {
+          armCompletionWatchOnResponse = true;
+          requestCountsAsTurnActivity = true;
+        }
         return handleCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
@@ -1608,8 +1610,10 @@ export async function runCodexAppServerAttempt(
         });
       }
       if (request.method === "item/tool/requestUserInput") {
-        armCompletionWatchOnResponse = true;
-        requestCountsAsTurnActivity = true;
+        if (isCurrentThreadTurnRequestParams(request.params, thread.threadId, turnId)) {
+          armCompletionWatchOnResponse = true;
+          requestCountsAsTurnActivity = true;
+        }
         return userInputBridge?.handleRequest({
           id: request.id,
           params: request.params,
@@ -1617,8 +1621,10 @@ export async function runCodexAppServerAttempt(
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
-          armCompletionWatchOnResponse = true;
-          requestCountsAsTurnActivity = true;
+          if (isCurrentApprovalTurnRequestParams(request.params, thread.threadId, turnId)) {
+            armCompletionWatchOnResponse = true;
+            requestCountsAsTurnActivity = true;
+          }
           return handleApprovalRequest({
             method: request.method,
             params: request.params,
@@ -3245,6 +3251,41 @@ function isTurnNotification(
     return false;
   }
   return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+}
+
+function isCurrentThreadTurnRequestParams(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
+}
+
+function isCurrentApprovalTurnRequestParams(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const requestThreadId = readString(value, "threadId") ?? readString(value, "conversationId");
+  return requestThreadId === threadId && readString(value, "turnId") === turnId;
+}
+
+function isCurrentThreadOptionalTurnRequestParams(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
+  if (!isJsonObject(value) || readString(value, "threadId") !== threadId) {
+    return false;
+  }
+  const requestTurnId = value.turnId;
+  return requestTurnId === null || requestTurnId === undefined || requestTurnId === turnId;
 }
 
 function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
