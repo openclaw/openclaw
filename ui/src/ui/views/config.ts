@@ -1293,7 +1293,7 @@ export function renderConfig(props: ConfigProps) {
                 >
                   <polyline points="15 18 9 12 15 6"></polyline>
                 </svg>
-                Quick Settings
+                ${t("settings.quickSettingsHeading")}
               </button>
             `
           : nothing}
@@ -1415,20 +1415,20 @@ export function renderConfig(props: ConfigProps) {
                     <button
                       class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
                       ?disabled=${props.schemaLoading || !props.schema}
-                      title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                      title=${formUnsafe ? t("settings.formViewUnsafeTooltip") : ""}
                       @click=${() => props.onFormModeChange("form")}
                     >
-                      Form
+                      ${t("settings.modeForm")}
                     </button>
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
                       ?disabled=${!rawAvailable}
                       title=${rawAvailable
-                        ? "Edit raw JSON/JSON5 config"
-                        : "Raw mode unavailable for this snapshot"}
+                        ? t("settings.rawModeTooltip")
+                        : t("settings.rawModeUnavailable")}
                       @click=${() => props.onFormModeChange("raw")}
                     >
-                      Raw
+                      ${t("settings.modeRaw")}
                     </button>
                   </div>
                 `
@@ -1437,17 +1437,19 @@ export function renderConfig(props: ConfigProps) {
               ? html`
                   <span class="config-changes-badge"
                     >${formMode === "raw"
-                      ? "Unsaved changes"
-                      : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span
+                      ? t("settings.unsavedChanges")
+                      : diff.length === 1
+                        ? t("settings.unsavedChangeCount", { count: String(diff.length) })
+                        : t("settings.unsavedChangesCount", { count: String(diff.length) })}</span
                   >
                 `
-              : html` <span class="config-status muted">No changes</span> `}
+              : html` <span class="config-status muted">${t("settings.noChanges")}</span> `}
           </div>
           <div class="config-actions__right">
             ${!rawAvailable
               ? html`
                   <span class="config-status muted config-actions__notice"
-                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                    >${t("settings.rawModeDisabledNotice")}</span
                   >
                 `
               : nothing}
@@ -1456,10 +1458,12 @@ export function renderConfig(props: ConfigProps) {
                 ? html`
                     <button
                       class="btn btn--sm"
-                      title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
+                      title=${props.configPath
+                        ? t("settings.openConfigPath", { path: props.configPath })
+                        : t("settings.openConfigFile")}
                       @click=${props.onOpenFile}
                     >
-                      ${icons.fileText} Open
+                      ${icons.fileText} ${t("settings.open")}
                     </button>
                   `
                 : nothing}
@@ -1467,7 +1471,7 @@ export function renderConfig(props: ConfigProps) {
                 ${props.loading ? t("common.loading") : t("common.reload")}
               </button>
               <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
-                Clear
+                ${t("settings.clear")}
               </button>
               <button
                 class="btn btn--sm primary"
@@ -1475,7 +1479,7 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.saving ? "true" : "false"}
                 @click=${props.onSave}
               >
-                ${renderActionButtonContent(props.saving, "Save", "Saving…")}
+                ${renderActionButtonContent(props.saving, t("common.save"), t("common.saving"))}
               </button>
               <button
                 class="btn btn--sm"
@@ -1483,7 +1487,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.applying ? "true" : "false"}
                 @click=${props.onApply}
               >
-                ${renderActionButtonContent(props.applying, "Apply", "Applying…")}
+                ${renderActionButtonContent(
+                  props.applying,
+                  t("settings.apply"),
+                  t("settings.applying"),
+                )}
               </button>
               <button
                 class="btn btn--sm"
@@ -1491,7 +1499,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.updating ? "true" : "false"}
                 @click=${props.onUpdate}
               >
-                ${renderActionButtonContent(props.updating, "Update", "Updating…")}
+                ${renderActionButtonContent(
+                  props.updating,
+                  t("settings.update"),
+                  t("settings.updating"),
+                )}
               </button>
             </div>
           </div>
@@ -1518,8 +1530,8 @@ export function renderConfig(props: ConfigProps) {
                           <input
                             type="text"
                             class="config-search__input"
-                            placeholder="Search settings..."
-                            aria-label="Search settings"
+                            placeholder="${t("settings.searchPlaceholder")}"
+                            aria-label="${t("settings.searchAriaLabel")}"
                             .value=${props.searchQuery}
                             @input=${(e: Event) =>
                               props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -1528,7 +1540,7 @@ export function renderConfig(props: ConfigProps) {
                             ? html`
                                 <button
                                   class="config-search__clear"
-                                  aria-label="Clear search"
+                                  aria-label="${t("settings.clearSearch")}"
                                   @click=${() => props.onSearchChange("")}
                                 >
                                   ×
