@@ -1147,7 +1147,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
               return;
             }
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+            await runOutsideGatewayRootWorkAdmission(() =>
+              params.startChannel(name, undefined, { includeKnownAccounts: true }),
+            );
           };
           const restartFailures = await collectChannelOperationFailures({
             channels: channelsToRestart,
