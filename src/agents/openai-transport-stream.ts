@@ -431,6 +431,38 @@ function parseTextSignature(
   return { id: signature };
 }
 
+function toReplayableInputImagePart(item: {
+  type?: string;
+  data?: string;
+  mimeType?: string;
+}): ResponseInputMessageContentList[number] | undefined {
+  if (item.type !== "image" || typeof item.data !== "string") {
+    return undefined;
+  }
+  const data = item.data.trim();
+  if (!data) {
+    return undefined;
+  }
+  return {
+    type: "input_image",
+    detail: "auto",
+    image_url: `data:${item.mimeType ?? "image/jpeg"};base64,${data}`,
+  };
+}
+
+function countOmittedImages(content: unknown): number {
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let count = 0;
+  for (const item of content) {
+    if (item && typeof item === "object" && item.type === "image" && item.omitted === true) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function convertResponsesMessages(
   model: Model<Api>,
   context: Context,
@@ -497,17 +529,27 @@ function convertResponsesMessages(
           content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
         });
       } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
+        const omittedImages = countOmittedImages(msg.content);
+        const content = msg.content
+          .flatMap((item) => {
+            if (item.type === "text") {
+              return [{ type: "input_text", text: sanitizeTransportPayloadText(item.text) }];
+            }
+            const imagePart = toReplayableInputImagePart(item);
+            return imagePart ? [imagePart] : [];
+          })
+          .filter(
+            (item) => model.input.includes("image") || item.type !== "input_image",
+          ) as ResponseInputMessageContentList;
+        if (omittedImages > 0) {
+          content.push({
+            type: "input_text",
+            text:
+              omittedImages === 1
+                ? "[User sent an image omitted from persisted context.]"
+                : `[User sent ${omittedImages} images omitted from persisted context.]`,
+          });
+        }
         if (content.length > 0) {
           messages.push({ role: "user", content });
         }
@@ -576,26 +618,36 @@ function convertResponsesMessages(
         .filter((item) => item.type === "text")
         .map((item) => item.text)
         .join("\n");
-      const hasImages = msg.content.some((item) => item.type === "image");
+      const imageOutput = msg.content.flatMap((item) => {
+        const imagePart = toReplayableInputImagePart(item);
+        return imagePart ? [imagePart] : [];
+      });
+      const omittedImages = countOmittedImages(msg.content);
+      const omittedNotice =
+        omittedImages > 0
+          ? omittedImages === 1
+            ? "(tool returned an image omitted from persisted context)"
+            : `(tool returned ${omittedImages} images omitted from persisted context)`
+          : "";
+      const textOutput = textResult
+        ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
+        : [];
       const [callId] = msg.toolCallId.split("|");
       messages.push({
         type: "function_call_output",
         call_id: callId,
         output:
-          hasImages && model.input.includes("image")
+          imageOutput.length > 0 && model.input.includes("image")
             ? ([
-                ...(textResult
-                  ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
-                  : []),
-                ...msg.content
-                  .filter((item) => item.type === "image")
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
+                ...textOutput,
+                ...imageOutput,
+                ...(omittedNotice ? [{ type: "input_text", text: omittedNotice }] : []),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeTransportPayloadText(textResult || "(see attached image)"),
+            : sanitizeTransportPayloadText(
+                textResult && omittedNotice
+                  ? `${textResult}\n${omittedNotice}`
+                  : textResult || omittedNotice || "(see attached image)",
+              ),
       });
     }
     msgIndex += 1;

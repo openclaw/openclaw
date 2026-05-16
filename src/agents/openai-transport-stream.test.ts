@@ -2025,6 +2025,104 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("replaces omitted user images with placeholder text during Responses replay", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "FTL" },
+              { type: "image", mimeType: "image/jpeg", bytes: 40340, omitted: true },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
+    };
+
+    expect(params.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "FTL" },
+          { type: "input_text", text: "[User sent an image omitted from persisted context.]" },
+        ],
+      },
+    ]);
+  });
+
+  it("replaces omitted tool images with placeholder text during Responses replay", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1|fc_1", name: "read", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolName: "read",
+            toolCallId: "call_1|fc_1",
+            content: [
+              { type: "text", text: "looks good" },
+              { type: "image", mimeType: "image/png", bytes: 2048, omitted: true },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<
+        | { type?: string; call_id?: string; output?: string }
+        | { type?: string; call_id?: string; output?: Array<{ type?: string; text?: string }> }
+      >;
+    };
+
+    expect(params.input).toHaveLength(2);
+    expect(params.input?.[0]).toMatchObject({
+      type: "function_call",
+      call_id: "call_1",
+      name: "read",
+      arguments: "{}",
+    });
+    expect(params.input?.[1]).toEqual({
+      type: "function_call_output",
+      call_id: "call_1",
+      output: "looks good\n(tool returned an image omitted from persisted context)",
+    });
+  });
+
   it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
