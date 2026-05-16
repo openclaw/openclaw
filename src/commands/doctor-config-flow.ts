@@ -87,7 +87,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
+  const dryRun = params.options.dryRun === true;
+  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair || dryRun });
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
@@ -236,7 +237,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
   }
 
-  if (shouldRepair) {
+  // Skip the repair sequence in dry-run mode: it has real side effects (plugin installs,
+  // state writes) that must not execute during a preview-only pass. Config-level diff output
+  // is produced by finalizeDoctorConfigFlow above using only the mutations already collected.
+  if (shouldRepair && !dryRun) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const repairSequence = await runDoctorRepairSequence({
       state: { cfg, candidate, pendingChanges, fixHints },
@@ -293,6 +297,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     candidate,
     pendingChanges,
     shouldRepair,
+    dryRun,
     fixHints,
     confirm: params.confirm,
     note,

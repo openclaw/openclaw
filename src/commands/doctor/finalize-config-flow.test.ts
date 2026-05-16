@@ -43,6 +43,66 @@ describe("doctor finalize config flow", () => {
     );
   });
 
+  it("emits diff and skips write in dry-run mode with pending changes", async () => {
+    const note = vi.fn();
+    const result = await finalizeDoctorConfigFlow({
+      cfg: { channels: {} },
+      candidate: { channels: { signal: { enabled: true } } },
+      pendingChanges: true,
+      shouldRepair: false,
+      dryRun: true,
+      fixHints: [],
+      confirm: async () => true,
+      note,
+    });
+
+    expect(result).toEqual({
+      cfg: { channels: {} },
+      shouldWriteConfig: false,
+    });
+    expect(note).toHaveBeenCalledOnce();
+    expect(note.mock.calls[0]?.[1]).toBe("Dry run \u2014 proposed changes (not applied)");
+    expect(note.mock.calls[0]?.[0]).toContain("channels.signal.enabled");
+  });
+
+  it("emits no-changes note in dry-run mode without pending changes", async () => {
+    const note = vi.fn();
+    const result = await finalizeDoctorConfigFlow({
+      cfg: { channels: {} },
+      candidate: { channels: {} },
+      pendingChanges: true,
+      shouldRepair: false,
+      dryRun: true,
+      fixHints: [],
+      confirm: async () => true,
+      note,
+    });
+
+    expect(result).toEqual({
+      cfg: { channels: {} },
+      shouldWriteConfig: false,
+    });
+    expect(note).toHaveBeenCalledWith("No config changes detected.", "Dry run");
+  });
+
+  it("dry-run takes precedence over repair mode", async () => {
+    const note = vi.fn();
+    const result = await finalizeDoctorConfigFlow({
+      cfg: { channels: {} },
+      candidate: { channels: { signal: { enabled: true } } },
+      pendingChanges: true,
+      shouldRepair: true,
+      dryRun: true,
+      fixHints: [],
+      confirm: async () => true,
+      note,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(note).toHaveBeenCalledOnce();
+    expect(note.mock.calls[0]?.[1]).toBe("Dry run \u2014 proposed changes (not applied)");
+  });
+
   it("writes automatically in repair mode when changes exist", async () => {
     const result = await finalizeDoctorConfigFlow({
       cfg: { channels: { signal: { enabled: true } } },

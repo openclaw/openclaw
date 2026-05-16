@@ -5,5 +5,6 @@ export type DoctorOptions = {
   deep?: boolean;
   repair?: boolean;
   force?: boolean;
+  dryRun?: boolean;
   generateGatewayToken?: boolean;
 };

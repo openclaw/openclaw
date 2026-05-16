@@ -588,6 +588,12 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  // dry-run must never write config, even if health contributions mutated ctx.cfg after the
+  // config flow. The dryRun guard is authoritative here so that any future contributions
+  // that touch ctx.cfg cannot accidentally bypass it.
+  if (ctx.options.dryRun === true) {
+    return;
+  }
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
   const { replaceConfigFile } = await import("../config/config.js");
