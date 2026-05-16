@@ -16,7 +16,11 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -179,6 +183,53 @@ describe("resolveBootstrapContextForRun", () => {
     const contextFileNames = new Set(result.contextFiles.map((file) => path.basename(file.path)));
     expect(contextFileNames.has("BOOTSTRAP.md")).toBe(true);
     expect(contextFileNames.has("AGENTS.md")).toBe(true);
+  });
+
+  it("excludes stale BOOTSTRAP.md after workspace setup is complete", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bootstrapSeededAt: "2026-05-15T02:50:29.000Z",
+          setupCompletedAt: "2026-05-15T03:00:00.000Z",
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "stale ritual", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME),
+      "# IDENTITY.md\n",
+      "utf8",
+    );
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+
+    expect(result.bootstrapFiles.map((file) => file.name)).not.toContain(
+      DEFAULT_BOOTSTRAP_FILENAME,
+    );
+    expect(result.contextFiles.map((file) => path.basename(file.path))).not.toContain(
+      DEFAULT_BOOTSTRAP_FILENAME,
+    );
+  });
+
+  it("keeps BOOTSTRAP.md when workspace setup state cannot be read", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, ".openclaw", "workspace-state.json"));
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "ritual", "utf8");
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+
+    expect(result.bootstrapFiles.map((file) => file.name)).toContain(DEFAULT_BOOTSTRAP_FILENAME);
+    expect(result.contextFiles.map((file) => path.basename(file.path))).toContain(
+      DEFAULT_BOOTSTRAP_FILENAME,
+    );
   });
 
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {

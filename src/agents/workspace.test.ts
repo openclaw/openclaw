@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -264,6 +264,36 @@ describe("ensureAgentWorkspace", () => {
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
+  it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "# IDENTITY.md\n\n- **Name:** Example\n",
+    });
+
+    const cleanupError = Object.assign(new Error("immutable bootstrap"), { code: "EPERM" });
+    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
+    try {
+      const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+
+      expect(result.repaired).toBe(true);
+      expect(result.bootstrapExists).toBe(true);
+      expect(result.cleanupFailed).toBe(true);
+      await expect(
+        fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+      const state = await readWorkspaceState(tempDir);
+      expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+    } finally {
+      rmSpy.mockRestore();
+    }
   });
 
   it("uses SOUL.md customization as stale bootstrap completion evidence", async () => {

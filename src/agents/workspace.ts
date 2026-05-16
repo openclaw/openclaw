@@ -4,6 +4,7 @@ import path from "node:path";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { logWarn } from "../logger.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -258,6 +259,7 @@ type WorkspaceBootstrapCompletionReconcileResult = {
   repaired: boolean;
   bootstrapExists: boolean;
   state: WorkspaceSetupState;
+  cleanupFailed?: boolean;
 };
 
 async function reconcileWorkspaceBootstrapCompletionState(params: {
@@ -293,15 +295,39 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     return { repaired: false, bootstrapExists, state: params.state };
   }
 
+  async function removeStaleBootstrapFile(): Promise<boolean> {
+    try {
+      await fs.rm(params.bootstrapPath, { force: true });
+      const removed = !(await pathExists(params.bootstrapPath));
+      if (!removed) {
+        logWarn(
+          `workspace bootstrap: setup completion was recorded, but stale ${DEFAULT_BOOTSTRAP_FILENAME} still exists at ${params.bootstrapPath}`,
+        );
+      }
+      return removed;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      logWarn(
+        `workspace bootstrap: setup completion was recorded, but stale ${DEFAULT_BOOTSTRAP_FILENAME} cleanup failed at ${params.bootstrapPath}: ${detail}`,
+      );
+      return false;
+    }
+  }
+
   const now = new Date().toISOString();
   const repairedState: WorkspaceSetupState = {
     ...params.state,
     bootstrapSeededAt: params.state.bootstrapSeededAt ?? now,
     setupCompletedAt: now,
   };
-  await fs.rm(params.bootstrapPath, { force: true });
   await writeWorkspaceSetupState(params.statePath, repairedState);
-  return { repaired: true, bootstrapExists: false, state: repairedState };
+  const removed = await removeStaleBootstrapFile();
+  return {
+    repaired: true,
+    bootstrapExists: !removed,
+    state: repairedState,
+    cleanupFailed: !removed,
+  };
 }
 
 function resolveWorkspaceStatePath(dir: string): string {
@@ -612,6 +638,15 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
+async function shouldLoadLegacyBootstrapFile(resolvedDir: string): Promise<boolean> {
+  try {
+    return !(await isWorkspaceSetupCompleted(resolvedDir));
+  } catch {
+    // Match agents.files.list: if state cannot be read, keep BOOTSTRAP.md visible.
+    return true;
+  }
+}
+
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
@@ -643,15 +678,19 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_HEARTBEAT_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
     },
-    {
+  ];
+
+  if (await shouldLoadLegacyBootstrapFile(resolvedDir)) {
+    entries.push({
       name: DEFAULT_BOOTSTRAP_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
-    },
-    {
-      name: DEFAULT_MEMORY_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_MEMORY_FILENAME),
-    },
-  ];
+    });
+  }
+
+  entries.push({
+    name: DEFAULT_MEMORY_FILENAME,
+    filePath: path.join(resolvedDir, DEFAULT_MEMORY_FILENAME),
+  });
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
