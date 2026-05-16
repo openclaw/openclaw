@@ -3,6 +3,8 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { writeDiagnosticMemoryPressureBundleSync } from "./diagnostic-stability-bundle.js";
+import { createSubsystemLogger } from "./subsystem.js";
 
 const MB = 1024 * 1024;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
@@ -13,6 +15,8 @@ const DEFAULT_RSS_GROWTH_WARNING_BYTES = 512 * MB;
 const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
+
+const log = createSubsystemLogger("diagnostics/memory");
 
 type DiagnosticMemoryThresholds = {
   rssWarningBytes?: number;
@@ -162,6 +166,10 @@ export function emitDiagnosticMemorySample(options?: {
   uptimeMs?: number;
   thresholds?: DiagnosticMemoryThresholds;
   emitSample?: boolean;
+  writeCriticalBundle?: boolean;
+  stateDir?: string;
+  sessionStorePaths?: string[];
+  resolveSessionStorePaths?: () => string[] | undefined;
 }): DiagnosticMemoryUsage {
   const now = options?.now ?? Date.now();
   const memory = normalizeMemoryUsage(options?.memoryUsage ?? process.memoryUsage());
@@ -186,6 +194,22 @@ export function emitDiagnosticMemorySample(options?: {
       type: "diagnostic.memory.pressure",
       ...pressure,
     });
+    if (pressure.level === "critical" && options?.writeCriticalBundle !== false) {
+      const sessionStorePaths = options?.sessionStorePaths ?? options?.resolveSessionStorePaths?.();
+      const result = writeDiagnosticMemoryPressureBundleSync({
+        pressure,
+        stateDir: options?.stateDir,
+        sessionStorePaths,
+        now: new Date(now),
+      });
+      if (result.status === "written") {
+        log.warn(
+          `critical memory pressure bundle written: path=${result.path} reason=${pressure.reason} level=${pressure.level}`,
+        );
+      } else if (result.status === "failed") {
+        log.warn(`critical memory pressure bundle failed: ${String(result.error)}`);
+      }
+    }
   }
   return memory;
 }

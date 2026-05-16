@@ -325,6 +325,42 @@ function renderStabilityBundleSummary(params: {
       lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
     }
   }
+  const memoryPressure = bundle.evidence?.memoryPressure;
+  if (memoryPressure) {
+    lines.push(
+      `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
+        memoryPressure.reason
+      } rss=${formatBytes(memoryPressure.memory.rssBytes)} heap=${formatBytes(
+        memoryPressure.memory.heapUsedBytes,
+      )} threshold=${formatBytes(memoryPressure.thresholdBytes)}`,
+    );
+    if (memoryPressure.heapStatistics) {
+      lines.push(
+        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatBytes(
+          memoryPressure.heapStatistics.usedHeapSizeBytes,
+        )} limit=${formatBytes(
+          memoryPressure.heapStatistics.heapSizeLimitBytes,
+        )} available=${formatBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+      );
+    }
+    if (memoryPressure.activeResources) {
+      const resources = Object.entries(memoryPressure.activeResources.byType)
+        .map(([type, count]) => `${type}=${count}`)
+        .join(", ");
+      lines.push(
+        `${colorize(rich, theme.muted, "Active resources:")} total=${
+          memoryPressure.activeResources.total
+        }${resources ? ` · ${resources}` : ""}`,
+      );
+    }
+    if (memoryPressure.topSessionFiles?.length) {
+      const files = memoryPressure.topSessionFiles
+        .slice(0, 5)
+        .map((file) => `${file.relativePath}=${formatBytes(file.sizeBytes)}`)
+        .join(", ");
+      lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
+    }
+  }
   lines.push("", ...renderStabilitySummary(snapshot, rich));
   return lines;
 }

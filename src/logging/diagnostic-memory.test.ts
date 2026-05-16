@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
@@ -5,6 +8,15 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  readLatestDiagnosticStabilityBundleSync,
+  resetDiagnosticStabilityBundleForTest,
+} from "./diagnostic-stability-bundle.js";
+import {
+  resetDiagnosticStabilityRecorderForTest,
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "./diagnostic-stability.js";
 
 function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage {
   return {
@@ -23,12 +35,17 @@ describe("diagnostic memory", () => {
     vi.setSystemTime(new Date("2026-04-22T12:00:00.000Z"));
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
+    resetDiagnosticStabilityBundleForTest();
+    resetDiagnosticStabilityRecorderForTest();
   });
 
   afterEach(() => {
+    stopDiagnosticStabilityRecorder();
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
+    resetDiagnosticStabilityBundleForTest();
+    resetDiagnosticStabilityRecorderForTest();
   });
 
   it("emits memory samples with byte counts", () => {
@@ -198,5 +215,113 @@ describe("diagnostic memory", () => {
         0,
       ),
     ).toBe(1);
+  });
+
+  it("resolves session store paths only for critical bundle writes", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-lazy-"));
+    const resolveSessionStorePaths = vi.fn(() => []);
+    try {
+      emitDiagnosticMemorySample({
+        now: 1000,
+        stateDir,
+        resolveSessionStorePaths,
+        memoryUsage: memoryUsage({ rss: 500 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+        },
+      });
+      emitDiagnosticMemorySample({
+        now: 2000,
+        stateDir,
+        resolveSessionStorePaths,
+        memoryUsage: memoryUsage({ rss: 2000 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+        },
+      });
+
+      expect(resolveSessionStorePaths).not.toHaveBeenCalled();
+
+      emitDiagnosticMemorySample({
+        now: 3000,
+        stateDir,
+        resolveSessionStorePaths,
+        memoryUsage: memoryUsage({ rss: 4000 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+        },
+      });
+
+      expect(resolveSessionStorePaths).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a stability bundle when critical pressure is emitted", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-"));
+    const customRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-custom-sessions-"));
+    try {
+      const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+      const customSessionsDir = path.join(customRoot, "custom-sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.mkdirSync(customSessionsDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir, "small.jsonl"), "small\n", "utf8");
+      fs.writeFileSync(path.join(sessionsDir, "large.jsonl"), "x".repeat(4096), "utf8");
+      fs.writeFileSync(path.join(customSessionsDir, "sessions.json"), "{}\n", "utf8");
+      fs.writeFileSync(
+        path.join(customSessionsDir, "custom-secret-session.jsonl"),
+        "x".repeat(8192),
+        "utf8",
+      );
+      startDiagnosticStabilityRecorder();
+
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        uptimeMs: 0,
+        stateDir,
+        sessionStorePaths: [path.join(customSessionsDir, "sessions.json")],
+        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+          pressureRepeatMs: 60_000,
+        },
+      });
+
+      const latest = readLatestDiagnosticStabilityBundleSync({ stateDir });
+      expect(latest.status).toBe("found");
+      if (latest.status !== "found") {
+        return;
+      }
+      expect(latest.bundle.reason).toBe("diagnostic.memory.pressure.critical");
+      expect(latest.bundle.snapshot.summary.byType["diagnostic.memory.pressure"]).toBe(1);
+      expect(latest.bundle.evidence?.memoryPressure).toMatchObject({
+        level: "critical",
+        reason: "rss_threshold",
+        thresholdBytes: 3000,
+        memory: expect.objectContaining({
+          rssBytes: 4000,
+          heapUsedBytes: 3000,
+        }),
+      });
+      expect(latest.bundle.evidence?.memoryPressure?.heapStatistics?.heapSizeLimitBytes).toEqual(
+        expect.any(Number),
+      );
+      expect(latest.bundle.evidence?.memoryPressure?.activeResources?.total).toEqual(
+        expect.any(Number),
+      );
+      expect(latest.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]).toMatchObject({
+        relativePath: "sessions/<session>.jsonl",
+        sizeBytes: 8192,
+      });
+      expect(JSON.stringify(latest.bundle)).not.toContain("custom-secret-session");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(customRoot, { recursive: true, force: true });
+    }
   });
 });

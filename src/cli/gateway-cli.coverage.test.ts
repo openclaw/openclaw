@@ -233,6 +233,41 @@ describe("gateway-cli coverage", () => {
           uptimeMs: 2000,
         },
         host: { hostname: "test-host" },
+        evidence: {
+          memoryPressure: {
+            level: "critical",
+            reason: "rss_threshold",
+            memory: {
+              rssBytes: 4096,
+              heapTotalBytes: 2048,
+              heapUsedBytes: 1536,
+              externalBytes: 128,
+              arrayBuffersBytes: 64,
+            },
+            thresholdBytes: 3000,
+            heapStatistics: {
+              totalHeapSizeBytes: 2048,
+              totalHeapSizeExecutableBytes: 256,
+              totalPhysicalSizeBytes: 2048,
+              totalAvailableSizeBytes: 8192,
+              usedHeapSizeBytes: 1536,
+              heapSizeLimitBytes: 4096,
+              mallocedMemoryBytes: 32,
+              externalMemoryBytes: 128,
+            },
+            activeResources: {
+              total: 2,
+              byType: { Timeout: 2 },
+            },
+            topSessionFiles: [
+              {
+                relativePath: "agents/<agent>/sessions/<session>.jsonl",
+                sizeBytes: 4096,
+                mtimeMs: Date.parse("2026-04-22T12:00:00.000Z"),
+              },
+            ],
+          },
+        },
         snapshot: {
           generatedAt: "2026-04-22T12:00:00.000Z",
           capacity: 1000,
@@ -274,6 +309,10 @@ describe("gateway-cli coverage", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(output).toContain("Stability bundle");
       expect(output).toContain("gateway.restart_startup_failed");
+      expect(output).toContain("Memory pressure");
+      expect(output).toContain("rss_threshold");
+      expect(output).toContain("Largest session files");
+      expect(output).toContain("agents/<agent>/sessions/<session>.jsonl");
       expect(output).toContain("payload.large");
       expect(output).toContain("gateway.http.json");
     } finally {
