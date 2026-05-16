@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../plugins/provider-external-auth.types.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -299,6 +300,68 @@ describe("ensureAuthProfileStore", () => {
       });
     } finally {
       restoreAgentDirEnv({ previousStateDir, previousAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers agent-local provider profiles before inherited main profiles", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-local-provider-"));
+    const { mainDir, agentDir, previousStateDir, previousAgentDir, previousPiAgentDir } =
+      configureMainAuthTestDirs(root);
+    try {
+      const expires = Date.now() + 60_000;
+      fs.writeFileSync(
+        path.join(mainDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "minimax-portal:cli": {
+                type: "oauth",
+                provider: "minimax-portal",
+                access: "main-minimax-access",
+                refresh: "main-minimax-refresh",
+                expires,
+              },
+            },
+            order: {
+              "minimax-portal": ["minimax-portal:cli"],
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "minimax-portal:default": {
+                type: "oauth",
+                provider: "minimax-portal",
+                access: "agent-minimax-access",
+                refresh: "agent-minimax-refresh",
+                expires,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(Object.keys(store.profiles)).toEqual(["minimax-portal:default", "minimax-portal:cli"]);
+      expect(resolveAuthProfileOrder({ store, provider: "minimax-portal" })).toEqual([
+        "minimax-portal:default",
+        "minimax-portal:cli",
+      ]);
+    } finally {
+      restoreAgentDirEnv({ previousStateDir, previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
