@@ -1567,7 +1567,7 @@ function withWebSearchProviderOverride(
   if (!provider) {
     return config;
   }
-  const next = structuredClone(config) as OpenClawConfig;
+  const next = structuredClone(config);
   const root = next as Record<string, unknown>;
   const tools =
     root.tools && typeof root.tools === "object" && !Array.isArray(root.tools)
