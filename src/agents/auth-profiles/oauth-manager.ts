@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
@@ -68,6 +69,7 @@ export class OAuthManagerRefreshError extends Error {
 
   constructor(params: {
     credential: OAuthCredential;
+    attemptedCredentials?: OAuthCredential[];
     profileId: string;
     refreshedStore: AuthProfileStore;
     cause: unknown;
@@ -81,15 +83,14 @@ export class OAuthManagerRefreshError extends Error {
         ? structuredCause.cause
         : params.cause;
     const storedCredential = params.refreshedStore.profiles[params.profileId];
-    const causeMessage = redactOAuthCredentialSecrets(
-      formatErrorMessage(params.cause),
-      collectOAuthCredentialSecrets(
-        params.credential,
-        storedCredential?.type === "oauth" ? storedCredential : undefined,
-      ),
+    const secrets = collectOAuthCredentialSecrets(
+      params.credential,
+      ...(params.attemptedCredentials ?? []),
+      storedCredential?.type === "oauth" ? storedCredential : undefined,
     );
+    const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets);
     super(`OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`, {
-      cause: delegatedCause,
+      cause: createRedactedOAuthRefreshCause(delegatedCause, secrets),
     });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;
@@ -172,7 +173,7 @@ function collectOAuthCredentialSecrets(
       }
     }
   }
-  return Array.from(secrets);
+  return Array.from(secrets).toSorted((a, b) => b.length - a.length);
 }
 
 function redactOAuthCredentialSecrets(message: string, secrets: string[]): string {
@@ -181,6 +182,55 @@ function redactOAuthCredentialSecrets(message: string, secrets: string[]): strin
     redacted = redacted.split(secret).join("[redacted]");
   }
   return redacted;
+}
+
+function formatRawErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    let formatted = error.message || error.name || "Error";
+    let cause: unknown = error.cause;
+    const seen = new Set<unknown>([error]);
+    while (cause && !seen.has(cause)) {
+      seen.add(cause);
+      if (cause instanceof Error) {
+        if (cause.message) {
+          formatted += ` | ${cause.message}`;
+        }
+        cause = cause.cause;
+      } else if (typeof cause === "string") {
+        formatted += ` | ${cause}`;
+        break;
+      } else {
+        break;
+      }
+    }
+    return formatted;
+  }
+  if (
+    typeof error === "string" ||
+    typeof error === "number" ||
+    typeof error === "boolean" ||
+    typeof error === "bigint"
+  ) {
+    return String(error);
+  }
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return Object.prototype.toString.call(error);
+  }
+}
+
+function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
+  return redactSensitiveText(redactOAuthCredentialSecrets(formatRawErrorMessage(error), secrets));
+}
+
+function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Error {
+  const redacted = formatRedactedOAuthRefreshError(cause, secrets);
+  const sanitized = new Error(redacted);
+  if (cause instanceof Error && cause.name) {
+    sanitized.name = cause.name;
+  }
+  return sanitized;
 }
 
 async function loadFreshStoredOAuthCredential(params: {
@@ -367,6 +417,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     agentDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
+    attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
     const authPath = resolveAuthStorePath(ownerAgentDir);
@@ -479,6 +530,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             `refreshOAuthCredential(${cred.provider})`,
             OAUTH_REFRESH_CALL_TIMEOUT_MS,
             async () => {
+              params.attemptedCredentials?.push(credentialToRefresh);
               const refreshed = await adapter.refreshCredential(credentialToRefresh);
               return refreshed
                 ? ({
@@ -530,6 +582,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     agentDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
+    attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const key = refreshQueueKey(params.provider, params.profileId);
     const prev = refreshQueues.get(key) ?? Promise.resolve();
@@ -569,6 +622,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       credential: adoptedCredential,
       readBootstrapCredential: adapter.readBootstrapCredential,
     });
+    const attemptedCredentials: OAuthCredential[] = [];
 
     if (!params.forceRefresh && hasUsableOAuthCredential(effectiveCredential)) {
       return {
@@ -587,6 +641,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         agentDir: params.agentDir,
         cfg: params.cfg,
         forceRefresh: params.forceRefresh,
+        attemptedCredentials,
       });
       return refreshed;
     } catch (error) {
@@ -638,6 +693,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             agentDir: params.agentDir,
             cfg: params.cfg,
             forceRefresh: params.forceRefresh,
+            attemptedCredentials,
           });
           if (retried) {
             return retried;
@@ -712,6 +768,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       throw new OAuthManagerRefreshError({
         credential: params.credential,
+        attemptedCredentials: [effectiveCredential, ...attemptedCredentials],
         profileId: params.profileId,
         refreshedStore,
         cause: error,
