@@ -65,6 +65,7 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 - **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
 - **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
 
+The auto fallback primary-probe interval is five minutes. Older auto fallback entries without a probe timestamp are probed on their next normal turn, then use the same interval after fallback records a fresh timestamp. OpenClaw sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
 ## Auth storage (keys + OAuth)
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
@@ -306,6 +307,7 @@ That means fallback retries have to coordinate with live model switching:
 - User-driven model overrides are treated as exact selections for fallback policy, so an unreachable selected provider surfaces as a failure instead of being masked by `agents.defaults.model.fallbacks`.
 - Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
 - Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. OpenClaw periodically probes the configured origin again and clears the auto override when it recovers; `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
+- User replies announce fallback transitions and fallback-cleared recovery once per state change. Sticky fallback turns do not repeat the notice.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
