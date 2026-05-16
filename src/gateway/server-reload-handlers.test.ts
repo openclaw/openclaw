@@ -436,6 +436,118 @@ describe("gateway Gmail hot reload handlers", () => {
 
     expect(restartSignal?.aborted).toBe(true);
   });
+
+  it("does not start a Gmail restart after the managed reloader stops before hot reload applies", async () => {
+    const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
+      current: null,
+    };
+    let releaseSecrets: (() => void) | undefined;
+    let secretsEntered: (() => void) | undefined;
+    const secretsStarted = new Promise<void>((resolve) => {
+      secretsEntered = resolve;
+    });
+    const releaseSecretsPromise = new Promise<void>((resolve) => {
+      releaseSecrets = resolve;
+    });
+    const initialConfig = createGmailConfig("old@example.com");
+    const nextConfig = createGmailConfig("next@example.com");
+    const reloader = startManagedGatewayConfigReloader({
+      minimalTestGateway: false,
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      initialInternalWriteHash: null,
+      watchPath: "/tmp/openclaw.json",
+      readSnapshot: vi.fn(async () => ({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        sourceConfig: nextConfig,
+        resolved: nextConfig,
+        valid: true,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+        hash: "hash-next",
+      })) as never,
+      promoteSnapshot: vi.fn(async () => true) as never,
+      subscribeToWrites: ((listener: (event: ConfigWriteNotification) => void) => {
+        writeListenerRef.current = listener;
+        return () => {
+          if (writeListenerRef.current === listener) {
+            writeListenerRef.current = null;
+          }
+        };
+      }) as never,
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      channelManager: {} as never,
+      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => {
+        secretsEntered?.();
+        await releaseSecretsPromise;
+        return {
+          sourceConfig: config,
+          config,
+          authStores: [],
+          warnings: [],
+          webTools: {},
+        };
+      }) as never,
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      clients: [],
+    });
+    const registeredWriteListener = writeListenerRef.current;
+    if (!registeredWriteListener) {
+      throw new Error("Expected config write listener to be registered");
+    }
+
+    registeredWriteListener({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      persistedHash: "hash-next",
+      revision: 1,
+      fingerprint: "runtime-hash-next",
+      sourceFingerprint: "source-hash-next",
+      writtenAtMs: Date.now(),
+    });
+    await secretsStarted;
+
+    const stopPromise = reloader.stop();
+    releaseSecrets?.();
+    await stopPromise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(hoisted.stopGmailWatcher).not.toHaveBeenCalled();
+    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+  });
 });
 
 describe("gateway plugin hot reload handlers", () => {
