@@ -1213,4 +1213,123 @@ describe("subagent registry seam flow", () => {
       );
     });
   });
+
+  it("expires suspended cron final deliveries into compact tombstones", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const runId = "run-suspended-cron-expired";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:suspended-cron",
+      controllerSessionKey: "agent:main:cron:cron-1:run:parent",
+      requesterSessionKey: "agent:main:cron:cron-1:run:parent",
+      requesterDisplayKey: "cron",
+      task: "cron suspended delivery",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+      createdAt: now - 3 * 60 * 60_000,
+      startedAt: now - 3 * 60 * 60_000,
+      endedAt: now - 3 * 60 * 60_000,
+      outcome: { status: "ok" },
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryCreatedAt: now - 3 * 60 * 60_000,
+      pendingFinalDeliveryLastAttemptAt: now - 2 * 60 * 60_000 - 1,
+      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryLastError: "gateway request timeout for agent",
+      pendingFinalDeliveryPayload: {
+        requesterSessionKey: "agent:main:cron:cron-1:run:parent",
+        requesterDisplayKey: "cron",
+        childSessionKey: "agent:main:subagent:suspended-cron",
+        childRunId: runId,
+        task: "cron suspended delivery",
+        endedAt: now - 3 * 60 * 60_000,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        frozenResultText: "large final payload",
+      },
+      deliverySuspendedAt: now - 2 * 60 * 60_000 - 1,
+      deliverySuspendedReason: "retry-limit",
+      lastAnnounceDeliveryError: "gateway request timeout for agent",
+    });
+
+    await mod.__testing.sweepOnceForTests();
+
+    const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:suspended-cron");
+    expect(run).toMatchObject({
+      runId,
+      pendingFinalDelivery: undefined,
+      pendingFinalDeliveryPayload: undefined,
+      deliverySuspendedAt: undefined,
+      deliverySuspendedReason: undefined,
+      deliveryDiscardedAt: now,
+      deliveryDiscardReason: "expired",
+      cleanupHandled: true,
+      cleanupCompletedAt: now,
+    });
+    expect(run?.deliveryDiscardedPayloadSummary).toEqual({
+      requesterSessionKey: "agent:main:cron:cron-1:run:parent",
+      childSessionKey: "agent:main:subagent:suspended-cron",
+      childRunId: runId,
+      endedAt: now - 3 * 60 * 60_000,
+      status: "ok",
+      lastError: "gateway request timeout for agent",
+    });
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
+
+  it("pressure-prunes oldest suspended final deliveries when backlog exceeds hard cap", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    for (let i = 0; i < 51; i += 1) {
+      const runId = `run-suspended-pressure-${i}`;
+      mod.addSubagentRunForTests({
+        runId,
+        childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:telegram:direct:418181497",
+        requesterDisplayKey: "telegram",
+        task: "interactive suspended delivery",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+        spawnMode: "session",
+        createdAt: now - 60_000,
+        startedAt: now - 60_000,
+        endedAt: now - 60_000,
+        outcome: { status: "ok" },
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryCreatedAt: now - 60_000,
+        pendingFinalDeliveryLastAttemptAt: now - 60_000 + i,
+        pendingFinalDeliveryAttemptCount: 3,
+        pendingFinalDeliveryLastError: "gateway request timeout for agent",
+        pendingFinalDeliveryPayload: {
+          requesterSessionKey: "agent:main:telegram:direct:418181497",
+          requesterDisplayKey: "telegram",
+          childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
+          childRunId: runId,
+          task: "interactive suspended delivery",
+          endedAt: now - 60_000,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          frozenResultText: "final payload",
+        },
+        deliverySuspendedAt: now - 60_000 + i,
+        deliverySuspendedReason: "retry-limit",
+      });
+    }
+
+    await mod.__testing.sweepOnceForTests();
+
+    const runs = Array.from({ length: 51 }, (_, i) =>
+      mod.getSubagentRunByChildSessionKey(`agent:main:subagent:suspended-pressure-${i}`),
+    );
+    const discarded = runs.filter((run) => run?.deliveryDiscardReason === "pressure-pruned");
+    const stillSuspended = runs.filter(
+      (run) => run?.pendingFinalDelivery === true && typeof run.deliverySuspendedAt === "number",
+    );
+    expect(discarded).toHaveLength(41);
+    expect(stillSuspended).toHaveLength(10);
+    expect(discarded[0]?.runId).toBe("run-suspended-pressure-0");
+    expect(runs[40]?.deliveryDiscardReason).toBe("pressure-pruned");
+    expect(runs[41]?.pendingFinalDelivery).toBe(true);
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
 });
