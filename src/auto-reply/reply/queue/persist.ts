@@ -15,6 +15,27 @@ import type { FollowupRun, QueueDropPolicy, QueueMode } from "./types.js";
 
 const FOLLOWUP_QUEUE_STATE_FILENAME = "live-chat-followup-queues.json";
 
+/**
+ * Keys of non-empty queues restored from disk on this process start.
+ * Entries are removed as drains are scheduled; drain.ts sweeps this set
+ * inside rememberFollowupDrainCallback so restored items drain as soon as
+ * a valid callback is registered for the queue's channel route.
+ */
+const restoredPendingDrainKeys = new Set<string>();
+
+export function peekRestoredPendingDrainKeys(): ReadonlySet<string> {
+  return restoredPendingDrainKeys;
+}
+
+export function clearRestoredPendingDrainKey(key: string): void {
+  restoredPendingDrainKeys.delete(key);
+}
+
+/** For testing only — reset the pending-drain set between test cases. */
+export function _clearRestoredPendingDrainKeysForTest(): void {
+  restoredPendingDrainKeys.clear();
+}
+
 export function resolveFollowupQueueStatePath(stateDir: string = resolveStateDir()): string {
   return path.join(stateDir, FOLLOWUP_QUEUE_STATE_FILENAME);
 }
@@ -158,12 +179,9 @@ export function restoreFollowupQueues(): void {
         lastRun: data.lastRun,
       };
       FOLLOWUP_QUEUES.set(key, restored);
-      // Note: drain callbacks (FOLLOWUP_RUN_CALLBACKS) are empty after a full
-      // process restart, so kicking them here would be a no-op. Items in
-      // restored queues will be delivered when the next enqueueFollowupRun call
-      // re-registers the channel callback and kicks the drain. For immediate
-      // delivery on startup, channel handlers would need to register their
-      // runFollowup callbacks before any queue restore.
+      if (restored.items.length > 0) {
+        restoredPendingDrainKeys.add(key);
+      }
     }
   } catch (err) {
     defaultRuntime.error?.(`failed to restore followup queues: ${String(err)}`);

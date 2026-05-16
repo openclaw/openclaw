@@ -14,7 +14,11 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { persistFollowupQueues } from "./persist.js";
+import {
+  clearRestoredPendingDrainKey,
+  peekRestoredPendingDrainKeys,
+  persistFollowupQueues,
+} from "./persist.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -36,6 +40,18 @@ export function rememberFollowupDrainCallback(
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+  // After a process restart, drain callbacks are initially empty and restored
+  // queues sit idle until a new message arrives for their channel route.
+  // Sweep the pending-restore set here: for any restored queue whose callback
+  // is now registered (including the one just set above), kick a drain
+  // immediately so delivery resumes without waiting for the next inbound message.
+  for (const restoredKey of peekRestoredPendingDrainKeys()) {
+    const cb = FOLLOWUP_RUN_CALLBACKS.get(restoredKey);
+    if (cb) {
+      clearRestoredPendingDrainKey(restoredKey);
+      scheduleFollowupDrain(restoredKey, cb);
+    }
+  }
 }
 
 export function clearFollowupDrainCallback(key: string): void {

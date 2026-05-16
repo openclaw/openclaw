@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  _clearRestoredPendingDrainKeysForTest,
+  clearRestoredPendingDrainKey,
+  peekRestoredPendingDrainKeys,
   persistFollowupQueues,
   resolveFollowupQueueStatePath,
   restoreFollowupQueues,
@@ -65,6 +68,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     originalEnv = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     clearFollowupQueue(TEST_KEY);
+    _clearRestoredPendingDrainKeysForTest();
   });
 
   afterEach(() => {
@@ -132,6 +136,34 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
     expect(() => restoreFollowupQueues()).not.toThrow();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
+  });
+
+  it("registers restored keys in the pending-drain set when queue has items", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("pending delivery"));
+    persistFollowupQueues();
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    restoreFollowupQueues();
+
+    expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(true);
+    clearRestoredPendingDrainKey(TEST_KEY);
+    expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(false);
+  });
+
+  it("does not add to pending-drain set when restored queue is empty", () => {
+    // Write a state file with an empty items array to verify the guard.
+    const statePath = path.join(tmpDir, STATE_FILE);
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: Date.now(),
+        entries: [[TEST_KEY, { items: [], mode: "steer", droppedCount: 0, summaryLines: [] }]],
+      }),
+    );
+    restoreFollowupQueues();
+    expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(false);
   });
 
   it("skips entries with missing or invalid items array", () => {
