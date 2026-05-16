@@ -309,7 +309,7 @@ describe("cron service store seam coverage", () => {
         updatedAtMs: STORE_TEST_NOW,
         state: { nextRunAtMs: staleNextRunAtMs },
       }),
-      schedule: "0 17 * * *",
+      schedule: { kind: "cron", expr: "" },
     });
 
     await expect(ensureLoaded(state, { forceReload: true, skipRecompute: true })).resolves.toBe(
