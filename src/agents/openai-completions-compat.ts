@@ -1,4 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
+import type { ArrayToolParameterItemsMode } from "../config/types.models.js";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
@@ -21,6 +22,7 @@ type OpenAICompletionsCompatDefaults = {
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
+  arrayToolParameterItems: ArrayToolParameterItemsMode;
 };
 
 type DetectedOpenAICompletionsCompat = {
@@ -90,7 +92,9 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
       (!isNonStandard &&
-        (isLocalEndpoint || !usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
+        (isLocalEndpoint ||
+          !usesConfiguredNonOpenAIEndpoint ||
+          supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat:
       isDeepSeek || isXiaomi
@@ -103,6 +107,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
+    arrayToolParameterItems: isXiaomi ? "string" : "permissive",
   };
 }
 

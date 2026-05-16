@@ -49,6 +49,11 @@ function supportsStrictMode(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
+function arrayToolParameterItems(model: Model<Api>): string | undefined {
+  return (model.compat as { arrayToolParameterItems?: string } | undefined)
+    ?.arrayToolParameterItems;
+}
+
 function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -181,6 +186,20 @@ describe("normalizeModelCompat", () => {
       provider: "qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     });
+  });
+
+  it("uses string array item compat for Xiaomi token-plan OpenAI-compatible endpoints", () => {
+    const model = {
+      ...baseModel(),
+      id: "mimo-v2.5",
+      provider: "xiaomi-mimo-tp",
+      baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+
+    const normalized = normalizeModelCompat(model);
+
+    expect(arrayToolParameterItems(normalized)).toBe("string");
   });
 
   it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {

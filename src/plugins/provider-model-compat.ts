@@ -53,6 +53,13 @@ export function resolveToolCallArgumentsEncoding(
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
+export function resolveArrayToolParameterItems(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): ModelCompatConfig["arrayToolParameterItems"] | undefined {
+  const mode = extractModelCompat(modelOrCompat)?.arrayToolParameterItems;
+  return mode === "permissive" || mode === "string" || mode === "omit" ? mode : undefined;
+}
+
 export function resolveUnsupportedToolSchemaKeywords(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ReadonlySet<string> {
@@ -68,10 +75,7 @@ export function resolveUnsupportedToolSchemaKeywords(
 export function shouldOmitEmptyArrayItems(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): boolean {
-  const compat = extractModelCompat(modelOrCompat) as
-    | (ModelCompatConfig & { omitEmptyArrayItems?: unknown })
-    | undefined;
-  return compat?.omitEmptyArrayItems === true;
+  return extractModelCompat(modelOrCompat)?.omitEmptyArrayItems === true;
 }
 
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
@@ -100,26 +104,34 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  const compat = model.compat ?? undefined;
+  const compat = extractModelCompat(model);
   const detectedCompatDefaults = baseUrl
     ? detectOpenAICompletionsCompat(model).defaults
     : undefined;
+  const shouldForceArrayToolParameterItems = Boolean(
+    detectedCompatDefaults &&
+    detectedCompatDefaults.arrayToolParameterItems !== "permissive" &&
+    compat?.arrayToolParameterItems === undefined,
+  );
   const needsForce = Boolean(
     detectedCompatDefaults &&
     (!detectedCompatDefaults.supportsDeveloperRole ||
       !detectedCompatDefaults.supportsUsageInStreaming ||
-      !detectedCompatDefaults.supportsStrictMode),
+      !detectedCompatDefaults.supportsStrictMode ||
+      shouldForceArrayToolParameterItems),
   );
   if (!needsForce) {
     return model;
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
+  const hasArrayToolParameterItemsOverride = compat?.arrayToolParameterItems !== undefined;
   const targetStrictMode = compat?.supportsStrictMode ?? detectedCompatDefaults?.supportsStrictMode;
   if (
     compat?.supportsDeveloperRole !== undefined &&
     hasStreamingUsageOverride &&
-    compat?.supportsStrictMode !== undefined
+    compat?.supportsStrictMode !== undefined &&
+    (hasArrayToolParameterItemsOverride || !shouldForceArrayToolParameterItems)
   ) {
     return model;
   }
@@ -136,11 +148,17 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
                 supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
               }),
           supportsStrictMode: targetStrictMode,
+          ...(shouldForceArrayToolParameterItems
+            ? { arrayToolParameterItems: detectedCompatDefaults?.arrayToolParameterItems }
+            : {}),
         }
       : {
           supportsDeveloperRole: false,
           supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
           supportsStrictMode: detectedCompatDefaults?.supportsStrictMode ?? false,
+          ...(shouldForceArrayToolParameterItems
+            ? { arrayToolParameterItems: detectedCompatDefaults?.arrayToolParameterItems }
+            : {}),
         },
   } as typeof model;
 }

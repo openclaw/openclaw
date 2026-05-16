@@ -170,6 +170,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     "supportsStrictMode",
     "requiresStringContent",
     "strictMessageKeys",
+    "omitEmptyArrayItems",
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
@@ -183,9 +184,21 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     }
   }
 
-  const stringFields = ["toolSchemaProfile", "toolCallArgumentsEncoding"] as const;
+  const stringFields = [
+    "toolSchemaProfile",
+    "toolCallArgumentsEncoding",
+    "arrayToolParameterItems",
+  ] as const;
   for (const field of stringFields) {
     const normalized = normalizeOptionalString(value[field]) ?? "";
+    if (
+      field === "arrayToolParameterItems" &&
+      normalized !== "permissive" &&
+      normalized !== "string" &&
+      normalized !== "omit"
+    ) {
+      continue;
+    }
     if (normalized) {
       compat[field] = normalized;
     }

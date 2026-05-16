@@ -109,6 +109,63 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("uses string items for providers that reject permissive array item schemas", () => {
+    expect(
+      normalizeToolParameterSchema(
+        {
+          type: "object",
+          properties: {
+            entity_hints: { type: "array", description: "Optional entity hints" },
+            nested: {
+              type: "object",
+              properties: {
+                ids: { type: "array" },
+              },
+            },
+            alternatives: {
+              anyOf: [{ type: "array" }, { type: "string" }],
+            },
+          },
+        },
+        { modelCompat: { arrayToolParameterItems: "string" } },
+      ),
+    ).toEqual({
+      type: "object",
+      properties: {
+        entity_hints: {
+          type: "array",
+          description: "Optional entity hints",
+          items: { type: "string" },
+        },
+        nested: {
+          type: "object",
+          properties: {
+            ids: { type: "array", items: { type: "string" } },
+          },
+        },
+        alternatives: {
+          anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
+        },
+      },
+    });
+  });
+
+  it("can skip synthetic array items for provider-specific tool schema compat", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        entity_hints: { type: "array", description: "Optional entity hints" },
+        explicit: { type: "array", items: { type: "number" } },
+      },
+    };
+
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelCompat: { arrayToolParameterItems: "omit" },
+      }),
+    ).toEqual(schema);
+  });
+
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",

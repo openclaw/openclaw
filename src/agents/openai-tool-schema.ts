@@ -5,6 +5,7 @@ export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js"
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
+  arrayToolParameterItems?: unknown;
 };
 
 type ToolWithParameters = {
@@ -18,18 +19,26 @@ function resolveToolSchemaModelCompat(
   if (!compat) {
     return undefined;
   }
-  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
-    ? compat.unsupportedToolSchemaKeywords.filter(
-        (keyword): keyword is string => typeof keyword === "string",
-      )
-    : [];
-  if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
-    return undefined;
+  const modelCompat: ModelCompatConfig = {};
+  if (Array.isArray(compat.unsupportedToolSchemaKeywords)) {
+    const unsupportedToolSchemaKeywords = compat.unsupportedToolSchemaKeywords.filter(
+      (keyword): keyword is string => typeof keyword === "string",
+    );
+    if (unsupportedToolSchemaKeywords.length > 0) {
+      modelCompat.unsupportedToolSchemaKeywords = unsupportedToolSchemaKeywords;
+    }
   }
-  return {
-    ...(unsupportedToolSchemaKeywords.length > 0 ? { unsupportedToolSchemaKeywords } : {}),
-    ...(compat.omitEmptyArrayItems === true ? { omitEmptyArrayItems: true } : {}),
-  };
+  if (compat.omitEmptyArrayItems === true) {
+    modelCompat.omitEmptyArrayItems = true;
+  }
+  if (
+    compat.arrayToolParameterItems === "permissive" ||
+    compat.arrayToolParameterItems === "string" ||
+    compat.arrayToolParameterItems === "omit"
+  ) {
+    modelCompat.arrayToolParameterItems = compat.arrayToolParameterItems;
+  }
+  return Object.keys(modelCompat).length > 0 ? modelCompat : undefined;
 }
 
 export function normalizeStrictOpenAIJsonSchema(

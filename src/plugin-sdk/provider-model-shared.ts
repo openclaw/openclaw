@@ -66,6 +66,7 @@ export {
   hasToolSchemaProfile,
   hasNativeWebSearchTool,
   normalizeModelCompat,
+  resolveArrayToolParameterItems,
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
 } from "../plugins/provider-model-compat.js";

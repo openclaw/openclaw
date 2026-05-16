@@ -55,6 +55,8 @@ type SupportedThinkingFormat =
   | "deepseek"
   | "openrouter";
 
+export type ArrayToolParameterItemsMode = "permissive" | "string" | "omit";
+
 export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedOpenAIResponsesCompatFields &
   SupportedAnthropicMessagesCompatFields & {
@@ -68,6 +70,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     strictMessageKeys?: boolean;
     toolSchemaProfile?: string;
     unsupportedToolSchemaKeywords?: string[];
+    omitEmptyArrayItems?: boolean;
+    arrayToolParameterItems?: ArrayToolParameterItemsMode;
     nativeWebSearchTool?: boolean;
     toolCallArgumentsEncoding?: string;
     requiresMistralToolIds?: boolean;

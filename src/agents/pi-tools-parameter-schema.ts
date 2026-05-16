@@ -1,7 +1,8 @@
 import type { TSchema } from "typebox";
-import type { ModelCompatConfig } from "../config/types.models.js";
+import type { ArrayToolParameterItemsMode, ModelCompatConfig } from "../config/types.models.js";
 import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
 import {
+  resolveArrayToolParameterItems,
   resolveUnsupportedToolSchemaKeywords,
   shouldOmitEmptyArrayItems,
 } from "../plugins/provider-model-compat.js";
@@ -147,7 +148,10 @@ function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
   return Object.keys(schemaRecord).length === 0;
 }
 
-function normalizeArraySchemasMissingItems(schema: unknown): unknown {
+function normalizeArraySchemasMissingItems(
+  schema: unknown,
+  mode: ArrayToolParameterItemsMode = "permissive",
+): unknown {
   if (!isSchemaRecord(schema)) {
     return schema;
   }
@@ -155,7 +159,10 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
   let changed = false;
   const nextSchema: Record<string, unknown> = { ...schema };
   if (nextSchema.type === "array" && nextSchema.items === undefined) {
-    nextSchema.items = {};
+    if (mode === "omit") {
+      return schema;
+    }
+    nextSchema.items = mode === "string" ? { type: "string" } : {};
     changed = true;
   }
 
@@ -165,7 +172,7 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
     }
     const value = nextSchema[key];
     if (Array.isArray(value)) {
-      const normalized = value.map(normalizeArraySchemasMissingItems);
+      const normalized = value.map((entry) => normalizeArraySchemasMissingItems(entry, mode));
       if (normalized.some((entry, index) => entry !== value[index])) {
         nextSchema[key] = normalized;
         changed = true;
@@ -173,7 +180,7 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
       return;
     }
 
-    const normalized = normalizeArraySchemasMissingItems(value);
+    const normalized = normalizeArraySchemasMissingItems(value, mode);
     if (normalized !== value) {
       nextSchema[key] = normalized;
       changed = true;
@@ -211,7 +218,7 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
     let entriesChanged = false;
     const normalizedEntries: Array<[string, unknown]> = Object.entries(value).map(
       ([entryKey, entryValue]) => {
-        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue);
+        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue, mode);
         if (normalizedEntryValue !== entryValue) {
           entriesChanged = true;
         }
@@ -333,9 +340,12 @@ export function normalizeToolParameterSchema(
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  const arrayToolParameterItems =
+    resolveArrayToolParameterItems(options?.modelCompat) ??
+    (omitEmptyArrayItems ? "omit" : "permissive");
 
   function applyProviderCleaning(s: unknown): TSchema {
-    const normalizedSchema = normalizeArraySchemasMissingItems(s);
+    const normalizedSchema = normalizeArraySchemasMissingItems(s, arrayToolParameterItems);
     const arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
