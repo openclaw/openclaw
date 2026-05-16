@@ -62,6 +62,7 @@
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tlon/**",
     "!dist/extensions/twitch/**",
+    "!dist/extensions/vefaas-sandbox/**",
     "!dist/extensions/voice-call/**",
     "!dist/extensions/whatsapp/**",
     "!dist/extensions/zalo/**",

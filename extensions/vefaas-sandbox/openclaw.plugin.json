@@ -1,0 +1,215 @@
+{
+  "id": "vefaas-sandbox",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "VEFaaS Sandbox",
+  "description": "Sandbox backend powered by VEFaaS with SSH-based command execution and remote workspaces.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "const": "remote"
+      },
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "functionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "region": {
+        "type": "string",
+        "minLength": 1
+      },
+      "endpoint": {
+        "type": "string",
+        "minLength": 1
+      },
+      "image": {
+        "type": "string",
+        "minLength": 1
+      },
+      "remoteWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "remoteAgentWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "ttlSeconds": {
+        "type": "integer",
+        "maximum": 9007199254740991,
+        "minimum": 60
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1
+      },
+      "resources": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cpuCores": {
+            "type": "number",
+            "minimum": 0.1
+          },
+          "memoryMiB": {
+            "type": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 128
+          },
+          "gpuCount": {
+            "type": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0
+          },
+          "gpuType": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "network": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "egress": {
+            "type": "string",
+            "enum": ["default", "restricted", "disabled"]
+          },
+          "vpcId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subnetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "securityGroupId": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "opencode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entrypoint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eventMode": {
+            "type": "string",
+            "const": "ndjson"
+          },
+          "artifactDir": {
+            "type": "string",
+            "minLength": 1
+          },
+          "acp": {
+            "type": "boolean"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "Workspace mode. The VEFaaS backend currently supports remote canonical workspaces."
+    },
+    "command": {
+      "label": "Provisioner Command",
+      "help": "Path or command name for the VEFaaS sandbox provisioner."
+    },
+    "functionId": {
+      "label": "Function ID",
+      "help": "Optional VEFaaS webserver sandbox function id forwarded to the provisioner."
+    },
+    "region": {
+      "label": "Region",
+      "help": "Optional VEFaaS region passed to the provisioner."
+    },
+    "endpoint": {
+      "label": "Endpoint",
+      "help": "Optional VEFaaS control-plane endpoint passed to the provisioner.",
+      "advanced": true
+    },
+    "image": {
+      "label": "Image",
+      "help": "Sandbox image that contains opencode and the required runtime tools."
+    },
+    "remoteWorkspaceDir": {
+      "label": "Remote Workspace Dir",
+      "help": "Primary writable workspace inside the VEFaaS sandbox.",
+      "advanced": true
+    },
+    "remoteAgentWorkspaceDir": {
+      "label": "Remote Agent Dir",
+      "help": "Agent workspace mirror path when workspaceAccess is read-only.",
+      "advanced": true
+    },
+    "ttlSeconds": {
+      "label": "TTL Seconds",
+      "help": "Requested sandbox lifetime before provider-side cleanup.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for provisioner operations such as create and ssh-config.",
+      "advanced": true
+    },
+    "resources": {
+      "label": "Resources",
+      "help": "Optional CPU, memory, and GPU request forwarded to the provisioner.",
+      "advanced": true
+    },
+    "network": {
+      "label": "Network",
+      "help": "Optional network placement and egress policy forwarded to the provisioner.",
+      "advanced": true
+    },
+    "opencode": {
+      "label": "OpenCode",
+      "help": "OpenCode remote attempt settings used by the VEFaaS provisioner.",
+      "advanced": true
+    },
+    "opencode.entrypoint": {
+      "label": "OpenCode Entrypoint",
+      "help": "Command inside the sandbox image used to start OpenCode attempts.",
+      "advanced": true
+    },
+    "opencode.eventMode": {
+      "label": "OpenCode Event Mode",
+      "help": "Event stream format emitted by the remote OpenCode attempt. Only ndjson is supported.",
+      "advanced": true
+    },
+    "opencode.artifactDir": {
+      "label": "OpenCode Artifact Dir",
+      "help": "Remote directory where OpenCode writes attempt artifacts, logs, and snapshots.",
+      "advanced": true
+    },
+    "opencode.acp": {
+      "label": "OpenCode ACP",
+      "help": "Register ACP backend vefaas-opencode and run opencode acp inside VEFaaS.",
+      "advanced": true
+    },
+    "opencode.env": {
+      "label": "OpenCode Env",
+      "help": "Environment variables passed to the remote opencode acp process.",
+      "advanced": true
+    }
+  }
+}

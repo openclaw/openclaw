@@ -171,6 +171,23 @@
       }
     },
     {
+      "name": "@openclaw/vefaas-sandbox",
+      "description": "OpenClaw VEFaaS sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "vefaas-sandbox",
+          "label": "VEFaaS Sandbox"
+        },
+        "install": {
+          "npmSpec": "@openclaw/vefaas-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/voice-call",
       "description": "OpenClaw voice-call plugin",
       "source": "official",

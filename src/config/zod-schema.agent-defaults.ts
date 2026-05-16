@@ -97,6 +97,16 @@ export const AgentDefaultsSchema = z
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),
+        runtimeIsolation: z
+          .object({
+            mode: z.enum(["off", "worker", "vefaas-opencode"]).optional(),
+            permissions: z.boolean().optional(),
+            ttlSeconds: z.number().int().min(60).optional(),
+            checkpointBeforeSeconds: z.number().int().min(0).optional(),
+            workspaceMode: z.literal("remote").optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

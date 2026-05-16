@@ -430,6 +430,16 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
   "agents.defaults.experimental": "Experimental Agent Flags",
   "agents.defaults.experimental.localModelLean": "Enable Lean Local Model Mode (Experimental)",
+  "agents.defaults.experimental.runtimeIsolation": "Command Runtime Isolation (Experimental)",
+  "agents.defaults.experimental.runtimeIsolation.mode": "Command Runtime Isolation Mode",
+  "agents.defaults.experimental.runtimeIsolation.permissions":
+    "Command Runtime Isolation Permissions",
+  "agents.defaults.experimental.runtimeIsolation.ttlSeconds":
+    "Command Runtime Isolation TTL Seconds",
+  "agents.defaults.experimental.runtimeIsolation.checkpointBeforeSeconds":
+    "Command Runtime Isolation Checkpoint Window",
+  "agents.defaults.experimental.runtimeIsolation.workspaceMode":
+    "Command Runtime Isolation Workspace Mode",
   "agents.defaults.bootstrapPromptTruncationWarning": "Bootstrap Prompt Truncation Warning",
   "agents.defaults.startupContext": "Startup Context",
   "agents.defaults.startupContext.enabled": "Enable Startup Context",

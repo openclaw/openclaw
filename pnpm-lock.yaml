@@ -1539,6 +1539,22 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/vefaas-sandbox:
+    dependencies:
+      '@volcengine/vefaas':
+        specifier: 1.0.5
+        version: 1.0.5
+      acpx:
+        specifier: 0.7.0
+        version: 0.7.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/venice:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -4544,6 +4560,18 @@ packages:
   '@vitest/utils@4.1.6':
     resolution: {integrity: sha512-FxIY+U81R3LGKCxaHHFRQ5+g6/iRgGLmeHWdp2Amj4ljQRrEIWHmZyDfDYBRZlpyqA7qKxtS9DD1dhk8RnRIVQ==}
 
+  '@volcengine/openapi@1.36.2':
+    resolution: {integrity: sha512-cJHvW5xefOPTmtIuDHKLYmSfDdTdtdcT77RWo9yf8eHD+Md8Qtgps2vWkf+t0aNblWViEbcrZT06Ji4oksP8AA==}
+    engines: {node: '>=12'}
+
+  '@volcengine/sdk-core@1.0.0':
+    resolution: {integrity: sha512-3rWpt7rAr8kG7OXpcuveOdcQIf46GmG2PFClWG5e6aJWx+KBuY4xe40SKflp8NF+v+WYMLteQuC5vR429xGf+A==}
+    engines: {node: '>=18'}
+
+  '@volcengine/vefaas@1.0.5':
+    resolution: {integrity: sha512-2O8nViUltVMyX0yWJ7u+SbmKUU0wOYTBnIbDnRm2nGJshFkjccGjD+PxIGLwuyiwCgEB2ycr83OKX/Hi6UlacA==}
+    engines: {node: '>=18'}
+
   '@wasm-audio-decoders/common@9.0.7':
     resolution: {integrity: sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==}
 
@@ -5057,6 +5085,15 @@ packages:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
 
+  crc@4.3.2:
+    resolution: {integrity: sha512-uGDHf4KLLh2zsHa8D8hIQ1H/HtFQhyHrc0uhHBcoKGol/Xnb+MPYfUMw7cvON6ze/GUESTudKayDcJC5HnJv1A==}
+    engines: {node: '>=12'}
+    peerDependencies:
+      buffer: '>=6.0.3'
+    peerDependenciesMeta:
+      buffer:
+        optional: true
+
   croner@10.0.1:
     resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
     engines: {node: '>=18.0'}
@@ -5099,6 +5136,9 @@ packages:
 
   date-fns@4.1.0:
     resolution: {integrity: sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg==}
+
+  dayjs@1.11.20:
+    resolution: {integrity: sha512-YbwwqR/uYpeoP4pu043q+LTDLFBLApUP6VxRihdfNTqu4ubqMlGDLd6ErXhEgsyvY0K6nCs7nggYumAN+9uEuQ==}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -6046,6 +6086,10 @@ packages:
   lodash.clonedeep@4.5.0:
     resolution: {integrity: sha512-H5ZhCF25riFd9uB5UCkVKo61m3S/xZk1x4wA6yp/L3RFP6Z/eHH1ymQcGLo7J3GMPfm0V/7m1tryHuGVxpqEBQ==}
 
+  lodash.get@4.4.2:
+    resolution: {integrity: sha512-z+Uw/vLuy6gQe8cfaFWD7p0wVv8fJl3mbzXh33RS+0oW2wvUqiRXiQ69gLWSLpgB5/6sU+r6BlQR0MBILadqTQ==}
+    deprecated: This package is deprecated. Use the optional chaining (?.) operator instead.
+
   lodash.identity@3.0.0:
     resolution: {integrity: sha512-AupTIzdLQxJS5wIYUQlgGyk2XRTfGXA+MCghDHqZk0pzUNYvd3EESS6dkChNauNYVIutcb0dfHw1ri9Q1yPV8Q==}
 
@@ -6539,6 +6583,10 @@ packages:
   p-limit@2.3.0:
     resolution: {integrity: sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==}
     engines: {node: '>=6'}
+
+  p-limit@3.1.0:
+    resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
+    engines: {node: '>=10'}
 
   p-locate@4.1.0:
     resolution: {integrity: sha512-R79ZZ/0wAxKGu3oYMlz8jy/kbhsNrS7SKZ7PxEHBgJ5+F2mtFW2fK2cOtBh1cHYkQsbzFV7I+EoRKe6Yt0oK7A==}
@@ -7765,6 +7813,10 @@ packages:
   yauzl@3.2.1:
     resolution: {integrity: sha512-k1isifdbpNSFEHFJ1ZY4YDewv0IH9FR61lDetaRMD3j2ae3bIXGV+7c+LHCqtQGofSd8PIyV4X6+dHMAnSr60A==}
     engines: {node: '>=12'}
+
+  yocto-queue@0.1.0:
+    resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
+    engines: {node: '>=10'}
 
   zca-js@2.1.2:
     resolution: {integrity: sha512-82+zCqoIXnXEF6C9YuN3Kf7WKlyyujY/6Ejl2n8PkwazYkBK0k7kiPd8S7nHvC5Wl7vjwGRhDYeAM8zTHyoRxQ==}
@@ -9391,7 +9443,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.64.0':
     dependencies:
-      axios: 1.16.0
+      axios: 1.16.0(debug@4.4.3)
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -9552,7 +9604,7 @@ snapshots:
       '@microsoft/teams.api': 2.0.11
       '@microsoft/teams.common': 2.0.11
       '@microsoft/teams.graph': 2.0.11
-      axios: 1.16.0
+      axios: 1.16.0(debug@4.4.3)
       cors: 2.8.6
       express: 5.2.1
       jsonwebtoken: 9.0.3
@@ -9566,7 +9618,7 @@ snapshots:
 
   '@microsoft/teams.common@2.0.11':
     dependencies:
-      axios: 1.16.0
+      axios: 1.16.0(debug@4.4.3)
     transitivePeerDependencies:
       - debug
 
@@ -10305,7 +10357,7 @@ snapshots:
       '@slack/types': 2.21.1
       '@slack/web-api': 7.16.0
       '@types/express': 5.0.6
-      axios: 1.16.0
+      axios: 1.16.0(debug@4.4.3)
       express: 5.2.1
       path-to-regexp: 8.4.0
       raw-body: 3.0.2
@@ -10351,7 +10403,7 @@ snapshots:
       '@slack/types': 2.21.1
       '@types/node': 25.8.0
       '@types/retry': 0.12.0
-      axios: 1.16.0
+      axios: 1.16.0(debug@4.4.3)
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -10972,6 +11024,40 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
+  '@volcengine/openapi@1.36.2':
+    dependencies:
+      axios: 1.16.0(debug@4.4.3)
+      crc: 4.3.2
+      crypto-js: 4.2.0
+      dayjs: 1.11.20
+      debug: 4.4.3
+      form-data: 2.5.4
+      lodash.get: 4.4.2
+      p-limit: 3.1.0
+      protobufjs: 7.5.6
+      uuid: 14.0.0
+    transitivePeerDependencies:
+      - buffer
+      - supports-color
+
+  '@volcengine/sdk-core@1.0.0':
+    dependencies:
+      '@volcengine/openapi': 1.36.2
+      axios: 1.16.0(debug@4.4.3)
+      uuid: 14.0.0
+    transitivePeerDependencies:
+      - buffer
+      - debug
+      - supports-color
+
+  '@volcengine/vefaas@1.0.5':
+    dependencies:
+      '@volcengine/sdk-core': 1.0.0
+    transitivePeerDependencies:
+      - buffer
+      - debug
+      - supports-color
+
   '@wasm-audio-decoders/common@9.0.7':
     dependencies:
       '@eshaz/web-worker': 1.2.2
@@ -11156,9 +11242,9 @@ snapshots:
 
   await-to-js@3.0.0: {}
 
-  axios@1.16.0:
+  axios@1.16.0(debug@4.4.3):
     dependencies:
-      follow-redirects: 1.16.0
+      follow-redirects: 1.16.0(debug@4.4.3)
       form-data: 2.5.4
       proxy-from-env: 2.1.0
     transitivePeerDependencies:
@@ -11456,6 +11542,8 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
+  crc@4.3.2: {}
+
   croner@10.0.1: {}
 
   cross-spawn@7.0.6:
@@ -11497,6 +11585,8 @@ snapshots:
       - '@noble/hashes'
 
   date-fns@4.1.0: {}
+
+  dayjs@1.11.20: {}
 
   debug@4.4.3:
     dependencies:
@@ -11892,7 +11982,9 @@ snapshots:
 
   flatbuffers@24.12.23: {}
 
-  follow-redirects@1.16.0: {}
+  follow-redirects@1.16.0(debug@4.4.3):
+    optionalDependencies:
+      debug: 4.4.3
 
   form-data@2.5.4:
     dependencies:
@@ -12610,6 +12702,8 @@ snapshots:
 
   lodash.clonedeep@4.5.0: {}
 
+  lodash.get@4.4.2: {}
+
   lodash.identity@3.0.0: {}
 
   lodash.includes@4.3.0: {}
@@ -13295,6 +13389,10 @@ snapshots:
   p-limit@2.3.0:
     dependencies:
       p-try: 2.2.0
+
+  p-limit@3.1.0:
+    dependencies:
+      yocto-queue: 0.1.0
 
   p-locate@4.1.0:
     dependencies:
@@ -14581,6 +14679,8 @@ snapshots:
     dependencies:
       buffer-crc32: 0.2.13
       pend: 1.2.0
+
+  yocto-queue@0.1.0: {}
 
   zca-js@2.1.2:
     dependencies:

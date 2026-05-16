@@ -522,6 +522,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: vefaas-sandbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vefaas-sandbox/**"
+          - "docs/gateway/vefaas-sandbox.md"
+          - "docs/plugins/reference/vefaas-sandbox.md"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

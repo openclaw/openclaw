@@ -1076,6 +1076,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.localModelLean":
     "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+  "agents.defaults.experimental.runtimeIsolation":
+    'Experimental command-agent attempt isolation. "off" keeps the current in-process path; "worker" uses the #78164 local Node worker runtime; "vefaas-opencode" targets a VEFaaS sandbox-hosted OpenCode session.',
+  "agents.defaults.experimental.runtimeIsolation.mode":
+    'Choose the experimental command-agent attempt executor: "off", "worker", or "vefaas-opencode".',
+  "agents.defaults.experimental.runtimeIsolation.permissions":
+    "Also enable Node permission flags for the local worker executor. This does not apply to remote VEFaaS OpenCode execution.",
+  "agents.defaults.experimental.runtimeIsolation.ttlSeconds":
+    "Requested remote runtime lifetime in seconds for remote executors such as VEFaaS OpenCode. The executor should fail closed when the provider TTL is insufficient.",
+  "agents.defaults.experimental.runtimeIsolation.checkpointBeforeSeconds":
+    "Seconds before remote runtime expiry when checkpoint or snapshot behavior should start. MVP implementations may report a clear timeout instead of automatic recovery.",
+  "agents.defaults.experimental.runtimeIsolation.workspaceMode":
+    'Workspace ownership mode for remote executors. "remote" means the sandbox workspace is canonical for the attempt.',
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
   "agents.defaults.startupContext":

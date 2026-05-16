@@ -92,6 +92,27 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
+export type AgentRuntimeIsolationExperimentalConfig = {
+  /**
+   * Experimental command-agent attempt isolation mode.
+   * - off: keep the current in-process execution path
+   * - worker: run attempts through the #78164 local Node worker runtime
+   * - vefaas-opencode: run attempts in a VEFaaS sandbox-hosted OpenCode session
+   */
+  mode?: "off" | "worker" | "vefaas-opencode";
+  /**
+   * Add Node permission flags to the worker process. This only applies to the
+   * local worker executor and is stricter than worker isolation itself.
+   */
+  permissions?: boolean;
+  /** Requested remote runtime lifetime in seconds for remote executors. */
+  ttlSeconds?: number;
+  /** Trigger checkpointing when the remote executor has this many seconds left. */
+  checkpointBeforeSeconds?: number;
+  /** Workspace ownership mode for remote executors. */
+  workspaceMode?: "remote";
+};
+
 export type AgentRunRetriesConfig = {
   /** Base number of run retry iterations (default: 24). */
   base?: number;
@@ -269,6 +290,12 @@ export type AgentDefaultsConfig = {
      * model backends. Experimental preview only.
      */
     localModelLean?: boolean;
+    /**
+     * Route command-agent attempts through an isolated executor. Experimental
+     * preview only; mode="worker" depends on the #78164 worker runtime and
+     * mode="vefaas-opencode" depends on the VEFaaS OpenCode executor.
+     */
+    runtimeIsolation?: AgentRuntimeIsolationExperimentalConfig;
   };
   /**
    * Agent-visible bootstrap truncation warning mode:

@@ -27,6 +27,7 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["perplexity", "/tools/perplexity-search"],
   ["tavily", "/tools/tavily"],
   ["tokenjuice", "/tools/tokenjuice"],
+  ["vefaas-sandbox", "/gateway/vefaas-sandbox"],
 ]);
 /** @type {ReadonlyMap<string, string>} */
 const PLUGIN_REFERENCE_EXTRA_SECTIONS = new Map();
@@ -124,6 +125,7 @@ function humanizeId(value) {
     ["tts", "TTS"],
     ["twitch", "Twitch"],
     ["ui", "UI"],
+    ["vefaas", "VEFaaS"],
     ["vllm", "vLLM"],
     ["whatsapp", "WhatsApp"],
     ["xai", "xAI"],

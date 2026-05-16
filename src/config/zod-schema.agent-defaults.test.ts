@@ -113,6 +113,46 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it("accepts experimental runtime isolation modes", () => {
+    const result = AgentDefaultsSchema.parse({
+      experimental: {
+        runtimeIsolation: {
+          mode: "vefaas-opencode",
+          ttlSeconds: 1800,
+          checkpointBeforeSeconds: 300,
+          workspaceMode: "remote",
+        },
+      },
+    })!;
+
+    expect(result.experimental?.runtimeIsolation).toEqual({
+      mode: "vefaas-opencode",
+      ttlSeconds: 1800,
+      checkpointBeforeSeconds: 300,
+      workspaceMode: "remote",
+    });
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        experimental: {
+          runtimeIsolation: {
+            mode: "worker",
+            permissions: true,
+          },
+        },
+      }),
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        experimental: {
+          runtimeIsolation: {
+            mode: "plugin-harness",
+          },
+        },
+      }),
+      "experimental.runtimeIsolation.mode",
+    );
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");
