@@ -5049,6 +5049,24 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("does not fail a turn when the client closes after terminal completion is queued", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+
+    await harness.waitForMethod("turn/start");
+    const completed = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    harness.close();
+    await completed;
+
+    const result = await run;
+    expect(result.promptError ?? undefined).toBeUndefined();
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
   it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
     const harness = createStartedThreadHarness();
     const markerPrompt =

@@ -1035,6 +1035,7 @@ export async function runCodexAppServerAttempt(
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
   let steeringQueue: ReturnType<typeof createCodexSteeringQueue> | undefined;
   let completed = false;
+  let terminalTurnNotificationQueued = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
   let turnCompletionIdleTimeoutMessage: string | undefined;
@@ -1562,6 +1563,9 @@ export async function runCodexAppServerAttempt(
       isCurrentTurnNotification &&
       isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
     const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
+    if (isTurnTerminal) {
+      terminalTurnNotificationQueued = true;
+    }
     try {
       await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
@@ -1591,6 +1595,18 @@ export async function runCodexAppServerAttempt(
       userInputBridge?.handleNotification(notification);
       pendingNotifications.push(notification);
       return Promise.resolve();
+    }
+    const isCurrentTurnNotification = isTurnNotification(
+      notification.params,
+      thread.threadId,
+      turnId,
+    );
+    if (
+      isCurrentTurnNotification &&
+      (notification.method === "turn/completed" ||
+        isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt }))
+    ) {
+      terminalTurnNotificationQueued = true;
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
@@ -2023,7 +2039,7 @@ export async function runCodexAppServerAttempt(
       addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
     }
   ).addCloseHandler?.(() => {
-    if (completed || runAbortController.signal.aborted) {
+    if (completed || terminalTurnNotificationQueued || runAbortController.signal.aborted) {
       return;
     }
     clientClosedPromptError = "codex app-server client closed before turn completed";
