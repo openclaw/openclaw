@@ -11,6 +11,10 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
+type CallPluginToolOptions = {
+  signal?: AbortSignal;
+};
+
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   const params = tool.parameters;
   if (params && typeof params === "object" && "type" in params) {
@@ -42,7 +46,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         inputSchema: resolveJsonSchemaForTool(tool),
       })),
     }),
-    callTool: async (params: CallPluginToolParams) => {
+    callTool: async (params: CallPluginToolParams, options?: CallPluginToolOptions) => {
       const tool = toolMap.get(params.name);
       if (!tool) {
         return {
@@ -51,7 +55,13 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         };
       }
       try {
-        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {});
+        // Propagate the MCP SDK's per-request AbortSignal so tools can observe
+        // host-side cancellation (notifications/cancelled or transport close).
+        const result = await tool.execute(
+          `mcp-${Date.now()}`,
+          params.arguments ?? {},
+          options?.signal,
+        );
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content

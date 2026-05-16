@@ -14,8 +14,10 @@ export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool
   );
 
   server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return await handlers.callTool(request.params);
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    // Forward the SDK's per-request AbortSignal so in-flight tool.execute can
+    // observe notifications/cancelled and transport close from the host.
+    return await handlers.callTool(request.params, { signal: extra?.signal });
   });
 
   return server;
