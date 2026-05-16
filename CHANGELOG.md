@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions: preserve fresh post-compaction token snapshots across stale usage updates, preventing repeated auto-compaction after every message. Fixes #82576. (#82578) Thanks @njuboy11.
 - Gateway/sessions: discard stale metadata when recreating dead main session rows, so replacement sessions do not inherit old labels or transcript paths.
 - Codex app-server: mark native context compaction completion events as successful, preventing false "Compaction incomplete" notices after successful Codex-managed compaction. Fixes #82470. (#81593) Thanks @Kyzcreig.
+- Codex app-server: keep long-running turns alive while current-turn approvals, user input, dynamic tools, and notifications make progress, and carry that progress into the outer run timeout. (#82601) Thanks @100yenadmin.
 - Gateway/channels: hand off traced channel account startup outside the startup diagnostic phase so long-lived channel tasks do not keep liveness warnings pinned to channel startup. Refs #82398.
 - GitHub Copilot: route device-login requests through the plugin SSRF guard with a GitHub-only policy.
 - Agents/OpenAI Responses: log redacted `response.failed` previews when providers omit error details, preserving response ids and hashed request/provider ids for operator diagnosis. Fixes #82558.
