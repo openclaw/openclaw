@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
@@ -541,8 +542,9 @@ export async function launchOpenClawChrome(
         const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
           .then(formatChromeCdpDiagnostic)
           .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
-        const stderrOutput =
-          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+        const stderrOutput = redactSensitiveText(
+          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "",
+        );
         if (
           allowSingletonRecovery &&
           CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&

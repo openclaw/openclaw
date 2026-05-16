@@ -8,8 +8,10 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
@@ -432,11 +434,11 @@ async function createRealSession(
       const stderr = getStderr();
       if (stderr) {
         log.warn(
-          `Chrome MCP attach failed for profile "${profileName}". Subprocess stderr:\n${stderr}`,
+          `Chrome MCP attach failed for profile "${profileName}". Subprocess stderr:\n${redactSensitiveText(stderr)}`,
         );
       }
       const targetLabel = options.browserUrl
-        ? `the configured Chrome endpoint (${options.browserUrl})`
+        ? `the configured Chrome endpoint (${redactCdpUrl(options.browserUrl) ?? options.browserUrl})`
         : options.userDataDir
           ? `the configured Chromium user data dir (${options.userDataDir})`
           : "Google Chrome's default profile";

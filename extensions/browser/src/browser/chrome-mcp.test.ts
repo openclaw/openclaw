@@ -230,6 +230,30 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("redacts remote CDP URL secrets from attach failures", async () => {
+    const secretToken = "browserless-secret-token-1234567890"; // pragma: allowlist secret
+    const cdpUrl = `wss://browserless.example/chrome?token=${secretToken}`;
+
+    let message = "";
+    try {
+      await ensureChromeMcpAvailable(
+        "remote-profile",
+        {
+          cdpUrl,
+          mcpCommand: process.execPath,
+          mcpArgs: ["-e", "process.exit(1)"],
+        },
+        { ephemeral: true },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("Chrome MCP existing-session attach failed");
+    expect(message).toContain("browserless.example");
+    expect(message).not.toContain(secretToken);
+  });
+
   it("parses new_page text responses and returns the created tab", async () => {
     const factory: ChromeMcpSessionFactory = async () => createFakeSession();
     setChromeMcpSessionFactoryForTest(factory);
