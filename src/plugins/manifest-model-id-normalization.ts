@@ -46,7 +46,7 @@ function resolveMetadataSnapshotForPolicies(
   const current = getCurrentPluginMetadataSnapshot({
     config: params.config,
     env,
-    workspaceDir,
+    ...(workspaceDir !== undefined ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
   });
   if (current) {
     return { snapshot: current, cacheable: true };
