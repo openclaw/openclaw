@@ -41,6 +41,13 @@ type StatCard = {
   hint: string | TemplateResult;
 };
 
+type QuotaWindowSummary = {
+  displayName: string;
+  label: string;
+  remaining: number;
+  resetAt?: number;
+};
+
 function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
   return html`
     <button class="ov-card" data-kind=${card.kind} @click=${() => onNavigate(card.tab)}>
@@ -49,6 +56,74 @@ function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
       <span class="ov-card__hint">${card.hint}</span>
     </button>
   `;
+}
+
+function formatQuotaReset(resetAt?: number): string | null {
+  if (!resetAt || !Number.isFinite(resetAt)) {
+    return null;
+  }
+  const diffMs = resetAt - Date.now();
+  if (diffMs <= 0) {
+    return "now";
+  }
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) {
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    const remainingHours = hours % 24;
+    return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+  }
+  return new Date(resetAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function collectQuotaWindows(providers: ModelAuthStatusResult["providers"]): QuotaWindowSummary[] {
+  return providers
+    .flatMap((provider) =>
+      (provider.usage?.windows ?? []).map((window) => ({
+        displayName: provider.displayName,
+        label: (window.label || "").trim(),
+        remaining: Math.max(0, Math.min(100, Math.round(100 - window.usedPercent))),
+        resetAt: window.resetAt,
+      })),
+    )
+    .sort((a, b) => a.remaining - b.remaining || a.displayName.localeCompare(b.displayName));
+}
+
+function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null {
+  const primary = windows[0];
+  if (!primary) {
+    return null;
+  }
+  const reset = formatQuotaReset(primary.resetAt);
+  const primaryHint = [primary.displayName, primary.label, reset ? `⏱${reset}` : null].filter(
+    Boolean,
+  );
+  const secondary = windows.find(
+    (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
+  );
+  const secondaryHint = secondary
+    ? `${secondary.label ? `${secondary.label} ` : ""}${t("overview.cards.modelAuthUsageLeft", {
+        pct: String(secondary.remaining),
+      })}`
+    : null;
+  const valueClass = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "";
+
+  return {
+    kind: "quota",
+    tab: "usage",
+    label: t("tabs.usage"),
+    value: html`<span class=${valueClass}
+      >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
+    >`,
+    hint: [primaryHint.join(" · "), secondaryHint].filter(Boolean).join(" · "),
+  };
 }
 
 function renderSkeletonCards() {
@@ -94,6 +169,10 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
   const cronJobCount = props.cronJobs.length;
   const failedCronCount = props.cronJobs.filter((j) => j.state?.lastStatus === "error").length;
+  const authLoading = props.modelAuthStatus === null;
+  const authProviders = props.modelAuthStatus?.providers ?? [];
+  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
+  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(monitoredProviders));
 
   const cronValue =
     cronEnabled == null
@@ -139,6 +218,9 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       hint: cronHint,
     },
   ];
+  if (quotaCard) {
+    cards.splice(1, 0, quotaCard);
+  }
 
   // Model auth card — show providers whose auth needs monitoring.
   // See isMonitoredAuthProvider for the exact predicate.
@@ -148,9 +230,6 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   // card's N/A-placeholder pattern. Still hidden entirely for api-key-only
   // setups post-load (nothing to monitor), which accepts a one-time hide
   // rather than the recurring load-time layout shift.
-  const authLoading = props.modelAuthStatus === null;
-  const authProviders = props.modelAuthStatus?.providers ?? [];
-  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
   if (authLoading) {
     cards.push({
       kind: "auth",

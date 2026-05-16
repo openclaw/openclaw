@@ -180,4 +180,37 @@ describe("overview view rendering", () => {
     expect(recentNames).toEqual(["Ops Room", "Telegram Session", "Main Project"]);
     expect(recentNames).not.toContain("telegram:123:456");
   });
+
+  it("promotes provider quota into a dedicated overview card", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      usageResult: {
+        totals: { totalCost: 0, totalTokens: 0 },
+        aggregates: { messages: { total: 0 } },
+      } as OverviewProps["usageResult"],
+      modelAuthStatus: {
+        ts: Date.now(),
+        providers: [
+          {
+            provider: "openai-codex",
+            displayName: "Codex",
+            status: "ok",
+            profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+            usage: {
+              windows: [
+                { label: "3h", usedPercent: 18 },
+                { label: "Week", usedPercent: 72 },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const quota = container.querySelector('[data-kind="quota"]');
+    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · 3h 82% left");
+  });
 });
