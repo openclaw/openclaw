@@ -346,6 +346,12 @@ export const zh_CN: TranslationMap = {
     eventLogSubtitle: "最新 Gateway 事件。",
     noEvents: "暂无事件。",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "{time} 后过期",
     expired: "已过期",
@@ -1004,10 +1010,10 @@ export const zh_CN: TranslationMap = {
     settings: "聊天设置",
     thinkingToggle: "切换助手思考/工作输出",
     toolCallsToggle: "切换工具调用和工具结果",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "自动滚动模式",
+    autoScrollAlways: "始终",
+    autoScrollNearBottom: "接近底部",
+    autoScrollOff: "关闭",
     focusToggle: "切换专注模式 (隐藏侧边栏 + 页面页眉)",
     hideCronSessions: "隐藏定时任务会话",
     showCronSessions: "显示定时任务会话",

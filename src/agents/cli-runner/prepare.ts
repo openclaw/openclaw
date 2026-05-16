@@ -171,6 +171,7 @@ export async function prepareCliRunContext(
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    agentId: sessionAgentId,
     contextMode: params.bootstrapContextMode,
     runKind: params.bootstrapContextRunKind,
     warn: prepareDeps.makeBootstrapWarn({
@@ -179,8 +180,8 @@ export async function prepareCliRunContext(
       warn: (message) => cliBackendLog.warn(message),
     }),
   });
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
   const bootstrapAnalysis = analyzeBootstrapBudget({
     files: buildBootstrapInjectionStats({
       bootstrapFiles,
@@ -225,6 +226,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_INBOUND_TURN_KIND: params.currentTurnKind ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -467,6 +469,11 @@ export async function prepareCliRunContext(
     injectedFiles: contextFiles,
     skillsPrompt,
     tools: [],
+    currentTurn: {
+      ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+      promptChars: preparedPrompt.length,
+      runtimeContextChars: 0,
+    },
   });
 
   return {

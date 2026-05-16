@@ -39,7 +39,11 @@ import {
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
+import {
+  readRecentCodexRateLimits,
+  rememberCodexRateLimits,
+  resetCodexRateLimitCacheForTests,
+} from "./rate-limit-cache.js";
 import {
   runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
   __testing,
@@ -884,6 +888,69 @@ describe("runCodexAppServerAttempt", () => {
 
     params.sourceReplyDeliveryMode = "automatic";
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("music_generate"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = ["music_generate"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const dynamicToolNames =
+      (
+        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
+      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+
+    expect(dynamicToolNames).toContain("message");
+    expect(dynamicToolNames).toContain("music_generate");
+  });
+
+  it("keeps forced message dynamic tool when toolsAllow is empty", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("music_generate"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = [];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const dynamicToolNames =
+      (
+        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
+      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+
+    expect(dynamicToolNames).toEqual(["message"]);
   });
 
   it("starts Codex threads with searchable OpenClaw dynamic tools by default", async () => {
@@ -1858,7 +1925,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 60_000;
 
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
     await harness.waitForMethod("turn/start");
 
     const result = await run;
@@ -1890,7 +1957,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 200;
 
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 15 });
+    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 15 });
     await harness.waitForMethod("turn/start");
     await harness.notify(rateLimitsUpdated(Date.now() + 60_000));
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1917,6 +1984,29 @@ describe("runCodexAppServerAttempt", () => {
         ),
       { interval: 1 },
     );
+  });
+
+  it("yields a macrotask before processing queued app-server notifications", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 1_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const notification = rateLimitsUpdated(Date.now() + 60_000);
+    const processing = harness.notify(notification);
+    await Promise.resolve();
+
+    expect(readRecentCodexRateLimits()).toBeUndefined();
+    await processing;
+    expect(readRecentCodexRateLimits()).toEqual(notification.params);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("releases the session when a completed agent message item goes quiet", async () => {
@@ -2395,6 +2485,93 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("times out promptly when the last completed non-assistant current-turn item is not followed by turn completion", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+      { interval: 1 },
+    );
+    await notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          tool: "sessions_list",
+          arguments: {},
+          status: "inProgress",
+        },
+      },
+    });
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          tool: "sessions_list",
+          arguments: {},
+          status: "completed",
+          success: true,
+          contentItems: [],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          { timeoutMs: 5_000 },
+        ),
+      { interval: 1 },
+    );
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",
@@ -2797,7 +2974,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(startConfig?.["features.hooks"]).toBe(true);
     const preToolUseHooks = startConfig?.["hooks.PreToolUse"] as
       | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
       | undefined;
@@ -2885,7 +3062,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PostToolUse"])).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.Stop"])).toBe(true);
@@ -2921,7 +3098,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PermissionRequest"])).toBe(true);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
@@ -3061,7 +3238,7 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.codex_hooks"]).toBe(false);
+    expect(startConfig?.["features.hooks"]).toBe(false);
     expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);
@@ -3100,7 +3277,7 @@ describe("runCodexAppServerAttempt", () => {
         if (!harnessRef.current) {
           throw new Error("Expected Codex app-server harness to be initialized");
         }
-        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
+        void harnessRef.current.notify(rateLimitsUpdated(resetsAt));
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
@@ -3346,6 +3523,15 @@ describe("runCodexAppServerAttempt", () => {
 
     const params = createParams(sessionFile, workspaceDir);
     params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "discord";
+    params.messageProvider = "discord-voice";
+    params.senderId = "user-123";
+    params.senderName = "Test User";
+    params.senderUsername = "testuser";
+    params.inputProvenance = {
+      kind: "external_user",
+      sourceChannel: "discord",
+    };
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
 
@@ -3378,7 +3564,31 @@ describe("runCodexAppServerAttempt", () => {
     expect(agentEndPayload.success).toBe(false);
     expect(agentEndPayload.error).toBe("turn start exploded");
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
-    expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
+    const userMessage = agentEndPayload.messages?.find((message) => message.role === "user") as
+      | {
+          content?: unknown;
+          provenance?: unknown;
+          role?: string;
+          senderId?: unknown;
+          senderLabel?: unknown;
+          senderName?: unknown;
+          senderUsername?: unknown;
+          sourceChannel?: unknown;
+        }
+      | undefined;
+    expect(userMessage).toMatchObject({
+      role: "user",
+      content: "hello",
+      sourceChannel: "discord",
+      senderId: "user-123",
+      senderName: "Test User",
+      senderUsername: "testuser",
+      senderLabel: "Test User (user-123)",
+      provenance: {
+        kind: "external_user",
+        sourceChannel: "discord",
+      },
+    });
   });
 
   it("fires agent_end with success false when the codex turn is aborted", async () => {
@@ -3775,6 +3985,45 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
     );
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("does not time out when turn progress arrives before turn/start returns", async () => {
+    let harness: ReturnType<typeof createAppServerHarness>;
+    harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        await harness.notify({
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        });
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
     expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
   });
@@ -5145,7 +5394,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const config = {
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PreToolUse": [],
     };
     const expectedConfig = {
@@ -5204,7 +5453,7 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config: { "features.codex_hooks": true, hooks: { PreToolUse: [] } },
+      config: { "features.hooks": true, hooks: { PreToolUse: [] } },
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
@@ -5217,7 +5466,7 @@ describe("runCodexAppServerAttempt", () => {
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
       hooks: { PreToolUse: [] },
@@ -5257,7 +5506,7 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config: { "features.codex_hooks": true },
+      config: { "features.hooks": true },
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
@@ -5270,7 +5519,7 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config: { "features.codex_hooks": true },
+      config: { "features.hooks": true },
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
@@ -5284,13 +5533,13 @@ describe("runCodexAppServerAttempt", () => {
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
     });
@@ -5750,7 +5999,7 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
-    expect(resumeConfig?.["features.codex_hooks"]).toBe(true);
+    expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
     expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
     expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);

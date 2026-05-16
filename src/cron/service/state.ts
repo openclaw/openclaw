@@ -3,6 +3,7 @@ import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heart
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronFailureNotificationDelivery,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -30,6 +31,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
@@ -76,7 +78,12 @@ export type CronServiceDeps = {
   startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      forceSenderIsOwnerFalse?: boolean;
+    },
   ) => void;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {

@@ -2,6 +2,7 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   isActiveHarnessContextEngine,
+  resolveContextEngineOwnerPluginId,
   runHarnessContextEngineMaintenance,
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
@@ -24,11 +25,9 @@ type CodexNativeCompactionWaiter = {
   startTimeout: () => void;
   cancel: () => void;
 };
-type ContextEngineCompactResult = Awaited<
-  ReturnType<NonNullable<CompactEmbeddedPiSessionParams["contextEngine"]>["compact"]>
->;
 
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const warnedIgnoredCompactionOverrides = new Set<string>();
 
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
@@ -37,70 +36,158 @@ export async function maybeCompactCodexAppServerSession(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
-  if (activeContextEngine?.info.ownsCompaction) {
-    let primary: ContextEngineCompactResult | undefined;
-    let primaryError: string | undefined;
+  warnIfIgnoringOpenClawCompactionOverrides(params);
+  const nativeResult = await compactCodexNativeThread(params, options);
+  if (activeContextEngine && nativeResult?.ok && nativeResult.compacted) {
     try {
-      primary = await activeContextEngine.compact({
+      await runHarnessContextEngineMaintenance({
+        contextEngine: activeContextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
-        tokenBudget: params.contextTokenBudget,
-        currentTokenCount: params.currentTokenCount,
-        compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
-        customInstructions: params.customInstructions,
-        force: params.trigger === "manual",
+        reason: "compaction",
         runtimeContext: params.contextEngineRuntimeContext,
+        config: params.config,
       });
     } catch (error) {
-      primaryError = formatErrorMessage(error);
-      embeddedAgentLog.warn(
-        "context engine compaction failed; attempting Codex native compaction",
-        {
-          sessionId: params.sessionId,
-          engineId: activeContextEngine.info.id,
-          error: primaryError,
-        },
-      );
-    }
-    if (primary?.ok && primary.compacted) {
-      try {
-        await runHarnessContextEngineMaintenance({
-          contextEngine: activeContextEngine,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          sessionFile: params.sessionFile,
-          reason: "compaction",
-          runtimeContext: params.contextEngineRuntimeContext,
-          config: params.config,
-        });
-      } catch (error) {
-        embeddedAgentLog.warn(
-          "context engine compaction maintenance failed; continuing Codex native compaction",
-          {
-            sessionId: params.sessionId,
-            engineId: activeContextEngine.info.id,
-            error: formatErrorMessage(error),
-          },
-        );
-      }
-    }
-    const nativeResult = await compactCodexNativeThread(params, options);
-    if (!primary) {
-      return buildContextEngineCompactionFailureResult({
-        primaryError,
-        nativeResult,
-        currentTokenCount: params.currentTokenCount,
+      embeddedAgentLog.warn("context engine compaction maintenance failed after Codex compaction", {
+        sessionId: params.sessionId,
+        engineId: activeContextEngine.info.id,
+        error: formatErrorMessage(error),
       });
     }
-    return {
-      ok: primary.ok,
-      compacted: primary.compacted,
-      reason: primary.reason,
-      result: buildContextEnginePrimaryResult(primary, nativeResult, params.currentTokenCount),
-    };
   }
-  return await compactCodexNativeThread(params, options);
+  return nativeResult;
+}
+
+function warnIfIgnoringOpenClawCompactionOverrides(params: CompactEmbeddedPiSessionParams): void {
+  const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
+    ? params.contextEngine
+    : undefined;
+  const ignoredConfig = readIgnoredCompactionOverridePaths(params, activeContextEngine);
+  if (ignoredConfig.length === 0) {
+    return;
+  }
+  const warningKey = ignoredConfig.join("\0");
+  if (warnedIgnoredCompactionOverrides.has(warningKey)) {
+    return;
+  }
+  warnedIgnoredCompactionOverrides.add(warningKey);
+  embeddedAgentLog.warn(
+    "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ignoredConfig,
+    },
+  );
+}
+
+function readIgnoredCompactionOverridePaths(
+  params: CompactEmbeddedPiSessionParams,
+  activeContextEngine?: CompactEmbeddedPiSessionParams["contextEngine"],
+): string[] {
+  const ignored = new Set<string>();
+  const configuredContextEngine = readStringPath(params.config, [
+    "plugins",
+    "slots",
+    "contextEngine",
+  ]);
+  const runtimeContextEnginePlugin =
+    typeof params.contextEngineRuntimeContext?.contextEnginePluginId === "string"
+      ? params.contextEngineRuntimeContext.contextEnginePluginId.trim()
+      : "";
+  const activeContextEnginePlugin = resolveContextEngineOwnerPluginId(activeContextEngine);
+  for (const entry of readCompactionOverrideEntries(params)) {
+    const localProvider =
+      typeof entry.record.provider === "string" ? entry.record.provider.trim() : "";
+    const inheritedProvider =
+      !localProvider && typeof entry.inheritedRecord?.provider === "string"
+        ? entry.inheritedRecord.provider.trim()
+        : "";
+    const provider = localProvider || inheritedProvider;
+    const providerPath = localProvider
+      ? `${entry.path}.compaction.provider`
+      : inheritedProvider && entry.inheritedPath
+        ? `${entry.inheritedPath}.compaction.provider`
+        : undefined;
+    const activeLosslessContextEngine =
+      provider.toLowerCase() === "lossless-claw" &&
+      (activeContextEnginePlugin === "lossless-claw" ||
+        runtimeContextEnginePlugin.toLowerCase() === "lossless-claw" ||
+        configuredContextEngine?.toLowerCase() === "lossless-claw");
+    if (activeLosslessContextEngine) {
+      continue;
+    }
+    if (typeof entry.record.model === "string" && entry.record.model.trim()) {
+      ignored.add(`${entry.path}.compaction.model`);
+    }
+    if (providerPath) {
+      ignored.add(providerPath);
+    }
+  }
+  return [...ignored];
+}
+
+function readCompactionOverrideEntries(params: CompactEmbeddedPiSessionParams): Array<{
+  path: string;
+  record: Record<string, unknown>;
+  inheritedRecord?: Record<string, unknown>;
+  inheritedPath?: string;
+}> {
+  const entries: Array<{
+    path: string;
+    record: Record<string, unknown>;
+    inheritedRecord?: Record<string, unknown>;
+    inheritedPath?: string;
+  }> = [];
+  const defaultCompaction = readRecord(readRecord(params.config?.agents)?.defaults)?.compaction;
+  const defaultRecord = readRecord(defaultCompaction);
+  if (defaultRecord) {
+    entries.push({ path: "agents.defaults", record: defaultRecord });
+  }
+  const agentId = readAgentIdFromSessionKey(params.sessionKey ?? params.sandboxSessionKey);
+  if (!agentId) {
+    return entries;
+  }
+  const agents = Array.isArray(params.config?.agents?.list) ? params.config.agents.list : [];
+  const activeAgent = agents.find((agent) => {
+    const id = typeof agent?.id === "string" ? agent.id.trim().toLowerCase() : "";
+    return id === agentId;
+  });
+  const agentCompaction = readRecord(activeAgent)?.compaction;
+  const agentRecord = readRecord(agentCompaction);
+  if (agentRecord) {
+    entries.push({
+      path: `agents.list.${agentId}`,
+      record: agentRecord,
+      inheritedRecord: defaultRecord,
+      inheritedPath: "agents.defaults",
+    });
+  }
+  return entries;
+}
+
+function readAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const parts = sessionKey?.trim().toLowerCase().split(":").filter(Boolean) ?? [];
+  if (parts.length < 3 || parts[0] !== "agent") {
+    return undefined;
+  }
+  return parts[1]?.trim() || undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readStringPath(value: unknown, path: readonly string[]): string | undefined {
+  let current = value;
+  for (const segment of path) {
+    current = readRecord(current)?.[segment];
+  }
+  return typeof current === "string" && current.trim() ? current.trim() : undefined;
 }
 
 async function compactCodexNativeThread(
@@ -164,85 +251,11 @@ async function compactCodexNativeThread(
       tokensBefore: params.currentTokenCount ?? 0,
       details: {
         backend: "codex-app-server",
-        ownsCompaction: params.contextEngine?.info?.ownsCompaction === true,
         threadId: binding.threadId,
         signal: completion.signal,
         turnId: completion.turnId,
         itemId: completion.itemId,
       },
-    },
-  };
-}
-
-function mergeCompactionDetails(
-  primaryDetails: unknown,
-  nativeResult: EmbeddedPiCompactResult | undefined,
-  contextEngineCompaction?: { ok: false; reason?: string },
-): unknown {
-  const codexNativeCompaction = nativeResult
-    ? nativeResult.ok && nativeResult.compacted
-      ? { ok: true, compacted: true, details: nativeResult.result?.details }
-      : { ok: false, compacted: false, reason: nativeResult.reason }
-    : undefined;
-  const extraDetails = {
-    ...(codexNativeCompaction ? { codexNativeCompaction } : {}),
-    ...(contextEngineCompaction ? { contextEngineCompaction } : {}),
-  };
-  if (primaryDetails && typeof primaryDetails === "object" && !Array.isArray(primaryDetails)) {
-    return {
-      ...(primaryDetails as Record<string, unknown>),
-      ...extraDetails,
-    };
-  }
-  return Object.keys(extraDetails).length > 0 ? extraDetails : primaryDetails;
-}
-
-function buildContextEnginePrimaryResult(
-  primary: ContextEngineCompactResult,
-  nativeResult: EmbeddedPiCompactResult | undefined,
-  currentTokenCount: number | undefined,
-): NonNullable<EmbeddedPiCompactResult["result"]> | undefined {
-  if (primary.result) {
-    return {
-      summary: primary.result.summary ?? "",
-      firstKeptEntryId: primary.result.firstKeptEntryId ?? "",
-      tokensBefore: primary.result.tokensBefore,
-      tokensAfter: primary.result.tokensAfter,
-      details: mergeCompactionDetails(primary.result.details, nativeResult),
-    };
-  }
-  const details = mergeCompactionDetails(undefined, nativeResult);
-  return details
-    ? {
-        summary: "",
-        firstKeptEntryId: "",
-        tokensBefore: nativeResult?.result?.tokensBefore ?? currentTokenCount ?? 0,
-        details,
-      }
-    : undefined;
-}
-
-function buildContextEngineCompactionFailureResult(params: {
-  primaryError?: string;
-  nativeResult: EmbeddedPiCompactResult | undefined;
-  currentTokenCount?: number;
-}): EmbeddedPiCompactResult {
-  const reason = params.primaryError
-    ? `context engine compaction failed: ${params.primaryError}`
-    : "context engine compaction failed";
-  return {
-    ok: false,
-    compacted: params.nativeResult?.compacted ?? false,
-    reason,
-    result: {
-      summary: params.nativeResult?.result?.summary ?? "",
-      firstKeptEntryId: params.nativeResult?.result?.firstKeptEntryId ?? "",
-      tokensBefore: params.nativeResult?.result?.tokensBefore ?? params.currentTokenCount ?? 0,
-      tokensAfter: params.nativeResult?.result?.tokensAfter,
-      details: mergeCompactionDetails(params.nativeResult?.result?.details, params.nativeResult, {
-        ok: false,
-        reason,
-      }),
     },
   };
 }

@@ -23,6 +23,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   readGatewayServiceState,
@@ -1573,6 +1574,9 @@ async function maybeRestartService(params: {
     }
 
     if (health.healthy) {
+      if (!params.opts.json) {
+        defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      }
       return true;
     }
 
@@ -1683,7 +1687,7 @@ async function maybeRestartService(params: {
         await createUpdateConfigSnapshot();
         restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
-        defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
+        defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
 
       const shouldVerifyRestart =
@@ -1725,7 +1729,7 @@ async function maybeRestartService(params: {
       }
     } catch (err) {
       if (!params.opts.json) {
-        defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
+        defaultRuntime.log(theme.warn(`Gateway: restart failed: ${String(err)}`));
         defaultRuntime.log(
           theme.muted(
             `You may need to restart the service manually: ${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}`,
@@ -1741,6 +1745,7 @@ async function maybeRestartService(params: {
 
   if (!params.opts.json) {
     defaultRuntime.log("");
+    defaultRuntime.log(theme.muted("Gateway: restart skipped (--no-restart)."));
     if (params.result.mode === "npm" || params.result.mode === "pnpm") {
       defaultRuntime.log(
         theme.muted(
@@ -2255,6 +2260,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
   if (opts.dryRun !== true) {
+    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
     assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
