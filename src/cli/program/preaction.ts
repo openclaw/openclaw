@@ -76,7 +76,7 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
 }
 
 function isGuidedConfigAction(actionCommand: Command): boolean {
-  return actionCommand.name() === "config" && actionCommand.parent?.parent === undefined;
+  return actionCommand.name() === "config" && !actionCommand.parent?.parent;
 }
 
 export function registerPreActionHooks(program: Command, programVersion: string) {
