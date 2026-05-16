@@ -1646,7 +1646,7 @@ export async function dispatchReplyFromConfig(
               `provider=${ctx.Provider ?? "unknown"}`,
               `surface=${ctx.Surface ?? "unknown"}`,
               `chatType=${chatType ?? "unknown"}`,
-              `turn=${ctx.InboundTurnKind ?? "unknown"}`,
+              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
               `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
               `${formatSuppressedReplyPayloadForLog(reply)})`,
             ].join(" "),
