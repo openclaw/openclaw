@@ -6,6 +6,7 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -485,6 +486,7 @@ export async function prepareCliRunContext(
   });
   const contextEngine =
     resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
+  const hadSessionFile = await pathExists(params.sessionFile);
 
   return {
     params: preparedPrompt === params.prompt ? params : { ...params, prompt: preparedPrompt },
@@ -494,6 +496,7 @@ export async function prepareCliRunContext(
     backendResolved,
     preparedBackend: preparedBackendFinal,
     reusableCliSession,
+    hadSessionFile,
     contextEngine,
     modelId,
     normalizedModel,

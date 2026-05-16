@@ -91,6 +91,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     reusableCliSession: {
       sessionId: "existing-external-cli-session",
     },
+    hadSessionFile: true,
     contextEngine,
     modelId: "sonnet-4.6",
     normalizedModel: "sonnet-4.6",
@@ -132,12 +133,15 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
   });
 
   it("finalizes successful CLI turns with the active context engine", async () => {
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
     const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
     const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
       createMaintenanceResult(),
     );
     const dispose = vi.fn(async () => {});
-    const contextEngine = createContextEngine({ afterTurn, maintain, dispose });
+    const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain, dispose });
     const context = buildPreparedContext(contextEngine);
     const { runPreparedCliAgent } = await import("./cli-runner.js");
 
@@ -150,6 +154,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       sessionKey: "agent:main:main",
       agentId: "main",
       config: undefined,
+    });
+    expect(bootstrap).toHaveBeenCalledWith({
+      sessionId: "openclaw-session-1",
+      sessionKey: "agent:main:main",
+      sessionFile: "session.jsonl",
     });
     expect(afterTurn).toHaveBeenCalledTimes(1);
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
@@ -174,8 +183,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       model: "sonnet-4.6",
       usage: { input: 11, output: 7, total: 18 },
     });
-    expect(maintain).toHaveBeenCalledTimes(1);
-    expect(maintain.mock.calls[0]?.[0]).toMatchObject({
+    expect(maintain).toHaveBeenCalledTimes(2);
+    expect(maintain.mock.calls[1]?.[0]).toMatchObject({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
       sessionFile: "session.jsonl",
@@ -184,7 +193,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
         llm: { complete: expect.any(Function) },
       },
     });
-    expect(dispose).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to ingestBatch and still runs turn maintenance", async () => {
@@ -209,12 +218,15 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(ingestBatchParams?.messages).toHaveLength(2);
     expectMessageText(ingestBatchParams?.messages[0], "transcript visible ask");
     expectMessageText(ingestBatchParams?.messages[1], "final answer");
-    expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
+    expect(maintain).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not finalize, maintain, or dispose the engine on failed CLI attempts", async () => {
+  it("does not finalize or run turn maintenance on failed CLI attempts", async () => {
     executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
     const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
     const ingestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async () => ({
       ingestedCount: 0,
@@ -223,16 +235,38 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       createMaintenanceResult(),
     );
     const dispose = vi.fn(async () => {});
-    const contextEngine = createContextEngine({ afterTurn, ingestBatch, maintain, dispose });
+    const contextEngine = createContextEngine({
+      bootstrap,
+      afterTurn,
+      ingestBatch,
+      maintain,
+      dispose,
+    });
     const { runPreparedCliAgent } = await import("./cli-runner.js");
 
     await expect(runPreparedCliAgent(buildPreparedContext(contextEngine))).rejects.toThrow(
       "cli boom",
     );
 
+    expect(bootstrap).toHaveBeenCalledTimes(1);
     expect(afterTurn).not.toHaveBeenCalled();
     expect(ingestBatch).not.toHaveBeenCalled();
-    expect(maintain).not.toHaveBeenCalled();
-    expect(dispose).not.toHaveBeenCalled();
+    expect(maintain).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the primary CLI error when context engine disposal fails", async () => {
+    executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
+    const dispose = vi.fn(async () => {
+      throw new Error("dispose boom");
+    });
+    const contextEngine = createContextEngine({ dispose });
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await expect(runPreparedCliAgent(buildPreparedContext(contextEngine))).rejects.toThrow(
+      "cli boom",
+    );
+
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });

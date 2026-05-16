@@ -10,7 +10,11 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
-import { finalizeHarnessContextEngineTurn } from "./harness/context-engine-lifecycle.js";
+import {
+  bootstrapHarnessContextEngine,
+  finalizeHarnessContextEngineTurn,
+  runHarnessContextEngineMaintenance,
+} from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
@@ -22,6 +26,11 @@ import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-he
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
+
+type CliContextEngineMaintenanceParams = Parameters<typeof runHarnessContextEngineMaintenance>[0];
+type CliContextEngineMaintenanceResult = Awaited<
+  ReturnType<typeof runHarnessContextEngineMaintenance>
+>;
 
 function flushSessionManagerFile(sessionManager: SessionManager): void {
   (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
@@ -108,7 +117,7 @@ async function finalizeCliContextEngineTurn(params: {
   output: Awaited<
     ReturnType<typeof import("./cli-runner/execute.runtime.js").executePreparedCliRun>
   >;
-}) {
+}): Promise<void> {
   const { context } = params;
   if (!context.contextEngine) {
     return;
@@ -140,9 +149,28 @@ async function finalizeCliContextEngineTurn(params: {
     sessionFile: runParams.sessionFile,
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
+    runMaintenance: runCliContextEngineMaintenance,
     config: runParams.config,
     warn: (message) => log.warn(message),
   });
+}
+
+async function runCliContextEngineMaintenance(
+  params: CliContextEngineMaintenanceParams,
+): Promise<CliContextEngineMaintenanceResult> {
+  // Run maintenance inline in file-rewrite mode so disposal cannot race a deferred turn task.
+  return await runHarnessContextEngineMaintenance({
+    ...params,
+    executionMode: "background",
+  });
+}
+
+async function disposeCliContextEngine(context: PreparedCliRunContext): Promise<void> {
+  try {
+    await context.contextEngine?.dispose?.();
+  } catch (err) {
+    log.warn(`context engine dispose failed after CLI run: ${formatErrorMessage(err)}`);
+  }
 }
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
@@ -489,6 +517,17 @@ export async function runPreparedCliAgent(
 
   // Try with the provided CLI session ID first
   try {
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: context.hadSessionFile,
+      contextEngine: context.contextEngine,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      runMaintenance: runCliContextEngineMaintenance,
+      config: params.config,
+      warn: (message) => log.warn(message),
+    });
+
     if (hasBeforeAgentRunHooks && hookRunner) {
       let beforeRunResult:
         | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
@@ -626,7 +665,11 @@ export async function runPreparedCliAgent(
       return toCliRunFailure(err);
     }
   } finally {
-    await context.preparedBackend.cleanup?.();
+    try {
+      await context.preparedBackend.cleanup?.();
+    } finally {
+      await disposeCliContextEngine(context);
+    }
   }
 }
 
