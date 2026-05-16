@@ -25,19 +25,19 @@ The first pack is intentionally narrow:
 ## Scenarios
 
 The machine-readable pack metadata lives in
-`extensions/qa-lab/src/scenario-packs.ts`. The initial pack does not add a CLI
-pack selector, so run the scenarios explicitly:
+`extensions/qa-lab/src/scenario-packs.ts`. Run the pack with
+`--pack personal-agent`:
 
 ```bash
 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 pnpm openclaw qa suite \
   --provider-mode mock-openai \
-  --scenario personal-reminder-roundtrip \
-  --scenario personal-channel-thread-reply \
-  --scenario personal-memory-preference-recall \
-  --scenario personal-redaction-no-secret-leak \
-  --scenario personal-tool-safety-followthrough \
+  --pack personal-agent \
   --concurrency 1
 ```
+
+`--pack` is additive with repeated `--scenario` flags. Explicit scenarios run
+first, then the pack scenarios run in `QA_PERSONAL_AGENT_SCENARIO_IDS` order with
+duplicates removed.
 
 The pack is designed for `qa-channel` with `mock-openai` or another local QA
 provider lane. It should not be pointed at live chat services or real personal
