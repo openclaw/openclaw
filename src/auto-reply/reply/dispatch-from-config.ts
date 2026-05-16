@@ -592,6 +592,9 @@ export async function dispatchReplyFromConfig(
     if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
+    if (payload.trustedLocalMedia === true) {
+      return payload;
+    }
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
     return await normalizeReplyMediaPayloadPaths(payload);
   };
@@ -1063,7 +1066,7 @@ export async function dispatchReplyFromConfig(
       };
     };
 
-    // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
+    // Run before_dispatch hook 鈥?let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
         hookRunner.runBeforeDispatch(
@@ -1147,7 +1150,7 @@ export async function dispatchReplyFromConfig(
     // outbound source delivery.
     if (suppressDelivery) {
       logVerbose(
-        `Delivery suppressed by ${deliverySuppressionReason} for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
+        `Delivery suppressed by ${deliverySuppressionReason} for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} 鈥?agent will still process the message`,
       );
     }
 
@@ -1475,14 +1478,14 @@ export async function dispatchReplyFromConfig(
               if (suppressDelivery) {
                 return;
               }
-              // Suppress reasoning payloads — channels using this generic dispatch
+              // Suppress reasoning payloads 鈥?channels using this generic dispatch
               // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
               // Telegram has its own dispatch path that handles reasoning splitting.
               if (payload.isReasoning === true) {
                 return;
               }
               // Accumulate block text for TTS generation after streaming.
-              // Exclude compaction status notices — they are informational UI
+              // Exclude compaction status notices 鈥?they are informational UI
               // signals and must not be synthesised into the spoken reply.
               if (payload.text && !payload.isCompactionNotice) {
                 const joinsBufferedTtsDirective =
@@ -1603,7 +1606,7 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
-      // Suppress reasoning payloads from channel delivery — channels using this
+      // Suppress reasoning payloads from channel delivery 鈥?channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (reply.isReasoning === true) {
         continue;
