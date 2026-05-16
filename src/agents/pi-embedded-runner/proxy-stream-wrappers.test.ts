@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
+  createReasoningContentNormalizerWrapper,
 } from "./proxy-stream-wrappers.js";
 
 describe("proxy stream wrappers", () => {
@@ -112,5 +113,163 @@ describe("proxy stream wrappers", () => {
     expect(payload.messages[0]?.content).toEqual([
       { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
     ]);
+  });
+});
+
+describe("createReasoningContentNormalizerWrapper", () => {
+  it("renames reasoning to reasoning_content on assistant messages for non-OpenRouter endpoints", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi", reasoning: "the model thought about greeting" },
+      ],
+    };
+    const wrapped = createReasoningContentNormalizerWrapper(((_m, _c, options) => {
+      options?.onPayload?.(payload, _m);
+      return createAssistantMessageEventStream();
+    }) as StreamFn);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "zenmux",
+        id: "deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    const msg = payload.messages[1] as Record<string, unknown>;
+    expect(msg.reasoning_content).toBe("the model thought about greeting");
+    expect(msg.reasoning).toBeUndefined();
+  });
+
+  it("does not rename on OpenRouter endpoints", () => {
+    const payload = {
+      messages: [{ role: "assistant", content: "hi", reasoning: "keep me" }],
+    };
+    const wrapped = createReasoningContentNormalizerWrapper(((_m, _c, options) => {
+      options?.onPayload?.(payload, _m);
+      return createAssistantMessageEventStream();
+    }) as StreamFn);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "deepseek/deepseek-r1",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    const msg = payload.messages[0] as Record<string, unknown>;
+    expect(msg.reasoning).toBe("keep me");
+    expect(msg.reasoning_content).toBeUndefined();
+  });
+
+  it("does not double-set reasoning_content if already present", () => {
+    const payload = {
+      messages: [
+        { role: "assistant", content: "hi", reasoning_content: "existing", reasoning: "extra" },
+      ],
+    };
+    const wrapped = createReasoningContentNormalizerWrapper(((_m, _c, options) => {
+      options?.onPayload?.(payload, _m);
+      return createAssistantMessageEventStream();
+    }) as StreamFn);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "zenmux",
+        id: "deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    const msg = payload.messages[0] as Record<string, unknown>;
+    expect(msg.reasoning_content).toBe("existing");
+    expect(msg.reasoning).toBe("extra");
+  });
+
+  it("skips non-openai-completions APIs", () => {
+    const payload = {
+      messages: [{ role: "assistant", content: "hi", reasoning: "should survive" }],
+    };
+    const wrapped = createReasoningContentNormalizerWrapper(((_m, _c, options) => {
+      options?.onPayload?.(payload, _m);
+      return createAssistantMessageEventStream();
+    }) as StreamFn);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+      { messages: [] },
+      {},
+    );
+
+    const msg = payload.messages[0] as Record<string, unknown>;
+    expect(msg.reasoning).toBe("should survive");
+    expect(msg.reasoning_content).toBeUndefined();
+  });
+
+  it("does not touch non-assistant messages that happen to have reasoning", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "hello", reasoning: "user-reasoning" },
+        { role: "assistant", content: "hi" },
+      ],
+    };
+    const wrapped = createReasoningContentNormalizerWrapper(((_m, _c, options) => {
+      options?.onPayload?.(payload, _m);
+      return createAssistantMessageEventStream();
+    }) as StreamFn);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "zenmux",
+        id: "deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    const userMsg = payload.messages[0] as Record<string, unknown>;
+    expect(userMsg.reasoning).toBe("user-reasoning");
+    expect(userMsg.reasoning_content).toBeUndefined();
+
+    const asstMsg = payload.messages[1] as Record<string, unknown>;
+    expect(asstMsg.reasoning).toBeUndefined();
+  });
+
+  it("leaves messages without reasoning unchanged", () => {
+    const payload = {
+      messages: [{ role: "assistant", content: "plain response" }],
+    };
+    const wrapped = createReasoningContentNormalizerWrapper(((_m, _c, options) => {
+      options?.onPayload?.(payload, _m);
+      return createAssistantMessageEventStream();
+    }) as StreamFn);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "zenmux",
+        id: "deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    const msg = payload.messages[0] as Record<string, unknown>;
+    expect(msg.content).toBe("plain response");
+    expect(msg.reasoning).toBeUndefined();
+    expect(msg.reasoning_content).toBeUndefined();
   });
 });

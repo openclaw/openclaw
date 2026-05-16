@@ -1263,4 +1263,54 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
     expect(params).not.toHaveProperty("reasoning_effort");
   });
+
+  it("normalizes reasoning to reasoning_content on assistant messages in completions params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "zenmux",
+        baseUrl: "https://zenmux.ai/api/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 65536,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "hello" }],
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "thinking",
+                thinking: "the model thought about this",
+                thinkingSignature: "reasoning",
+              },
+              { type: "text", text: "hi there" },
+            ],
+            api: "openai-completions",
+            provider: "zenmux",
+            model: "deepseek-v4-flash",
+            timestamp: 2,
+            stopReason: "stop",
+          } as never,
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    const assistantMsg = params.messages?.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg?.reasoning_content).toBe("the model thought about this");
+    expect(assistantMsg?.reasoning).toBeUndefined();
+  });
 });

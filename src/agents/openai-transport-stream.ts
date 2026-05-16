@@ -1266,6 +1266,7 @@ export function buildOpenAICompletionsParams(
     messages: convertMessages(model as never, completionsContext, compat as never),
     stream: true,
   };
+  normalizeAssistantReasoningField(params.messages, compat.thinkingFormat);
   if (compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
   }
@@ -1301,6 +1302,25 @@ export function buildOpenAICompletionsParams(
     );
   }
   return params;
+}
+
+function normalizeAssistantReasoningField(messages: unknown, thinkingFormat: string): void {
+  if (thinkingFormat === "openrouter" || !Array.isArray(messages)) {
+    return;
+  }
+  for (const msg of messages) {
+    if (
+      msg &&
+      typeof msg === "object" &&
+      (msg as { role?: unknown }).role === "assistant" &&
+      typeof (msg as { reasoning?: unknown }).reasoning === "string" &&
+      (msg as { reasoning_content?: unknown }).reasoning_content === undefined
+    ) {
+      const target = msg as Record<string, unknown>;
+      target.reasoning_content = target.reasoning;
+      delete target.reasoning;
+    }
+  }
 }
 
 export function parseTransportChunkUsage(

@@ -18,7 +18,10 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import { createOpenAIResponsesContextManagementWrapper } from "./openai-stream-wrappers.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
-import { createOpenRouterSystemCacheWrapper } from "./proxy-stream-wrappers.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  createReasoningContentNormalizerWrapper,
+} from "./proxy-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const defaultProviderRuntimeDeps = {
@@ -388,6 +391,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
+  ctx.agent.streamFn = createReasoningContentNormalizerWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
 
   if (!ctx.providerWrapperHandled) {
