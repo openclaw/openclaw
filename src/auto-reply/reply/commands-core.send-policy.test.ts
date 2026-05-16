@@ -113,7 +113,27 @@ describe("handleCommands send policy", () => {
         text: "done",
         replyToId: undefined,
         replyToCurrent: false,
+        isCommandResponse: true,
       },
     });
+  });
+
+  it("tags command replies with isCommandResponse so TTS skips them (#82582)", async () => {
+    // Slash command output is operator-facing status text (e.g.
+    // "/active-memory status"), not assistant content. The normalizer
+    // tags every command reply so the TTS dispatch wrapper in
+    // dispatch-from-config.ts:maybeApplyTtsToReplyPayload short-circuits
+    // before synthesising audio, even under `ttsAuto: "always"`.
+    const { handleCommands } = await import("./commands-core.js");
+    loadCommandHandlersMock.mockReturnValue([
+      vi.fn(async () => ({
+        shouldContinue: false,
+        reply: { text: "Active Memory: off for this session." },
+      })),
+    ]);
+
+    const result = await handleCommands(makeParams());
+
+    expect(result.reply?.isCommandResponse).toBe(true);
   });
 });

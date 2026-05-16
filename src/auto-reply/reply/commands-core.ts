@@ -26,6 +26,11 @@ function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHan
       ...result.reply,
       replyToId: undefined,
       replyToCurrent: false,
+      // Tag every slash command response so downstream dispatch skips TTS
+      // synthesis. Command output (e.g. `/active-memory status`) is
+      // operator-facing status text, not assistant content, and should not
+      // be narrated even under `ttsAuto: "always"`. See #82582.
+      isCommandResponse: true,
     },
   };
 }

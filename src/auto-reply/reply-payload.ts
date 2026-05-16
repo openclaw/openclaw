@@ -44,6 +44,11 @@ export type ReplyPayload = {
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
   isCompactionNotice?: boolean;
+  /** Marks this payload as a slash command response (e.g.
+   *  `/active-memory status`). Slash command output is operator-facing
+   *  status text, not assistant content, so TTS should not narrate it
+   *  even under `ttsAuto: "always"`. See #82582. */
+  isCommandResponse?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

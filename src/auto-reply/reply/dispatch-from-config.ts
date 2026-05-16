@@ -173,6 +173,12 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  // Slash command responses (e.g. `/active-memory status`, `/model`) are
+  // operator-facing status text, not assistant content. Even with
+  // `ttsAuto: "always"` they should not be narrated. See #82582.
+  if (params.payload?.isCommandResponse) {
+    return params.payload;
+  }
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
