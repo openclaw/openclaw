@@ -1400,6 +1400,9 @@ describe("run-node script", () => {
   it("shows tty progress while rebuilding source-checkout artifacts", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
         oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
         buildPaths: [DIST_ENTRY, BUILD_STAMP],
       });
@@ -1407,7 +1410,7 @@ describe("run-node script", () => {
       const stderrChunks: string[] = [];
       const stderr = {
         isTTY: true,
-        write: vi.fn((chunk: string) => {
+        write: vi.fn((chunk: string | Buffer) => {
           stderrChunks.push(String(chunk));
           return true;
         }),
@@ -1430,7 +1433,7 @@ describe("run-node script", () => {
         runRuntimePostBuild: async () => {},
         execPath: process.execPath,
         platform: process.platform,
-      });
+      } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
 
       expect(exitCode).toBe(0);
       const stderrText = stderrChunks.join("");
