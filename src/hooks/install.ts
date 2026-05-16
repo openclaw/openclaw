@@ -9,6 +9,10 @@ import { parseFrontmatter } from "./frontmatter.js";
 
 let hookInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
 
+export function clearHookInstallRuntimeCache() {
+  hookInstallRuntimePromise = undefined;
+}
+
 async function loadHookInstallRuntime() {
   hookInstallRuntimePromise ??= import("./install.runtime.js");
   return hookInstallRuntimePromise;
