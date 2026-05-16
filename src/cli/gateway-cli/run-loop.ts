@@ -25,6 +25,7 @@ const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
 type RestartIntentOptions = {
+  reason?: string;
   force?: boolean;
   waitMs?: number;
 };
@@ -638,7 +639,12 @@ export async function runGatewayLoop(params: {
     void (async () => {
       const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
-      request(restartIntent ? "restart" : "stop", "SIGTERM", undefined, restartIntent ?? undefined);
+      request(
+        restartIntent ? "restart" : "stop",
+        "SIGTERM",
+        restartIntent?.reason,
+        restartIntent ?? undefined,
+      );
     })();
   };
   const onSigint = () => {
@@ -658,7 +664,7 @@ export async function runGatewayLoop(params: {
       } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
-        request("restart", "SIGUSR1", "gateway.restart", restartIntent);
+        request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
         return;
       }
       const authorized = consumeGatewaySigusr1RestartAuthorization();
