@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Channels/stream previews: contain rejected background draft-stream flushes so preview send failures do not surface as fatal unhandled rejections. Fixes #82712. (#82713) Thanks @coygeek.
 - Providers/OpenAI Codex: include base `gpt-5.5` and `gpt-5.4` reasoning metadata in the bundled Codex catalog so `/think xhigh` remains available for those models. Fixes #82744.
 - Providers/MiniMax: declare CN endpoint auth aliases in the plugin manifest so `minimax-cn` and `minimax-portal-cn` reuse the correct base auth profiles instead of falling back to unrelated models after 401s. Fixes #63823. Thanks @kamusis.
+- Secrets/audit: treat `$VAR` auth-profile values as env SecretRefs and stop reporting env-ref credentials as plaintext, including mixed `keyRef` plus env-ref profile states. Fixes #53998. Thanks @schirloc and @artwalker.
 - Agents/model fallback: suppress fallback notices when the active OpenAI Codex runtime reports the same canonical OpenAI model.
 - Agents/music generation: remove model-controlled request timeouts, default internal provider requests to five minutes, and keep configured timeouts at a 120-second floor.
 - Agents/media generation: stop logging delivered failure summaries as missing message-tool delivery when no generated media was expected.
