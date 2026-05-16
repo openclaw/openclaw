@@ -16,7 +16,7 @@ Default behavior:
 
 - Groups are restricted (`groupPolicy: "allowlist"`).
 - Replies require a mention unless you explicitly disable mention gating.
-- Visible replies in groups/channels prefer the `message` tool, with final-text fallback for normal requests.
+- Visible replies in groups/channels use the `message` tool by default.
 
 Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
@@ -43,12 +43,13 @@ always-on group chatter -> user request, or room event when configured
 
 For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
 `openclaw doctor --fix` writes this default into configured-channel configs that omit it.
-That means the agent still processes the turn and can update memory/session state, and it should speak visibly with `message(action=send)` when it has a room reply. If the model misses that tool and returns substantive final text on a normal group/channel request, OpenClaw now falls back to posting that final text instead of leaving the room silent.
+That means the agent still processes the turn and can update memory/session state, and it should speak visibly with `message(action=send)` when it has a room reply. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
 
 This default depends on a model/runtime that reliably calls tools. If logs show
 assistant text but `didSendViaMessagingTool: false`, the model answered
-through the fallback instead of calling the message tool. That is not a
-Discord/Slack/Telegram send failure, but a tool-discipline signal. Use a
+privately instead of calling the message tool. The room stays silent, and the
+gateway verbose log records the suppressed final payload metadata. That is not
+a Discord/Slack/Telegram send failure, but a tool-discipline signal. Use a
 tool-call-reliable model for group/channel sessions, or set
 `messages.groupChat.visibleReplies: "automatic"` when you want all visible group
 replies to use the legacy final-reply path.

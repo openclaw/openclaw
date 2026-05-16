@@ -178,9 +178,8 @@ export type GetReplyOptions = {
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible
-   * delivery and keeps block/preview output private; non-ambient group/channel
-   * final text may fall back to normal source delivery when no message-tool
-   * reply was produced.
+   * delivery and keeps normal final text, block output, and preview output
+   * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */
