@@ -1101,10 +1101,12 @@ describe("handleFeishuMessage command authorization", () => {
     const context = mockCallArg<{
       ChatType?: string;
       CommandAuthorized?: boolean;
+      CommandSource?: string;
       SenderId?: string;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ChatType).toBe("group");
     expect(context.CommandAuthorized).toBe(false);
+    expect(context.CommandSource).toBe("text");
     expect(context.SenderId).toBe("ou-attacker");
   });
 
@@ -1183,10 +1185,12 @@ describe("handleFeishuMessage command authorization", () => {
     const context = mockCallArg<{
       ChatType?: string;
       CommandAuthorized?: boolean;
+      CommandSource?: string;
       SenderId?: string;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ChatType).toBe("group");
     expect(context.CommandAuthorized).toBe(true);
+    expect(context.CommandSource).toBe("text");
     expect(context.SenderId).toBe("ou-admin");
   });
 

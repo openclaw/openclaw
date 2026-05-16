@@ -1297,6 +1297,7 @@ export async function handleFeishuMessage(params: {
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
+        ...(shouldComputeCommandAuthorized ? { CommandSource: "text" as const } : {}),
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
