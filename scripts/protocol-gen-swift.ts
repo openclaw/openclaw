@@ -190,7 +190,7 @@ function swiftInitializerParam(params: {
   if (params.required) {
     return `${params.name}: ${type}`;
   }
-  const defaultNil = DEFAULTED_OPTIONAL_INIT_PARAMS[params.structName]?.has(params.key) === true;
+  const defaultNil = DEFAULTED_OPTIONAL_INIT_PARAMS[params.structName]?.has(params.key) ?? false;
   return `${params.name}: ${type}?${defaultNil ? " = nil" : ""}`;
 }
 
