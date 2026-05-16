@@ -334,6 +334,7 @@ function createChatHeaderState(
     applySettings(next: AppViewState["settings"]) {
       state.settings = next;
     },
+    setTab: vi.fn(),
     loadAssistantIdentity: vi.fn(),
     resetToolStream: vi.fn(),
     resetChatScroll: vi.fn(),
@@ -1056,6 +1057,38 @@ describe("chat session controls", () => {
       t("chat.selectors.model"),
       t("chat.selectors.thinkingLevel"),
     ]);
+  });
+
+  it("shows provider quota in the chat header when usage data is loaded", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openai-codex",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [
+              { label: "3h", usedPercent: 18 },
+              { label: "Week", usedPercent: 72 },
+            ],
+          },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
+    expect(quota?.getAttribute("href")).toBe("/usage");
+    expect(quota?.getAttribute("title")).toContain("Codex · Week");
+
+    quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
+
+    expect(state.setTab).toHaveBeenCalledWith("usage");
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {

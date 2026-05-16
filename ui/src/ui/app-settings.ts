@@ -403,13 +403,16 @@ export async function refreshActiveTab(host: SettingsHost) {
           loadWikiMemoryPalace(app),
         ]);
         break;
-      case "chat":
+      case "chat": {
+        const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
         await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
         scheduleChatScroll(
           host as unknown as Parameters<typeof scheduleChatScroll>[0],
           !host.chatHasAutoScrolled,
         );
+        void modelAuthRefresh;
         break;
+      }
       case "debug":
         await loadDebug(app);
         host.eventLog = host.eventLogBuffer;
