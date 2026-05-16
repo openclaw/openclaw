@@ -77,6 +77,7 @@ const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
+const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_MAX_WARN_MS = 10_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
 const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
@@ -234,6 +235,16 @@ function formatOptionalDiagnosticMetric(value: number | undefined): string {
   return value === undefined ? "unknown" : String(value);
 }
 
+function hasDiagnosticEventLoopDelayWarning(params: {
+  eventLoopDelayP99Ms: number;
+  eventLoopDelayMaxMs: number;
+}): boolean {
+  return (
+    params.eventLoopDelayP99Ms >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS ||
+    params.eventLoopDelayMaxMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_MAX_WARN_MS
+  );
+}
+
 function startDiagnosticLivenessSampler(): void {
   lastDiagnosticLivenessWallAt = Date.now();
   lastDiagnosticLivenessCpuUsage = process.cpuUsage();
@@ -298,10 +309,7 @@ function sampleDiagnosticLiveness(now: number): DiagnosticLivenessSample | null 
   const eventLoopUtilizationRatio = roundDiagnosticMetric(eventLoopUtilization, 3);
   const reasons: DiagnosticLivenessWarningReason[] = [];
 
-  if (
-    eventLoopDelayP99Ms >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS ||
-    eventLoopDelayMaxMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS
-  ) {
+  if (hasDiagnosticEventLoopDelayWarning({ eventLoopDelayP99Ms, eventLoopDelayMaxMs })) {
     reasons.push("event_loop_delay");
   }
   if (eventLoopUtilizationRatio >= DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN) {
@@ -670,7 +678,7 @@ export function logSessionStateChange(
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   if (params.state === "idle") {
-    state.queueDepth = Math.max(0, state.queueDepth - 1);
+    state.queueDepth = 0;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
@@ -1099,6 +1107,13 @@ export function stopDiagnosticHeartbeat() {
 
 export function getDiagnosticSessionStateCountForTest(): number {
   return getDiagnosticSessionStateCountForTestImpl();
+}
+
+export function hasDiagnosticEventLoopDelayWarningForTest(params: {
+  eventLoopDelayP99Ms: number;
+  eventLoopDelayMaxMs: number;
+}): boolean {
+  return hasDiagnosticEventLoopDelayWarning(params);
 }
 
 export function resetDiagnosticStateForTest(): void {

@@ -33,6 +33,7 @@ import {
   logSessionStateChange,
   logMessageQueued,
   diagnosticLogger,
+  hasDiagnosticEventLoopDelayWarningForTest,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
@@ -222,6 +223,21 @@ describe("diagnostic session state pruning", () => {
 
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+
+  it("clears queued work when a session becomes idle", () => {
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+
+    expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).queueDepth).toBe(
+      2,
+    );
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+    expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).queueDepth).toBe(
+      0,
+    );
   });
 });
 
@@ -1280,6 +1296,24 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("ignores transient event-loop max spikes below the max-spike threshold", () => {
+    expect(
+      hasDiagnosticEventLoopDelayWarningForTest({
+        eventLoopDelayP99Ms: 21,
+        eventLoopDelayMaxMs: 1_500,
+      }),
+    ).toBe(false);
+  });
+
+  it("warns for transient event-loop max spikes above the max-spike threshold", () => {
+    expect(
+      hasDiagnosticEventLoopDelayWarningForTest({
+        eventLoopDelayP99Ms: 21,
+        eventLoopDelayMaxMs: 10_500,
+      }),
+    ).toBe(true);
+  });
+
   it("does not let idle liveness samples suppress later active-work warnings", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -1307,6 +1341,15 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expectLoggerMessageContaining(warnSpy, "liveness warning:");
+  });
+
+  it("warns for sustained P99 event-loop delay below the max-spike threshold", () => {
+    expect(
+      hasDiagnosticEventLoopDelayWarningForTest({
+        eventLoopDelayP99Ms: 1_500,
+        eventLoopDelayMaxMs: 1_500,
+      }),
+    ).toBe(true);
   });
 
   it("throttles repeated liveness warnings", () => {
