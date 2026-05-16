@@ -11,6 +11,14 @@ function expectedSourceMcpServerArgs(entrypoint: string): string[] {
   return ["--import", TSX_IMPORT, path.resolve(entrypoint)];
 }
 
+function expectedMcpServerArgs(sourceEntrypoint: string, distEntrypoint: string): string[] {
+  const distPath = path.resolve(distEntrypoint);
+  if (fs.existsSync(distPath)) {
+    return [distPath];
+  }
+  return expectedSourceMcpServerArgs(sourceEntrypoint);
+}
+
 describe("embedded acpx plugin config", () => {
   it("resolves workspace stateDir and cwd by default", () => {
     const workspaceDir = path.resolve("/tmp/openclaw-acpx");
@@ -164,7 +172,10 @@ describe("embedded acpx plugin config", () => {
     const server = resolved.mcpServers["openclaw-plugin-tools"];
     expect(server).toEqual({
       command: process.execPath,
-      args: expectedSourceMcpServerArgs("src/mcp/plugin-tools-serve.ts"),
+      args: expectedMcpServerArgs(
+        "src/mcp/plugin-tools-serve.ts",
+        "dist/mcp/plugin-tools-serve.js",
+      ),
     });
   });
 
@@ -179,7 +190,10 @@ describe("embedded acpx plugin config", () => {
     const server = resolved.mcpServers["openclaw-tools"];
     expect(server).toEqual({
       command: process.execPath,
-      args: expectedSourceMcpServerArgs("src/mcp/openclaw-tools-serve.ts"),
+      args: expectedMcpServerArgs(
+        "src/mcp/openclaw-tools-serve.ts",
+        "dist/mcp/openclaw-tools-serve.js",
+      ),
     });
   });
 
