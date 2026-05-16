@@ -1725,7 +1725,14 @@ describe("resolvePluginTools optional tools", () => {
     expect(tool?.name).toBe("cached_lifecycle_tool");
     expect(factory).toHaveBeenCalledTimes(1);
 
-    const replacementRegistry = createToolRegistry([]);
+    const unrelatedEntry: MockRegistryToolEntry = {
+      pluginId: "unrelated-live",
+      optional: false,
+      source: "/tmp/unrelated-live.js",
+      names: ["unrelated_live_tool"],
+      factory: () => makeTool("unrelated_live_tool"),
+    };
+    const replacementRegistry = createToolRegistry([unrelatedEntry]);
     replacementRegistry.plugins.push({ id: "cache-lifecycle-test", status: "loaded" });
     setActivePluginRegistry?.(replacementRegistry as never, "provider-runtime", "default", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
@@ -1741,6 +1748,10 @@ describe("resolvePluginTools optional tools", () => {
       content: [{ type: "text", text: "ok" }],
     });
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expect(getActivePluginRegistry?.()).toBe(replacementRegistry);
+    expect(getActivePluginRegistry?.()?.tools.map((entry) => entry.pluginId)).toContain(
+      "unrelated-live",
+    );
   });
 
   it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {

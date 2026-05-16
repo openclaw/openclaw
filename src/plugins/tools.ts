@@ -19,26 +19,28 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
-import {
-  ensureStandaloneRuntimePluginRegistryLoaded,
-  installStandaloneRuntimePluginRegistry,
-} from "./runtime/standalone-runtime-registry-loader.js";
+import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   readCachedPluginToolDescriptors,
+  resetPluginToolDescriptorCache as resetCachedPluginToolDescriptors,
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-export {
-  resetPluginToolDescriptorCache,
-  resetPluginToolDescriptorCache as resetPluginToolFactoryCache,
-} from "./tool-descriptor-cache.js";
+let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
+
+export function resetPluginToolDescriptorCache(): void {
+  resetCachedPluginToolDescriptors();
+  cachedDescriptorRuntimeRegistries = new WeakMap();
+}
+
+export { resetPluginToolDescriptorCache as resetPluginToolFactoryCache };
 
 export type PluginToolMeta = {
   pluginId: string;
@@ -565,6 +567,10 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
+        retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
+        onRetainRegistry: (registry) => {
+          cachedDescriptorRuntimeRegistries.set(params.descriptor, registry);
+        },
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
       if (!candidates || candidates.length === 0) {
@@ -768,6 +774,8 @@ function resolveCachedPluginTools(params: {
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
+  retainedRegistry?: PluginRegistry;
+  onRetainRegistry?: (registry: PluginRegistry) => void;
 }) {
   const lookup = {
     env: params.loadOptions.env,
@@ -793,24 +801,26 @@ function resolvePluginToolRegistry(params: {
     return activeRegistry;
   }
 
+  if (registryHasScopedPluginTools(params.retainedRegistry, params.onlyPluginIds)) {
+    return params.retainedRegistry;
+  }
+
   const forceStandaloneLoad = Boolean(channelRegistry || activeRegistry);
   const shouldRetainColdLoadedToolRegistry =
     forceStandaloneLoad &&
     params.loadOptions.activate === false &&
-    params.loadOptions.toolDiscovery === true;
+    params.loadOptions.toolDiscovery === true &&
+    params.onRetainRegistry !== undefined;
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
     forceLoad: forceStandaloneLoad,
-    installRegistry: shouldRetainColdLoadedToolRegistry ? false : !forceStandaloneLoad,
+    installRegistry: !forceStandaloneLoad,
     requiredPluginIds: params.onlyPluginIds,
     loadOptions: params.loadOptions,
   });
   if (registryHasScopedPluginTools(standaloneRegistry, params.onlyPluginIds)) {
     if (shouldRetainColdLoadedToolRegistry) {
-      installStandaloneRuntimePluginRegistry(standaloneRegistry, {
-        loadOptions: params.loadOptions,
-        surface: "active",
-      });
+      params.onRetainRegistry?.(standaloneRegistry);
     }
     return standaloneRegistry;
   }
