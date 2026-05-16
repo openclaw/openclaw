@@ -109,6 +109,40 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
+async function writeVersionedFakeGeminiBin(
+  root: string,
+  versionOutput: string,
+): Promise<{ binDir: string; geminiBinPath: string }> {
+  const binDir = path.join(root, "bin");
+  await fs.mkdir(binDir, { recursive: true });
+  const geminiBinPath = path.join(binDir, "gemini");
+  await fs.writeFile(
+    geminiBinPath,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv[2] === '--version') {",
+      `  console.log(${JSON.stringify(versionOutput)});`,
+      "  process.exit(0);",
+      "}",
+      "console.log(",
+      "  JSON.stringify({",
+      "    argv: process.argv.slice(2),",
+      "    geminiApiKey: process.env.GEMINI_API_KEY ?? null,",
+      "    googleApiKey: process.env.GOOGLE_API_KEY ?? null,",
+      "    googleGenaiUseGca: process.env.GOOGLE_GENAI_USE_GCA ?? null,",
+      "    googleGenaiUseVertexai: process.env.GOOGLE_GENAI_USE_VERTEXAI ?? null,",
+      `    preserveFlag: process.env.${GEMINI_AUTH_ENV_PRESERVE_FLAG} ?? null,`,
+      "    inheritedProbe: process.env.OPENCLAW_ACPX_ENV_PROBE ?? null,",
+      "  }),",
+      ");",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await fs.chmod(geminiBinPath, 0o755);
+  return { binDir, geminiBinPath };
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("ANTHROPIC_API_KEY");
@@ -673,6 +707,115 @@ describe("prepareAcpxCodexAuthConfig", () => {
       inheritedProbe?: unknown;
     };
     expect(launched.argv).toEqual(["--acp"]);
+    expect(launched.geminiApiKey).toBe("child-gemini-secret");
+    expect(launched.googleApiKey).toBe("child-google-secret");
+    expect(launched.googleGenaiUseGca).toBe("child-gca-selector");
+    expect(launched.googleGenaiUseVertexai).toBe("child-vertex-selector");
+    expect(launched.preserveFlag).toBeNull();
+    expect(launched.inheritedProbe).toBe("preserved");
+    expect(process.env.GEMINI_API_KEY).toBe("parent-gemini-secret");
+    expect(process.env.GOOGLE_API_KEY).toBe("parent-google-secret");
+    expect(process.env.GOOGLE_GENAI_USE_GCA).toBe("parent-gca-selector");
+    expect(process.env.GOOGLE_GENAI_USE_VERTEXAI).toBe("parent-vertex-selector");
+    expect(process.env.OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV).toBe("parent-preserve-flag");
+  });
+
+  it("keeps modern Gemini CLI on --acp while stripping provider auth env", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedGeminiPaths(stateDir);
+    const { binDir } = await writeVersionedFakeGeminiBin(root, "0.33.0");
+    process.env.GEMINI_API_KEY = "parent-gemini-secret";
+    process.env.GOOGLE_API_KEY = "parent-google-secret";
+    process.env.GOOGLE_GENAI_USE_GCA = "parent-gca-selector";
+    process.env.GOOGLE_GENAI_USE_VERTEXAI = "parent-vertex-selector";
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GEMINI_API_KEY: "child-gemini-secret",
+        GOOGLE_API_KEY: "child-google-secret",
+        GOOGLE_GENAI_USE_GCA: "child-gca-selector",
+        GOOGLE_GENAI_USE_VERTEXAI: "child-vertex-selector",
+        OPENCLAW_ACPX_ENV_PROBE: "preserved",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+    const launched = JSON.parse(stdout.trim()) as {
+      argv?: unknown;
+      geminiApiKey?: unknown;
+      googleApiKey?: unknown;
+      googleGenaiUseGca?: unknown;
+      googleGenaiUseVertexai?: unknown;
+      preserveFlag?: unknown;
+      inheritedProbe?: unknown;
+    };
+    expect(launched.argv).toEqual(["--acp"]);
+    expect(launched.geminiApiKey).toBeNull();
+    expect(launched.googleApiKey).toBeNull();
+    expect(launched.googleGenaiUseGca).toBeNull();
+    expect(launched.googleGenaiUseVertexai).toBeNull();
+    expect(launched.preserveFlag).toBeNull();
+    expect(launched.inheritedProbe).toBe("preserved");
+    expect(process.env.GEMINI_API_KEY).toBe("parent-gemini-secret");
+    expect(process.env.GOOGLE_API_KEY).toBe("parent-google-secret");
+    expect(process.env.GOOGLE_GENAI_USE_GCA).toBe("parent-gca-selector");
+    expect(process.env.GOOGLE_GENAI_USE_VERTEXAI).toBe("parent-vertex-selector");
+  });
+
+  it("uses --experimental-acp for older Gemini CLI while preserving explicit env opt-in", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedGeminiPaths(stateDir);
+    const { binDir } = await writeVersionedFakeGeminiBin(root, "0.32.9");
+    process.env.GEMINI_API_KEY = "parent-gemini-secret";
+    process.env.GOOGLE_API_KEY = "parent-google-secret";
+    process.env.GOOGLE_GENAI_USE_GCA = "parent-gca-selector";
+    process.env.GOOGLE_GENAI_USE_VERTEXAI = "parent-vertex-selector";
+    process.env.OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV = "parent-preserve-flag";
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GEMINI_API_KEY: "child-gemini-secret",
+        GOOGLE_API_KEY: "child-google-secret",
+        GOOGLE_GENAI_USE_GCA: "child-gca-selector",
+        GOOGLE_GENAI_USE_VERTEXAI: "child-vertex-selector",
+        OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV: "true",
+        OPENCLAW_ACPX_ENV_PROBE: "preserved",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+    const launched = JSON.parse(stdout.trim()) as {
+      argv?: unknown;
+      geminiApiKey?: unknown;
+      googleApiKey?: unknown;
+      googleGenaiUseGca?: unknown;
+      googleGenaiUseVertexai?: unknown;
+      preserveFlag?: unknown;
+      inheritedProbe?: unknown;
+    };
+    expect(launched.argv).toEqual(["--experimental-acp"]);
     expect(launched.geminiApiKey).toBe("child-gemini-secret");
     expect(launched.googleApiKey).toBe("child-google-secret");
     expect(launched.googleGenaiUseGca).toBe("child-gca-selector");
