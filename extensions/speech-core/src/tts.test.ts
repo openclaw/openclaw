@@ -442,15 +442,19 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
-  it("applies TTS for block delivery kind in final mode (#82628)", async () => {
-    await expectTtsPayloadResult({
+  it("skips block delivery kind in final mode (accumulated final tail synthesizes instead)", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-block-kind-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "WebChat block stream chunks defer TTS to the final tail." },
+      cfg,
       channel: "webchat",
-      prefsName: "openclaw-speech-core-block-kind-tts-test",
-      text: "WebChat block replies should synthesize audio for auto TTS.",
-      target: "audio-file",
-      audioAsVoice: undefined,
       kind: "block",
     });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result.trustedLocalMedia).toBeUndefined();
+    expect(result.text).toBe("WebChat block stream chunks defer TTS to the final tail.");
   });
 
   it("skips tool delivery kind in final mode", async () => {

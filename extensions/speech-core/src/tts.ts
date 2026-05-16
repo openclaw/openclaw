@@ -1759,7 +1759,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const mode = config.mode ?? "final";
-  if (mode === "final" && params.kind && params.kind !== "final" && params.kind !== "block") {
+  if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
   }
 
