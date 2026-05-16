@@ -129,6 +129,16 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
   return nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS;
 }
 
+function resolveStreamingCardAppendContent(previousText: string, nextText: string): string {
+  if (!nextText || nextText === previousText) {
+    return "";
+  }
+  if (!previousText) {
+    return nextText;
+  }
+  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
+}
+
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -205,7 +215,7 @@ export class FeishuStreamingSession {
 
     const apiBase = resolveApiBase(this.creds.domain);
     const elements: Record<string, unknown>[] = [
-      { tag: "markdown", content: "⏳ Thinking...", element_id: "content" },
+      { tag: "markdown", content: "", element_id: "content" },
     ];
     if (options?.note) {
       elements.push({ tag: "hr" });
@@ -391,9 +401,13 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
+      const appendContent = resolveStreamingCardAppendContent(this.state.currentText, mergedText);
+      if (!appendContent) {
+        return;
+      }
       this.pendingText = null;
       this.state.currentText = mergedText;
-      await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+      await this.updateCardContent(appendContent, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
     await this.queue;
   }
@@ -442,7 +456,7 @@ export class FeishuStreamingSession {
 
     // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.currentText) {
-      await this.updateCardContent(text);
+      await this.updateCardContent(resolveStreamingCardAppendContent(this.state.currentText, text));
       this.state.currentText = text;
     }
 
