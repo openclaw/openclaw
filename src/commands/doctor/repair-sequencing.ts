@@ -20,6 +20,7 @@ import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
+import { maybeMigrateMemoryCoreDreamingStorage } from "./shared/memory-core-dreaming-storage-migration.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
@@ -104,6 +105,10 @@ export async function runDoctorRepairSequence(params: {
   if (!isUpdatePackageSwapInProgress(env) && !missingConfiguredPluginInstallFailed) {
     applyMutation(maybeRepairStalePluginConfig(state.candidate, env));
   }
+  // Migrate v2026.4.21 legacy `dreaming.storage` string values before the
+  // generic invalid-plugin-config quarantine runs. Otherwise memory-core
+  // gets disabled and the user loses their other dreaming settings. #70407.
+  applyMutation(maybeMigrateMemoryCoreDreamingStorage(state.candidate));
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
