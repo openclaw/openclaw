@@ -31,7 +31,7 @@ The work is therefore narrow and well-bounded:
 - Not changing `selection.ts` defaults.
 - Not removing or deprecating `@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, or `pi-tui`.
 - Not rewriting the 383 import sites that reach into `@earendil-works/pi-*`.
-- Not touching `src/agents/pi-embedded-runner/`, `src/agents/pi-hooks/`, `src/agents/pi-embedded-helpers/`, or `src/agents/harness/builtin-pi.ts` beyond what's needed to expose extracted neutral helpers (e.g. tool-policy) so both harnesses can reuse them.
+- Not touching `src/agents/pi-embedded-runner/`, `src/agents/pi-hooks/`, `src/agents/pi-embedded-helpers/`, `src/agents/pi-tools.before-tool-call.ts`, or `src/agents/harness/builtin-pi.ts`. The Copilot SDK harness copies the tool-policy logic into its own `permission-bridge.ts` with a back-pointer comment instead of extracting a shared helper (see §3.4 for the rationale and answered open question Q4).
 - Not removing any PI provider extension (`extensions/anthropic*`, `extensions/amazon-bedrock*`).
 - Not migrating channel delivery, transcript file format, or auth-profile storage off PI shapes.
 - Not replacing `pi-tui` or anything in `src/tui`.
@@ -46,7 +46,7 @@ The work is therefore narrow and well-bounded:
 | Loop ownership | OpenClaw's `runEmbeddedAttempt` | `session.send` / `sendAndWait` | `runCopilotSdkAttempt` calls `sendAndWait`, listens to events, projects them into OpenClaw's `EmbeddedRunAttemptResult` |
 | Streaming | Per-provider stream wrappers + block chunker | `streaming: true`, `assistant.message_delta` / `assistant.reasoning_delta` events | Subscribe to delta events; reuse the existing block chunker for channel delivery |
 | Tools | OpenClaw owns the tool list (pi-tools, bash-tools, apply-patch, message tool, channel plugins) | `tools?: Tool[]` per session + `onPermissionRequest` (required) + `onUserInputRequest` + `tool.execution_*` events | A `tool-bridge` converts each OpenClaw tool to a Copilot SDK `Tool` and proxies execution back into the existing tool runner |
-| Permission policy | `pi-tools.before-tool-call.ts`, `effective-tool-policy.ts` | `onPermissionRequest` callback | Extract a runtime-neutral `before-tool-call` helper (small refactor); both harnesses call it. PI keeps its existing wiring. |
+| Permission policy | `pi-tools.before-tool-call.ts`, `effective-tool-policy.ts` | `onPermissionRequest` callback | Copy the tool-policy logic into `permission-bridge.ts` with a back-pointer comment to `pi-tools.before-tool-call.ts`. PI source untouched; no shared helper extraction (see §3.4). |
 | User-input from tools | OpenClaw inline | `onUserInputRequest` | Bridge to existing channel/TUI prompt flow (`commitments/`) |
 | Compaction | OpenClaw drives `compact.runtime.ts`; persists `compactionSummary` custom message | `infiniteSessions: { ... }` config; SDK auto-compacts; exposes `workspacePath` with `checkpoints/`, `plan.md`, `files/` | Harness `compact()` enables `infiniteSessions` and writes an OpenClaw-shaped marker file (`workspacePath/files/openclaw-compaction-<ts>.json`) so the rest of OpenClaw still sees a familiar artifact |
 | Side-questions | `runSideQuestion` against raw `Model<Api>` | A short-lived `client.createSession({ infiniteSessions: false, tools: [] })` + `sendAndWait` + `disconnect` | Pool one "scratch" session per agent for back-to-back questions |
@@ -94,7 +94,7 @@ src/agents/copilot-sdk-runtime/
   attempt.ts          # runCopilotSdkAttempt(params): EmbeddedRunAttemptResult
   event-bridge.ts     # Session events -> AssistantMessage / AgentMessage
   tool-bridge.ts      # OpenClaw tools -> SDK Tool[] + onPermissionRequest
-  permission-bridge.ts# Calls extracted neutral before-tool-call helper
+  permission-bridge.ts# Copied tool-policy logic + back-pointer comment to PI source
   user-input-bridge.ts# onUserInputRequest -> channel/TUI prompts
   hooks-bridge.ts     # SDK SessionHooks -> harness lifecycle hooks
   auth-bridge.ts      # AuthProfileStore -> {gitHubToken | useLoggedInUser, copilotHome}
@@ -116,11 +116,19 @@ src/plugins/builtin/
 
 Nothing in `src/agents/pi-embedded-runner/`, `src/agents/pi-hooks/`, `src/agents/pi-embedded-helpers/`, or `src/types/pi-*.d.ts` is touched.
 
-### 3.4 The single small refactor outside the new module
+### 3.4 Tool-policy duplication is intentional
 
-To avoid duplicating tool-policy logic, extract the runtime-neutral parts of `src/agents/pi-tools.before-tool-call.ts` into `src/agents/before-tool-call.ts`. PI calls it, the new harness calls it. This is purely additive (rename + re-export shim from the old path) and does not change PI behavior.
+We do **not** extract a shared `before-tool-call.ts`. Per answered open
+question Q4, the Copilot SDK harness copies the runtime-neutral tool-policy
+logic from `src/agents/pi-tools.before-tool-call.ts` into
+`src/agents/copilot-sdk-runtime/permission-bridge.ts` with a top-of-file
+back-pointer comment to the PI source. PI source is untouched; no shim, no
+maintainer-PI coupling, no owner sign-off required to land the new harness.
 
-If extracting cleanly proves invasive in review, the fallback is to copy the policy logic into `permission-bridge.ts` with a comment pointing at the PI source — acceptable for an additive feature.
+Trade-off accepted: if the PI policy changes materially, the Copilot SDK
+copy must be updated in lockstep. The back-pointer comment plus a
+`permission-bridge` unit test that mirrors the PI fixtures makes the drift
+detectable in code review.
 
 ### 3.5 Configuration surface
 
@@ -184,7 +192,7 @@ Exit: `pnpm test`, `pnpm tsgo:prod`, `pnpm check` green; opt-in path works end t
 - `harness.compact` via `infiniteSessions` + workspace marker.
 - `harness.runSideQuestion` via pooled transient session.
 - `harness.reset` and `harness.dispose` lifecycle.
-- Permission/user-input/hooks/auth bridges (extract neutral `before-tool-call.ts`; PI keeps its existing call site through a re-export).
+- Permission/user-input/hooks/auth bridges (`permission-bridge.ts` copies tool-policy logic from PI with a back-pointer comment; PI source untouched — see §3.4).
 - Optional telemetry bridge.
 - Optional dual-write transcript adapter so existing OpenClaw transcript readers see SDK sessions.
 - Add BYOK provider mappings only on demand (no fan-out unless a user/team asks for a specific provider under the new harness).
@@ -226,8 +234,7 @@ Each item is sized for one PR. IDs match the SQL todo table.
 15. `compaction-impl` — `harness.compact` via `infiniteSessions`; OpenClaw marker in `workspacePath/files/`.
 16. `side-question-impl` — `runSideQuestion` via pooled transient session.
 17. `reset-dispose-impl` — `reset` (`deleteSession`) and `dispose` (`stop`) lifecycle.
-18. `permission-extract` — extract runtime-neutral `before-tool-call.ts`; PI keeps current call site via re-export.
-19. `permission-bridge` — Copilot SDK `onPermissionRequest` calls the extracted helper.
+18. `permission-bridge` — Copilot SDK `onPermissionRequest` calls a copy of the PI tool-policy logic placed in `permission-bridge.ts` with a back-pointer comment to `pi-tools.before-tool-call.ts` (no shared extraction; see §3.4).
 20. `user-input-bridge` — `onUserInputRequest` to existing channel/TUI prompt path.
 21. `hooks-bridge` — SDK `SessionHooks` to `harness/lifecycle-hook-helpers.ts`.
 22. `auth-bridge` — `AuthProfileStore` -> `{gitHubToken | useLoggedInUser, copilotHome}`; client pooling per profile.
@@ -258,7 +265,7 @@ Each item is sized for one PR. IDs match the SQL todo table.
 1. Which Copilot subscription does OpenClaw plan to use for live tests in CI, and what's the per-release token budget?
 2. Should the new harness advertise `supports: true` for any non-subscription model on day one, or stay subscription-only until a user asks for BYOK?
 3. Permission UX: are long-running channel approvals (seconds-to-minutes) acceptable inside `onPermissionRequest`, or do we need a fast-path?
-4. Does the `before-tool-call` extraction in Phase 2 need owner sign-off (it touches a PI-adjacent file), or can it land as a maintainer refactor?
+4. ~~Does the `before-tool-call` extraction in Phase 2 need owner sign-off?~~ **Resolved:** extraction dropped; the harness copies the policy with a back-pointer comment (§3.4).
 5. Should the pooled `CopilotClient` be process-global or per-agent? Per-agent is safer; process-global is cheaper.
 
 ---
