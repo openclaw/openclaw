@@ -32,7 +32,7 @@ describe("readPostCompactionContext", () => {
     expect(result).toContain("Do startup things");
     expect(result).toContain("Be safe");
     if (expectDefaultProse) {
-      expect(result).toContain("Run your Session Startup sequence");
+      expect(result).toContain("CONTINUE the unfinished task");
     }
   }
 
@@ -366,7 +366,7 @@ Read WORKFLOW.md on startup.
       const content = `## Session Startup\n\nDo startup.\n`;
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
       const result = await readPostCompactionContext(tmpDir);
-      expect(result).toContain("Run your Session Startup sequence");
+      expect(result).toContain("CONTINUE the unfinished task");
     });
 
     it("falls back to legacy sections when defaults are explicitly configured", async () => {
@@ -392,6 +392,92 @@ Read WORKFLOW.md on startup.
       } as OpenClawConfig;
       const result = await readPostCompactionContext(tmpDir, { cfg });
       expect(result).toContain("Init things");
+    });
+  });
+
+  describe("compaction summary injection", () => {
+    it("injects compaction summary when sessionFile is provided", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+
+      // Create a mock transcript file with a compaction entry
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const compactionEntry = JSON.stringify({
+        type: "compaction",
+        id: "cmp1",
+        summary: "User asked to fix the login bug. Fixed auth.ts line 42. Tests pass. Next: deploy to staging.",
+        firstKeptEntryId: "kept1",
+      });
+      fs.writeFileSync(sessionFile, compactionEntry + "\n");
+
+      const result = await readPostCompactionContext(tmpDir, { sessionFile });
+      expect(result).not.toBeNull();
+      expect(result).toContain("<compaction-summary>");
+      expect(result).toContain("login bug");
+      expect(result).toContain("auth.ts");
+      expect(result).toContain("</compaction-summary>");
+      expect(result).toContain("CONTINUE the unfinished task");
+    });
+
+    it("works without sessionFile (backward compatible)", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+
+      const result = await readPostCompactionContext(tmpDir);
+      expect(result).not.toBeNull();
+      expect(result).not.toContain("<compaction-summary>");
+      expect(result).toContain("CONTINUE the unfinished task");
+    });
+
+    it("finds latest compaction when multiple exist", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const lines = [
+        JSON.stringify({ type: "session", id: "s1" }),
+        JSON.stringify({ type: "compaction", id: "c1", summary: "Old summary about task X." }),
+        JSON.stringify({ type: "message", id: "m1", message: { role: "user" } }),
+        JSON.stringify({ type: "compaction", id: "c2", summary: "New summary about task Y. Last action: deployed fix." }),
+        JSON.stringify({ type: "message", id: "m2", message: { role: "assistant" } }),
+      ];
+      fs.writeFileSync(sessionFile, lines.join("\n") + "\n");
+
+      const result = await readPostCompactionContext(tmpDir, { sessionFile });
+      expect(result).not.toBeNull();
+      expect(result).toContain("task Y");
+      expect(result).toContain("deployed fix");
+      expect(result).not.toContain("task X");
+    });
+
+    it("handles missing sessionFile gracefully", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+
+      const result = await readPostCompactionContext(tmpDir, {
+        sessionFile: "/nonexistent/session.jsonl",
+      });
+      expect(result).not.toBeNull();
+      // Should still work, just without compaction summary
+      expect(result).not.toContain("<compaction-summary>");
+    });
+
+    it("truncates very long compaction summaries", async () => {
+      const content = `## Session Startup\n\nDo startup.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const longSummary = "A".repeat(10000);
+      const compactionEntry = JSON.stringify({
+        type: "compaction",
+        id: "cmp1",
+        summary: longSummary,
+      });
+      fs.writeFileSync(sessionFile, compactionEntry + "\n");
+
+      const result = await readPostCompactionContext(tmpDir, { sessionFile });
+      expect(result).not.toBeNull();
+      expect(result).toContain("[compaction summary truncated]");
     });
   });
 });

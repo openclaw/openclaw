@@ -293,10 +293,12 @@ type SessionLogSnapshot = {
 async function appendPostCompactionRefreshPrompt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
+  sessionFile?: string;
 }): Promise<void> {
   const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
     cfg: params.cfg,
     agentId: params.followupRun.run.agentId,
+    sessionFile: params.sessionFile,
   });
   if (!refreshPrompt) {
     return;
@@ -682,6 +684,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   await appendPostCompactionRefreshPrompt({
     cfg: params.cfg,
     followupRun: params.followupRun,
+    sessionFile: params.followupRun.run.sessionFile,
   });
   entry = params.sessionStore?.[params.sessionKey] ?? entry;
   if (entry) {

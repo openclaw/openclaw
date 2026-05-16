@@ -8,6 +8,7 @@ import { openRootFile } from "../../infra/boundary-file-read.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const MAX_CONTEXT_CHARS = 1800;
+const MAX_COMPACTION_SUMMARY_CHARS = 6000;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
 const LEGACY_POST_COMPACTION_SECTIONS = ["Every Session", "Safety"];
 
@@ -57,15 +58,73 @@ function formatDateStamp(nowMs: number, timezone: string): string {
 }
 
 /**
- * Read critical sections from workspace AGENTS.md for post-compaction injection.
+ * Read the latest compaction summary from the session transcript file.
+ *
+ * The transcript file is in JSONL format (one JSON object per line).
+ * Compaction entries have `type: "compaction"` and a `summary` field
+ * containing the LLM-generated summary of the compressed context.
+ *
+ * This function scans the file for the most recent compaction entry
+ * and returns its summary text. Returns null if no compaction entry
+ * is found or the file cannot be read.
+ */
+export async function readLatestCompactionSummary(
+  sessionFile?: string,
+): Promise<string | null> {
+  if (!sessionFile) {
+    return null;
+  }
+
+  try {
+    const content = await fs.promises.readFile(sessionFile, "utf-8");
+    const lines = content.split("\n");
+    // Scan from the end to find the most recent compaction entry.
+    // Compaction entries are written after the summarized entries,
+    // so the last one in the file is the most recent.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]?.trim();
+      if (!line) {
+        continue;
+      }
+      try {
+        const entry = JSON.parse(line);
+        if (entry?.type === "compaction" && typeof entry.summary === "string" && entry.summary.trim()) {
+          return entry.summary.trim();
+        }
+      } catch {
+        // Malformed line — skip
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read critical sections from workspace AGENTS.md for post-compaction injection,
+ * and optionally include the compaction summary from the session transcript.
+ *
+ * The function serves two purposes:
+ * 1. Inject configured AGENTS.md sections (e.g., safety rules) so the agent
+ *    retains critical guardrails after the transcript is compressed.
+ * 2. Inject the compaction summary from the session transcript so the agent
+ *    has explicit access to the compressed context — including active tasks,
+ *    progress, pending work, and decisions — without relying solely on the
+ *    pi-coding-agent's internal branch summary handling.
+ *
  * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
- * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
- * daily memory files instead of guessing based on training cutoff.
  */
 export type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
   nowMs?: number;
+  /**
+   * Path to the session transcript file (JSONL).
+   * If provided, the latest compaction summary will be read from this file
+   * and injected into the post-compaction context.
+   */
+  sessionFile?: string;
 };
 
 export async function readPostCompactionContext(
@@ -75,6 +134,7 @@ export async function readPostCompactionContext(
   const cfg = options?.cfg;
   const agentId = options?.agentId;
   const effectiveNowMs = options?.nowMs;
+  const sessionFile = options?.sessionFile;
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
@@ -110,9 +170,7 @@ export async function readPostCompactionContext(
 
     // Fall back to legacy section names ("Every Session" / "Safety") when using
     // defaults and the current headings aren't found — preserves compatibility
-    // with older AGENTS.md templates. The fallback also applies when the user
-    // explicitly configures the default pair, so that pinning the documented
-    // defaults never silently changes behavior vs. leaving the field unset.
+    // with older AGENTS.md templates.
     const isDefaultSections =
       !Array.isArray(configuredSections) ||
       matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
@@ -132,8 +190,6 @@ export async function readPostCompactionContext(
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =
       resolveAgentContextLimits(cfg, agentId)?.postCompactionMaxChars ?? MAX_CONTEXT_CHARS;
-    // Always append the real runtime timestamp — AGENTS.md content may itself contain
-    // "Current time:" as user-authored text, so we must not gate on that substring.
     const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs);
 
     const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
@@ -142,25 +198,44 @@ export async function readPostCompactionContext(
         ? combined.slice(0, maxContextChars) + "\n...[truncated]..."
         : combined;
 
-    // When using the default section set, use precise prose that names the
-    // "Session Startup" sequence explicitly. When custom sections are configured,
-    // use generic prose — referencing a hardcoded "Session Startup" sequence
-    // would be misleading for deployments that use different section names.
+    // Read compaction summary from the session transcript file.
+    // This provides the agent with explicit access to the compressed context,
+    // including active tasks, progress, pending work, and decisions.
+    const compactionSummary = await readLatestCompactionSummary(sessionFile);
+
+    // Build the post-compaction context with three parts:
+    // 1. Prose: clear instruction to continue the task (not restart)
+    // 2. Compaction summary: the compressed context from the transcript
+    // 3. AGENTS.md sections: critical rules and guardrails
     const prose = isDefaultSections
-      ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-        "Run your Session Startup sequence - read the required files before responding to the user."
-      : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
-        `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
+      ? "Session was just compacted. CONTINUE the unfinished task immediately. " +
+        "The compaction summary below contains task progress, pending work, and context. " +
+        "Do NOT restart or reinitialize — use the summary to seamlessly continue."
+      : `Session was just compacted. CONTINUE the unfinished task immediately. ` +
+        `The compaction summary below contains task progress and context. ` +
+        `Do NOT restart or reinitialize — use the summary to seamlessly continue. ` +
+        `Additional guidance from ${displayNames.join(", ")} is provided below.`;
 
     const sectionLabel = isDefaultSections
       ? "Critical rules from AGENTS.md:"
       : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
 
-    return (
-      "[Post-compaction context refresh]\n\n" +
-      `${prose}\n\n` +
-      `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`
-    );
+    let result = "[Post-compaction context refresh]\n\n" + `${prose}\n\n`;
+
+    // Inject compaction summary if available
+    if (compactionSummary) {
+      const truncatedSummary =
+        compactionSummary.length > MAX_COMPACTION_SUMMARY_CHARS
+          ? compactionSummary.slice(0, MAX_COMPACTION_SUMMARY_CHARS) +
+            "\n...[compaction summary truncated]..."
+          : compactionSummary;
+      result +=
+        `<compaction-summary>\n${truncatedSummary}\n</compaction-summary>\n\n`;
+    }
+
+    result += `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`;
+
+    return result;
   } catch {
     return null;
   }
