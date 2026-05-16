@@ -147,7 +147,7 @@ Docs: https://docs.openclaw.ai
 - Providers/catalogs: reject malformed successful LM Studio, GitHub Copilot, DeepInfra, Vercel AI Gateway, and Kilocode model-list responses with provider-owned errors instead of raw parser/type failures or silent fallback catalogs.
 - Providers/polling: reject array, null, or scalar successful operation status responses with provider-owned malformed JSON errors instead of waiting until timeout.
 - ACPX/Codex: reap plugin-local Codex ACP adapter orphans on startup after wrapper crashes while keeping direct adapter commands out of launch-lease injection. Fixes #82364. (#82459) Thanks @joshavant.
-- Agents/model fallback: periodically probe the configured primary for auto-pinned fallback sessions and clear the pin when it recovers, preventing sessions from staying on a fallback model indefinitely. Fixes #82544. Thanks @crpol.
+- Agents/model fallback: periodically probe the configured primary for auto-pinned fallback sessions, announce fallback/recovery transitions, and clear the pin when it recovers, preventing sessions from staying on a fallback model indefinitely. Fixes #82544. Thanks @crpol.
 - Telegram: send presentation-only payloads by rendering fallback text and inline buttons instead of treating them as empty. Fixes #82404. (#82449) Thanks @joshavant.
 - Providers/Kimi: preserve Kimi Coding `reasoning_content` replay and backfill assistant tool-call placeholders when thinking is enabled, so `kimi-for-coding` follow-up tool turns no longer fail after prior tool use. Fixes #82161. Thanks @amknight.
 - Providers/search tools: reject malformed successful xAI, Gemini, and Kimi web/code search responses with provider-owned errors instead of silent `No response` payloads or ungrounded fallback state.

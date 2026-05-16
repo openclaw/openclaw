@@ -173,6 +173,9 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+    return params.payload;
+  }
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
@@ -1507,9 +1510,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               // Accumulate block text for TTS generation after streaming.
-              // Exclude compaction status notices — they are informational UI
-              // signals and must not be synthesised into the spoken reply.
-              if (payload.text && !payload.isCompactionNotice) {
+              // Exclude status notices — they are informational UI signals
+              // and must not be synthesised into the spoken reply.
+              const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+              if (payload.text && !isStatusNotice) {
                 const joinsBufferedTtsDirective =
                   cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                 if (accumulatedBlockText.length > 0) {
@@ -1523,7 +1527,7 @@ export async function dispatchReplyFromConfig(
                 blockCount++;
               }
               const visiblePayload =
-                payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                payload.text && cleanBlockTtsDirectiveText && !isStatusNotice
                   ? (() => {
                       const text = cleanBlockTtsDirectiveText.push(payload.text);
                       return { ...payload, text: text.trim() ? text : undefined };
