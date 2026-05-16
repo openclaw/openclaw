@@ -1,6 +1,11 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
+import {
+  isExplicitCommandTurn,
+  resolveCommandTurnContext,
+  type CommandTurnContext,
+} from "../command-turn-context.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
@@ -8,26 +13,29 @@ export type SourceReplyDeliveryModeContext = {
   CommandAuthorized?: boolean;
   CommandBody?: string;
   CommandSource?: "text" | "native";
+  CommandTurn?: CommandTurnContext;
 };
 
 export function isExplicitSourceReplyCommand(ctx: SourceReplyDeliveryModeContext): boolean {
-  if (ctx.CommandSource === "native") {
-    return true;
-  }
-  return ctx.CommandSource === "text" && ctx.CommandAuthorized === true;
+  return isExplicitCommandTurn(resolveCommandTurnContext(ctx));
 }
 
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
-  if (params.requested) {
-    return params.messageToolAvailable === false && params.requested === "message_tool_only"
-      ? "automatic"
-      : params.requested;
+  if (params.strictMessageToolOnly === true) {
+    return "message_tool_only";
+  }
+  if (
+    params.requested &&
+    (params.requested !== "message_tool_only" || params.messageToolAvailable !== false)
+  ) {
+    return params.requested;
   }
   if (isExplicitSourceReplyCommand(params.ctx)) {
     return "automatic";
@@ -63,6 +71,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
   suppressAcpChildUserDelivery?: boolean;
   explicitSuppressTyping?: boolean;
@@ -74,6 +83,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
+    strictMessageToolOnly: params.strictMessageToolOnly,
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,
   });

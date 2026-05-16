@@ -73,6 +73,10 @@ type LoadPersistedAuthProfileStoreOptions = {
   repairOAuthSecretPayloads?: boolean;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function normalizeSecretBackedField(params: {
   entry: Record<string, unknown>;
   valueField: "key" | "token";
@@ -564,10 +568,10 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
 }
 
 function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return null;
   }
-  const record = raw as Record<string, unknown>;
+  const record = raw;
   if ("profiles" in record) {
     return null;
   }
@@ -586,14 +590,14 @@ function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
 }
 
 export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return null;
   }
-  const record = raw as Record<string, unknown>;
-  if (!record.profiles || typeof record.profiles !== "object") {
+  const record = raw;
+  if (!isRecord(record.profiles)) {
     return null;
   }
-  const profiles = record.profiles as Record<string, unknown>;
+  const profiles = record.profiles;
   const normalized: Record<string, AuthProfileCredential> = {};
   const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(profiles)) {

@@ -139,6 +139,49 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+  });
+
+  it("rejects empty Codex MCP agent scopes", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: [] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["  "] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["!!!"] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("merges plugin ui hints", () => {
@@ -391,6 +434,49 @@ describe("config schema", () => {
         toolSearch: {
           enabled: true,
           mode: "both",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts Code Mode config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ codeMode: true })?.codeMode).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        codeMode: {
+          enabled: true,
+          runtime: "quickjs-wasi",
+          mode: "only",
+          languages: ["javascript", "typescript"],
+          timeoutMs: 5000,
+          memoryLimitBytes: 67_108_864,
+          maxOutputBytes: 65_536,
+          maxSnapshotBytes: 10_485_760,
+          maxPendingToolCalls: 8,
+          snapshotTtlSeconds: 900,
+          searchDefaultLimit: 4,
+          maxSearchLimit: 12,
+        },
+      })?.codeMode,
+    ).toEqual({
+      enabled: true,
+      runtime: "quickjs-wasi",
+      mode: "only",
+      languages: ["javascript", "typescript"],
+      timeoutMs: 5000,
+      memoryLimitBytes: 67_108_864,
+      maxOutputBytes: 65_536,
+      maxSnapshotBytes: 10_485_760,
+      maxPendingToolCalls: 8,
+      snapshotTtlSeconds: 900,
+      searchDefaultLimit: 4,
+      maxSearchLimit: 12,
+    });
+    expect(
+      ToolsSchema.safeParse({
+        codeMode: {
+          enabled: true,
+          runtime: "node",
         },
       }).success,
     ).toBe(false);

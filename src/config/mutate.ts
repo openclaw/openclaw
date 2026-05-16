@@ -185,6 +185,21 @@ function markActiveConfigMutationPath(configPath: string): void {
   activeConfigMutationLocks.getStore()?.add(path.resolve(configPath));
 }
 
+async function readConfigSnapshotForMutation(params: {
+  io?: ConfigMutationIO;
+  writeOptions?: ConfigWriteOptions;
+}): Promise<{
+  snapshot: ConfigFileSnapshot;
+  writeOptions: ConfigWriteOptions;
+}> {
+  if (params.io) {
+    return await params.io.readConfigFileSnapshotForWrite();
+  }
+  return await readConfigFileSnapshotForWrite({
+    skipPluginValidation: params.writeOptions?.skipPluginValidation,
+  });
+}
+
 function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {
   if (!isRecord(base) || !isRecord(next)) {
     return isDeepStrictEqual(base, next) ? [] : ["<root>"];
@@ -372,7 +387,10 @@ async function replaceConfigFileUnlocked(params: {
   const prepared =
     params.snapshot && params.writeOptions
       ? { snapshot: params.snapshot, writeOptions: params.writeOptions }
-      : await (params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite)();
+      : await readConfigSnapshotForMutation({
+          io: params.io,
+          writeOptions: params.writeOptions,
+        });
   const { snapshot, writeOptions } = prepared;
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   markActiveConfigMutationPath(snapshot.path);
@@ -433,9 +451,10 @@ async function transformConfigFileAttempt<T>(
   params: TransformConfigFileParams<T>,
   attempt: number,
 ): Promise<ConfigMutationResult<T>> {
-  const { snapshot, writeOptions } = await (
-    params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
-  )();
+  const { snapshot, writeOptions } = await readConfigSnapshotForMutation({
+    io: params.io,
+    writeOptions: params.writeOptions,
+  });
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   markActiveConfigMutationPath(snapshot.path);
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);

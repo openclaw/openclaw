@@ -331,6 +331,35 @@ describe("config mutate helpers", () => {
     );
   });
 
+  it("uses skipPluginValidation for replace pre-write snapshots", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { plugins: { entries: { "strict-plugin": { enabled: true } } } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await replaceConfigFile({
+      nextConfig: { plugins: { entries: { "strict-plugin": { enabled: false } } } },
+      writeOptions: { skipPluginValidation: true },
+    });
+
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+    });
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      { plugins: { entries: { "strict-plugin": { enabled: false } } } },
+      {
+        baseSnapshot: snapshot,
+        expectedConfigPath: snapshot.path,
+        skipPluginValidation: true,
+        afterWrite: { mode: "auto" },
+      },
+    );
+  });
+
   it("returns explicit restart follow-up intent for replace writes", async () => {
     const snapshot = createSnapshot({
       hash: "hash-restart",
