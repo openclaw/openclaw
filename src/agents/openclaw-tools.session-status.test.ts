@@ -556,7 +556,10 @@ describe("session_status tool", () => {
       config: mockConfig as never,
     });
 
-    await tool.execute("call-implicit-run-session-thinking", {});
+    const result = await tool.execute("call-implicit-run-session-thinking", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
 
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     const sessionEntry = statusArg.sessionEntry as SessionEntry;
