@@ -35,6 +35,49 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
 
+  it("preserves user-authored model and agent metadata during unknown-key cleanup", () => {
+    const result = stripUnknownConfigKeys({
+      defaultModel: "minimax/MiniMax-M2.7",
+      mcp: {
+        servers: {
+          tushareMcp: {
+            transport: "streamable-http",
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", description: "Main coordinator" },
+          { id: "stock-news", description: "Tracks market news" },
+        ],
+      },
+      unexpected: true,
+    } as never);
+
+    expect(result.removed).toContain("unexpected");
+    expect(result.removed).not.toContain("defaultModel");
+    expect(result.removed).not.toContain("agents.list[0].description");
+    expect(result.removed).not.toContain("agents.list[1].description");
+    expect(result.config).toMatchObject({
+      defaultModel: "minimax/MiniMax-M2.7",
+      mcp: {
+        servers: {
+          tushareMcp: {
+            transport: "streamable-http",
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", description: "Main coordinator" },
+          { id: "stock-news", description: "Tracks market news" },
+        ],
+      },
+    });
+  });
+
   describe("stripUnknownConfigKeys during update", () => {
     const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 
