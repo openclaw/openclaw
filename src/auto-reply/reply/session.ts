@@ -34,7 +34,9 @@ import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
+  MAX_SESSION_HISTORY,
   type SessionEntry,
+  type SessionHistoryEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -43,6 +45,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { resolveSessionEntryLabel } from "../../gateway/session-utils.fs.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -230,6 +233,25 @@ function resolveBoundConversationSessionKey(params: {
   return binding.targetSessionKey;
 }
 
+function buildUpdatedHistory(
+  entry: SessionEntry,
+  storePath: string | undefined,
+  agentId: string | undefined,
+): SessionHistoryEntry[] {
+  const previous = entry.history ?? [];
+  const current: SessionHistoryEntry = {
+    sessionId: entry.sessionId,
+    sessionFile: entry.sessionFile,
+    updatedAt: entry.updatedAt,
+    label: resolveSessionEntryLabel(entry, storePath, agentId),
+    systemSent: entry.systemSent,
+  };
+  return [current, ...previous.filter((item) => item.sessionId !== current.sessionId)].slice(
+    0,
+    MAX_SESSION_HISTORY,
+  );
+}
+
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -322,6 +344,7 @@ export async function initSessionState(params: {
   let persistedSubagentRole: SessionEntry["subagentRole"];
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
   let persistedDisplayName: SessionEntry["displayName"];
+  let updatedHistory: SessionHistoryEntry[] | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -544,6 +567,9 @@ export async function initSessionState(params: {
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
       persistedDisplayName = entry.displayName;
+      updatedHistory = buildUpdatedHistory(entry, storePath, agentId);
+    } else if (entry) {
+      updatedHistory = buildUpdatedHistory(entry, storePath, agentId);
     }
   }
 
@@ -667,6 +693,7 @@ export async function initSessionState(params: {
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
+    history: updatedHistory ?? baseEntry?.history,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,

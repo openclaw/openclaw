@@ -737,6 +737,22 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+      key: "resume",
+      nativeName: "resume",
+      description: "Resume a previous session by ID, or list recent sessions.",
+      textAlias: "/resume",
+      acceptsArgs: true,
+      category: "session",
+      tier: "essential",
+      args: [
+        {
+          name: "target",
+          description: "#index or 8-char session id (omit to list recent sessions)",
+          type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",

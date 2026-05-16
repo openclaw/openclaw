@@ -1613,6 +1613,29 @@ export function readRecentSessionUsageFromTranscript(
   });
 }
 
+type SessionEntryLabelFields = {
+  label?: string;
+  displayName?: string;
+  subject?: string;
+  sessionId: string;
+  sessionFile?: string;
+};
+
+export function resolveSessionEntryLabel(
+  entry: SessionEntryLabelFields,
+  storePath: string | undefined,
+  agentId: string | undefined,
+): string | undefined {
+  return (
+    entry.label ??
+    entry.displayName?.trim() ??
+    entry.subject?.trim() ??
+    readSessionTitleFieldsFromTranscript(entry.sessionId, storePath, entry.sessionFile, agentId)
+      .lastMessagePreview ??
+    undefined
+  );
+}
+
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
 const PREVIEW_MAX_LINES = 200;
 

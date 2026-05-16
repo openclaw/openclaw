@@ -2801,6 +2801,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.history?.[0]?.sessionId).toBe(existingSessionId);
     expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
     const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
       entry.startsWith(`${existingSessionId}.jsonl.reset.`),
@@ -2849,6 +2850,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
       expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionEntry.history?.[0]?.sessionId).toBe(existingSessionId);
       expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
