@@ -44,7 +44,6 @@ export async function prepareGatewayPluginBootstrap(params: {
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
 }) {
-  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,
@@ -75,12 +74,28 @@ export async function prepareGatewayPluginBootstrap(params: {
     await Promise.all(startupTasks);
   }
 
+  // Ensure the codex runtime plugin is installed and enabled before plugin loading
+  // so the harness is registered when openai/openai-codex models are configured.
+  // ensureCodexRuntimePluginForModelSelection only fires during onboarding; users
+  // upgrading with existing OpenAI config skip that path entirely.
+  const cfgAtStart = params.minimalTestGateway
+    ? params.cfgAtStart
+    : await (async () => {
+        const { ensureCodexRuntimePluginForGatewayStartup } =
+          await import("../commands/codex-runtime-plugin-install.js");
+        return ensureCodexRuntimePluginForGatewayStartup({
+          cfg: params.cfgAtStart,
+          log: params.log.info,
+        });
+      })();
+  const activationSourceConfig = params.activationSourceConfig ?? cfgAtStart;
+
   initSubagentRegistry();
 
   const gatewayPluginConfig = params.minimalTestGateway
-    ? params.cfgAtStart
+    ? cfgAtStart
     : mergeActivationSectionsIntoRuntimeConfig({
-        runtimeConfig: params.cfgAtStart,
+        runtimeConfig: cfgAtStart,
         activationConfig: applyPluginAutoEnable({
           config: activationSourceConfig,
           env: process.env,

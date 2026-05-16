@@ -103,6 +103,83 @@ export async function ensureCodexRuntimePluginForModelSelection(params: {
   };
 }
 
+export async function ensureCodexRuntimePluginForGatewayStartup(params: {
+  cfg: OpenClawConfig;
+  log: (message: string) => void;
+  env?: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const { collectConfiguredModelRefs } = await import("../config/model-refs.js");
+  const needsCodex = collectConfiguredModelRefs(params.cfg).some(({ value }) =>
+    modelSelectionShouldEnsureCodexPlugin({ model: value, config: params.cfg }),
+  );
+  if (!needsCodex) {
+    return params.cfg;
+  }
+  const env = params.env ?? process.env;
+  const existingRecords = await loadInstalledPluginIndexInstallRecords({ env });
+  if (isInstalledRecordPresentOnDisk(existingRecords[CODEX_RUNTIME_PLUGIN_ID], env)) {
+    const enableResult = enablePluginInConfig(params.cfg, CODEX_RUNTIME_PLUGIN_ID);
+    return enableResult.enabled ? enableResult.config : params.cfg;
+  }
+  params.log(
+    `gateway: codex runtime plugin required by configured models but not installed — installing ${CODEX_RUNTIME_PLUGIN_NPM_SPEC}`,
+  );
+  const { ensureOnboardingPluginInstalled } = await import("./onboarding-plugin-install.js");
+  const result = await ensureOnboardingPluginInstalled({
+    cfg: params.cfg,
+    entry: {
+      pluginId: CODEX_RUNTIME_PLUGIN_ID,
+      label: CODEX_RUNTIME_PLUGIN_LABEL,
+      install: { npmSpec: CODEX_RUNTIME_PLUGIN_NPM_SPEC, defaultChoice: "npm" },
+      trustedSourceLinkedOfficialInstall: true,
+      preferRemoteInstall: true,
+    },
+    prompter: createGatewayStartupPrompter(params.log),
+    runtime: {
+      log: (...args) => {
+        params.log(args.map(String).join(" "));
+      },
+      error: (...args) => {
+        params.log(args.map(String).join(" "));
+      },
+      exit: () => {
+        throw new Error("codex startup install attempted process exit");
+      },
+    },
+    promptInstall: false,
+    autoConfirmSingleSource: true,
+  });
+  if (result.installed) {
+    params.log(`gateway: codex runtime plugin installed`);
+  }
+  return result.cfg;
+}
+
+function createGatewayStartupPrompter(log: (message: string) => void): WizardPrompter {
+  const abort = (method: string): never => {
+    throw new Error(`codex startup install triggered unexpected interactive prompt: ${method}`);
+  };
+  return {
+    intro: async (title) => {
+      log(`[codex-install] ${title}`);
+    },
+    outro: async (message) => {
+      log(`[codex-install] ${message}`);
+    },
+    note: async (message, title) => {
+      log(`[codex-install] ${title != null ? `${title}: ` : ""}${message}`);
+    },
+    plain: async (message) => {
+      log(`[codex-install] ${message}`);
+    },
+    select: async () => abort("select"),
+    multiselect: async () => abort("multiselect"),
+    text: async () => abort("text"),
+    confirm: async () => abort("confirm"),
+    progress: () => abort("progress"),
+  };
+}
+
 export async function repairCodexRuntimePluginInstallForModelSelection(params: {
   cfg: OpenClawConfig;
   model?: string;
