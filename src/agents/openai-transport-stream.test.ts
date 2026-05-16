@@ -140,6 +140,73 @@ describe("openai transport stream", () => {
     ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
   });
 
+  it("observes detail-less Responses failures without leaking request ids", () => {
+    const model = createAzureResponsesModel();
+    const event = {
+      type: "response.failed",
+      response: {
+        id: "resp_failed_123",
+        status: "failed",
+        model: "gpt-5.4-pro",
+        metadata: {
+          litellm_request_id: "litellm_req_plaintext_123",
+          api_key: "sk-observation-secret",
+        },
+        provider_request_id: "provider_req_plaintext_456",
+        status_details: {
+          provider_request_id: "provider_req_nested_789",
+        },
+        provider_error: {
+          request_id: "provider_error_req_nested_012",
+        },
+      },
+    };
+
+    const observation = __testing.buildResponsesFailedNoDetailsObservation(event, model);
+    const summary = __testing.summarizeResponsesFailedNoDetailsObservation(observation);
+
+    expect(observation.providerRuntimeFailureKind).toBe("no_error_details");
+    expect(observation.responseId).toBe("resp_failed_123");
+    expect(observation.responseStatus).toBe("failed");
+    expect(observation.responseModel).toBe("gpt-5.4-pro");
+    expect(observation.requestIdHashes).toHaveLength(4);
+    expect(observation.requestIdHashes.join(",")).toContain("sha256:");
+    expect(summary).toContain("responseId=resp_failed_123");
+    expect(summary).toContain("requestIds=");
+    expect(JSON.stringify(observation)).not.toContain("litellm_req_plaintext_123");
+    expect(JSON.stringify(observation)).not.toContain("provider_req_plaintext_456");
+    expect(JSON.stringify(observation)).not.toContain("provider_req_nested_789");
+    expect(JSON.stringify(observation)).not.toContain("provider_error_req_nested_012");
+    expect(JSON.stringify(observation)).not.toContain("sk-observation-secret");
+  });
+
+  it("preserves the failed response id before throwing detail-less Responses failures", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      __testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_runtime",
+              status: "failed",
+              model: "gpt-5.4-pro",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow(
+      "Unknown error (no error details in response) (status=failed id=resp_failed_runtime model=gpt-5.4-pro)",
+    );
+
+    expect(output.responseId).toBe("resp_failed_runtime");
+  });
+
   it("clamps Responses cached prompt usage at zero", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -1071,10 +1138,10 @@ describe("openai transport stream", () => {
       }
     }
 
-    setTimeout(() => {
+    setImmediate(() => {
       yieldedToTimer = true;
       abort.abort();
-    }, 0);
+    });
 
     await expect(
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
@@ -1099,10 +1166,10 @@ describe("openai transport stream", () => {
       }
     }
 
-    setTimeout(() => {
+    setImmediate(() => {
       yieldedToTimer = true;
       abort.abort();
-    }, 0);
+    });
 
     await expect(
       __testing.processResponsesStream(mockStream(), output, stream, model, {

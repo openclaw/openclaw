@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Agents/OpenAI Responses: preserve and log redacted diagnostics for detail-less `response.failed` events so operators can correlate failed response ids/status/model without losing `no_error_details` failover classification. Fixes #82558. (#82563) Thanks @hclsys.
+
 ## 2026.5.17
 
 ### Changes
