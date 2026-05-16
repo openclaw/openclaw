@@ -1,5 +1,6 @@
 import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
@@ -153,7 +154,7 @@ function resolveEnvProxyDispatcherOptions(): ConstructorParameters<
   UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]
 >[0] {
   return {
-    ...resolveEnvHttpProxyAgentOptions(),
+    ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
     ...HTTP1_ONLY_DISPATCHER_OPTIONS,
   } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
 }
@@ -260,7 +261,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
       );
     } else if (kind === "env-proxy") {
       const proxyOptions = {
-        ...resolveEnvHttpProxyAgentOptions(),
+        ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),

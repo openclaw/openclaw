@@ -5,6 +5,8 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
+  addActiveManagedProxyTlsOptions,
+  resolveActiveManagedProxyTlsOptions,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -232,8 +234,10 @@ async function resolveEnvProxyAgent(
   if (!proxyUrl) {
     return undefined;
   }
+  const proxyTls = resolveActiveManagedProxyTlsOptions({ proxyUrl });
+  const proxyAgentOptions = proxyTls?.ca ? { ca: proxyTls.ca } : undefined;
   try {
-    const agent = new HttpsProxyAgent(proxyUrl) as Agent;
+    const agent = new HttpsProxyAgent(proxyUrl, proxyAgentOptions) as Agent;
     logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     return agent;
   } catch (error) {
@@ -257,8 +261,8 @@ async function resolveEnvFetchDispatcher(
   try {
     const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
     return proxyUrl
-      ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
-      : new EnvHttpProxyAgent({ allowH2: false });
+      ? new ProxyAgent(addActiveManagedProxyTlsOptions({ allowH2: false, uri: proxyUrl }))
+      : new EnvHttpProxyAgent(addActiveManagedProxyTlsOptions({ allowH2: false }));
   } catch (error) {
     logger.warn(
       { error: String(error) },

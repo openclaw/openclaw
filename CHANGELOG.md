@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Proxy: support HTTPS managed forward-proxy endpoints and scoped `proxy.tls.caFile` CA trust for proxy endpoint TLS. (#79171) Thanks @jesse-merhi.
+
 ### Fixes
 
 - Providers/GitHub Copilot: request identity-encoded Copilot API responses across token exchange, catalog, model calls, usage, and embeddings so compressed Business-account error payloads no longer reach JSON parsers as gzip bytes. Fixes #82871. Thanks @tonyfe01.

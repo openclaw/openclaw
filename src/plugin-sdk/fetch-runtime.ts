@@ -3,6 +3,10 @@
 export { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
 export { withTrustedEnvProxyGuardedFetchMode } from "../infra/net/fetch-guard.ts";
 export {
+  addActiveManagedProxyTlsOptions,
+  resolveActiveManagedProxyTlsOptions,
+} from "../infra/net/proxy/managed-proxy-undici.js";
+export {
   hasEnvHttpProxyConfigured,
   hasEnvHttpProxyAgentConfigured,
   resolveEnvHttpProxyAgentOptions,

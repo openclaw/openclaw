@@ -3,6 +3,7 @@ import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  addActiveManagedProxyTlsOptions,
   createPinnedLookup,
   hasEnvHttpProxyAgentConfigured,
   resolveEnvHttpProxyAgentOptions,
@@ -306,11 +307,11 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
 
   if (policy.mode === "explicit-proxy") {
     const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
-    const proxyOptions = {
+    const proxyOptions = addActiveManagedProxyTlsOptions({
       uri: policy.proxyUrl,
       ...poolOptions,
       ...(requestTlsOptions ? { requestTls: requestTlsOptions } : {}),
-    } satisfies ConstructorParameters<typeof ProxyAgent>[0];
+    }) satisfies ConstructorParameters<typeof ProxyAgent>[0];
     try {
       return {
         dispatcher: new ProxyAgent(proxyOptions),
@@ -326,12 +327,12 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   if (policy.mode === "env-proxy") {
     const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
     const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
-    const proxyOptions = {
+    const proxyOptions = addActiveManagedProxyTlsOptions({
       ...poolOptions,
       ...resolveEnvHttpProxyAgentOptions(),
       ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
-    } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+    }) satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0];
     try {
       return {
         dispatcher: new EnvHttpProxyAgent(proxyOptions),
