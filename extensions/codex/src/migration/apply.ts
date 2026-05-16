@@ -29,6 +29,7 @@ import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "../app-server/auth-bridge.js";
 import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
   isCodexPluginsMarketplaceName,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
@@ -359,7 +360,7 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
         return false;
       }
       const name = (marketplace as { name?: unknown }).name;
-      return typeof name === "string" && isCodexPluginsMarketplaceName(name);
+      return name === CODEX_PLUGINS_MARKETPLACE_NAME;
     })
   );
 }
