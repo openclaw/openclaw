@@ -395,11 +395,22 @@ export async function invokeNativeHookRelay(
   const registration = relays.get(relayId);
   if (!registration) {
     pruneExpiredNativeHookRelays();
+    log.warn(
+      "native hook relay not found at invocation time; the Codex hook script reached the gateway but no matching relay is registered. " +
+        "If approvalPolicy is not 'never', pending Codex exec calls will resolve as 'declined' (no exitCode, no durationMs). " +
+        "Workarounds: set plugins.codex.config.appServer.approvalPolicy=never, or set OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY=never in the gateway environment.",
+      { relayId, provider, event },
+    );
     throw new Error("native hook relay not found");
   }
   if (Date.now() > registration.expiresAtMs) {
     relays.delete(relayId);
     removeNativeHookRelayInvocations(relayId);
+    log.warn(
+      "native hook relay expired before invocation; the Codex hook script reached the gateway after the relay TTL elapsed. " +
+        "If approvalPolicy is not 'never', the in-flight Codex exec call will resolve as 'declined'.",
+      { relayId, provider, event, expiresAtMs: registration.expiresAtMs },
+    );
     throw new Error("native hook relay expired");
   }
   if (registration.provider !== provider) {

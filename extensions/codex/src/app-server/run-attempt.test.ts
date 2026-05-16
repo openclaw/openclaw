@@ -3733,6 +3733,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(resolved.approvalPolicy).toBe("never");
   });
 
+  it("skips promotion when the resolver downgraded approvalPolicy because user Codex hooks are disabled", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      env: {},
+      requirementsToml: null,
+      pluginConfig: { appServer: { approvalPolicy: "on-request" } },
+      userCodexConfigToml: "[features]\nhooks = false\n",
+    });
+
+    expect(appServer.approvalPolicy).toBe("never");
+    expect(appServer.approvalPolicyDowngrade?.reason).toBe("user-codex-features-hooks-disabled");
+
+    const resolved = __testing.resolveCodexAppServerForOpenClawToolPolicy({
+      appServer,
+      pluginConfig: readCodexPluginConfig({}),
+      env: {},
+      shouldPromote: true,
+      canUseUntrustedApprovalPolicy: true,
+    });
+
+    expect(resolved.approvalPolicy).toBe("never");
+    expect(resolved.approvalPolicyDowngrade?.reason).toBe("user-codex-features-hooks-disabled");
+  });
+
+  it("emits the approval-policy downgrade warning at most once per process per reason", () => {
+    __testing.resetReportedCodexApprovalPolicyDowngradeReasonsForTests();
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    try {
+      const downgrade = {
+        from: "on-request" as const,
+        to: "never" as const,
+        reason: "user-codex-features-hooks-disabled" as const,
+      };
+      __testing.reportCodexApprovalPolicyDowngradeOnce(downgrade);
+      __testing.reportCodexApprovalPolicyDowngradeOnce(downgrade);
+      __testing.reportCodexApprovalPolicyDowngradeOnce(downgrade);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [message, fields] = warnSpy.mock.calls[0] ?? [];
+      expect(message).toMatch(/features\.hooks/i);
+      expect(fields).toEqual({ approvalPolicyDowngrade: downgrade });
+    } finally {
+      warnSpy.mockRestore();
+      __testing.resetReportedCodexApprovalPolicyDowngradeReasonsForTests();
+    }
+  });
+
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),

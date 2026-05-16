@@ -432,6 +432,32 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
   };
 }
 
+const reportedCodexApprovalPolicyDowngradeReasons = new Set<string>();
+
+function reportCodexApprovalPolicyDowngradeOnce(
+  downgrade: CodexAppServerRuntimeOptions["approvalPolicyDowngrade"],
+): void {
+  if (!downgrade) {
+    return;
+  }
+  if (reportedCodexApprovalPolicyDowngradeReasons.has(downgrade.reason)) {
+    return;
+  }
+  reportedCodexApprovalPolicyDowngradeReasons.add(downgrade.reason);
+  if (downgrade.reason === "user-codex-features-hooks-disabled") {
+    embeddedAgentLog.warn(
+      "codex: app-server approvalPolicy downgraded from " +
+        `"${downgrade.from}" to "${downgrade.to}" because the user's Codex config disables features.hooks. ` +
+        "Non-never policies route exec approvals through the Codex native hook relay; with hooks disabled, " +
+        "every exec returns as declined. Set features.hooks=true in your Codex config, or set " +
+        "plugins.codex.config.appServer.approvalPolicy=never to silence this warning.",
+      {
+        approvalPolicyDowngrade: downgrade,
+      },
+    );
+  }
+}
+
 function resolveCodexAppServerForOpenClawToolPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
@@ -444,6 +470,13 @@ function resolveCodexAppServerForOpenClawToolPolicy(params: {
     !params.canUseUntrustedApprovalPolicy ||
     params.appServer.approvalPolicy !== "never"
   ) {
+    return params.appServer;
+  }
+  // If the resolver downgraded the policy to "never" because the user's
+  // Codex config disables `features.hooks`, the hook-relay path is unusable.
+  // Promoting back to "untrusted" here would re-enter that broken path and
+  // cause every exec to return as declined.
+  if (params.appServer.approvalPolicyDowngrade) {
     return params.appServer;
   }
   const explicitMode =
@@ -517,6 +550,7 @@ export async function runCodexAppServerAttempt(
       configuredAppServer.start.transport !== "stdio" ||
       isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
   });
+  reportCodexApprovalPolicyDowngradeOnce(appServer.approvalPolicyDowngrade);
   let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -3802,6 +3836,10 @@ export const __testing = {
   resolveDynamicToolCallTimeoutMs,
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
+  reportCodexApprovalPolicyDowngradeOnce,
+  resetReportedCodexApprovalPolicyDowngradeReasonsForTests(): void {
+    reportedCodexApprovalPolicyDowngradeReasons.clear();
+  },
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

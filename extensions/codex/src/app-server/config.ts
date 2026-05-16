@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import path from "node:path";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
@@ -98,6 +99,14 @@ export type CodexAppServerStartOptions = {
   clearEnv?: string[];
 };
 
+export type CodexApprovalPolicyDowngradeReason = "user-codex-features-hooks-disabled";
+
+export type CodexApprovalPolicyDowngrade = {
+  from: CodexAppServerApprovalPolicy;
+  to: CodexAppServerApprovalPolicy;
+  reason: CodexApprovalPolicyDowngradeReason;
+};
+
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   requestTimeoutMs: number;
@@ -106,6 +115,7 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+  approvalPolicyDowngrade?: CodexApprovalPolicyDowngrade;
 };
 
 export type CodexPluginConfig = {
@@ -314,6 +324,10 @@ export function resolveCodexAppServerRuntimeOptions(
     requirementsToml?: string | null;
     requirementsPath?: string;
     readRequirementsFile?: (path: string) => string | undefined;
+    userCodexConfigToml?: string | null;
+    userCodexConfigPath?: string;
+    readUserCodexConfigFile?: (filePath: string) => string | undefined;
+    userCodexHooksEnabled?: boolean;
     platform?: NodeJS.Platform;
     hostName?: string;
   } = {},
@@ -355,6 +369,41 @@ export function resolveCodexAppServerRuntimeOptions(
     );
   }
 
+  const resolvedApprovalPolicy: CodexAppServerApprovalPolicy =
+    resolveApprovalPolicy(config.approvalPolicy) ??
+    resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
+    defaultPolicy?.approvalPolicy ??
+    (policyMode === "guardian" ? "on-request" : "never");
+
+  // Non-"never" approval policies route exec approvals through the Codex
+  // native hook relay (see resolveCodexNativeHookRelayEvents in run-attempt).
+  // If the user's persistent Codex config disables `features.hooks`, that
+  // path is a no-op and every exec sits in pending-approval state until the
+  // app-server marks it declined. Downgrade to "never" so commands can run,
+  // and surface the downgrade on the runtime options so the call site can
+  // emit a one-shot warning and so the OpenClaw-tool promotion path knows
+  // not to re-promote this back to "untrusted".
+  const userCodexHooksEnabled =
+    params.userCodexHooksEnabled ??
+    readUserCodexHooksFeature({
+      env,
+      configToml: params.userCodexConfigToml,
+      configPath: params.userCodexConfigPath,
+      readConfigFile: params.readUserCodexConfigFile,
+      platform: params.platform,
+    });
+  const approvalPolicyDowngrade: CodexApprovalPolicyDowngrade | undefined =
+    userCodexHooksEnabled === false && resolvedApprovalPolicy !== "never"
+      ? {
+          from: resolvedApprovalPolicy,
+          to: "never",
+          reason: "user-codex-features-hooks-disabled",
+        }
+      : undefined;
+  const approvalPolicy: CodexAppServerApprovalPolicy = approvalPolicyDowngrade
+    ? approvalPolicyDowngrade.to
+    : resolvedApprovalPolicy;
+
   return {
     start: {
       transport,
@@ -371,11 +420,8 @@ export function resolveCodexAppServerRuntimeOptions(
       config.turnCompletionIdleTimeoutMs,
       60_000,
     ),
-    approvalPolicy:
-      resolveApprovalPolicy(config.approvalPolicy) ??
-      resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      defaultPolicy?.approvalPolicy ??
-      (policyMode === "guardian" ? "on-request" : "never"),
+    approvalPolicy,
+    ...(approvalPolicyDowngrade ? { approvalPolicyDowngrade } : {}),
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -1021,4 +1067,129 @@ function splitShellWords(value: string): string[] {
     words.push(current);
   }
   return words;
+}
+
+// Returns true/false when the user's persistent Codex config explicitly sets
+// `features.hooks` (or the legacy `features.codex_hooks` alias), or undefined
+// when the file is unreadable or the key is absent. Absent means "default",
+// which Codex 0.130+ treats as enabled, so absence does not trigger downgrade.
+function readUserCodexHooksFeature(params: {
+  env: NodeJS.ProcessEnv;
+  configToml?: string | null;
+  configPath?: string;
+  readConfigFile?: (filePath: string) => string | undefined;
+  platform?: NodeJS.Platform;
+}): boolean | undefined {
+  let content: string | undefined;
+  if (params.configToml !== undefined) {
+    content = params.configToml ?? undefined;
+  } else {
+    const filePath =
+      readNonEmptyString(params.configPath) ??
+      resolveUserCodexConfigPath(params.env, params.platform ?? process.platform);
+    if (!filePath) {
+      return undefined;
+    }
+    try {
+      content = params.readConfigFile
+        ? params.readConfigFile(filePath)
+        : readFileSync(filePath, "utf8");
+    } catch {
+      return undefined;
+    }
+  }
+  if (content === undefined) {
+    return undefined;
+  }
+  const stripped = stripTomlLineComments(content);
+  // Precedence: in-table inline > dotted top-level. Modern `features.hooks`
+  // wins over the legacy `features.codex_hooks` alias.
+  return (
+    parseTomlBooleanInTable(stripped, "features", "hooks") ??
+    parseTomlBooleanInTable(stripped, "features", "codex_hooks")
+  );
+}
+
+function resolveUserCodexConfigPath(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const codexHome = readNonEmptyString(env.CODEX_HOME);
+  if (codexHome) {
+    return path.join(codexHome, "config.toml");
+  }
+  const home = resolveHomeDir(env, platform);
+  if (!home) {
+    return undefined;
+  }
+  return path.join(home, ".codex", "config.toml");
+}
+
+function resolveHomeDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  const home = readNonEmptyString(env.HOME);
+  if (home) {
+    return home;
+  }
+  const userProfile = readNonEmptyString(env.USERPROFILE);
+  if (userProfile) {
+    return userProfile;
+  }
+  if (platform === "win32") {
+    const homeDrive = readNonEmptyString(env.HOMEDRIVE);
+    const homePath = readNonEmptyString(env.HOMEPATH);
+    if (homeDrive && homePath) {
+      return `${homeDrive}${homePath}`;
+    }
+  }
+  return undefined;
+}
+
+function parseTomlBooleanInTable(
+  strippedContent: string,
+  table: string,
+  key: string,
+): boolean | undefined {
+  const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tableHeader = new RegExp(`^\\s*\\[\\s*${escapedTable}\\s*\\]\\s*$`, "m");
+  const headerMatch = tableHeader.exec(strippedContent);
+  const inlineUnderHeader = headerMatch
+    ? matchInlineTomlBoolean(
+        sliceTomlSection(strippedContent, headerMatch.index + headerMatch[0].length),
+        key,
+      )
+    : undefined;
+  if (inlineUnderHeader !== undefined) {
+    return inlineUnderHeader;
+  }
+  return parseDottedTomlBoolean(strippedContent, table, key);
+}
+
+function sliceTomlSection(strippedContent: string, sectionStart: number): string {
+  const rest = strippedContent.slice(sectionStart);
+  const nextTableOffset = rest.search(/^\s*\[/m);
+  return nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset);
+}
+
+function matchInlineTomlBoolean(section: string, key: string): boolean | undefined {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = section.match(new RegExp(`(?:^|\\n)\\s*${escapedKey}\\s*=\\s*(true|false)\\b`));
+  return match ? match[1] === "true" : undefined;
+}
+
+function parseDottedTomlBoolean(
+  strippedContent: string,
+  table: string,
+  key: string,
+): boolean | undefined {
+  // TOML allows whitespace around the dotted key separator: `features . hooks`.
+  // Dotted keys outside any table header live at the top level, so we bound
+  // the search to the content before the first table header.
+  const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const topLevelEnd = firstTomlTableOffset(strippedContent);
+  const topLevel = strippedContent.slice(0, topLevelEnd);
+  const match = topLevel.match(
+    new RegExp(`(?:^|\\n)\\s*${escapedTable}\\s*\\.\\s*${escapedKey}\\s*=\\s*(true|false)\\b`),
+  );
+  return match ? match[1] === "true" : undefined;
 }
