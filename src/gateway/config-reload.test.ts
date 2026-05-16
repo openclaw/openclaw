@@ -397,6 +397,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
   });
 
+  it("hot-reloads diagnostics memory pressure bundle toggles", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureBundle.enabled"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureBundle.enabled");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);
@@ -883,6 +890,38 @@ describe("startGatewayConfigReloader", () => {
     expect(promoteSnapshot).toHaveBeenCalledWith(acceptedSnapshot, "valid-config");
 
     await reloader.stop();
+  });
+
+  it("hot-reloads direct diagnostics memory pressure bundle edits", async () => {
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      diagnostics: { memoryPressureBundle: { enabled: false } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: nextConfig,
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        hash: "diagnostics-memory-pressure-bundle-1",
+      }),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      diagnostics: { memoryPressureBundle: { enabled: true } },
+    };
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureBundle.enabled"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
   });
 
   it("does not promote external config edits when hot reload rejects them", async () => {

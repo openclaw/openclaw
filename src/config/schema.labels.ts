@@ -42,6 +42,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.flags": "Diagnostics Flags",
   "diagnostics.stuckSessionWarnMs": "Session Liveness Threshold (ms)",
   "diagnostics.stuckSessionAbortMs": "Session Abort Threshold (ms)",
+  "diagnostics.memoryPressureBundle": "Memory Pressure Bundle",
+  "diagnostics.memoryPressureBundle.enabled": "Memory Pressure Bundle Enabled",
   "diagnostics.otel.enabled": "OpenTelemetry Enabled",
   "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
   "diagnostics.otel.tracesEndpoint": "OpenTelemetry Traces Endpoint",

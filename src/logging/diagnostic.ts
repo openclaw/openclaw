@@ -139,6 +139,10 @@ function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] |
   }
 }
 
+function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
+  return config?.diagnostics?.memoryPressureBundle?.enabled !== false;
+}
+
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
 let lastDiagnosticLivenessWallAt = 0;
 let lastDiagnosticLivenessCpuUsage: CpuUsage | null = null;
@@ -1013,6 +1017,7 @@ export function startDiagnosticHeartbeat(
     } else {
       emitDiagnosticMemorySample({
         emitSample: shouldRecordMemorySample,
+        writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
         resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
       });
     }

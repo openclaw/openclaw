@@ -261,6 +261,32 @@ describe("diagnostic memory", () => {
     }
   });
 
+  it("can disable critical pressure bundle writes", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-disabled-"));
+    const resolveSessionStorePaths = vi.fn(() => []);
+    try {
+      startDiagnosticStabilityRecorder();
+
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        stateDir,
+        writeCriticalBundle: false,
+        resolveSessionStorePaths,
+        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+          pressureRepeatMs: 60_000,
+        },
+      });
+
+      expect(resolveSessionStorePaths).not.toHaveBeenCalled();
+      expect(readLatestDiagnosticStabilityBundleSync({ stateDir }).status).toBe("missing");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("writes a stability bundle when critical pressure is emitted", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-"));
     const customRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-custom-sessions-"));
