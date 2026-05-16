@@ -779,7 +779,7 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
     configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
       config: ctx.config,
       env: ctx.env,
-      allowUnresolved: hasAuthorizationHeader,
+      allowUnresolved: hasAuthorizationHeader || Boolean(discoveryApiKey),
     });
   } catch (error) {
     if (isLmstudioDiscoveryConfigResolutionError(error)) {
