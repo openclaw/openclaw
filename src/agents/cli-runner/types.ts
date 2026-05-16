@@ -116,6 +116,7 @@ export type PreparedCliRunContext = {
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
   hadSessionFile: boolean;
+  contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;
   modelId: string;
   normalizedModel: string;

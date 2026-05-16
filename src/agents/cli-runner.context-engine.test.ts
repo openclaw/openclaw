@@ -92,6 +92,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
       sessionId: "existing-external-cli-session",
     },
     hadSessionFile: true,
+    contextEngineConfig: {},
     contextEngine,
     modelId: "sonnet-4.6",
     normalizedModel: "sonnet-4.6",
@@ -220,6 +221,27 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expectMessageText(ingestBatchParams?.messages[1], "final answer");
     expect(maintain).toHaveBeenCalledTimes(2);
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves deferred maintenance ownership for background engines", async () => {
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      createMaintenanceResult(),
+    );
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({
+      info: {
+        id: "test-background-context-engine",
+        name: "Test background context engine",
+        turnMaintenanceMode: "background",
+      },
+      maintain,
+      dispose,
+    });
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await runPreparedCliAgent(buildPreparedContext(contextEngine));
+
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("does not finalize or run turn maintenance on failed CLI attempts", async () => {

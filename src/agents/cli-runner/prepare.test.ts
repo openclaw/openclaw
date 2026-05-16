@@ -664,6 +664,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.contextEngine?.info.id).toBe(engineId);
+      expect(context.contextEngineConfig).toBe(runtimeConfig);
       expect(factory).toHaveBeenCalledWith(
         expect.objectContaining({
           config: runtimeConfig,

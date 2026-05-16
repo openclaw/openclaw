@@ -13,7 +13,6 @@ import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failove
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
-  runHarnessContextEngineMaintenance,
 } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -26,11 +25,6 @@ import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-he
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
-
-type CliContextEngineMaintenanceParams = Parameters<typeof runHarnessContextEngineMaintenance>[0];
-type CliContextEngineMaintenanceResult = Awaited<
-  ReturnType<typeof runHarnessContextEngineMaintenance>
->;
 
 function flushSessionManagerFile(sessionManager: SessionManager): void {
   (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
@@ -149,23 +143,15 @@ async function finalizeCliContextEngineTurn(params: {
     sessionFile: runParams.sessionFile,
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
-    runMaintenance: runCliContextEngineMaintenance,
-    config: runParams.config,
+    config: context.contextEngineConfig,
     warn: (message) => log.warn(message),
   });
 }
 
-async function runCliContextEngineMaintenance(
-  params: CliContextEngineMaintenanceParams,
-): Promise<CliContextEngineMaintenanceResult> {
-  // Run maintenance inline in file-rewrite mode so disposal cannot race a deferred turn task.
-  return await runHarnessContextEngineMaintenance({
-    ...params,
-    executionMode: "background",
-  });
-}
-
 async function disposeCliContextEngine(context: PreparedCliRunContext): Promise<void> {
+  if (context.contextEngine?.info.turnMaintenanceMode === "background") {
+    return;
+  }
   try {
     await context.contextEngine?.dispose?.();
   } catch (err) {
@@ -523,8 +509,7 @@ export async function runPreparedCliAgent(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
-      runMaintenance: runCliContextEngineMaintenance,
-      config: params.config,
+      config: context.contextEngineConfig,
       warn: (message) => log.warn(message),
     });
 

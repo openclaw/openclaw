@@ -497,6 +497,7 @@ export async function prepareCliRunContext(
     preparedBackend: preparedBackendFinal,
     reusableCliSession,
     hadSessionFile,
+    contextEngineConfig,
     contextEngine,
     modelId,
     normalizedModel,
