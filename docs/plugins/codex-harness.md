@@ -119,8 +119,9 @@ Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 `openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
 do not write new `openai-codex/gpt-*` model refs.
 
-Do not set `compaction.model` or `compaction.provider` on Codex-backed agents.
-Codex owns compaction through its native app-server thread state, so OpenClaw
+Do not set `compaction.model` or `compaction.provider` on Codex-backed agents
+unless a selected context engine owns compaction. Without an owning context
+engine, Codex compacts through its native app-server thread state, so OpenClaw
 ignores those local summarizer overrides at runtime and `openclaw doctor --fix`
 removes them when the agent uses Codex.
 
@@ -130,6 +131,12 @@ Lossless remains supported as a context engine. Configure it through
 `agents.defaults.compaction.provider`. `openclaw doctor --fix` migrates the old
 `compaction.provider: "lossless-claw"` shape to the Lossless context-engine slot
 when Codex is the active runtime.
+
+When the active context engine reports `ownsCompaction: true`, `/compact` runs
+that engine's compaction lifecycle and invalidates the bound Codex app-server
+thread. The next Codex turn starts a fresh backend thread and rehydrates it from
+the context engine instead of layering Codex native compaction on top of the
+engine-owned semantic summary.
 
 ```json5
 {
@@ -625,8 +632,10 @@ The Codex harness changes the low-level embedded agent executor only.
 - Codex-native shell, patch, MCP, and native app tools are owned by Codex.
   OpenClaw can observe or block selected native events through the supported
   relay, but it does not rewrite native tool arguments.
-- Codex owns native compaction. OpenClaw keeps a transcript mirror for channel
-  history, search, `/new`, `/reset`, and future model or harness switching.
+- Codex owns native compaction unless the active OpenClaw context engine
+  declares `ownsCompaction: true`. OpenClaw keeps a transcript mirror for
+  channel history, search, `/new`, `/reset`, and future model or harness
+  switching.
 - Media generation, media understanding, TTS, approvals, and messaging-tool
   output continue through the matching OpenClaw provider/model settings.
 - `tool_result_persist` applies to OpenClaw-owned transcript tool results, not
