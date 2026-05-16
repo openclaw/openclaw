@@ -1597,11 +1597,21 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
-    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
+    const isGroupOrChannelSourceTurn = chatType === "group" || chatType === "channel";
+    const shouldDeliverGroupChannelFinalFallback = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
+      isGroupOrChannelSourceTurn &&
       ctx.InboundTurnKind !== "room_event" &&
       !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
+      reply.isError !== true &&
+      getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked !== true &&
+      hasOutboundReplyContent(reply, { trimText: true });
+    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
+      (suppressAutomaticSourceDelivery &&
+        ctx.InboundTurnKind !== "room_event" &&
+        !sendPolicyDenied &&
+        getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true) ||
+      shouldDeliverGroupChannelFinalFallback(reply);
     for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
