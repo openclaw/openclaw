@@ -4,6 +4,8 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerContextEngine } from "../../context-engine/registry.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { __testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
@@ -555,6 +557,51 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       );
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not allocate a non-legacy context engine before fallible CLI preparation finishes", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const engineId = `cli-prepare-late-engine-${Date.now().toString(36)}`;
+    const dispose = vi.fn(async () => {});
+    const factory = vi.fn((): ContextEngine => {
+      return {
+        info: { id: engineId, name: "CLI prepare late engine" },
+        ingest: vi.fn(async () => ({ ingested: true })),
+        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+        compact: vi.fn(async () => ({ ok: true, compacted: false })),
+        dispose,
+      };
+    });
+    registerContextEngine(engineId, factory);
+    setCliRunnerPrepareTestDeps({
+      resolveOpenClawReferencePaths: vi.fn(async () => {
+        throw new Error("reference path lookup failed");
+      }),
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-prepare-failure",
+          config: {
+            ...createCliBackendConfig(),
+            plugins: { slots: { contextEngine: engineId } },
+          },
+        }),
+      ).rejects.toThrow("reference path lookup failed");
+
+      expect(factory).not.toHaveBeenCalled();
+      expect(dispose).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

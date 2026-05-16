@@ -135,13 +135,6 @@ export async function prepareCliRunContext(
     agentId: params.agentId,
   });
   const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
-  ensureContextEnginesInitialized();
-  const resolvedContextEngine = await resolveContextEngine(params.config, {
-    agentDir,
-    workspaceDir,
-  });
-  const contextEngine =
-    resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   const effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
@@ -484,6 +477,13 @@ export async function prepareCliRunContext(
       runtimeContextChars: 0,
     },
   });
+  ensureContextEnginesInitialized();
+  const resolvedContextEngine = await resolveContextEngine(params.config, {
+    agentDir,
+    workspaceDir,
+  });
+  const contextEngine =
+    resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
 
   return {
     params: preparedPrompt === params.prompt ? params : { ...params, prompt: preparedPrompt },
