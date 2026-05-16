@@ -173,8 +173,9 @@ captures any requested-to-applied mapping.
 </Note>
 
 Provider request timeouts are operator configuration only. OpenClaw uses
-`agents.defaults.musicGenerationModel.timeoutMs` when configured and raises
-values below 120000ms to 120000ms.
+`agents.defaults.musicGenerationModel.timeoutMs` when configured, raises values
+below 120000ms to 120000ms, and otherwise defaults provider requests to
+300000ms.
 
 ## Async behavior
 
