@@ -1265,7 +1265,7 @@ describe("gateway send mirroring", () => {
         emoji: "✅",
       },
       requesterSenderId: "trusted-user",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
       toolContext: {
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",
@@ -1293,7 +1293,7 @@ describe("gateway send mirroring", () => {
       { channel: "whatsapp" },
     );
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({ inboundTurnKind: "room_event" }),
+      expect.objectContaining({ inboundEventKind: "room_event" }),
     );
   });
 

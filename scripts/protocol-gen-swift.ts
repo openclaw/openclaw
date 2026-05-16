@@ -46,7 +46,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = {
   ArtifactsListParams: new Set(["agentId"]),
   ArtifactsGetParams: new Set(["agentId"]),
   ArtifactsDownloadParams: new Set(["agentId"]),
-  MessageActionParams: new Set(["inboundTurnKind"]),
+  MessageActionParams: new Set(["inboundEventKind"]),
   CronRunLogEntry: new Set(["failureNotificationDelivery"]),
 };
 

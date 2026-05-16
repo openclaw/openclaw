@@ -4857,7 +4857,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
     const ctx = buildTestCtx({
       ChatType: "group",
-      InboundTurnKind: "room_event",
+      InboundEventKind: "room_event",
       SessionKey: "test:session",
     });
 
@@ -4957,7 +4957,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps group/channel final replies private when message-tool-only turns miss the message tool", async () => {
+  it("keeps group/channel final replies private when message-tool-only events miss the message tool", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -5181,7 +5181,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("requested fallback");
   });
 
-  it("keeps native command replies visible in group/channel turns", async () => {
+  it("keeps native command replies visible in group/channel events", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {

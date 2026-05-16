@@ -1752,8 +1752,8 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const isRoomEventCliTurn = params.followupRun.currentTurnKind === "room_event";
-            const cliSessionBinding = isRoomEventCliTurn
+            const isRoomEventCliRun = params.followupRun.currentInboundEventKind === "room_event";
+            const cliSessionBinding = isRoomEventCliRun
               ? undefined
               : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
             const authProfile = resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
@@ -1823,8 +1823,8 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                   prompt: params.commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
-                  currentTurnKind: params.followupRun.currentTurnKind,
-                  currentTurnContext: params.followupRun.currentTurnContext,
+                  currentInboundEventKind: params.followupRun.currentInboundEventKind,
+                  currentInboundContext: params.followupRun.currentInboundContext,
                   inputProvenance: params.followupRun.run.inputProvenance,
                   provider: cliExecutionProvider,
                   model,
@@ -1857,7 +1857,7 @@ export async function runAgentTurnWithFallback(params: {
                   replyOperation: params.replyOperation,
                 });
                 const result: EmbeddedAgentRunResult =
-                  isRoomEventCliTurn && rawResult.meta.agentMeta
+                  isRoomEventCliRun && rawResult.meta.agentMeta
                     ? (() => {
                         const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
                           rawResult.meta.agentMeta;
@@ -2010,8 +2010,8 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
-                currentTurnKind: params.followupRun.currentTurnKind,
-                currentTurnContext: params.followupRun.currentTurnContext,
+                currentInboundEventKind: params.followupRun.currentInboundEventKind,
+                currentInboundContext: params.followupRun.currentInboundContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:

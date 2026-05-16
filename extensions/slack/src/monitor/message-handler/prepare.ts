@@ -4,17 +4,20 @@ import {
   type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   buildMentionRegexes,
+  classifyChannelInboundEvent,
   formatInboundEnvelope,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
+  resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -864,6 +867,7 @@ export async function prepareSlackMessage(params: {
   // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
   const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
   const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
+  const hasAbortRequest = isAbortRequestText(textForCommandDetection);
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
@@ -1033,6 +1037,16 @@ export async function prepareSlackMessage(params: {
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
   const chatType = resolveSlackChatType(conversation.resolvedChannelType);
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: chatType },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg,
+      agentId: route.agentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest,
+  });
 
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "slack",
@@ -1040,8 +1054,10 @@ export async function prepareSlackMessage(params: {
   });
   const ackReactionValue = ackReaction ?? "";
   const sourceRepliesAreToolOnly =
-    resolveChannelMessageSourceReplyDeliveryMode({ cfg, ctx: { ChatType: chatType } }) ===
-    "message_tool_only";
+    resolveChannelMessageSourceReplyDeliveryMode({
+      cfg,
+      ctx: { ChatType: chatType, InboundEventKind: inboundEventKind },
+    }) === "message_tool_only";
   const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const shouldAckReaction = () =>
     Boolean(
@@ -1224,7 +1240,7 @@ export async function prepareSlackMessage(params: {
   const effectiveMessageThreadId =
     assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
 
-  const ctxPayload = buildChannelTurnContext({
+  const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
     provider: "slack",
     surface: "slack",
@@ -1263,6 +1279,7 @@ export async function prepareSlackMessage(params: {
       nativeChannelId: message.channel,
     },
     message: {
+      inboundEventKind,
       body: combinedBody,
       bodyForAgent: rawBody,
       rawBody,

@@ -183,6 +183,7 @@ candidate contains redacted secret placeholders such as `***`.
         visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
         groupChat: {
           visibleReplies: "message_tool", // default; visible output requires message(action=send)
+          unmentionedInbound: "room_event", // unmentioned always-on group chatter is quiet context
         },
       },
       agents: {

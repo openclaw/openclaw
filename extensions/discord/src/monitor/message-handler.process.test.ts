@@ -1342,6 +1342,25 @@ describe("processDiscordMessage session routing", () => {
     dispatchInboundMessage.mockClear();
     await runProcessDiscordMessage(
       await createBaseContext({
+        shouldRequireMention: false,
+        effectiveWasMentioned: false,
+        inboundEventKind: "room_event",
+        cfg: {
+          messages: {
+            groupChat: {
+              visibleReplies: "automatic",
+            },
+          },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+        route: BASE_CHANNEL_ROUTE,
+      }),
+    );
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+
+    dispatchInboundMessage.mockClear();
+    await runProcessDiscordMessage(
+      await createBaseContext({
         ...createDirectMessageContextOverrides(),
       }),
     );

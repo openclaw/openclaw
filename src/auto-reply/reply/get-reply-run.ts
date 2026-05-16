@@ -437,7 +437,7 @@ export async function runPreparedReply(
     ctx,
     isHeartbeat,
   });
-  const inboundTurnKind = promptSessionCtx.InboundTurnKind;
+  const inboundEventKind = promptSessionCtx.InboundEventKind;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -661,7 +661,7 @@ export async function runPreparedReply(
     startupContextPrelude,
     softResetTail,
     isHeartbeat,
-    turnKind: inboundTurnKind,
+    inboundEventKind: inboundEventKind,
   });
   const effectiveBaseBody = promptEnvelopeBase.effectiveBaseBody;
   let prefixedBodyBase = await applySessionHints({
@@ -704,7 +704,7 @@ export async function runPreparedReply(
     prefixedCommandBody: string;
     queuedBody: string;
     transcriptCommandBody: string;
-    currentTurnContext?: typeof promptEnvelopeBase.currentTurnContext;
+    currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime) {
       const eventsBlock = await drainFormattedSystemEventBlock({
@@ -733,7 +733,7 @@ export async function runPreparedReply(
       startupContextPrelude,
       softResetTail,
       isHeartbeat,
-      turnKind: inboundTurnKind,
+      inboundEventKind: inboundEventKind,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
     });
@@ -762,9 +762,9 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
+  let { prefixedCommandBody, queuedBody, transcriptCommandBody, currentInboundContext } =
     await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
-  const isRoomEvent = inboundTurnKind === "room_event";
+  const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -1010,7 +1010,7 @@ export async function runPreparedReply(
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentInboundContext } =
           await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
       resolveBusyState: resolveQueueBusyState,
@@ -1038,8 +1038,8 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
-    currentTurnKind: inboundTurnKind,
-    currentTurnContext,
+    currentInboundEventKind: inboundEventKind,
+    currentInboundContext,
     abortSignal: opts?.abortSignal,
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
