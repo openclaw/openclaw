@@ -1,0 +1,682 @@
+{
+  "default_workflow": "full",
+  "judge_model": "gpt-5.5",
+  "default_judge_prompt": "Judge strictly. Return YES only when the CLI output provides concrete evidence that the stage completed the requested work with acceptable quality. Require artifact evidence, no unhandled errors, alignment with the goal, and either validation evidence or a clear explanation why validation was not applicable. Return NO if the output is mostly narration, leaves unresolved blockers, skips required files or commands, reports failing checks without a follow-up fix, or lacks enough evidence to trust the result. Respond with YES or NO followed by a brief explanation.",
+  "defaults": {
+    "maxBudgetUsd": 0,
+    "_maxBudgetNote": "Codex stages do not support maxBudgetUsd; keep this at 0 unless a future harness supports budget handoff.",
+    "_modelFallbackNote": "Use gpt-5.3-codex for research/plan/implement/debug to reduce context handoff churn. Use Spark for bounded validate/commit-style stages. Escalation uses GPT-5.5 after judge-failed retries.",
+    "_modelFallbackExample": {
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/implement.md",
+          "requires": [
+            ".codex/skills/ff_implement_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/implement.md",
+          "requires": [
+            ".codex/skills/ff_implement_plan/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "_codexContextNote": "Codex-specific context handoff settings live under harnesses.codex.codex. The default template asks fastflow to run ff_create_handoff, then ff_resume_handoff in a fresh session, after a completed Codex turn reports 50%+ approximate context usage."
+  },
+  "workflows": {
+    "full": {
+      "description": "Complete workflow: research -> plan -> implement -> validate -> commit",
+      "stages": [
+        "research",
+        "plan",
+        "implement",
+        "validate",
+        "commit"
+      ]
+    },
+    "plan-first": {
+      "description": "Skip research, start with planning",
+      "stages": [
+        "plan",
+        "implement",
+        "validate",
+        "commit"
+      ]
+    },
+    "debug": {
+      "description": "Debug workflow for bug fixes",
+      "stages": [
+        "debug",
+        "implement",
+        "validate",
+        "commit"
+      ]
+    },
+    "quick": {
+      "description": "Quick workflow when plan isn't needed",
+      "stages": [
+        "implement",
+        "commit"
+      ]
+    },
+    "review": {
+      "description": "Address PR review feedback",
+      "stages": [
+        "fetch-feedback",
+        "implement",
+        "commit"
+      ],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
+    "review-with-replies": {
+      "description": "Address PR review feedback and reply to comments",
+      "stages": [
+        "fetch-feedback",
+        "implement",
+        "reply-to-comments",
+        "commit"
+      ],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
+    "merge-conflict": {
+      "description": "Resolve merge or rebase conflicts",
+      "stages": [
+        "merge-conflict"
+      ]
+    },
+    "codex-quick": {
+      "description": "Two-stage Codex workflow using .codex/stages/* and .codex/skills/* templates.",
+      "stages": [
+        "implement-codex",
+        "commit-codex"
+      ]
+    },
+    "codex-full": {
+      "description": "Complete Codex workflow using .codex/stages/* and .codex/skills/* templates.",
+      "stages": [
+        "research-codex",
+        "plan-codex",
+        "implement-codex",
+        "validate-codex",
+        "commit-codex"
+      ]
+    },
+    "codex-debug": {
+      "description": "Codex debug workflow for bug fixes",
+      "stages": [
+        "debug-codex",
+        "implement-codex",
+        "validate-codex",
+        "commit-codex"
+      ]
+    },
+    "codex-review": {
+      "description": "Codex workflow to address PR review feedback",
+      "stages": [
+        "fetch-feedback-codex",
+        "implement-codex",
+        "commit-codex"
+      ],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
+    "codex-review-with-replies": {
+      "description": "Codex workflow to address PR review feedback and reply to comments",
+      "stages": [
+        "fetch-feedback-codex",
+        "implement-codex",
+        "reply-to-comments-codex",
+        "commit-codex"
+      ],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
+    "codex-merge-conflict": {
+      "description": "Codex workflow to resolve merge or rebase conflicts",
+      "stages": [
+        "merge-conflict-codex"
+      ]
+    }
+  },
+  "stages": {
+    "research": {
+      "prompt_file": ".codex/stages/research.md",
+      "requires": [
+        ".codex/skills/ff_research_codebase/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the research output identifies the relevant code paths, summarizes the current behavior, notes constraints or risks, and writes or updates the expected research artifact under thoughts/shared/research/. Return NO for vague summaries, missing file references, missing artifact evidence, or unanswered questions that block planning.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/research.md",
+          "requires": [
+            ".codex/skills/ff_research_codebase/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/research.md",
+          "requires": [
+            ".codex/skills/ff_research_codebase/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex"
+    },
+    "debug": {
+      "prompt_file": ".codex/stages/debug.md",
+      "requires": [
+        ".codex/skills/ff_debug/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the debug output names a credible root cause, cites supporting evidence from code/logs/tests, and proposes a concrete fix or next action. Return NO for speculation without evidence, missing reproduction details, or unresolved blockers without a clear handoff.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/debug.md",
+          "requires": [
+            ".codex/skills/ff_debug/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/debug.md",
+          "requires": [
+            ".codex/skills/ff_debug/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex"
+    },
+    "plan": {
+      "prompt_file": ".codex/stages/plan.md",
+      "checkpoint": true,
+      "requires": [
+        ".codex/skills/ff_create_plan/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the plan artifact under thoughts/shared/plans/ is complete, actionable, sequenced, and includes acceptance criteria, validation steps, risk notes, and any required branch/PR strategy. Return NO if the plan is vague, omits success criteria, ignores known constraints, or leaves open questions that should have been resolved.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/plan.md",
+          "requires": [
+            ".codex/skills/ff_create_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/plan.md",
+          "requires": [
+            ".codex/skills/ff_create_plan/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex"
+    },
+    "implement": {
+      "prompt_file": ".codex/stages/implement.md",
+      "requires": [
+        ".codex/skills/ff_implement_plan/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the output shows concrete code or config changes aligned with the plan/goal, explains meaningful decisions, and reports any validation attempted. Return NO if no relevant files changed, the work is only described but not done, errors are ignored, TODOs are left as substitutes for implementation, or validation failures are unresolved.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/implement.md",
+          "requires": [
+            ".codex/skills/ff_implement_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/implement.md",
+          "requires": [
+            ".codex/skills/ff_implement_plan/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex"
+    },
+    "validate": {
+      "prompt_file": ".codex/stages/validate.md",
+      "requires": [
+        ".codex/skills/ff_validate_plan/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if relevant tests, type checks, linting, builds, or documented manual checks were run and passed, or if skipped checks are explicitly justified with low residual risk. Return NO for missing validation, failing checks without a fix, incomplete command output, or unclear residual risk.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/validate.md",
+          "requires": [
+            ".codex/skills/ff_validate_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/validate.md",
+          "requires": [
+            ".codex/skills/ff_validate_plan/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex-spark"
+    },
+    "commit": {
+      "prompt_file": ".codex/stages/commit.md",
+      "requires": [
+        ".codex/skills/ff_commit/SKILL.md",
+        ".codex/skills/ff_describe_pr/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the output shows a focused commit was created, and a PR was created or intentionally skipped with a reason. Return NO if unrelated changes were bundled, no commit/PR evidence appears, the working tree remains dirty without explanation, or branch protection/PR requirements were ignored.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/commit.md",
+          "requires": [
+            ".codex/skills/ff_commit/SKILL.md",
+            ".codex/skills/ff_describe_pr/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/commit.md",
+          "requires": [
+            ".codex/skills/ff_commit/SKILL.md",
+            ".codex/skills/ff_describe_pr/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex-spark"
+    },
+    "fetch-feedback": {
+      "prompt_file": ".codex/stages/fetch-feedback.md",
+      "requires": [],
+      "judge_prompt": "Return YES only if PR feedback was fetched from the authoritative source and converted into a clear goal or action list. Return NO if comments were guessed, no PR/thread was inspected, action items are ambiguous, or required feedback could not be accessed without a handoff.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/fetch-feedback.md",
+          "requires": []
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/fetch-feedback.md",
+          "requires": []
+        }
+      ],
+      "model": "gpt-5.3-codex-spark"
+    },
+    "merge-conflict": {
+      "prompt_file": ".codex/stages/merge-conflict.md",
+      "requires": [
+        ".codex/skills/ff_resolve_conflicts/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if conflicts were identified, resolved in the affected files, and the merge/rebase status is clean or clearly handed off with remaining blockers. Return NO if conflict markers remain, validation is missing, or resolution rationale is absent for non-trivial conflicts.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/merge-conflict.md",
+          "requires": [
+            ".codex/skills/ff_resolve_conflicts/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/merge-conflict.md",
+          "requires": [
+            ".codex/skills/ff_resolve_conflicts/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex-spark"
+    },
+    "reply-to-comments": {
+      "prompt_file": ".codex/stages/reply-to-comments.md",
+      "requires": [
+        ".codex/skills/ff_reply_to_comments/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if addressed PR comments were identified, replies were posted or drafted as required, and the output summarizes what was replied to. Return NO if replies are missing, comments were not mapped to fixes, or unresolved comments are not explicitly called out.",
+      "harness": "codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/reply-to-comments.md",
+          "requires": [
+            ".codex/skills/ff_reply_to_comments/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/reply-to-comments.md",
+          "requires": [
+            ".codex/skills/ff_reply_to_comments/SKILL.md"
+          ]
+        }
+      ],
+      "model": "gpt-5.3-codex-spark"
+    },
+    "research-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/research.md",
+      "requires": [
+        ".codex/skills/ff_research_codebase/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the research output identifies the relevant code paths, summarizes the current behavior, notes constraints or risks, and writes or updates the expected research artifact under thoughts/shared/research/. Return NO for vague summaries, missing file references, missing artifact evidence, or unanswered questions that block planning.",
+      "model": "gpt-5.3-codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/research.md",
+          "requires": [
+            ".codex/skills/ff_research_codebase/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/research.md",
+          "requires": [
+            ".codex/skills/ff_research_codebase/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "debug-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/debug.md",
+      "requires": [
+        ".codex/skills/ff_debug/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the debug output names a credible root cause, cites supporting evidence from code/logs/tests, and proposes a concrete fix or next action. Return NO for speculation without evidence, missing reproduction details, or unresolved blockers without a clear handoff.",
+      "model": "gpt-5.3-codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/debug.md",
+          "requires": [
+            ".codex/skills/ff_debug/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/debug.md",
+          "requires": [
+            ".codex/skills/ff_debug/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "plan-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/plan.md",
+      "checkpoint": true,
+      "requires": [
+        ".codex/skills/ff_create_plan/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the plan artifact under thoughts/shared/plans/ is complete, actionable, sequenced, and includes acceptance criteria, validation steps, risk notes, and any required branch/PR strategy. Return NO if the plan is vague, omits success criteria, ignores known constraints, or leaves open questions that should have been resolved.",
+      "model": "gpt-5.3-codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/plan.md",
+          "requires": [
+            ".codex/skills/ff_create_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/plan.md",
+          "requires": [
+            ".codex/skills/ff_create_plan/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "implement-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/implement.md",
+      "requires": [
+        ".codex/skills/ff_implement_plan/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the output shows concrete code or config changes aligned with the plan/goal, explains meaningful decisions, and reports any validation attempted. Return NO if no relevant files changed, the work is only described but not done, errors are ignored, TODOs are left as substitutes for implementation, or validation failures are unresolved.",
+      "model": "gpt-5.3-codex",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/implement.md",
+          "requires": [
+            ".codex/skills/ff_implement_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/implement.md",
+          "requires": [
+            ".codex/skills/ff_implement_plan/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "validate-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/validate.md",
+      "requires": [
+        ".codex/skills/ff_validate_plan/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if relevant tests, type checks, linting, builds, or documented manual checks were run and passed, or if skipped checks are explicitly justified with low residual risk. Return NO for missing validation, failing checks without a fix, incomplete command output, or unclear residual risk.",
+      "model": "gpt-5.3-codex-spark",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/validate.md",
+          "requires": [
+            ".codex/skills/ff_validate_plan/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/validate.md",
+          "requires": [
+            ".codex/skills/ff_validate_plan/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "commit-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/commit.md",
+      "requires": [
+        ".codex/skills/ff_commit/SKILL.md",
+        ".codex/skills/ff_describe_pr/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if the output shows a focused commit was created, and a PR was created or intentionally skipped with a reason. Return NO if unrelated changes were bundled, no commit/PR evidence appears, the working tree remains dirty without explanation, or branch protection/PR requirements were ignored.",
+      "model": "gpt-5.3-codex-spark",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/commit.md",
+          "requires": [
+            ".codex/skills/ff_commit/SKILL.md",
+            ".codex/skills/ff_describe_pr/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/commit.md",
+          "requires": [
+            ".codex/skills/ff_commit/SKILL.md",
+            ".codex/skills/ff_describe_pr/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "fetch-feedback-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/fetch-feedback.md",
+      "requires": [],
+      "judge_prompt": "Return YES only if PR feedback was fetched from the authoritative source and converted into a clear goal or action list. Return NO if comments were guessed, no PR/thread was inspected, action items are ambiguous, or required feedback could not be accessed without a handoff.",
+      "model": "gpt-5.3-codex-spark",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/fetch-feedback.md",
+          "requires": []
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/fetch-feedback.md",
+          "requires": []
+        }
+      ]
+    },
+    "merge-conflict-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/merge-conflict.md",
+      "requires": [
+        ".codex/skills/ff_resolve_conflicts/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if conflicts were identified, resolved in the affected files, and the merge/rebase status is clean or clearly handed off with remaining blockers. Return NO if conflict markers remain, validation is missing, or resolution rationale is absent for non-trivial conflicts.",
+      "model": "gpt-5.3-codex-spark",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/merge-conflict.md",
+          "requires": [
+            ".codex/skills/ff_resolve_conflicts/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/merge-conflict.md",
+          "requires": [
+            ".codex/skills/ff_resolve_conflicts/SKILL.md"
+          ]
+        }
+      ]
+    },
+    "reply-to-comments-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/reply-to-comments.md",
+      "requires": [
+        ".codex/skills/ff_reply_to_comments/SKILL.md"
+      ],
+      "judge_prompt": "Return YES only if addressed PR comments were identified, replies were posted or drafted as required, and the output summarizes what was replied to. Return NO if replies are missing, comments were not mapped to fixes, or unresolved comments are not explicitly called out.",
+      "model": "gpt-5.3-codex-spark",
+      "backup": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.3-codex-spark",
+          "prompt_file": ".codex/stages/reply-to-comments.md",
+          "requires": [
+            ".codex/skills/ff_reply_to_comments/SKILL.md"
+          ]
+        }
+      ],
+      "escalation": [
+        {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "prompt_file": ".codex/stages/reply-to-comments.md",
+          "requires": [
+            ".codex/skills/ff_reply_to_comments/SKILL.md"
+          ]
+        }
+      ]
+    }
+  },
+  "harness": "codex",
+  "judge_harness": "codex",
+  "harnesses": {
+    "codex": {
+      "binary": "codex",
+      "default_model": "gpt-5.3-codex-spark",
+      "codex": {
+        "model_context_window": 128000,
+        "context_handoff_threshold_percent": 50
+      }
+    }
+  }
+}

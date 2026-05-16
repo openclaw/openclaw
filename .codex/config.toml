@@ -1,0 +1,6 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CLAUDE_BASH_MAINTAIN_WORKING_DIR = "1"
+MAX_THINKING_TOKENS = "32000"
