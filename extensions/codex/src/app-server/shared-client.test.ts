@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
+import { codexAppServerStartOptionsKey } from "./config.js";
 import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -272,6 +273,41 @@ describe("shared Codex app-server client", () => {
     const applyCall = applyAuthProfileCall();
     expect(applyCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
     expect(applyCall?.authProfileId).toBe("openai-codex:work");
+  });
+
+  it("migrates legacy singleton global state into the keyed registry", async () => {
+    const legacy = createClientHarness();
+    const next = createClientHarness();
+    const startOptions = {
+      transport: "websocket" as const,
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      authToken: "tok-legacy",
+      headers: {},
+    };
+    const key = codexAppServerStartOptionsKey(startOptions, {
+      agentDir: "/tmp/openclaw-agent",
+    });
+    const globalState = globalThis as typeof globalThis & {
+      [key: symbol]: unknown;
+    };
+    globalState[Symbol.for("openclaw.codexAppServerClientState")] = {
+      key,
+      client: legacy.client,
+      promise: Promise.resolve(legacy.client),
+    };
+
+    await expect(getSharedCodexAppServerClient({ startOptions })).resolves.toBe(legacy.client);
+
+    legacy.client.close();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(next.client);
+    const list = listCodexAppServerModels({ timeoutMs: 1000, startOptions });
+    await sendInitializeResult(next, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(next);
+
+    await expect(list).resolves.toEqual({ models: [] });
+    expect(startSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an active shared client alive when another agent dir uses a different key", async () => {

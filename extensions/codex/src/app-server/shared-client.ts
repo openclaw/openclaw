@@ -22,13 +22,31 @@ type SharedCodexAppServerClientState = {
   clients: Map<string, SharedCodexAppServerClientEntry>;
 };
 
+type LegacySharedCodexAppServerClientState = Partial<SharedCodexAppServerClientEntry> & {
+  key?: string;
+  clients?: unknown;
+};
+
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: SharedCodexAppServerClientState;
+    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?:
+      | SharedCodexAppServerClientState
+      | LegacySharedCodexAppServerClientState;
   };
-  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= { clients: new Map() };
+  const state = globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
+  if (state?.clients instanceof Map) {
+    return state as SharedCodexAppServerClientState;
+  }
+  const clients = new Map<string, SharedCodexAppServerClientEntry>();
+  if (state?.key && (state.client || state.promise)) {
+    clients.set(state.key, { client: state.client, promise: state.promise });
+    state.client?.addCloseHandler((closedClient) =>
+      clearSharedClientEntryIfCurrent(state.key!, closedClient),
+    );
+  }
+  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = { clients };
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
 }
 
