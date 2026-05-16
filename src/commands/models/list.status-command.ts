@@ -166,6 +166,7 @@ export async function modelsStatusCommand(
     plain?: boolean;
     check?: boolean;
     probe?: boolean;
+    probeAll?: boolean;
     probeProvider?: string;
     probeProfile?: string | string[];
     probeTimeout?: string;
@@ -178,6 +179,11 @@ export async function modelsStatusCommand(
   ensureFlagCompatibility(opts);
   if (opts.plain && opts.probe) {
     throw new Error("--probe cannot be used with --plain output.");
+  }
+  if (opts.probeAll && !opts.probe) {
+    runtime.error(
+      "Warning: --all has no effect without --probe. Add --probe to enable per-model health checks.",
+    );
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
@@ -505,6 +511,7 @@ export async function modelsStatusCommand(
             timeoutMs: probeTimeoutMs,
             concurrency: probeConcurrency,
             maxTokens: probeMaxTokens,
+            probeAll: Boolean(opts.probeAll),
           },
           onProgress: update,
         });
