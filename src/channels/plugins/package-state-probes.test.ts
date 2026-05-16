@@ -9,10 +9,16 @@ import {
 } from "./package-state-probes.js";
 
 const listChannelCatalogEntriesMock = vi.hoisted(() => vi.fn());
+const isBundledSourceOverlayPathMock = vi.hoisted(() =>
+  vi.fn((_params: { sourcePath: string }) => false),
+);
 const tempDirs: string[] = [];
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
   listChannelCatalogEntries: listChannelCatalogEntriesMock,
+}));
+vi.mock("../../plugins/bundled-source-overlays.js", () => ({
+  isBundledSourceOverlayPath: isBundledSourceOverlayPathMock,
 }));
 
 function makeBundledChannelCatalogEntry(params: {
@@ -43,6 +49,8 @@ function removeTempDirs() {
 beforeEach(() => {
   removeTempDirs();
   listChannelCatalogEntriesMock.mockReset();
+  isBundledSourceOverlayPathMock.mockReset();
+  isBundledSourceOverlayPathMock.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -156,6 +164,51 @@ describe("channel package-state probes", () => {
       hasBundledChannelPackageState({
         metadataKey: "persistedAuthState",
         channelId: "whatsapp",
+        cfg: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves source overlay precedence over packaged package-state probes", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-overlay-"));
+    tempDirs.push(root);
+    const sourceRoot = path.join(root, "extensions", "matrix");
+    const builtRoot = path.join(root, "dist", "extensions", "matrix");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.mkdirSync(builtRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceRoot, "auth-presence.js"),
+      "module.exports.hasAnyMatrixAuth = () => true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(builtRoot, "auth-presence.js"),
+      "module.exports.hasAnyMatrixAuth = () => false;\n",
+      "utf8",
+    );
+    isBundledSourceOverlayPathMock.mockImplementation(
+      ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
+    );
+
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "matrix",
+        origin: "bundled",
+        rootDir: sourceRoot,
+        channel: {
+          id: "matrix",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasAnyMatrixAuth",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "persistedAuthState",
+        channelId: "matrix",
         cfg: {},
       }),
     ).toBe(true);

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isBundledSourceOverlayPath } from "../../plugins/bundled-source-overlays.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
@@ -96,6 +97,9 @@ function listBuiltBundledPackageStateModules(params: {
   rootDir: string;
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
+  if (isBundledSourceOverlayPath({ sourcePath: params.rootDir })) {
+    return [];
+  }
   const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
   if (!sourceRoot) {
     return [];
