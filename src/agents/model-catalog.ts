@@ -23,7 +23,10 @@ import {
   normalizeConfiguredProviderCatalogModelId,
   type ProviderModelIdNormalizationOptions,
 } from "./model-ref-shared.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  hasConfiguredProviderModelRows,
+} from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -303,7 +306,10 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   if (models.length === 0) {
     throw new Error("persisted model catalog has no usable model rows");
   }
-  const configuredModels = buildConfiguredModelCatalog({ cfg });
+  const configuredModels = buildConfiguredModelCatalog({
+    cfg,
+    manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
+  });
   if (configuredModels.length > 0) {
     appendCatalogEntriesIfAbsent(models, configuredModels);
   }
@@ -372,6 +378,14 @@ export async function loadModelCatalog(params?: {
     const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
+      let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
+      const getManifestPlugins = () => {
+        manifestPlugins ??= loadManifestMetadataSnapshot({
+          config: cfg,
+          env: process.env,
+        }).plugins;
+        return manifestPlugins;
+      };
       if (!readOnly) {
         await ensureOpenClawModelsJson(cfg);
         logStage("models-json-ready");
@@ -411,7 +425,9 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        const id = normalizeConfiguredProviderCatalogModelId(provider, rawId);
+        const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, {
+          manifestPlugins: getManifestPlugins(),
+        });
         if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
@@ -454,7 +470,9 @@ export async function loadModelCatalog(params?: {
           for (const entry of supplemental) {
             normalizedSupplemental.push({
               ...entry,
-              id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id),
+              id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
+                manifestPlugins: getManifestPlugins(),
+              }),
             });
           }
           appendCatalogEntriesIfAbsent(models, normalizedSupplemental);
@@ -462,7 +480,10 @@ export async function loadModelCatalog(params?: {
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
-      const configuredModels = buildConfiguredModelCatalog({ cfg });
+      const configuredModels = buildConfiguredModelCatalog({
+        cfg,
+        manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
+      });
       if (configuredModels.length > 0) {
         appendCatalogEntriesIfAbsent(models, configuredModels);
       }
