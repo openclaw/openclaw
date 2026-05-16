@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu/wiki: reject numeric wiki space IDs before creating Lark clients and keep numeric-looking IDs documented as quoted opaque strings, preventing JavaScript precision loss in knowledge base calls. Fixes #45301. (#82769) Thanks @hyspacex.
 - Channels/stream previews: contain rejected background draft-stream flushes so preview send failures do not surface as fatal unhandled rejections. Fixes #82712. (#82713) Thanks @coygeek.
 - Providers/OpenAI Codex: include base `gpt-5.5` and `gpt-5.4` reasoning metadata in the bundled Codex catalog so `/think xhigh` remains available for those models. Fixes #82744.
 - Providers/MiniMax: declare CN endpoint auth aliases in the plugin manifest so `minimax-cn` and `minimax-portal-cn` reuse the correct base auth profiles instead of falling back to unrelated models after 401s. Fixes #63823. Thanks @kamusis.
@@ -38,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Agents/session_status: resolve implicit no-arg status lookups against the live run session, so `/think` changes report the current thinking level instead of stale sandbox state. Fixes #82669. (#82696) Thanks @leno23.
 - Discord: keep progress drafts visible for message-tool-only guild replies under the default coding tool profile. Fixes #82747. Thanks @eliranwong.
 - CLI/setup: order the model/auth provider picker as OpenAI, Anthropic, xAI, Google, then the remaining providers alphabetically.
+- Diagnostics/usage/voice-call: treat explicit zero and non-finite limits as empty results and reject invalid voice-call numeric CLI flags. Fixes #82646, #82650, #82651, and #82653. (#82679) Thanks @leno23.
 - Gateway/diagnostics: add opt-in critical memory pressure stability snapshots with gateway logs, V8 heap, cgroup, active-resource, and redacted large session-file evidence. Fixes #82518.
 - Doctor/Gateway: avoid treating unrelated macOS LaunchAgents as legacy gateways just because their environment values mention old checkout paths.
 - Gateway/heartbeat: defer heartbeat runs while the target reply operation is queued or active, preventing heartbeat prompts from interleaving with WebChat responses before the streaming lane starts. Fixes #82722. Thanks @Andy-Xie-1145.
@@ -65,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - Discord: bind delayed gateway `identify` retries to the originating socket generation so retries triggered after a reconnect do not identify against a fresh socket. Fixes #82225. Thanks @giodl73-repo.
 - ACP/control plane: refresh cached runtime handles when agent config changes so ACP sessions stop using stale runtimes after `agents.defaults` edits. Fixes #82237. Thanks @giodl73-repo.
 - Gateway/sessions: scope session data lookups by agent id so multi-agent gateway state cannot cross-leak session records across configured agents. (#81386) Thanks @pgondhi987.
+- Gateway/restart: mark active main sessions as restart-aborted before forced restarts so startup recovery can resume interrupted turns instead of leaving them stranded as running. Fixes #82433. (#82772) Thanks @joshavant.
 - Agents/media: require generated music/video completion agents to use the message tool for visible delivery and stop merging generated image attachments into message-tool-only source reply mirrors, avoiding direct fallback posts that can duplicate media the model already sent.
 - Agents/media: accept generated media attachments on internal completion events and report delivery-loss failures as errors, so completed background music/video tasks do not disappear after provider success.
 - Matrix/approvals: release in-flight reaction bindings when the channel approval handler stops mid-delivery, preventing stale approval targets after restart. Fixes #82485. (#82482) Thanks @Feelw00.
