@@ -8,6 +8,8 @@ import type {
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
+  resolveAvailableAgentHarnessPolicy,
+  resolveAgentHarnessPolicy,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
@@ -201,6 +203,11 @@ describe("runAgentHarnessAttempt", () => {
   it("uses the Codex harness by default for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
 
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    });
+
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
       provider: "openai",
@@ -211,6 +218,15 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("falls back to PI when the implicit OpenAI Codex harness is unavailable", async () => {
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    });
+    expect(resolveAvailableAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
       provider: "openai",
