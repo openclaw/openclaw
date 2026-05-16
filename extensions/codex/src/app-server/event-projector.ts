@@ -41,6 +41,7 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
+import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
@@ -57,6 +58,7 @@ export type CodexAppServerToolTelemetry = {
 
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
+  trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
 
 const ZERO_USAGE: Usage = {
@@ -120,6 +122,10 @@ export class CodexAppServerEventProjector {
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
+  private readonly standardItemStartEventIds = new Set<string>();
+  private readonly standardItemEndEventIds = new Set<string>();
+  private readonly normalizedToolStartEventIds = new Set<string>();
+  private readonly normalizedToolResultEventIds = new Set<string>();
   private readonly toolResultOutputDeltaState = new Map<
     string,
     { chars: number; messages: number; truncated: boolean }
@@ -536,8 +542,8 @@ export class CodexAppServerEventProjector {
       });
     }
     this.recordToolMeta(item);
-    this.emitStandardItemEvent({ phase: "end", item });
-    this.emitNormalizedToolItemEvent({ phase: "result", item });
+    this.emitToolItemStartIfMissing(item);
+    this.emitToolItemResult(item);
     this.recordNativeToolTranscriptCall(item);
     this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
@@ -644,6 +650,8 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.emitToolItemStartIfMissing(item);
+      this.emitToolItemResult(item);
       this.recordNativeToolTranscriptCall(item);
       this.recordNativeToolTranscriptResult(item);
       this.emitAfterToolCallObservation(item);
@@ -812,10 +820,16 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    const emittedItemIds =
+      params.phase === "start" ? this.standardItemStartEventIds : this.standardItemEndEventIds;
+    if (emittedItemIds.has(item.id)) {
+      return;
+    }
     const kind = itemKind(item);
     if (!kind) {
       return;
     }
+    emittedItemIds.add(item.id);
     const meta = itemMeta(item, this.toolProgressDetailMode());
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
@@ -833,6 +847,22 @@ export class CodexAppServerEventProjector {
     });
   }
 
+  private emitToolItemStartIfMissing(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    this.emitStandardItemEvent({ phase: "start", item });
+    this.emitNormalizedToolItemEvent({ phase: "start", item });
+  }
+
+  private emitToolItemResult(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    this.emitStandardItemEvent({ phase: "end", item });
+    this.emitNormalizedToolItemEvent({ phase: "result", item });
+  }
+
   private emitNormalizedToolItemEvent(params: {
     phase: "start" | "result";
     item: CodexThreadItem | undefined;
@@ -841,13 +871,22 @@ export class CodexAppServerEventProjector {
     if (!item || !shouldSynthesizeToolProgressForItem(item)) {
       return;
     }
+    const emittedItemIds =
+      params.phase === "start"
+        ? this.normalizedToolStartEventIds
+        : this.normalizedToolResultEventIds;
+    if (emittedItemIds.has(item.id)) {
+      return;
+    }
     const name = itemName(item);
     if (!name) {
       return;
     }
+    emittedItemIds.add(item.id);
     const meta = itemMeta(item, this.toolProgressDetailMode());
     const args = params.phase === "start" ? itemToolArgs(item) : undefined;
     const status = params.phase === "result" ? itemStatus(item) : "running";
+    this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
     this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     this.emitAgentEvent({
       stream: "tool",
@@ -870,6 +909,38 @@ export class CodexAppServerEventProjector {
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
     }
+  }
+
+  private recordToolTrajectoryEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    name: string;
+    args?: Record<string, unknown>;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    if (params.phase === "start") {
+      this.options.trajectoryRecorder?.recordEvent("tool.call", {
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId: params.item.id,
+        toolCallId: params.item.id,
+        name: params.name,
+        arguments: params.args,
+      });
+      return;
+    }
+    const toolResult = itemToolResult(params.item).result;
+    this.options.trajectoryRecorder?.recordEvent("tool.result", {
+      threadId: this.threadId,
+      turnId: this.turnId,
+      itemId: params.item.id,
+      toolCallId: params.item.id,
+      name: params.name,
+      status: params.status,
+      isError: isNonSuccessItemStatus(params.status),
+      ...(toolResult ? { result: toolResult } : {}),
+      ...(itemOutputText(params.item) ? { output: itemOutputText(params.item) } : {}),
+    });
   }
 
   private emitDiagnosticToolExecutionEvent(params: {

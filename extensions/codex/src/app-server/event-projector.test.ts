@@ -191,6 +191,29 @@ function findAgentEvent(
   throw new Error(`Expected agent event ${params.stream}`);
 }
 
+function findAgentEvents(
+  mock: unknown,
+  params: { stream: string; phase?: string; itemId?: string; name?: string },
+) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error("Expected onAgentEvent mock calls");
+  }
+  return calls.flatMap((call) => {
+    const event = requireRecord(call[0], "agent event");
+    const data = requireRecord(event.data, "agent event data");
+    if (
+      event.stream === params.stream &&
+      (!params.phase || data.phase === params.phase) &&
+      (!params.itemId || data.itemId === params.itemId) &&
+      (!params.name || data.name === params.name)
+    ) {
+      return [{ event, data }];
+    }
+    return [];
+  });
+}
+
 function findPlanEventWithSteps(mock: unknown, steps: string[]) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   if (!Array.isArray(calls)) {
@@ -1251,6 +1274,187 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("backfills Codex-native tool progress from turn completed snapshots", async () => {
+    const onAgentEvent = vi.fn();
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { trajectoryRecorder },
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          error: null,
+          items: [
+            {
+              type: "commandExecution",
+              id: "cmd-final",
+              command: "echo ok",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "completed",
+              commandActions: [],
+              aggregatedOutput: "ok",
+              exitCode: 0,
+              durationMs: 7,
+            },
+          ],
+        },
+      }),
+    );
+
+    const itemStart = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "start",
+      itemId: "cmd-final",
+    }).data;
+    expect(itemStart.kind).toBe("command");
+    expect(itemStart.name).toBe("bash");
+    expect(itemStart.suppressChannelProgress).toBe(true);
+    const itemEnd = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "end",
+      itemId: "cmd-final",
+    }).data;
+    expect(itemEnd.status).toBe("completed");
+    const toolStart = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "start",
+      itemId: "cmd-final",
+      name: "bash",
+    }).data;
+    expect(toolStart.args).toEqual({ command: "echo ok", cwd: "/workspace" });
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-final",
+      name: "bash",
+    }).data;
+    expect(toolResult.status).toBe("completed");
+    expect(toolResult.isError).toBe(false);
+    expect(requireRecord(toolResult.result, "tool result payload")).toMatchObject({
+      exitCode: 0,
+      durationMs: 7,
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-final",
+      toolCallId: "cmd-final",
+      name: "bash",
+      arguments: { command: "echo ok", cwd: "/workspace" },
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-final",
+      toolCallId: "cmd-final",
+      name: "bash",
+      status: "completed",
+      isError: false,
+      result: { status: "completed", exitCode: 0, durationMs: 7 },
+      output: "ok",
+    });
+  });
+
+  it("does not duplicate live Codex-native tool progress when final snapshots repeat it", async () => {
+    const onAgentEvent = vi.fn();
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { trajectoryRecorder },
+    );
+    const completedCommand = {
+      type: "commandExecution",
+      id: "cmd-repeat",
+      command: "echo ok",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "ok",
+      exitCode: 0,
+      durationMs: 3,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          ...completedCommand,
+          status: "inProgress",
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: completedCommand,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          error: null,
+          items: [completedCommand],
+        },
+      }),
+    );
+
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "item",
+        phase: "start",
+        itemId: "cmd-repeat",
+      }),
+    ).toHaveLength(1);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "cmd-repeat",
+      }),
+    ).toHaveLength(1);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "tool",
+        phase: "start",
+        itemId: "cmd-repeat",
+        name: "bash",
+      }),
+    ).toHaveLength(1);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "cmd-repeat",
+        name: "bash",
+      }),
+    ).toHaveLength(1);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.call"),
+    ).toHaveLength(1);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.result"),
+    ).toHaveLength(1);
   });
 
   it("orders declined native tool diagnostics after their start event", async () => {
