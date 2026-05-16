@@ -277,6 +277,49 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+  it("returns no-route when explicit approval delivery was attempted and failed", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+        turnSourceChannel: "discord",
+        turnSourceAccountId: "work",
+      },
+      60_000,
+      "approval-dispatch-failed",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+
+    await handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => false,
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => ({ delivered: false, attempted: true }),
+    });
+
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-dispatch-failed", decision: null }),
+      undefined,
+    );
+  });
+
   it("targets requested approval events to visible approval clients when available", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(

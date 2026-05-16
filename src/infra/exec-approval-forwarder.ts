@@ -55,6 +55,12 @@ type ResolveSessionTargetFn = (params: {
 type ApprovalKind = "exec" | "plugin";
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
+type DeliverySummary = {
+  attempted: number;
+  delivered: number;
+  failed: number;
+};
+
 type ApprovalRouteRequest = {
   agentId?: string | null;
   sessionKey?: string | null;
@@ -364,14 +370,14 @@ async function deliverToTargets(params: {
   deliver: DeliverApprovalPayloads;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
-}) {
+}): Promise<DeliverySummary> {
   const deliveries = params.targets.map(async (target) => {
     if (params.shouldSend && !params.shouldSend()) {
-      return;
+      return { attempted: false, delivered: false, failed: false };
     }
     const channel = normalizeMessageChannel(target.channel) ?? target.channel;
     if (!isDeliverableMessageChannel(channel)) {
-      return;
+      return { attempted: false, delivered: false, failed: false };
     }
     try {
       const payload = params.buildPayload(target);
@@ -387,11 +393,21 @@ async function deliverToTargets(params: {
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
       }
+      return { attempted: true, delivered: true, failed: false };
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
+      return { attempted: true, delivered: false, failed: true };
     }
   });
-  await Promise.allSettled(deliveries);
+  const results = await Promise.all(deliveries);
+  return results.reduce(
+    (summary, result) => ({
+      attempted: summary.attempted + (result.attempted ? 1 : 0),
+      delivered: summary.delivered + (result.delivered ? 1 : 0),
+      failed: summary.failed + (result.failed ? 1 : 0),
+    }),
+    { attempted: 0, delivered: 0, failed: 0 },
+  );
 }
 
 function buildApprovalRenderPayload<TParams>(params: {
@@ -595,7 +611,7 @@ function createApprovalHandlers<
       return false;
     }
 
-    void deliverToTargets({
+    const delivery = await deliverToTargets({
       cfg,
       targets: filteredTargets,
       buildPayload: (target) =>
@@ -623,11 +639,20 @@ function createApprovalHandlers<
       },
       deliver: params.deliver,
       shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err) => {
-      log.error(
-        `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
-      );
     });
+    if (delivery.delivered === 0) {
+      const entry = pending.get(requestId);
+      if (entry === pendingEntry) {
+        pending.delete(requestId);
+        clearTimeout(timeoutId);
+      }
+      if (delivery.attempted > 0 && delivery.failed > 0) {
+        throw new Error(
+          `${params.strategy.kind} approvals: failed to deliver request ${requestId}`,
+        );
+      }
+      return false;
+    }
     return true;
   };
 

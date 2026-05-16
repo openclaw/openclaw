@@ -44,8 +44,25 @@ type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
   expiresAtMs: number;
 };
 
+type ApprovalDeliveryResult =
+  | boolean
+  | {
+      delivered: boolean;
+      attempted?: boolean;
+    };
+
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
+}
+
+function normalizeApprovalDeliveryResult(result: ApprovalDeliveryResult): {
+  delivered: boolean;
+  attempted: boolean;
+} {
+  if (typeof result === "boolean") {
+    return { delivered: result, attempted: result };
+  }
+  return { delivered: result.delivered, attempted: result.attempted === true };
 }
 
 export function isApprovalDecision(value: string): value is ExecApprovalDecision {
@@ -280,7 +297,7 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
-  deliverRequest: () => boolean | Promise<boolean>;
+  deliverRequest: () => ApprovalDeliveryResult | Promise<ApprovalDeliveryResult>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
     requestEvent: RequestedApprovalEvent<TPayload>,
@@ -310,16 +327,19 @@ export async function handlePendingApprovalRequest<
       ? approvalClientConnIds.size > 0
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = params.deliverRequest();
-  const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+  const delivery = normalizeApprovalDeliveryResult(
+    isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult,
+  );
   const hasTurnSourceRoute =
     !hasApprovalClients &&
-    !delivered &&
+    !delivery.delivered &&
+    !delivery.attempted &&
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,
     });
 
-  if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {
+  if (!hasApprovalClients && !hasTurnSourceRoute && !delivery.delivered) {
     params.manager.expire(params.record.id, "no-approval-route");
     params.respond(
       true,

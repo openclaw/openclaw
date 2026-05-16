@@ -146,12 +146,17 @@ export function createPluginApprovalHandlers(
         twoPhase,
         deliverRequest: () => {
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
-            return false;
+            return { delivered: false, attempted: false };
           }
-          return opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err) => {
-            context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
-            return false;
-          });
+          return opts.forwarder
+            .handlePluginApprovalRequested(requestEvent)
+            .then((delivered) => ({ delivered, attempted: delivered }))
+            .catch((err) => {
+              context.logGateway?.error?.(
+                `plugin approvals: forward request failed: ${String(err)}`,
+              );
+              return { delivered: false, attempted: true };
+            });
         },
       });
     },
