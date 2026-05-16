@@ -98,6 +98,10 @@ type RuntimeParityPendingToolCall = RuntimeParityToolCall & {
 };
 
 const DEFAULT_AGENT_ID = "qa";
+const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
+const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
+const HEARTBEAT_TASK_PROMPT_PREFIX =
+  "Run the following periodic tasks (only those due based on their intervals):";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -593,6 +597,57 @@ function buildTranscriptRecords(transcriptBytes: string): RuntimeParityTranscrip
   return records;
 }
 
+function isHeartbeatOnlyRuntimeTranscript(transcriptBytes: string) {
+  const records = buildTranscriptRecords(transcriptBytes);
+  if (records.length === 0) {
+    return false;
+  }
+  const userTexts = records
+    .filter((record) => record.role === "user" && !isToolResultLikeMessage(record.message))
+    .map((record) => extractAssistantText(record.message));
+  return userTexts.length > 0 && userTexts.every(isHeartbeatRuntimeUserText);
+}
+
+function isToolResultLikeMessage(message: Record<string, unknown>) {
+  if (message.role === "tool" || message.role === "toolResult") {
+    return true;
+  }
+  const rawContent = message.content;
+  if (!Array.isArray(rawContent)) {
+    return false;
+  }
+  return rawContent.some((block) => {
+    if (!isMessageRecord(block)) {
+      return false;
+    }
+    const type = readNonEmptyString(block.type)?.toLowerCase();
+    return type === "tool_result" || type === "toolresult" || type === "tool_result_error";
+  });
+}
+
+function isHeartbeatRuntimeUserText(text: string) {
+  const normalized = normalizeTextForParity(text).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === HEARTBEAT_TRANSCRIPT_PROMPT.toLowerCase()) {
+    return true;
+  }
+  if (normalized.startsWith("read heartbeat.md") && normalized.includes("heartbeat_ok")) {
+    return true;
+  }
+  if (
+    normalized.startsWith("read heartbeat.md") &&
+    normalized.includes(HEARTBEAT_RESPONSE_TOOL_NAME)
+  ) {
+    return true;
+  }
+  return (
+    normalized.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX.toLowerCase()) &&
+    (normalized.includes("heartbeat_ok") || normalized.includes(HEARTBEAT_RESPONSE_TOOL_NAME))
+  );
+}
+
 function extractFinalAssistantText(records: RuntimeParityTranscriptRecord[]) {
   let lastAssistantText = "";
   for (const record of records) {
@@ -795,9 +850,7 @@ async function readRuntimeParitySessionEntries(params: {
     const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
     const rootEntries = entries.filter(isRuntimeParityRootSession);
     const candidates = rootEntries.length > 0 ? rootEntries : entries;
-    return candidates
-      .toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
-      .slice(0, 1);
+    return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   } catch {
     return [];
   }
@@ -834,8 +887,9 @@ async function loadRuntimeParityTranscripts(params: {
     }
     try {
       const transcript = await fs.readFile(sessionFile, "utf8");
-      if (transcript.trim().length > 0) {
+      if (transcript.trim().length > 0 && !isHeartbeatOnlyRuntimeTranscript(transcript)) {
         transcripts.push(transcript.trimEnd());
+        break;
       }
     } catch {
       // Ignore missing transcript files so failed cells still render.
