@@ -1557,7 +1557,9 @@ function validateConfigObjectWithPluginsBase(
     memorySlot.trim() &&
     !knownIds.has(memorySlot)
   ) {
-    pushMissingPluginIssue("plugins.slots.memory", memorySlot);
+    pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
+      warnOnly: Boolean(formatMissingOfficialExternalPluginWarning(memorySlot)),
+    });
   }
 
   let selectedMemoryPluginId: string | null = null;
