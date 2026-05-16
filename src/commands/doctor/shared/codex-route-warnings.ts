@@ -1089,6 +1089,7 @@ function collectDisabledCodexPluginRouteHits(cfg: OpenClawConfig): DisabledCodex
     path: "agents.defaults",
   });
   if (
+    cfg.agents &&
     !hasAgentPrimaryModelConfig(defaults) &&
     !defaultRefs.some(
       (ref) =>

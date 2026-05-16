@@ -2331,6 +2331,26 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
+  it("keeps Codex disabled when no agent routes are configured", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: { enabled: true },
+            codex: { enabled: false },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.cfg.plugins?.allow).toEqual(["brave"]);
+  });
+
   it("re-enables the Codex plugin when defaults configure only non-Codex fallbacks", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
