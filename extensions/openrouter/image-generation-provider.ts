@@ -40,20 +40,6 @@ const SUPPORTED_ASPECT_RATIOS = [
 ] as const;
 const OPENROUTER_IMAGE_MALFORMED_RESPONSE = "OpenRouter image generation response malformed";
 
-type OpenRouterImageEntry = {
-  image_url?: { url?: string };
-  imageUrl?: { url?: string };
-};
-
-type OpenRouterChatCompletionResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string | unknown[] | null;
-      images?: OpenRouterImageEntry[];
-    };
-  }>;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -150,7 +136,7 @@ function extractImagesFromPart(
 }
 
 export function extractOpenRouterImagesFromResponse(
-  body: OpenRouterChatCompletionResponse | unknown,
+  body: unknown,
   options: { malformedResponseError?: string } = {},
 ): GeneratedImageAsset[] {
   if (!isRecord(body)) {

@@ -186,7 +186,7 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
 }
 
 export function parseOpenAiCompatibleImageResponse(
-  payload: OpenAiCompatibleImageResponsePayload | unknown,
+  payload: unknown,
   options: {
     defaultMimeType?: string;
     fileNamePrefix?: string;
