@@ -438,6 +438,32 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
     }
     writeTextFileIfChanged(legacyPath, `export * from "./${targetFileName}";\n`);
   }
+
+  const entryCompatPath = path.join(distDir, "entry.js");
+  if (!fsImpl.existsSync(entryCompatPath) && fsImpl.existsSync(path.join(distDir, "index.mjs"))) {
+    writeTextFileIfChanged(entryCompatPath, `export * from "./index.mjs";\n`);
+  }
+
+  const cliDir = path.join(distDir, "cli");
+  const runMainCompatPath = path.join(cliDir, "run-main.js");
+  if (!fsImpl.existsSync(runMainCompatPath)) {
+    let runMainTarget;
+    try {
+      runMainTarget = fsImpl
+        .readdirSync(distDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name)
+        .filter((name) => /^run-main-.+\.mjs$/.test(name))
+        .toSorted((left, right) => left.localeCompare(right))[0];
+    } catch {
+      runMainTarget = undefined;
+    }
+
+    if (runMainTarget) {
+      fsImpl.mkdirSync?.(cliDir, { recursive: true });
+      writeTextFileIfChanged(runMainCompatPath, `export * from "../${runMainTarget}";\n`);
+    }
+  }
 }
 
 export function writeLegacyCliExitCompatChunks(params = {}) {
