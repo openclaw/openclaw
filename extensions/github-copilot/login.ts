@@ -13,6 +13,7 @@ const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_DEVICE_VERIFICATION_URL = "https://github.com/login/device";
+const GITHUB_DEVICE_FLOW_SSRF_POLICY = { allowedHostnames: ["github.com"] };
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -80,29 +81,31 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function postGitHubDeviceFlowForm(params: {
-  url: string;
-  body: URLSearchParams;
-  failureLabel: string;
-}): Promise<Record<string, unknown>> {
+async function postGitHubDeviceFlowJson<T>(
+  url: string,
+  body: URLSearchParams,
+  failurePrefix: string,
+): Promise<T> {
   const { response, release } = await githubDeviceFlowFetchGuard({
-    url: params.url,
+    url,
+    policy: GITHUB_DEVICE_FLOW_SSRF_POLICY,
+    auditContext: "github-copilot-device-flow",
     init: {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: params.body,
+      body,
     },
     requireHttps: true,
-    auditContext: "github-copilot-device-flow",
   });
+
   try {
     if (!response.ok) {
-      throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
+      throw new Error(`${failurePrefix}: HTTP ${response.status}`);
     }
-    return parseJsonResponse(await response.json());
+    return parseJsonResponse(await response.json()) as T;
   } finally {
     await release();
   }
@@ -114,11 +117,11 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     scope: params.scope,
   });
 
-  const json = (await postGitHubDeviceFlowForm({
-    url: DEVICE_CODE_URL,
+  const json = await postGitHubDeviceFlowJson<DeviceCodeResponse>(
+    DEVICE_CODE_URL,
     body,
-    failureLabel: "GitHub device code failed",
-  })) as DeviceCodeResponse;
+    "GitHub device code failed",
+  );
   if (!json.device_code || !json.user_code || !json.verification_uri) {
     throw new Error("GitHub device code response missing fields");
   }
@@ -137,11 +140,11 @@ async function pollForAccessToken(params: {
   });
 
   while (Date.now() < params.expiresAt) {
-    const json = (await postGitHubDeviceFlowForm({
-      url: ACCESS_TOKEN_URL,
-      body: bodyBase,
-      failureLabel: "GitHub device token failed",
-    })) as DeviceTokenResponse;
+    const json = await postGitHubDeviceFlowJson<DeviceTokenResponse>(
+      ACCESS_TOKEN_URL,
+      bodyBase,
+      "GitHub device token failed",
+    );
     if ("access_token" in json && typeof json.access_token === "string") {
       return json.access_token;
     }
