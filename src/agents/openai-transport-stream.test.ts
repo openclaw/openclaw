@@ -3807,6 +3807,54 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
   });
 
+  it("applies model compat empty array items omission after completions normalization", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5",
+        name: "MiMo V2.5",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          omitEmptyArrayItems: true,
+        } as never,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "collect",
+            description: "Collect hints",
+            parameters: {
+              type: "object",
+              properties: {
+                hints: { type: "array" },
+                typedHints: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.hints).toStrictEqual({
+      type: "array",
+    });
+    expect(params.tools?.[0]?.function?.parameters?.properties?.typedHints).toStrictEqual({
+      type: "array",
+      items: { type: "string" },
+    });
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
