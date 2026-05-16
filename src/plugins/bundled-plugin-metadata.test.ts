@@ -637,6 +637,56 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("keeps generated entry path resolution inside bundled plugin roots", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-path-contained-");
+    const sourcePluginRoot = path.join(tempRoot, "extensions", "alpha");
+    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+    const absoluteEscape = path.join(tempRoot, "absolute.js");
+    const absolutePluginEntry = path.join(sourcePluginRoot, "index.ts");
+
+    fs.mkdirSync(sourcePluginRoot, { recursive: true });
+    fs.mkdirSync(distPluginRoot, { recursive: true });
+    fs.writeFileSync(absolutePluginEntry, "export {};\n", "utf8");
+    fs.writeFileSync(path.join(tempRoot, "extensions", "escape.ts"), "export {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(tempRoot, "dist", "extensions", "escape.js"),
+      "export {};\n",
+      "utf8",
+    );
+    fs.writeFileSync(absoluteEscape, "export {};\n", "utf8");
+
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: absolutePluginEntry,
+          built: absolutePluginEntry,
+        },
+        "alpha",
+      ),
+    ).toBe(absolutePluginEntry);
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: "../escape.ts",
+          built: "../escape.js",
+        },
+        "alpha",
+      ),
+    ).toBeNull();
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: absoluteEscape,
+          built: absoluteEscape,
+        },
+        "alpha",
+      ),
+    ).toBeNull();
+  });
+
   it("scans direct plugin-tree overrides and resolves generated paths from that scan dir", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-tree-");
     const pluginsDir = path.join(tempRoot, "bundled-plugins");
@@ -765,6 +815,38 @@ describe("bundled plugin metadata", () => {
         preferBuilt: true,
       }),
     ).toBe(path.join(distPluginRoot, "index.js"));
+  });
+
+  it("keeps bundled repo entry path resolution inside the plugin directory", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-contained-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["../escape.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(tempRoot, "extensions", "escape.ts"), "export {};\n", "utf8");
+    fs.mkdirSync(path.join(tempRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, "dist", "extensions", "escape.js"),
+      "export {};\n",
+      "utf8",
+    );
+
+    expect(
+      resolveBundledPluginRepoEntryPath({
+        rootDir: tempRoot,
+        pluginId: "alpha",
+        preferBuilt: true,
+      }),
+    ).toBeNull();
   });
 
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {
