@@ -99,7 +99,7 @@ env:
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
