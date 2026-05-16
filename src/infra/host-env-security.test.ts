@@ -1261,6 +1261,21 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env["ProgramFiles(x86)"]).toBe("D:\\SDKs");
   });
+
+  it("strips selected inherited env keys before host exec children inherit them", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        SKILL_SECRET_FOR_EXEC: "skill-secret-value",
+        SAFE_KEY: "ok",
+      },
+      stripInheritedKeys: ["skill_secret_for_exec"],
+    });
+
+    expect(result.env.SKILL_SECRET_FOR_EXEC).toBeUndefined();
+    expect(result.env.SAFE_KEY).toBe("ok");
+    expect(result.env.PATH).toBe("/usr/bin:/bin");
+  });
 });
 
 describe("normalizeEnvVarKey", () => {

@@ -5,6 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
+import { applySkillEnvOverrides } from "./skills/env-overrides.js";
+import type { SkillEntry } from "./skills/types.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
@@ -78,6 +80,8 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
       } else if (command.includes("SSLKEYLOGFILE")) {
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
+      } else if (command.includes("SKILL_SECRET_FOR_EXEC")) {
+        input.onStdout?.(env.SKILL_SECRET_FOR_EXEC ?? "");
       } else if (command.includes("$PATH")) {
         input.onStdout?.(env.PATH ?? "");
       } else if (command.includes("echo ok")) {
@@ -151,6 +155,27 @@ const normalizeText = (value?: string) =>
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .trim();
+
+function makeEnvSkillEntry(name: string, primaryEnv: string): SkillEntry {
+  const baseDir = `/virtual/${name}`;
+  const filePath = `${baseDir}/SKILL.md`;
+  return {
+    skill: {
+      name,
+      description: "Needs env",
+      filePath,
+      baseDir,
+      source: "test",
+      sourceInfo: { path: filePath, source: "test", scope: "temporary", origin: "top-level" },
+      disableModelInvocation: false,
+    },
+    frontmatter: {},
+    metadata: {
+      primaryEnv,
+      requires: { env: [primaryEnv] },
+    },
+  };
+}
 
 function normalizePathEntries(value?: string): string[] {
   const entries: string[] = [];
@@ -382,6 +407,41 @@ describe("exec host env validation", () => {
       } else {
         process.env.SSLKEYLOGFILE = original;
       }
+    }
+  });
+
+  it("strips active skill env keys from generic host execution", async () => {
+    if (isWin) {
+      return;
+    }
+    const key = "SKILL_SECRET_FOR_EXEC";
+    const envSnapshot = captureEnv([key]);
+    const restoreSkillEnv = applySkillEnvOverrides({
+      skills: [makeEnvSkillEntry("exec-secret-skill", key)],
+      config: {
+        skills: {
+          entries: {
+            "exec-secret-skill": {
+              apiKey: "skill-secret-value", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect(process.env[key]).toBe("skill-secret-value");
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call1", {
+        command: `printf '%s' "\${${key}:-}"`,
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      });
+      const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
+      expect(output).toBe("(no output)");
+      expect(output).not.toContain("skill-secret-value");
+    } finally {
+      restoreSkillEnv();
+      envSnapshot.restore();
     }
   });
 

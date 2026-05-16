@@ -93,6 +93,17 @@ export function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
   return null;
 }
 
+function normalizeEnvStripKeys(keys?: Iterable<string>): Set<string> {
+  const normalized = new Set<string>();
+  for (const rawKey of keys ?? []) {
+    const key = normalizeEnvVarKey(rawKey);
+    if (key) {
+      normalized.add(key.toUpperCase());
+    }
+  }
+  return normalized;
+}
+
 export function isDangerousHostEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
@@ -204,11 +215,16 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  stripInheritedKeys?: Iterable<string>;
 }): HostExecEnvSanitizationResult {
   const baseEnv = params?.baseEnv ?? process.env;
+  const stripInheritedKeys = normalizeEnvStripKeys(params?.stripInheritedKeys);
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
+    if (stripInheritedKeys.has(key.toUpperCase())) {
+      continue;
+    }
     if (isDangerousHostInheritedEnvVarName(key)) {
       continue;
     }
@@ -247,6 +263,7 @@ export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  stripInheritedKeys?: Iterable<string>;
 }): Record<string, string> {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
 }
