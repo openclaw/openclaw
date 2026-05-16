@@ -17,6 +17,9 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGateway(...args),
 }));
+vi.mock("../../gateway/operator-approval-runtime-token.js", () => ({
+  getOperatorApprovalRuntimeToken: () => "test-approval-runtime-token",
+}));
 
 function capturedGatewayCall(): CallGatewayScopedOptions {
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
@@ -167,6 +170,32 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("cron.add");
     expect(call.params).toEqual({ id: "job-1" });
     expect(call.scopes).toEqual(["operator.admin"]);
+  });
+
+  it("marks default plugin approval calls as approval-runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-1" });
+
+    await callGatewayTool("plugin.approval.waitDecision", {}, { id: "plugin:approval-1" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.waitDecision");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toBe("test-approval-runtime-token");
+  });
+
+  it("does not send the approval-runtime token to explicit gateway overrides", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-1" });
+
+    await callGatewayTool(
+      "plugin.approval.waitDecision",
+      { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t" },
+      { id: "plugin:approval-1" },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.waitDecision");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toBeUndefined();
   });
 
   it("derives plugin session action scopes from call params", async () => {

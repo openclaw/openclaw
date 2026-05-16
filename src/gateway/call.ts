@@ -49,6 +49,7 @@ type CallGatewayBaseOptions = {
   url?: string;
   token?: string;
   password?: string;
+  approvalRuntimeToken?: string;
   tlsFingerprint?: string;
   config?: OpenClawConfig;
   method: string;
@@ -691,6 +692,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       url,
       token,
       password,
+      approvalRuntimeToken: opts.approvalRuntimeToken,
       tlsFingerprint,
       preauthHandshakeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
