@@ -68,7 +68,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     const cfg = cfgWithSession("agent:ops:main");
     writeStore(cfg, {
       "agent:ops:work": {
-        sessionId: "agent-ops-work",
+        sessionId: "agent:ops:work",
         updatedAt: Date.now(),
       },
     });

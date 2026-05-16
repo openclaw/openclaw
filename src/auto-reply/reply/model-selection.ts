@@ -328,6 +328,7 @@ export async function createModelSelectionState(params: {
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider,
       harnessRuntime: harnessPolicy.runtime,
+      config: cfg,
     }).map(normalizeProviderId);
     if (!profile || !acceptedAuthProviders.includes(profileProvider ?? "")) {
       await clearSessionAuthProfileOverride({

@@ -1791,6 +1791,11 @@ export async function runAgentTurnWithFallback(params: {
             config: runtimeConfig,
             workspaceDir: params.followupRun.run.workspaceDir,
           });
+          const embeddedRunHarnessOverride =
+            sessionRuntimeOverride ??
+            (agentHarnessPolicy.runtime === "pi" && embeddedRunProvider !== provider
+              ? "pi"
+              : undefined);
           return (async () => {
             let attemptCompactionCount = 0;
             const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
@@ -1810,8 +1815,8 @@ export async function runAgentTurnWithFallback(params: {
                 ...senderContext,
                 ...runBaseParams,
                 provider: embeddedRunProvider,
-                agentHarnessId: sessionRuntimeOverride,
-                agentHarnessRuntimeOverride: sessionRuntimeOverride,
+                agentHarnessId: embeddedRunHarnessOverride,
+                agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,

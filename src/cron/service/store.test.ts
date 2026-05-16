@@ -291,7 +291,7 @@ describe("cron service store seam coverage", () => {
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
   });
 
-  it("skips a force-reloaded job when the persisted schedule is malformed", async () => {
+  it("keeps a force-reloaded legacy string schedule for runtime repair handling", async () => {
     const { storePath } = await makeStorePath();
     const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
 
@@ -316,12 +316,9 @@ describe("cron service store seam coverage", () => {
       undefined,
     );
 
-    expect(state.store?.jobs.find((job) => job.id === "reload-cron-expr-job")).toBeUndefined();
-    expectWarnedJob({
-      storePath,
-      jobId: "reload-cron-expr-job",
-      message: "skipped invalid persisted job",
-    });
+    const job = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(job.schedule).toBe("0 17 * * *");
+    expect(job.state.nextRunAtMs).toBeUndefined();
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {
