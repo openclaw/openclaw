@@ -502,7 +502,7 @@ function readNativeRelayPreToolUseDecision(
 
 function parseRelayJsonResponse(text: string): JsonObject | undefined {
   try {
-    const parsed = JSON.parse(text) as unknown;
+    const parsed = JSON.parse(text) as JsonValue;
     return isJsonObject(parsed) ? parsed : undefined;
   } catch {
     return undefined;
