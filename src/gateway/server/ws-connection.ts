@@ -11,6 +11,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { abortChatRunById } from "../chat-abort.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
@@ -392,6 +393,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
+      for (const [runId, entry] of context.chatAbortControllers) {
+        if (entry.ownerConnId === connId) {
+          abortChatRunById(context, {
+            runId,
+            sessionKey: entry.sessionKey,
+            stopReason: "owner-disconnect",
+          });
+        }
+      }
       let currentDisconnectedNodeId: string | null = null;
       if (client?.connect?.role === "node") {
         currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);

@@ -116,6 +116,7 @@ async function connectTestWs(
         unsubscribeAllSessionEvents: vi.fn(),
         nodeRegistry: { unregister: vi.fn() },
         nodeUnsubscribeAll: vi.fn(),
+        chatAbortControllers: new Map(),
       }) as never,
     ...params.options,
   });
@@ -292,6 +293,7 @@ describe("attachGatewayWsConnectionHandler", () => {
           unsubscribeAllSessionEvents: vi.fn(),
           nodeRegistry: { unregister },
           nodeUnsubscribeAll: vi.fn(),
+          chatAbortControllers: new Map(),
         }) as never,
     });
 
@@ -322,5 +324,99 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(unregister).toHaveBeenCalledTimes(1);
     expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(broadcastPresenceSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts chatAbortControllers entries whose ownerConnId matches the closing conn", async () => {
+    const chatAbortControllers = new Map<
+      string,
+      {
+        controller: AbortController;
+        sessionId: string;
+        sessionKey: string;
+        startedAtMs: number;
+        expiresAtMs: number;
+        ownerConnId?: string;
+      }
+    >();
+    const broadcast = vi.fn();
+    const removeChatRun = vi.fn((sessionId: string, clientRunId: string, sessionKey?: string) => ({
+      sessionKey: sessionKey ?? sessionId,
+      clientRunId,
+    }));
+    const requestContext = {
+      unsubscribeAllSessionEvents: vi.fn(),
+      nodeRegistry: { unregister: vi.fn(() => null) },
+      nodeUnsubscribeAll: vi.fn(),
+      chatAbortControllers,
+      chatRunBuffers: new Map<string, string>(),
+      chatDeltaSentAt: new Map<string, number>(),
+      chatDeltaLastBroadcastLen: new Map<string, number>(),
+      chatDeltaLastBroadcastText: new Map<string, string>(),
+      agentDeltaSentAt: new Map<string, number>(),
+      bufferedAgentEvents: new Map<string, unknown>(),
+      chatAbortedRuns: new Map<string, number>(),
+      removeChatRun,
+      agentRunSeq: new Map<string, number>(),
+      broadcast,
+      nodeSendToSession: vi.fn(),
+    };
+
+    const { passed, socket } = await connectTestWs({
+      options: {
+        buildRequestContext: () => requestContext as never,
+      },
+    });
+    const handlerParams = passed as {
+      setClient: (client: unknown) => boolean;
+      connId: string;
+    };
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+        connId: handlerParams.connId,
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+
+    const closingConnId = handlerParams.connId;
+    const otherConnId = "conn-other";
+    const controllerA = new AbortController();
+    const controllerB = new AbortController();
+    const controllerC = new AbortController();
+    chatAbortControllers.set("run-A", {
+      controller: controllerA,
+      sessionId: "session-1",
+      sessionKey: "sk-1",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      ownerConnId: closingConnId,
+    });
+    chatAbortControllers.set("run-B", {
+      controller: controllerB,
+      sessionId: "session-1",
+      sessionKey: "sk-1",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      ownerConnId: closingConnId,
+    });
+    chatAbortControllers.set("run-C", {
+      controller: controllerC,
+      sessionId: "session-2",
+      sessionKey: "sk-2",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      ownerConnId: otherConnId,
+    });
+
+    socket.emit("close", 1000, Buffer.from("client left"));
+
+    expect(controllerA.signal.aborted).toBe(true);
+    expect(controllerB.signal.aborted).toBe(true);
+    expect(controllerC.signal.aborted).toBe(false);
+    expect(chatAbortControllers.has("run-A")).toBe(false);
+    expect(chatAbortControllers.has("run-B")).toBe(false);
+    expect(chatAbortControllers.has("run-C")).toBe(true);
+    expect(removeChatRun).toHaveBeenCalledTimes(2);
   });
 });
