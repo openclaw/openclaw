@@ -36,6 +36,15 @@ const sessionEntryTypes = new Set<string>([
   "thinking_level_change",
 ] satisfies SessionEntry["type"][]);
 
+const repairableToolCallContentTypes = new Set([
+  "functionCall",
+  "function_call",
+  "toolCall",
+  "toolUse",
+  "tool_call",
+  "tool_use",
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -76,13 +85,25 @@ function isImageContent(value: unknown): boolean {
   );
 }
 
+function hasToolCallId(value: Record<string, unknown>): boolean {
+  return (
+    isString(value.id) ||
+    isString(value.call_id) ||
+    isString(value.toolCallId) ||
+    isString(value.toolUseId) ||
+    isString(value.tool_call_id) ||
+    isString(value.tool_use_id)
+  );
+}
+
 function isToolCallContent(value: unknown): boolean {
   return (
     isRecord(value) &&
-    value.type === "toolCall" &&
-    isString(value.id) &&
+    typeof value.type === "string" &&
+    repairableToolCallContentTypes.has(value.type) &&
+    hasToolCallId(value) &&
     isString(value.name) &&
-    isRecord(value.arguments) &&
+    (isRecord(value.arguments) || isRecord(value.input)) &&
     isOptionalString(value.thoughtSignature)
   );
 }
