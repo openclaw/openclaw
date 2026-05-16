@@ -470,6 +470,47 @@ describe("task-registry maintenance issue #60299", () => {
     expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
+  it("marks stale persistent cli owner sessions lost after the owning run context disappears", async () => {
+    const sessionKey = "agent:main:explicit:main";
+    const task = makeStaleTask({
+      runtime: "cli",
+      sourceId: "run-persistent-cli-stale",
+      runId: "run-persistent-cli-stale",
+      ownerKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      childSessionKey: sessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [sessionKey]: { sessionId: sessionKey, updatedAt: Date.now() } },
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("keeps persistent cli owner sessions live while the owning run context is still active", async () => {
+    const sessionKey = "agent:main:main";
+    const task = makeStaleTask({
+      runtime: "cli",
+      sourceId: "run-persistent-cli-live",
+      runId: "run-persistent-cli-live",
+      ownerKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      childSessionKey: sessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [sessionKey]: { sessionId: sessionKey, updatedAt: Date.now() } },
+      activeRunIds: ["run-persistent-cli-live"],
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
   it("does not keep stale CLI run-context tasks alive through stale subagent session rows", async () => {
     const childSessionKey = "agent:main:subagent:stale-cli";
     const task = makeStaleTask({

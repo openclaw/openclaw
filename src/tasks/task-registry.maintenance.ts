@@ -440,6 +440,22 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
+function isPersistentCliOwnerMainSession(task: TaskRecord, childSessionKey: string): boolean {
+  const normalizedChild = normalizeLowercaseStringOrEmpty(childSessionKey);
+  if (!normalizedChild) {
+    return false;
+  }
+  if (normalizedChild !== normalizeLowercaseStringOrEmpty(task.ownerKey)) {
+    return false;
+  }
+  if (normalizedChild !== normalizeLowercaseStringOrEmpty(task.requesterSessionKey)) {
+    return false;
+  }
+  const parsed = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey);
+  const normalizedRest = normalizeLowercaseStringOrEmpty(parsed?.rest);
+  return normalizedRest === "main" || normalizedRest.endsWith(":main");
+}
+
 function hasCliRunIdentity(task: TaskRecord): boolean {
   return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
 }
@@ -477,6 +493,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     if (task.runtime === "cli") {
       const chatType = resolveSessionChatType(childSessionKey, context);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
+        return false;
+      }
+      if (isPersistentCliOwnerMainSession(task, childSessionKey)) {
         return false;
       }
     }
