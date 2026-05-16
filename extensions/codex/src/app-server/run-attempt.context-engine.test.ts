@@ -822,10 +822,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
     expect(assemble).toHaveBeenCalledTimes(2);
     const retryAssembleParams = assemble.mock.calls[1]?.[0];
-    expect(retryAssembleParams?.messages.map((message) => message.role)).toEqual(["assistant"]);
-    expect(
-      retryAssembleParams?.messages.map((message) => String(message.content?.[0]?.text)),
-    ).toEqual(["successor compacted context"]);
+    expect(retryAssembleParams?.messages).toMatchObject([
+      { content: [{ text: "successor compacted context" }], role: "assistant" },
+    ]);
     const retryInputText = getRequestInputTextAt(harness, -1);
     expect(retryInputText).toContain("successor compacted context");
     expect(retryInputText).not.toContain("pre-compaction context");
