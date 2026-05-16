@@ -279,8 +279,11 @@ export class TelegramPollingSession {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
     const telegramTransport = this.#transportState.acquireForNextCycle();
+    const persistedLastUpdateId = this.opts.getLastUpdateId();
+    const lastUpdateId = this.opts.isolatedIngress?.enabled ? null : persistedLastUpdateId;
     const updateOffset = {
-      lastUpdateId: this.opts.getLastUpdateId(),
+      lastUpdateId,
+      persistenceFloorUpdateId: persistedLastUpdateId,
       onUpdateId: this.opts.persistUpdateId,
     };
     try {

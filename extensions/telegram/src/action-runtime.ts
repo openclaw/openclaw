@@ -208,6 +208,7 @@ async function maybePinTelegramActionSend(params: {
   accountId?: string;
   to: string;
   messageId?: string;
+  gatewayClientScopes?: readonly string[];
 }) {
   const pin = normalizeTelegramDeliveryPin(params.args);
   if (!pin) {
@@ -225,6 +226,7 @@ async function maybePinTelegramActionSend(params: {
       accountId: params.accountId,
       notify: pin.notify,
       verbose: false,
+      gatewayClientScopes: params.gatewayClientScopes,
     });
   } catch (err) {
     if (pin.required) {
@@ -316,6 +318,7 @@ export async function handleTelegramAction(
           token,
           remove,
           accountId: accountId ?? undefined,
+          gatewayClientScopes: options?.gatewayClientScopes,
         },
       );
     } catch (err) {
@@ -424,6 +427,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       to,
       messageId: result.messageId,
+      gatewayClientScopes: options?.gatewayClientScopes,
     });
     return jsonResult({
       ok: true,
@@ -524,6 +528,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
     });
     if (!result.ok) {
       return jsonResult({ ok: false, deleted: false, warning: result.warning });
@@ -570,6 +575,7 @@ export async function handleTelegramAction(
         token,
         accountId: accountId ?? undefined,
         buttons,
+        gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
     return jsonResult({
@@ -606,6 +612,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
@@ -661,6 +668,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       iconColor,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
     });
     return jsonResult({
       ok: true,
@@ -696,6 +704,7 @@ export async function handleTelegramAction(
         accountId: accountId ?? undefined,
         name: name ?? undefined,
         iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
     return jsonResult(result);
