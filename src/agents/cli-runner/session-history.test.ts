@@ -5,6 +5,7 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliSessionHistoryPrompt,
+  loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
   MAX_CLI_SESSION_HISTORY_FILE_BYTES,
@@ -137,6 +138,36 @@ describe("loadCliSessionHistoryMessages", () => {
       });
       expect(history).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
       expectMessageFields(history[0], { role: "user", content: "msg-25" });
+      expectMessageFields(history.at(-1), {
+        role: "user",
+        content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps complete history for context-engine snapshots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-context-engine-history",
+      messages: Array.from(
+        { length: MAX_CLI_SESSION_HISTORY_MESSAGES + 25 },
+        (_, index) => `msg-${index}`,
+      ),
+    });
+
+    try {
+      const history = await loadCliSessionContextEngineMessages({
+        sessionId: "session-context-engine-history",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(history).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES + 25);
+      expectMessageFields(history[0], { role: "user", content: "msg-0" });
       expectMessageFields(history.at(-1), {
         role: "user",
         content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,

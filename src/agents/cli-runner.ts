@@ -7,12 +7,16 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
+import {
+  loadCliSessionContextEngineMessages,
+  loadCliSessionHistoryMessages,
+} from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
+  runHarnessContextEngineMaintenance,
 } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -120,8 +124,8 @@ async function finalizeCliContextEngineTurn(params: {
   const { params: runParams } = context;
   const prePromptMessages = params.historyMessages.filter(isAgentMessage);
   const turnMessages: AgentMessage[] = [];
-  if (runParams.transcriptPrompt) {
-    turnMessages.push(buildCliContextEngineUserMessage(runParams.transcriptPrompt));
+  if (context.contextEngineTurnPrompt) {
+    turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
   }
   if (params.assistantText) {
     turnMessages.push(
@@ -134,6 +138,7 @@ async function finalizeCliContextEngineTurn(params: {
     );
   }
 
+  let deferredTurnMaintenance: Promise<void> | undefined;
   const result = await finalizeHarnessContextEngineTurn({
     contextEngine: context.contextEngine,
     promptError: false,
@@ -145,23 +150,40 @@ async function finalizeCliContextEngineTurn(params: {
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
+    runMaintenance: async (maintenanceParams) =>
+      await runHarnessContextEngineMaintenance({
+        ...maintenanceParams,
+        onDeferredMaintenance: (promise) => {
+          deferredTurnMaintenance = promise;
+        },
+      }),
     warn: (message) => log.warn(message),
   });
-  context.contextEngineDeferredTurnMaintenance =
-    result.postTurnFinalizationSucceeded &&
-    typeof context.contextEngine.maintain === "function" &&
-    context.contextEngine.info.turnMaintenanceMode === "background";
+  if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
+    const contextEngine = context.contextEngine;
+    const deferredDispose = deferredTurnMaintenance.finally(async () => {
+      await disposeContextEngine(contextEngine);
+    });
+    context.contextEngineDeferredTurnMaintenance = deferredDispose;
+    void deferredDispose;
+  }
+}
+
+async function disposeContextEngine(
+  contextEngine: PreparedCliRunContext["contextEngine"],
+): Promise<void> {
+  try {
+    await contextEngine?.dispose?.();
+  } catch (err) {
+    log.warn(`context engine dispose failed after CLI run: ${formatErrorMessage(err)}`);
+  }
 }
 
 async function disposeCliContextEngine(context: PreparedCliRunContext): Promise<void> {
   if (context.contextEngineDeferredTurnMaintenance) {
     return;
   }
-  try {
-    await context.contextEngine?.dispose?.();
-  } catch (err) {
-    log.warn(`context engine dispose failed after CLI run: ${formatErrorMessage(err)}`);
-  }
+  await disposeContextEngine(context.contextEngine);
 }
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
@@ -230,16 +252,25 @@ export async function runPreparedCliAgent(
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
-  const historyMessages =
-    hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks || context.contextEngine
-      ? await loadCliSessionHistoryMessages({
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
-        })
-      : [];
+  const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
+  const historyMessages = needsHookHistory
+    ? await loadCliSessionHistoryMessages({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        config: params.config,
+      })
+    : [];
+  const contextEngineHistoryMessages = context.contextEngine
+    ? await loadCliSessionContextEngineMessages({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        config: params.config,
+      })
+    : [];
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -585,7 +616,7 @@ export async function runPreparedCliAgent(
       const effectiveCliSessionId = output.sessionId ?? context.reusableCliSession.sessionId;
       await finalizeCliContextEngineTurn({
         context,
-        historyMessages,
+        historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
         assistantText,
         output,
       });
@@ -615,7 +646,9 @@ export async function runPreparedCliAgent(
             const effectiveCliSessionId = output.sessionId;
             await finalizeCliContextEngineTurn({
               context,
-              historyMessages,
+              historyMessages: context.contextEngine
+                ? contextEngineHistoryMessages
+                : historyMessages,
               assistantText,
               output,
             });

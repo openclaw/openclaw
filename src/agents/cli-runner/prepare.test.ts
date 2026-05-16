@@ -291,6 +291,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.params.prompt).toBe("history:2\n\nlatest ask");
+      expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(context.systemPrompt).toBe(
         "prepend system\n\nhook system\n\nappend system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
       );
@@ -387,6 +388,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         "Sender (untrusted metadata):\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
       );
       expect(context.params.transcriptPrompt).toBe("latest ask");
+      expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
       const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
         [unknown, unknown]
@@ -665,6 +667,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.contextEngine?.info.id).toBe(engineId);
       expect(context.contextEngineConfig).toBe(runtimeConfig);
+      expect(context.params.config).toBe(runtimeConfig);
       expect(factory).toHaveBeenCalledWith(
         expect.objectContaining({
           config: runtimeConfig,

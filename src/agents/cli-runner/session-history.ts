@@ -199,6 +199,19 @@ export async function loadCliSessionHistoryMessages(params: {
   return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
 }
 
+export async function loadCliSessionContextEngineMessages(params: {
+  sessionId: string;
+  sessionFile: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+}): Promise<unknown[]> {
+  return (await loadCliSessionEntries(params)).flatMap((entry) => {
+    const candidate = entry as HistoryEntry;
+    return candidate.type === "message" ? [candidate.message] : [];
+  });
+}
+
 export async function loadCliSessionReseedMessages(params: {
   sessionId: string;
   sessionFile: string;

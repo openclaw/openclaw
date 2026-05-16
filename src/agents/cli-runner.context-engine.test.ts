@@ -3,18 +3,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
-const { executePreparedCliRunMock, loadCliSessionHistoryMessagesMock, getGlobalHookRunnerMock } =
-  vi.hoisted(() => ({
-    executePreparedCliRunMock: vi.fn(),
-    loadCliSessionHistoryMessagesMock: vi.fn(),
-    getGlobalHookRunnerMock: vi.fn(() => null),
-  }));
+const {
+  executePreparedCliRunMock,
+  loadCliSessionContextEngineMessagesMock,
+  loadCliSessionHistoryMessagesMock,
+  getGlobalHookRunnerMock,
+} = vi.hoisted(() => ({
+  executePreparedCliRunMock: vi.fn(),
+  loadCliSessionContextEngineMessagesMock: vi.fn(),
+  loadCliSessionHistoryMessagesMock: vi.fn(),
+  getGlobalHookRunnerMock: vi.fn(() => null),
+}));
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executePreparedCliRunMock,
 }));
 
 vi.mock("./cli-runner/session-history.js", () => ({
+  loadCliSessionContextEngineMessages: loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessages: loadCliSessionHistoryMessagesMock,
 }));
 
@@ -94,6 +100,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     hadSessionFile: true,
     contextEngineConfig: {},
     contextEngine,
+    contextEngineTurnPrompt: "transcript visible ask",
     modelId: "sonnet-4.6",
     normalizedModel: "sonnet-4.6",
     systemPrompt: "You are a helpful assistant.",
@@ -124,11 +131,13 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       usage: { input: 11, output: 7, total: 18 },
       finalPromptText: "prompt sent to cli",
     });
-    loadCliSessionHistoryMessagesMock.mockReset();
-    loadCliSessionHistoryMessagesMock.mockResolvedValue([
+    loadCliSessionContextEngineMessagesMock.mockReset();
+    loadCliSessionContextEngineMessagesMock.mockResolvedValue([
       textMessage("user", "old ask", 1),
       textMessage("assistant", "old answer", 2),
     ]);
+    loadCliSessionHistoryMessagesMock.mockReset();
+    loadCliSessionHistoryMessagesMock.mockResolvedValue([]);
     getGlobalHookRunnerMock.mockReset();
     getGlobalHookRunnerMock.mockReturnValue(null);
   });
@@ -149,13 +158,14 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const result = await runPreparedCliAgent(context);
 
     expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");
-    expect(loadCliSessionHistoryMessagesMock).toHaveBeenCalledWith({
+    expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledWith({
       sessionId: "openclaw-session-1",
       sessionFile: "session.jsonl",
       sessionKey: "agent:main:main",
       agentId: "main",
       config: undefined,
     });
+    expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
     expect(bootstrap).toHaveBeenCalledWith({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
@@ -203,6 +213,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const contextEngine = createContextEngine({ afterTurn, dispose });
     const context = buildPreparedContext(contextEngine);
     context.params.transcriptPrompt = "";
+    context.contextEngineTurnPrompt = "";
     const { runPreparedCliAgent } = await import("./cli-runner.js");
 
     await runPreparedCliAgent(context);
@@ -227,17 +238,39 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const context = buildPreparedContext(contextEngine);
     context.params.prompt = "runtime context\n\noriginal user ask";
     delete context.params.transcriptPrompt;
+    context.contextEngineTurnPrompt = "original user ask";
     const { runPreparedCliAgent } = await import("./cli-runner.js");
 
     await runPreparedCliAgent(context);
 
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
-    expect(afterTurnParams?.messages).toHaveLength(3);
+    expect(afterTurnParams?.messages).toHaveLength(4);
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
     const turnMessages = afterTurnParams?.messages.slice(afterTurnParams.prePromptMessageCount);
-    expect(turnMessages).toHaveLength(1);
-    expectMessageText(turnMessages?.[0], "final answer");
+    expect(turnMessages).toHaveLength(2);
+    expectMessageText(turnMessages?.[0], "original user ask");
+    expectMessageText(turnMessages?.[1], "final answer");
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads unbounded context-engine history separately from hook history", async () => {
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({ afterTurn, dispose });
+    const context = buildPreparedContext(contextEngine);
+    const fullHistory = Array.from({ length: 101 }, (_, index) =>
+      textMessage("user", `old ask ${index}`, index),
+    );
+    loadCliSessionContextEngineMessagesMock.mockResolvedValueOnce(fullHistory);
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await runPreparedCliAgent(context);
+
+    const afterTurnParams = afterTurn.mock.calls[0]?.[0];
+    expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledTimes(1);
+    expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
+    expect(afterTurnParams?.prePromptMessageCount).toBe(101);
+    expect(afterTurnParams?.messages.slice(0, 101)).toEqual(fullHistory);
   });
 
   it("falls back to ingestBatch and still runs turn maintenance", async () => {
@@ -281,10 +314,14 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       dispose,
     });
     const { runPreparedCliAgent } = await import("./cli-runner.js");
+    const context = buildPreparedContext(contextEngine);
 
-    await runPreparedCliAgent(buildPreparedContext(contextEngine));
+    await runPreparedCliAgent(context);
 
     expect(dispose).not.toHaveBeenCalled();
+    expect(context.contextEngineDeferredTurnMaintenance).toBeDefined();
+    await context.contextEngineDeferredTurnMaintenance;
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("disposes background engines when no deferred turn maintenance is queued", async () => {

@@ -487,9 +487,15 @@ export async function prepareCliRunContext(
   const contextEngine =
     resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
   const hadSessionFile = await pathExists(params.sessionFile);
+  const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
+  const preparedParams: RunCliAgentParams = {
+    ...params,
+    config: contextEngineConfig,
+    prompt: preparedPrompt,
+  };
 
   return {
-    params: preparedPrompt === params.prompt ? params : { ...params, prompt: preparedPrompt },
+    params: preparedParams,
     effectiveAuthProfileId,
     started,
     workspaceDir,
@@ -499,6 +505,7 @@ export async function prepareCliRunContext(
     hadSessionFile,
     contextEngineConfig,
     contextEngine,
+    contextEngineTurnPrompt,
     modelId,
     normalizedModel,
     contextWindowInfo,
