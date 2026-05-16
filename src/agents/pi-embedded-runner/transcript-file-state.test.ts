@@ -533,6 +533,71 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("remaps malformed compaction markers to descendants on the active branch", async () => {
+    const root = await makeRoot("openclaw-transcript-state-compaction-branch-marker-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "branch-a-user",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user", content: "other branch" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "branch-b-user",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: { role: "user", content: "active branch kept turn" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "branch-b-assistant",
+          parentId: "branch-b-user",
+          timestamp: "2026-05-16T00:00:04.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "active reply" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "branch-b-assistant",
+          timestamp: "2026-05-16T00:00:05.000Z",
+          summary: "summary",
+          firstKeptEntryId: "bad-message",
+          tokensBefore: 200,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const compaction = state.getEntries().find((entry) => entry.type === "compaction");
+
+    expect(compaction).toMatchObject({ firstKeptEntryId: "branch-b-user" });
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary" },
+      { role: "user", content: "active branch kept turn" },
+      { role: "assistant", content: [{ type: "text", text: "active reply" }] },
+    ]);
+  });
+
   it("does not hang on rejected parent cycles", async () => {
     const root = await makeRoot("openclaw-transcript-state-rejected-cycle-");
     const sessionFile = path.join(root, "session.jsonl");

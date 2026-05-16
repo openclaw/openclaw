@@ -268,9 +268,40 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
 function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
   const entries: SessionEntry[] = [];
   const acceptedIds = new Set<string>();
+  const acceptedEntryById = new Map<string, SessionEntry>();
   const rejectedIds = new Set<string>();
   const rejectedParentById = new Map<string, string | null>();
   const firstReadableDescendantByRejectedId = new Map<string, string>();
+  const rejectedAncestorsByAcceptedId = new Map<string, string[]>();
+  const acceptedPath = (leafId: string | null | undefined): SessionEntry[] => {
+    const path: SessionEntry[] = [];
+    let id = leafId ?? null;
+    const seen = new Set<string>();
+    while (id !== null) {
+      if (seen.has(id)) {
+        break;
+      }
+      seen.add(id);
+      const entry = acceptedEntryById.get(id);
+      if (!entry) {
+        break;
+      }
+      path.unshift(entry);
+      id = entry.parentId;
+    }
+    return path;
+  };
+  const firstReadableDescendantOnBranch = (
+    rejectedId: string,
+    leafId: string | null | undefined,
+  ): string | undefined => {
+    for (const entry of acceptedPath(leafId)) {
+      if (rejectedAncestorsByAcceptedId.get(entry.id)?.includes(rejectedId)) {
+        return entry.id;
+      }
+    }
+    return undefined;
+  };
   const rejectedParentChain = (parentId: string | null | undefined): string[] => {
     const chain: string[] = [];
     let resolved = parentId ?? null;
@@ -310,6 +341,7 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
         (resolvedFirstKeptParent !== null && acceptedIds.has(resolvedFirstKeptParent)
           ? resolvedFirstKeptParent
           : undefined) ??
+        firstReadableDescendantOnBranch(repaired.firstKeptEntryId, parentId) ??
         firstReadableDescendantByRejectedId.get(repaired.firstKeptEntryId) ??
         parentId;
       if (firstKeptEntryId !== null && firstKeptEntryId !== repaired.firstKeptEntryId) {
@@ -321,6 +353,9 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
         if (!firstReadableDescendantByRejectedId.has(rejectedId)) {
           firstReadableDescendantByRejectedId.set(rejectedId, repaired.id);
         }
+      }
+      if (rejectedAncestors.length > 0) {
+        rejectedAncestorsByAcceptedId.set(repaired.id, rejectedAncestors);
       }
     }
     return repaired;
@@ -342,8 +377,10 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
     if (acceptedIds.has(entry.id)) {
       continue;
     }
-    entries.push(repairEntryLinks(entry));
-    acceptedIds.add(entry.id);
+    const repaired = repairEntryLinks(entry);
+    entries.push(repaired);
+    acceptedIds.add(repaired.id);
+    acceptedEntryById.set(repaired.id, repaired);
   }
   return entries;
 }
