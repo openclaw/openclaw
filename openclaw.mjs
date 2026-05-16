@@ -63,6 +63,27 @@ const readPackageVersion = () => {
   }
   return "unknown";
 };
+// Node's enableCompileCache() takes a base directory and internally creates a
+// versioned `<node-version>-<platform>-<arch>` child for the actual cache
+// files. module.getCompileCacheDir() returns that versioned CHILD path, while
+// resolvePackagedCompileCacheDirectory() returns the BASE we want Node to
+// anchor at. Strict equality between the two is therefore wrong by design — it
+// triggers an unnecessary respawn on every invocation even when the cache is
+// already configured correctly. Treat the current cache as already-anchored
+// when it normalizes to the desired base OR is nested inside it.
+const isCompileCacheAlreadyAnchored = (currentDirectory, desiredDirectory) => {
+  const current = path.resolve(currentDirectory);
+  const desired = path.resolve(desiredDirectory);
+  if (current === desired) {
+    return true;
+  }
+  const relative = path.relative(desired, current);
+  if (!relative) {
+    return true;
+  }
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+};
+
 const resolvePackagedCompileCacheDirectory = () => {
   const packageJsonUrl = new URL("./package.json", import.meta.url);
   const version = sanitizeCompileCachePathSegment(readPackageVersion());
@@ -215,7 +236,7 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
     return false;
   }
   const desiredDirectory = resolvePackagedCompileCacheDirectory();
-  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+  if (isCompileCacheAlreadyAnchored(currentDirectory, desiredDirectory)) {
     return false;
   }
   const env = {
