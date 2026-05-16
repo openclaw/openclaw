@@ -1,5 +1,6 @@
 import "fake-indexeddb/auto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -165,5 +166,56 @@ describe("Matrix IndexedDB persistence", () => {
     const lockPath = `${snapshotPath}.lock`;
     expect(fs.existsSync(lockPath)).toBe(false);
     await drainFileLockStateForTest();
+  });
+
+  it("persistIdbToDisk preserves previous snapshot when atomic replacement fails", async () => {
+    const snapshotPath = path.join(tmpDir, "atomic-fail-snapshot.json");
+    const priorContent = JSON.stringify([
+      {
+        name: `${DATABASE_PREFIX}::matrix-sdk-crypto`,
+        version: 1,
+        stores: [
+          {
+            name: "sessions",
+            keyPath: "sessionId",
+            autoIncrement: false,
+            indexes: [],
+            records: [{ key: "room-prior", value: { session: "prior-data" } }],
+          },
+        ],
+      },
+    ]);
+    fs.writeFileSync(snapshotPath, priorContent, { mode: 0o600 });
+
+    await seedDatabase({
+      name: cryptoDatabaseName,
+      storeName: "sessions",
+      records: [{ key: "room-new", value: { session: "new-data" } }],
+    });
+
+    const renameSpy = vi.spyOn(fsp, "rename").mockRejectedValueOnce(
+      Object.assign(new Error("ENOSPC: no space left on device"), {
+        code: "ENOSPC",
+      }),
+    );
+
+    await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
+
+    renameSpy.mockRestore();
+
+    // (a) prior file is byte-identical and parseable
+    const fileContent = fs.readFileSync(snapshotPath, "utf8");
+    expect(JSON.parse(fileContent)).toEqual(JSON.parse(priorContent));
+
+    // (b) no *.tmp files remain in the snapshot directory
+    const tmpFiles = fs.readdirSync(path.dirname(snapshotPath)).filter((f) => f.endsWith(".tmp"));
+    expect(tmpFiles).toHaveLength(0);
+
+    // (c) LogService.warn was called with the expected message
+    expect(warnSpy).toHaveBeenCalledWith(
+      "IdbPersistence",
+      "Failed to persist IndexedDB snapshot:",
+      expect.any(Error),
+    );
   });
 });

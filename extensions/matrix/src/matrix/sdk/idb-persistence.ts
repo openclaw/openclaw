@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
@@ -15,7 +16,12 @@ type IdbStoreSnapshot = {
   name: string;
   keyPath: IDBObjectStoreParameters["keyPath"];
   autoIncrement: boolean;
-  indexes: { name: string; keyPath: string | string[]; multiEntry: boolean; unique: boolean }[];
+  indexes: {
+    name: string;
+    keyPath: string | string[];
+    multiEntry: boolean;
+    unique: boolean;
+  }[];
   records: { key: IDBValidKey; value: unknown }[];
 };
 
@@ -268,8 +274,7 @@ export async function persistIdbToDisk(params?: {
         if (snapshot.length === 0) {
           return 0;
         }
-        fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
-        fs.chmodSync(snapshotPath, 0o600);
+        await writeJsonFileAtomically(snapshotPath, snapshot);
         return snapshot.length;
       },
     );
