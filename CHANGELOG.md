@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Feishu/wiki: reject numeric wiki space IDs before creating Lark clients and keep numeric-looking IDs documented as quoted opaque strings, preventing JavaScript precision loss in knowledge base calls. Fixes #45301. (#82769) Thanks @hyspacex.
+- Control UI: simplify Talk settings to Voice, Model, and Sensitivity defaults, with provider, transport, exact VAD, and timing controls behind Advanced.
 - Channels/stream previews: contain rejected background draft-stream flushes so preview send failures do not surface as fatal unhandled rejections. Fixes #82712. (#82713) Thanks @coygeek.
 - Providers/OpenAI Codex: include base `gpt-5.5` and `gpt-5.4` reasoning metadata in the bundled Codex catalog so `/think xhigh` remains available for those models. Fixes #82744.
 - Providers/MiniMax: declare CN endpoint auth aliases in the plugin manifest so `minimax-cn` and `minimax-portal-cn` reuse the correct base auth profiles instead of falling back to unrelated models after 401s. Fixes #63823. Thanks @kamusis.
