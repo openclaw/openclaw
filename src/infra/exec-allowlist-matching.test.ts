@@ -69,6 +69,26 @@ describe("exec allowlist matching", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects wildcard path matches that escape through dot segments",
+    () => {
+      expect(
+        matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          rawExecutable: "/usr/bin/../../bin/sh",
+          resolvedPath: "/usr/bin/../../bin/sh",
+          executableName: "sh",
+        }),
+      ).toBeNull();
+      expect(
+        matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          rawExecutable: "/usr/bin/sub/../env",
+          resolvedPath: "/usr/bin/sub/../env",
+          executableName: "env",
+        })?.pattern,
+      ).toBe("/usr/bin/**");
+    },
+  );
+
   it("matches absolute paths containing regex metacharacters literally", () => {
     const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {
