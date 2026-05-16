@@ -506,4 +506,30 @@ describe("thread-level session keys", () => {
     expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
   });
+
+  it("routes DM thread replies to the main DM session, not a thread-scoped session", () => {
+    const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+    const account = buildAccount("all");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "reply in thread",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
 });
