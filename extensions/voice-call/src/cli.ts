@@ -61,6 +61,7 @@ export const __testing = {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
   isGatewayUnavailableForLocalFallback,
+  parseVoiceCallIntOption,
 };
 
 function writeStdoutLine(...values: unknown[]): void {
