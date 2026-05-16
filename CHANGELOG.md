@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI Responses: log redacted diagnostics for detail-less `response.failed` events while preserving failed response ids, so operators can correlate provider-side failures. Fixes #82558.
 - Gateway/sessions: discard stale metadata when recreating dead main session rows, so replacement sessions do not inherit old labels or transcript paths.
 - Codex app-server: mark native context compaction completion events as successful, preventing false "Compaction incomplete" notices after successful Codex-managed compaction. Fixes #82470. (#81593) Thanks @Kyzcreig.
+- Codex app-server: keep long-running turns alive while current-turn approvals, user input, dynamic tools, and notifications make progress, and carry that progress into the outer run timeout. (#82601) Thanks @100yenadmin.
 - Gateway/channels: hand off traced channel account startup outside the startup diagnostic phase so long-lived channel tasks do not keep liveness warnings pinned to channel startup. Refs #82398.
 - GitHub Copilot: route device-login requests through the plugin SSRF guard with a GitHub-only policy.
 - Gateway/WebChat: route image attachments through a configured vision-capable `imageModel` plan before inlining images, and carry that image-model fallback chain through runtime retries. (#82524) Thanks @frankekn.
