@@ -1044,6 +1044,7 @@ export async function prepareSlackMessage(params: {
     roomLabel,
     storePath,
     sessionKey,
+    forceInitialHistory: Boolean(directThreadRoutedToDmSession),
     allowFromLower: threadContextAllowFromLower,
     allowNameMatching: ctx.allowNameMatching,
     contextVisibilityMode,
@@ -1061,6 +1062,8 @@ export async function prepareSlackMessage(params: {
         })
       : dmHistoryContext.inboundHistory;
   const commandBody = textForCommandDetection.trim();
+  const supplementalThreadHistoryBody =
+    directThreadRoutedToDmSession && !threadHistoryBody ? threadStarterBody : threadHistoryBody;
 
   const ctxPayload = buildChannelTurnContext({
     channel: "slack",
@@ -1128,19 +1131,21 @@ export async function prepareSlackMessage(params: {
     },
     media: toInboundMediaFacts(effectiveMedia),
     supplemental: {
-      thread: directThreadRoutedToDmSession
-        ? undefined
-        : {
-            // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
-            starterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
-            historyBody: threadHistoryBody,
-            label: threadLabel,
-          },
+      thread: {
+        // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+        starterBody:
+          !directThreadRoutedToDmSession && !threadSessionPreviousTimestamp
+            ? threadStarterBody
+            : undefined,
+        historyBody: supplementalThreadHistoryBody,
+        label: directThreadRoutedToDmSession ? undefined : threadLabel,
+      },
       groupSystemPrompt,
     },
     extra: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+      TransportThreadId: directThreadRoutedToDmSession ? threadContext.messageThreadId : undefined,
       IsFirstThreadTurn:
         isThreadReply &&
         threadTs &&

@@ -986,6 +986,48 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
   });
 
+  it("uses DM transport thread metadata for last-route updates", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "701.000",
+          thread_ts: "701.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        ctxPayload: {
+          MessageThreadId: undefined,
+          ReplyToId: "701.000",
+          TransportThreadId: "701.000",
+          SessionKey: "agent:main:main",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "701.000",
+      },
+      ctx: {
+        ReplyToId: "701.000",
+        TransportThreadId: "701.000",
+        SessionKey: "agent:main:main",
+      },
+    });
+  });
+
   it("keeps default main-scope DM last-route metadata on the main session", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({

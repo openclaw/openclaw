@@ -1160,6 +1160,33 @@ describe("dispatchReplyFromConfig", () => {
     expect(routeCall?.threadId).toBe("post-root");
   });
 
+  it("uses Slack DM TransportThreadId when ReplyToId is the current message", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:slack:direct:u123",
+      AccountId: "default",
+      ChatType: "direct",
+      MessageSid: "101.000",
+      ReplyToId: "101.000",
+      TransportThreadId: "101.000",
+      MessageThreadId: undefined,
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      ExplicitDeliverRoute: true,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const routeCall = firstRouteReplyCall() as { threadId?: string | number } | undefined;
+    expect(routeCall?.threadId).toBe("101.000");
+  });
+
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
