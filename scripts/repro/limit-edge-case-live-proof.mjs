@@ -105,6 +105,7 @@ async function main() {
 
   try {
     voiceCallCliTesting.parseVoiceCallIntOption("nope", "--port", { min: 1 });
+    assert.fail("expected invalid voicecall --port value to throw");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     assert.equal(message, "Invalid numeric value for --port: nope");
