@@ -345,7 +345,7 @@ ComfyUI support 1.
     The bundled xAI provider uses `/v1/images/generations` for prompt-only
     requests and `/v1/images/edits` when `image` or `images` is present.
 
-    - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-pro`
+    - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-quality`
     - Count: up to 4
     - References: one `image` or up to five `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
