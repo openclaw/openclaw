@@ -19,7 +19,7 @@ export function getInvalidPersistedCronJobReason(
     return "missing-schedule";
   }
   if (typeof schedule === "string") {
-    return "invalid-schedule";
+    return null;
   }
   if (typeof schedule !== "object") {
     return "missing-schedule";
@@ -58,7 +58,7 @@ export function getInvalidPersistedCronJobReason(
   }
   if (payloadKind === "systemEvent") {
     const text = payloadRecord.text;
-    if (typeof text !== "string" || text.trim().length === 0) {
+    if (typeof text !== "string") {
       return "invalid-payload";
     }
   }
