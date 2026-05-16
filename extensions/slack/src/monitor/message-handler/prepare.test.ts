@@ -1502,7 +1502,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.MessageThreadId).toBe("500.000");
   });
 
-  it("records non-main DM last-route metadata on the prepared thread session", async () => {
+  it("records non-main DM thread replies on the prepared direct session", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -1525,7 +1525,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.route.sessionKey).toBe("agent:main:slack:direct:u1");
-    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1:thread:500.000");
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1");
+    expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
     ).toEqual({
