@@ -52,13 +52,13 @@ export function getInvalidPersistedCronJobReason(
   }
   if (payloadKind === "systemEvent") {
     const text = payloadRecord.text;
-    if (typeof text !== "string" || text.trim().length === 0) {
+    if (typeof text !== "string") {
       return "invalid-payload";
     }
   }
   if (payloadKind === "agentTurn") {
     const message = payloadRecord.message;
-    if (typeof message !== "string" || message.trim().length === 0) {
+    if (typeof message !== "string") {
       return "invalid-payload";
     }
   }
