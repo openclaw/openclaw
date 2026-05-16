@@ -1,4 +1,3 @@
-import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -630,16 +629,7 @@ async function sendSubagentAnnounceDirectly(params: {
       expectsCompletionMessage: params.expectsCompletionMessage,
       sourceTool: params.sourceTool,
     });
-    const requiresMessageToolDelivery =
-      agentMediatedCompletion &&
-      completionRequiresMessageToolDelivery({
-        cfg,
-        requesterSessionKey: params.requesterSessionKey,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        requesterEntry,
-        directOrigin: effectiveDirectOrigin,
-        requesterSessionOrigin,
-      });
+    const requiresMessageToolDelivery = agentMediatedCompletion;
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;

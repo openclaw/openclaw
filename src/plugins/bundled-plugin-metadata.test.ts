@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -132,11 +134,10 @@ function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
 
 function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
-  return listRepoBundledPluginManifestDirs()
-    .flatMap((dirName) => {
-      const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
-      return result.ok ? [{ dirName, manifest: result.manifest }] : [];
-    });
+  return listRepoBundledPluginManifestDirs().flatMap((dirName) => {
+    const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
+    return result.ok ? [{ dirName, manifest: result.manifest }] : [];
+  });
 }
 
 function listRepoBundledPluginManifestDirs(): string[] {
@@ -167,20 +168,7 @@ function listExternalRepoBundledPluginManifestDirs(): string[] | null {
 }
 
 function listGitRepoBundledPluginManifestFiles(): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "extensions/*/openclaw.plugin.json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted();
+  return listGitTrackedFiles({ repoRoot, pathspecs: "extensions/*/openclaw.plugin.json" });
 }
 
 function listFindRepoBundledPluginManifestFiles(): string[] | null {
@@ -209,7 +197,7 @@ function listFindRepoBundledPluginManifestFiles(): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
+    .map((file) => toRepoRelativePath(repoRoot, file))
     .toSorted();
 }
 
@@ -335,16 +323,12 @@ function createInstalledPluginIndexForManifests(
 
 describe("bundled plugin metadata", () => {
   it("lists bundled plugin manifests without scanning extension directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const manifests = listRepoBundledPluginManifestsUncached();
 
       expect(manifests.length).toBeGreaterThan(0);
       expect(manifests.every((entry) => entry.dirName.length > 0)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it(

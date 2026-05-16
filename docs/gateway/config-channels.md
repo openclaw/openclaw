@@ -786,14 +786,15 @@ See the full channel index: [Channels](/channels).
 
 Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
-Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn, but normal final replies stay private and visible room output requires `message(action=send)`. Set `"automatic"` only when you want the legacy behavior where normal replies are posted back to the room. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`; the Codex harness also uses that tool-only behavior as its unset direct-chat default.
+Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn and asks the agent to use `message(action=send)` for visible room output. If the model returns final text without calling the message tool, that final text stays private and the gateway verbose log records suppressed payload metadata. Set `"automatic"` when you want all visible group replies to use the legacy final-reply path. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`; the Codex harness also uses that tool-only behavior as its unset direct-chat default.
 
 Tool-only visible replies require a model/runtime that reliably calls tools. If
 the session log shows assistant text with `didSendViaMessagingTool: false`, the
-model produced a private final answer instead of calling the message tool.
-Switch to a stronger tool-calling model for that channel, or set
-`messages.groupChat.visibleReplies: "automatic"` to restore legacy visible final
-replies.
+model produced private final text instead of calling the message tool. Switch
+to a stronger tool-calling model for that channel, inspect the gateway verbose
+log for the suppressed payload summary, or set
+`messages.groupChat.visibleReplies: "automatic"` to use legacy visible final
+replies for every group/channel request.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
 

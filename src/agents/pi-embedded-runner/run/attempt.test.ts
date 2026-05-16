@@ -279,6 +279,49 @@ describe("buildToolSearchRunPlan", () => {
 });
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips inbound metadata from historical user turns before model replay", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Actual historical ask");
+    expect(JSON.stringify(output)).not.toContain("Conversation info");
+    expect(JSON.stringify(output)).not.toContain("Sender (untrusted metadata)");
+    expect(JSON.stringify(input)).toContain("Conversation info");
+  });
+
+  it("strips inbound metadata from string historical user turns", () => {
+    const input = [
+      {
+        role: "user",
+        content:
+          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
+        timestamp: 1,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe("Plain historical ask");
+  });
+
   it("strips tool result details before provider conversion", () => {
     const input = [
       {

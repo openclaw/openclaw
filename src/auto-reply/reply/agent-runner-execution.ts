@@ -4,7 +4,13 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
+  hasSessionAutoModelFallbackProvenance,
+  markAutoFallbackPrimaryProbe,
+  resolveAutoFallbackPrimaryProbe,
+} from "../../agents/agent-scope.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -20,7 +26,11 @@ import {
   listLegacyRuntimeModelProviderAliases,
   resolveCliRuntimeExecutionProvider,
 } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  isCliProvider,
+  resolveModelRefFromString,
+  resolvePersistedOverrideModelRef,
+} from "../../agents/model-selection.js";
 import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -279,13 +289,20 @@ export function applyFallbackCandidateSelectionToEntry(params: {
   run: FollowupRun["run"];
   provider: string;
   model: string;
+  origin?: { provider: string; model: string };
+  force?: boolean;
   now?: number;
 }): { updated: boolean; nextState?: FallbackSelectionState } {
-  if (params.provider === params.run.provider && params.model === params.run.model) {
+  if (
+    !params.force &&
+    params.provider === params.run.provider &&
+    params.model === params.run.model
+  ) {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
-  const origin = resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
+  const origin =
+    params.origin ?? resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
@@ -1124,6 +1141,75 @@ function resolveSessionRuntimeOverrideForProvider(params: {
   )?.runtime;
 }
 
+export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
+  run: FollowupRun["run"];
+  entry?: SessionEntry;
+  sessionKey?: string;
+}): FollowupRun["run"] {
+  const probe = params.run.autoFallbackPrimaryProbe;
+  if (!probe || !params.sessionKey) {
+    return params.run;
+  }
+  if (!params.entry) {
+    return params.run;
+  }
+  const resolveEntrySelectionRun = (): FollowupRun["run"] => {
+    const entryRef = resolvePersistedOverrideModelRef({
+      defaultProvider: params.run.provider,
+      overrideProvider: params.entry?.providerOverride,
+      overrideModel: params.entry?.modelOverride,
+    });
+    const hasEntryModelOverride = Boolean(entryRef);
+    const authProfileId = normalizeOptionalString(params.entry?.authProfileOverride);
+    const fallbackRun: FollowupRun["run"] = {
+      ...params.run,
+      provider: entryRef?.provider ?? params.run.provider,
+      model: entryRef?.model ?? params.run.model,
+      autoFallbackPrimaryProbe: undefined,
+    };
+    if (hasEntryModelOverride) {
+      fallbackRun.hasSessionModelOverride = true;
+      fallbackRun.hasAutoFallbackProvenance =
+        hasSessionAutoModelFallbackProvenance(params.entry) || undefined;
+    } else {
+      delete fallbackRun.hasSessionModelOverride;
+      delete fallbackRun.hasAutoFallbackProvenance;
+    }
+    if (hasEntryModelOverride && params.entry?.modelOverrideSource) {
+      fallbackRun.modelOverrideSource = params.entry.modelOverrideSource;
+    } else {
+      delete fallbackRun.modelOverrideSource;
+    }
+    if (hasEntryModelOverride && authProfileId) {
+      fallbackRun.authProfileId = authProfileId;
+      if (params.entry?.authProfileOverrideSource) {
+        fallbackRun.authProfileIdSource = params.entry.authProfileOverrideSource;
+      } else {
+        delete fallbackRun.authProfileIdSource;
+      }
+    } else if (hasEntryModelOverride) {
+      delete fallbackRun.authProfileId;
+      delete fallbackRun.authProfileIdSource;
+    }
+    return fallbackRun;
+  };
+  const refreshedProbe = resolveAutoFallbackPrimaryProbe({
+    entry: params.entry,
+    sessionKey: params.sessionKey,
+    primaryProvider: probe.provider,
+    primaryModel: probe.model,
+  });
+  if (!refreshedProbe) {
+    return resolveEntrySelectionRun();
+  }
+  return {
+    ...params.run,
+    provider: refreshedProbe.provider,
+    model: refreshedProbe.model,
+    autoFallbackPrimaryProbe: refreshedProbe,
+  };
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1163,14 +1249,56 @@ export async function runAgentTurnWithFallback(params: {
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
-  const runtimeConfig = resolveQueuedReplyRuntimeConfig(params.followupRun.run.config);
-  const effectiveRun =
-    runtimeConfig === params.followupRun.run.config
-      ? params.followupRun.run
+  let runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+    run: params.followupRun.run,
+    entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
+    sessionKey: params.sessionKey,
+  });
+  if (runnableRun !== params.followupRun.run) {
+    params.followupRun.run = runnableRun;
+  }
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(runnableRun.config);
+  let effectiveRun =
+    runtimeConfig === runnableRun.config
+      ? runnableRun
       : {
-          ...params.followupRun.run,
+          ...runnableRun,
           config: runtimeConfig,
         };
+  const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
+    const probe = effectiveRun.autoFallbackPrimaryProbe;
+    const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
+    if (
+      probe &&
+      provider === probe.fallbackProvider &&
+      !isPrimaryProbeCandidate &&
+      probe.fallbackAuthProfileId
+    ) {
+      const candidateRun: FollowupRun["run"] = {
+        ...effectiveRun,
+        provider,
+        model,
+        authProfileId: probe.fallbackAuthProfileId,
+      };
+      if (probe.fallbackAuthProfileIdSource) {
+        candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
+      } else {
+        delete candidateRun.authProfileIdSource;
+      }
+      return candidateRun;
+    }
+    return effectiveRun;
+  };
+  const applyLiveModelSwitchToRun = (
+    run: FollowupRun["run"],
+    err: LiveSessionModelSwitchError,
+  ): void => {
+    run.provider = err.provider;
+    run.model = err.model;
+    run.authProfileId = err.authProfileId;
+    run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
+    run.autoFallbackPrimaryProbe = undefined;
+  };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const replyMediaContext =
@@ -1301,20 +1429,21 @@ export async function runAgentTurnWithFallback(params: {
   const persistFallbackCandidateSelection = async (
     provider: string,
     model: string,
+    candidateRun: FollowupRun["run"],
   ): Promise<(() => Promise<void>) | undefined> => {
-    if (params.followupRun.run.hasOneTurnModelOverride === true) {
+    if (effectiveRun.hasOneTurnModelOverride === true) {
       return undefined;
     }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
-      (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
+      (provider === effectiveRun.provider && model === effectiveRun.model)
     ) {
       return undefined;
     }
 
     const activeSessionEntry =
-      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
+      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
     if (!activeSessionEntry) {
       return undefined;
     }
@@ -1341,11 +1470,28 @@ export async function runAgentTurnWithFallback(params: {
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
+    const selectionRun =
+      candidateRun !== effectiveRun && effectiveRun.autoFallbackPrimaryProbe
+        ? {
+            ...candidateRun,
+            provider: candidateRun.provider,
+            model: effectiveRun.model,
+          }
+        : candidateRun;
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
-      run: params.followupRun.run,
+      run: selectionRun,
       provider,
       model,
+      force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
+      ...(effectiveRun.autoFallbackPrimaryProbe
+        ? {
+            origin: {
+              provider: effectiveRun.autoFallbackPrimaryProbe.provider,
+              model: effectiveRun.autoFallbackPrimaryProbe.model,
+            },
+          }
+        : {}),
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {
@@ -1392,6 +1538,45 @@ export async function runAgentTurnWithFallback(params: {
         }
       });
     };
+  };
+  const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
+    provider: string;
+    model: string;
+  }): Promise<void> => {
+    const probe = effectiveRun.autoFallbackPrimaryProbe;
+    if (!probe) {
+      return;
+    }
+    if (paramsForClear.provider !== probe.provider || paramsForClear.model !== probe.model) {
+      return;
+    }
+    if (!params.sessionKey || !params.activeSessionStore) {
+      return;
+    }
+    const activeSessionEntry =
+      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
+    if (!activeSessionEntry) {
+      return;
+    }
+    if (!entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
+      return;
+    }
+    clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
+    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+    if (!params.storePath) {
+      return;
+    }
+    await updateSessionStore(params.storePath, (store) => {
+      const persistedEntry = store[params.sessionKey!];
+      if (!persistedEntry) {
+        return;
+      }
+      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+        return;
+      }
+      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+      store[params.sessionKey!] = persistedEntry;
+    });
   };
 
   while (true) {
@@ -1503,6 +1688,14 @@ export async function runAgentTurnWithFallback(params: {
           return classification;
         },
         run: async (provider, model, runOptions) => {
+          const candidateRun = resolveRunForFallbackCandidate(provider, model);
+          const activeProbe = effectiveRun.autoFallbackPrimaryProbe;
+          if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
+            markAutoFallbackPrimaryProbe({
+              probe: activeProbe,
+              sessionKey: params.sessionKey,
+            });
+          }
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -1515,6 +1708,7 @@ export async function runAgentTurnWithFallback(params: {
             rollbackFallbackCandidateSelection = await persistFallbackCandidateSelection(
               provider,
               model,
+              candidateRun,
             );
             if (rollbackFallbackCandidateSelection) {
               pendingFallbackCandidateRollback = {
@@ -1562,13 +1756,9 @@ export async function runAgentTurnWithFallback(params: {
             const cliSessionBinding = isRoomEventCliTurn
               ? undefined
               : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
-            const authProfile = resolveRunAuthProfile(
-              params.followupRun.run,
-              cliExecutionProvider,
-              {
-                config: runtimeConfig,
-              },
-            );
+            const authProfile = resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
+              config: runtimeConfig,
+            });
             const hookMessageProvider = resolveOriginMessageProvider({
               originatingChannel: params.followupRun.originatingChannel,
               provider: params.sessionCtx.Provider,
@@ -1765,7 +1955,7 @@ export async function runAgentTurnWithFallback(params: {
           }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
-              run: effectiveRun,
+              run: candidateRun,
               sessionCtx: params.sessionCtx,
               hasRepliedRef: params.opts?.hasRepliedRef,
               provider,
@@ -2139,6 +2329,10 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code || undefined,
           }))
         : [];
+      await clearRecoveredAutoFallbackPrimaryProbe({
+        provider: fallbackProvider,
+        model: fallbackModel,
+      });
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
@@ -2212,12 +2406,13 @@ export async function runAgentTurnWithFallback(params: {
             }),
           };
         }
-        params.followupRun.run.provider = err.provider;
-        params.followupRun.run.model = err.model;
-        params.followupRun.run.authProfileId = err.authProfileId;
-        params.followupRun.run.authProfileIdSource = err.authProfileId
-          ? err.authProfileIdSource
-          : undefined;
+        applyLiveModelSwitchToRun(params.followupRun.run, err);
+        if (runnableRun !== params.followupRun.run) {
+          applyLiveModelSwitchToRun(runnableRun, err);
+        }
+        if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
+          applyLiveModelSwitchToRun(effectiveRun, err);
+        }
         fallbackProvider = err.provider;
         fallbackModel = err.model;
         continue;

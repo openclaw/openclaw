@@ -18,8 +18,22 @@ import { _setGitHubCopilotDeviceFlowFetchGuardForTesting } from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: vi.fn(async () => {}),
+  })),
   resolveCopilotApiToken: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
 
 vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",

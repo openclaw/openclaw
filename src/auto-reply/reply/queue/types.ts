@@ -1,3 +1,4 @@
+import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CurrentTurnPromptContext } from "../../../agents/pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
@@ -90,6 +91,7 @@ export type FollowupRun = {
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
     imageModelFallbacksOverride?: string[];
+    autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
