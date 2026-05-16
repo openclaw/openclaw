@@ -868,6 +868,7 @@ describe("qa cli runtime", () => {
                     finalText: "done",
                     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
                     wallClockMs: 10,
+                    runtimeErrorClass: "tool-error",
                     bootStateLines: [],
                   },
                 },

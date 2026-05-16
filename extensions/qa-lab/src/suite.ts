@@ -31,6 +31,7 @@ import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } fro
 import { defaultQaModelForMode } from "./run-config.js";
 import {
   captureRuntimeParityCell,
+  isRuntimeParityResultPass,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -276,7 +277,7 @@ async function runScenarioDefinition(
 }
 
 function isRuntimeParityPass(result: RuntimeParityResult) {
-  return result.drift === "none" || result.drift === "text-only";
+  return isRuntimeParityResultPass(result);
 }
 
 function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {

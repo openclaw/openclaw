@@ -78,7 +78,12 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
-import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
+import {
+  filterCodexDynamicTools,
+  isForcedPrivateQaCodexRuntime,
+  normalizeCodexDynamicToolName,
+  resolveCodexDynamicToolsLoading,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -618,7 +623,7 @@ export async function runCodexAppServerAttempt(
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     signal: runAbortController.signal,
-    loading: pluginConfig.codexDynamicToolsLoading ?? "searchable",
+    loading: resolveCodexDynamicToolsLoading(pluginConfig),
     directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
     hookContext: {
       agentId: sessionAgentId,
@@ -2748,7 +2753,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    allowGatewaySubagentBinding:
+      params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
@@ -3933,6 +3939,7 @@ export const __testing = {
   isInvalidCodexImagePayloadError,
   remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
+  resolveCodexDynamicToolsLoading,
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
   resolveOpenClawCodingToolsSessionKeys,

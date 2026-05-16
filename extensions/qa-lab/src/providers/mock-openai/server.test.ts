@@ -982,6 +982,74 @@ describe("qa mock openai server", () => {
     expect(finalPayload.output?.[0]?.content?.[0]?.text).toContain("replay unsafe after write");
   });
 
+  it("keeps compaction retry planning across continuation prompts", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.";
+    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          makeUserInput(prompt),
+          {
+            type: "function_call_output",
+            output: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+          },
+          makeUserInput("Continue after compaction."),
+        ],
+      }),
+    });
+    expect(writePlan.status).toBe(200);
+    expect(await writePlan.text()).toContain('"name":"write"');
+
+    const contextOnlyWritePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          {
+            type: "function_call_output",
+            output: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+          },
+          makeUserInput("Continue after compaction."),
+        ],
+      }),
+    });
+    expect(contextOnlyWritePlan.status).toBe(200);
+    expect(await contextOnlyWritePlan.text()).toContain('"name":"write"');
+
+    const finalReply = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "gpt-5.5",
+        input: [
+          makeUserInput(prompt),
+          {
+            type: "function_call_output",
+            output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
+          },
+          makeUserInput("Continue after compaction."),
+        ],
+      }),
+    });
+    expect(finalReply.status).toBe(200);
+    expect(outputText(await finalReply.json())).toContain("replay unsafe after write");
+  });
+
   it("supports exact reply memory prompts and embeddings requests", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1866,6 +1934,165 @@ describe("qa mock openai server", () => {
     expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
+  it("uses full request text when planning continuation subagent tool calls", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const handoffPrompt =
+      "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
+    const handoff = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
+      }),
+    });
+    expect(handoff.status).toBe(200);
+    expect(await handoff.text()).toContain('"name":"sessions_spawn"');
+
+    const handoffServer = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await handoffServer.stop();
+    });
+
+    const appServerHandoff = await fetch(`${handoffServer.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
+      }),
+    });
+    expect(appServerHandoff.status).toBe(200);
+    expect(await appServerHandoff.text()).toContain('"name":"sessions_spawn"');
+
+    const repeatedHandoff = await fetch(`${handoffServer.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(handoffPrompt), makeUserInput("Continue again.")],
+      }),
+    });
+    expect(repeatedHandoff.status).toBe(200);
+    expect(await repeatedHandoff.text()).not.toContain('"name":"sessions_spawn"');
+
+    const handoffFinal = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(handoffPrompt),
+          { type: "function_call_output", output: "SUBAGENT-OK" },
+          makeUserInput("Continue."),
+        ],
+      }),
+    });
+    expect(handoffFinal.status).toBe(200);
+    expect(outputText(await handoffFinal.json())).toContain("Delegated task");
+
+    const fanoutPrompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const appServerFanout = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(fanoutPrompt), makeUserInput("Continue.")],
+      }),
+    });
+    expect(appServerFanout.status).toBe(200);
+    expect(await appServerFanout.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const fanoutServer = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await fanoutServer.stop();
+    });
+
+    const firstFanout = await fetch(`${fanoutServer.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(fanoutPrompt)],
+      }),
+    });
+    expect(firstFanout.status).toBe(200);
+    expect(await firstFanout.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondFanout = await fetch(`${fanoutServer.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(fanoutPrompt),
+          {
+            type: "function_call_output",
+            output:
+              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+          },
+          makeUserInput("Continue."),
+        ],
+      }),
+    });
+    expect(secondFanout.status).toBe(200);
+    expect(await secondFanout.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+  });
+
+  it("keeps source discovery reports out of subagent handoff prose", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          makeUserInput(
+            "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.",
+          ),
+          {
+            type: "function_call_output",
+            output:
+              "repo/qa/scenarios/index.md includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
+          },
+          makeUserInput("Continue."),
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const text = outputText(await response.json());
+    expect(text).toContain("Worked:");
+    expect(text).toContain("repo/docs/help/testing.md");
+    expect(text).toContain("Follow-up:");
+    expect(text).not.toContain("Delegated task");
+  });
+
   it("does not let fanout completion state hijack child worker replies", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -2727,7 +2954,7 @@ describe("qa mock openai server", () => {
       | { name: string; input: Record<string, unknown> }
       | undefined;
     expect(toolUseBlock?.name).toBe("read");
-    expect(toolUseBlock?.input).toEqual({ path: "QA_SCENARIO_PLAN.md" });
+    expect(toolUseBlock?.input).toEqual({ path: "repo/qa/scenarios/index.md" });
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
@@ -2985,7 +3212,7 @@ describe("qa mock openai server", () => {
     expect(body).toContain("event: content_block_start");
     expect(body).toContain('"type":"tool_use"');
     expect(body).toContain('"name":"read"');
-    expect(body).toContain("QA_SCENARIO_PLAN.md");
+    expect(body).toContain("repo/qa/scenarios/index.md");
     expect(body).toContain("event: message_delta");
     expect(body).toContain("event: message_stop");
   });

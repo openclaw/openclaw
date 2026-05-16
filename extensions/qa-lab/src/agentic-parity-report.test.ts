@@ -66,7 +66,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
       },
       {
         name: "Compaction retry after mutating tool",
-        status: "fail",
+        status: "pass",
         steps: [],
         runtimeParity: {
           scenarioId: "compaction-retry-after-mutating-tool",
@@ -97,8 +97,8 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
     ],
     counts: {
       total: 2,
-      passed: 1,
-      failed: 1,
+      passed: 2,
+      failed: 0,
     },
     run: {
       providerMode: "mock-openai",
@@ -801,9 +801,28 @@ status=done`,
     });
 
     expect(report.runtimePair).toEqual(["pi", "codex"]);
-    expect(report.pass).toBe(false);
+    expect(report.pass).toBe(true);
     expect(report.driftCounts.none).toBe(1);
     expect(report.driftCounts["tool-call-shape"]).toBe(1);
+    expect(report.failures).toEqual([]);
+  });
+
+  it("fails runtime parity reports when a runtime cell fails", () => {
+    const summary = makeRuntimeParitySummary();
+    const scenario = summary.scenarios[1];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.status = "fail";
+    scenario.runtimeParity.cells.codex.runtimeErrorClass = "tool-error";
+
+    const report = buildQaRuntimeParityReport({
+      summary,
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failedScenarios).toBe(1);
     expect(report.failures).toContain(
       "Compaction retry after mutating tool drift=tool-call-shape (tool call 1 differs).",
     );

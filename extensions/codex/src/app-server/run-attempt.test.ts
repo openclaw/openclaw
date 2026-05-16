@@ -646,6 +646,21 @@ describe("runCodexAppServerAttempt", () => {
     ).toEqual(["message"]);
   });
 
+  it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
+    const tools = ["read", "write", "image_generate", "message"].map((name) => ({ name }));
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+
+    expect(
+      __testing
+        .filterCodexDynamicTools(tools, {}, privateQaCodexEnv)
+        .map((tool) => tool.name),
+    ).toEqual(["read", "write", "image_generate", "message"]);
+    expect(__testing.resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
+  });
+
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -895,6 +910,38 @@ describe("runCodexAppServerAttempt", () => {
     expect(factoryOptions).toHaveLength(1);
     expect((factoryOptions[0] as { modelProvider?: unknown }).modelProvider).toBe("openai");
     expect((factoryOptions[0] as { modelApi?: unknown }).modelApi).toBe("openai-responses");
+  });
+
+  it("enables gateway subagent binding for forced private QA Codex runs", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [createRuntimeDynamicTool("sessions_spawn")];
+    });
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey!,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(factoryOptions).toHaveLength(1);
+    const factoryOption = factoryOptions[0] as { allowGatewaySubagentBinding?: unknown };
+    expect(factoryOption.allowGatewaySubagentBinding).toBe(true);
+    expect(tools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {

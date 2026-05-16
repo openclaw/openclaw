@@ -16,7 +16,10 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
+import {
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolsLoading,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import {
@@ -378,7 +381,7 @@ async function createCodexSideToolBridge(input: {
   return createCodexDynamicToolBridge({
     tools,
     signal: input.signal,
-    loading: input.pluginConfig.codexDynamicToolsLoading ?? "searchable",
+    loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
     hookContext: {
       agentId: input.sessionAgentId,
       config: input.params.cfg,

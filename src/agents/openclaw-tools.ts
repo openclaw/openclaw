@@ -346,6 +346,7 @@ export function createOpenClawTools(
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
     messageExplicitlyAllowed;
+  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
@@ -424,6 +425,9 @@ export function createOpenClawTools(
             config: resolvedConfig,
             callGateway: openClawToolsDeps.callGateway,
           }),
+        ]),
+    ...(includeSubagentSpawnTool
+      ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
@@ -441,7 +445,8 @@ export function createOpenClawTools(
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
-        ]),
+        ]
+      : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onYield: options?.onYield,

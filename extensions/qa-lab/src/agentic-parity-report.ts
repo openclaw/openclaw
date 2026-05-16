@@ -4,10 +4,10 @@ import {
 } from "./agentic-parity.js";
 import type {
   RuntimeId,
-  RuntimeParityCell,
   RuntimeParityDrift,
   RuntimeParityResult,
 } from "./runtime-parity.js";
+import { isRuntimeParityResultPass, runtimeParityCellStatus } from "./runtime-parity.js";
 
 type QaParityReportStep = {
   name: string;
@@ -258,13 +258,6 @@ function normalizeRuntimePair(
     return pair;
   }
   return ["pi", "codex"];
-}
-
-function runtimeCellStatus(cell: RuntimeParityCell | undefined): "pass" | "fail" | "missing" {
-  if (!cell) {
-    return "missing";
-  }
-  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
 }
 
 function requiredCoverageStatus(
@@ -637,9 +630,9 @@ export function buildQaRuntimeParityReport(params: {
     driftCounts[parity.drift] += 1;
     const piCell = parity.cells.pi;
     const codexCell = parity.cells.codex;
-    const piStatus = runtimeCellStatus(piCell);
-    const codexStatus = runtimeCellStatus(codexCell);
-    const status = scenario.status === "pass" ? "pass" : "fail";
+    const piStatus = runtimeParityCellStatus(piCell);
+    const codexStatus = runtimeParityCellStatus(codexCell);
+    const status = isRuntimeParityResultPass(parity) ? "pass" : "fail";
     if (status === "fail") {
       failures.push(
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
@@ -660,12 +653,8 @@ export function buildQaRuntimeParityReport(params: {
   });
 
   const totalScenarios = params.summary.counts?.total ?? scenarios.length;
-  const passedScenarios =
-    params.summary.counts?.passed ??
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failedScenarios =
-    params.summary.counts?.failed ??
-    scenarios.filter((scenario) => scenario.status === "fail").length;
+  const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
 
   return {
     runtimePair,
@@ -680,7 +669,7 @@ export function buildQaRuntimeParityReport(params: {
     pass: failures.length === 0 && failedScenarios === 0,
     failures,
     notes: [
-      "Runtime parity treats none and text-only drift as pass; all structural, tool-shape, and failure-mode drift classes fail the lane.",
+      "Runtime parity fails runtime, transport, and failure-mode drift; structural and tool-shape drift is recorded as advisory when both runtimes complete.",
       "Token totals here are assistant-message usage captured from the normalized transcript, not provider transport payloads.",
     ],
   };
