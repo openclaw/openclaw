@@ -70,6 +70,28 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
       }).supportsUsageInStreaming,
     ).toBe(false);
   });
+
+  it("uses max_tokens for NVIDIA NIM (integrate.api.nvidia.com) baseUrl", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "nvidia-nim",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        endpointClass: "custom",
+        knownProviderFamily: "nvidia-nim",
+      }).maxTokensField,
+    ).toBe("max_tokens");
+  });
+
+  it("keeps max_completion_tokens for unrelated custom OpenAI-compatible endpoints", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "custom",
+        baseUrl: "https://api.example.com/v1",
+        endpointClass: "custom",
+        knownProviderFamily: "custom",
+      }).maxTokensField,
+    ).toBe("max_completion_tokens");
+  });
 });
 
 describe("detectOpenAICompletionsCompat", () => {
@@ -81,6 +103,16 @@ describe("detectOpenAICompletionsCompat", () => {
     });
 
     expect(detected.defaults.supportsUsageInStreaming).toBe(true);
+  });
+
+  it("emits max_tokens for NVIDIA NIM hosted models", () => {
+    const detected = detectOpenAICompletionsCompat({
+      provider: "nvidia-nim",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      id: "qwen/qwen2.5-coder-32b-instruct",
+    });
+
+    expect(detected.defaults.maxTokensField).toBe("max_tokens");
   });
 });
 

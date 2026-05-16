@@ -4,12 +4,29 @@ import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
+  baseUrl?: string;
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
   supportsOpenAICompletionsStreamingUsageCompat?: boolean;
   usesExplicitProxyLikeEndpoint?: boolean;
 };
+
+// NVIDIA NIM (build.nvidia.com) is OpenAI-compatible but its OpenAI-compat
+// endpoint rejects the newer `max_completion_tokens` field with HTTP 400.
+// It still expects the legacy `max_tokens`. Detect by hostname so users do
+// not need to set `compat.maxTokensField: "max_tokens"` on every NIM model.
+const NVIDIA_NIM_HOSTS = new Set(["integrate.api.nvidia.com"]);
+
+function isNvidiaNimBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return NVIDIA_NIM_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}
 
 type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
@@ -77,7 +94,8 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
-    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
+    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes")) ||
+    isNvidiaNimBaseUrl(input.baseUrl);
   return {
     supportsStore:
       !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
@@ -116,6 +134,7 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
     | "usesExplicitProxyLikeEndpoint"
   > & {
     provider?: string;
+    baseUrl?: string;
   },
 ): OpenAICompletionsCompatDefaults {
   return resolveOpenAICompletionsCompatDefaults(input);
@@ -142,6 +161,7 @@ export function detectOpenAICompletionsCompat(
     capabilities,
     defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
       provider: model.provider,
+      baseUrl: model.baseUrl,
       ...capabilities,
     }),
   };
