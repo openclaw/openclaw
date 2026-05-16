@@ -1,23 +1,32 @@
 ---
 name: crabbox
-description: Use Crabbox for OpenClaw remote validation across Linux, macOS, Windows, and WSL2. Default to the repo Crabbox config, use brokered AWS for normal broad proof, and keep Blacksmith Testbox as an explicit opt-in or outage diagnostic path.
+description: Use the Crabbox wrapper for OpenClaw remote validation across Linux, macOS, Windows, and WSL2, including delegated Blacksmith Testbox proof. Report the actual provider and id.
 ---
 
 # Crabbox
 
-Use Crabbox when OpenClaw needs remote Linux proof for broad tests, CI-parity
-checks, secrets, hosted services, Docker/E2E/package lanes, warmed reusable
-boxes, sync timing, logs/results, cache inspection, or lease cleanup.
+Use the Crabbox wrapper when OpenClaw needs remote Linux proof for broad tests,
+CI-parity checks, secrets, hosted services, Docker/E2E/package lanes, warmed
+reusable boxes, sync timing, logs/results, cache inspection, or lease cleanup.
 
-Default backend: the repo `.crabbox.yaml`, currently brokered AWS. Do not
-override it to Blacksmith unless the user explicitly asks for Blacksmith proof,
-the task is specifically about Testbox behavior, or AWS/brokered Crabbox is the
-broken layer.
+Crabbox is the transport/orchestration surface. The actual backend can be:
 
-Blacksmith Testbox is a delegated fallback, not the default router. If a
-Blacksmith run queues, fails capacity, fails auth, or cannot allocate, stop
-after one real attempt and switch to the repo default or report the blocker.
-Do not retry Blacksmith in a loop.
+- brokered AWS Crabbox: direct provider, `provider=aws`, lease ids like
+  `cbx_...`, `syncDelegated=false`
+- Blacksmith Testbox through Crabbox: delegated provider,
+  `provider=blacksmith-testbox`, ids like `tbx_...`, `syncDelegated=true`
+
+For OpenClaw maintainer broad `pnpm` gates, Blacksmith Testbox through the
+Crabbox wrapper is acceptable and often preferred when the standing Testbox
+rules apply. Do not describe those runs as "AWS Crabbox"; report them as
+Testbox-through-Crabbox with the `tbx_...` id and Actions run.
+
+Use the repo `.crabbox.yaml` brokered AWS path when the task specifically needs
+direct AWS Crabbox behavior, persistent direct-provider leases, `--fresh-pr`,
+`--full-resync`, environment forwarding, capture/download support, or provider
+comparison. Use `--provider blacksmith-testbox` when the task needs OpenClaw
+maintainer Testbox proof, prepared CI environment, broad/heavy pnpm gates, or
+the user asks for Testbox/Blacksmith.
 
 ## First Checks
 
@@ -34,10 +43,15 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
   shim can be stale.
-- Check `.crabbox.yaml` for repo defaults and honor them. For normal Linux
-  validation, omit `--provider` so the wrapper uses brokered AWS.
-- Pass `--provider blacksmith-testbox` only for explicit Blacksmith/Testbox
-  work or a deliberate comparison.
+- Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
+  means brokered AWS today.
+- For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
+  `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
+  Testbox policy applies.
+- Always report the actual provider and id. `cbx_...` means AWS Crabbox;
+  `tbx_...` means Blacksmith Testbox through Crabbox. If the output only says
+  `blacksmith testbox list`, use `blacksmith testbox list --all` before
+  concluding no box exists.
 - If a warm direct-provider lease smells stale, retry with `--full-resync`
   (alias `--fresh-sync`) before replacing the lease. This resets the remote
   workdir, skips the fingerprint fast path, reseeds Git when possible, and
@@ -83,11 +97,10 @@ Crabbox supports static SSH targets:
   with `../crabbox/bin/crabbox run --help`, config/flag tests, and the Crabbox
   Go test suite.
 
-## Default Brokered AWS Backend
+## Direct Brokered AWS Backend
 
-Use this for `pnpm check`, `pnpm check:changed`, `pnpm test`,
-`pnpm test:changed`, Docker/E2E/live/package gates, or anything likely to fan
-out across many Vitest projects.
+Use this when the task needs direct AWS Crabbox semantics rather than the
+prepared Blacksmith Testbox CI environment.
 
 Changed gate:
 
@@ -124,9 +137,9 @@ pnpm crabbox:run -- \
 
 Read the JSON summary. Useful fields:
 
-- `provider`: should normally be `aws`
+- `provider`: `aws`
 - `leaseId`: `cbx_...`
-- `syncDelegated`: should normally be `false`
+- `syncDelegated`: `false`
 - `commandPhases`: populated when the command prints `CRABBOX_PHASE:<name>`
 - `commandMs` / `totalMs`
 - `exitCode`
@@ -136,6 +149,41 @@ cleanup when a run fails, is interrupted, or the command output is unclear:
 
 ```sh
 ../crabbox/bin/crabbox list --provider aws
+```
+
+## Blacksmith Testbox Through Crabbox
+
+Use this for OpenClaw maintainer broad/heavy `pnpm` gates when the prepared CI
+environment is the right proof surface:
+
+```sh
+node scripts/crabbox-wrapper.mjs run \
+  --provider blacksmith-testbox \
+  --blacksmith-org openclaw \
+  --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
+  --blacksmith-job check \
+  --blacksmith-ref main \
+  --idle-timeout 90m \
+  --ttl 240m \
+  --timing-json \
+  -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 pnpm check:changed
+```
+
+Read the JSON summary and the Testbox line. Useful fields:
+
+- `provider`: `blacksmith-testbox`
+- `leaseId`: `tbx_...`
+- `syncDelegated`: `true`
+- `syncPhases`: delegated/skipped because Blacksmith owns checkout/sync
+- Actions run URL/id from the Testbox output
+- `exitCode`
+
+`blacksmith testbox list` may hide hydrating or ready boxes. Use:
+
+```sh
+blacksmith testbox list --all
+blacksmith testbox status <tbx_id>
 ```
 
 ## Observability Flags
