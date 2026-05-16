@@ -52,7 +52,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 let claimTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimTelegramSpooledUpdate;
+let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegram-ingress-spool.js").isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
+let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 
 type TelegramApiMiddleware = (
@@ -415,8 +417,13 @@ function startIsolatedIngressSession(params: {
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
-    ({ claimTelegramSpooledUpdate, listTelegramSpooledUpdates, writeTelegramSpooledUpdate } =
-      await import("./telegram-ingress-spool.js"));
+    ({
+      claimTelegramSpooledUpdate,
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+      listTelegramSpooledUpdates,
+      recoverStaleTelegramSpooledUpdateClaims,
+      writeTelegramSpooledUpdate,
+    } = await import("./telegram-ingress-spool.js"));
   });
 
   beforeEach(() => {
@@ -757,8 +764,6 @@ describe("TelegramPollingSession", () => {
 
   it("keeps claims owned by another live process blocked", async () => {
     await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
       const interruptedUpdate = topicUpdate(42, 10, "active topic 10 turn");
       await writeSpooledTestUpdates(tempDir, [
         interruptedUpdate,
@@ -790,27 +795,20 @@ describe("TelegramPollingSession", () => {
         { mode: 0o600 },
       );
 
-      const { createWorker, runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
         spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          events.push(`handled:${update.update_id}`);
-        },
+        staleMs: 0,
+        shouldRecover: (claim) => !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
       });
 
-      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(events).toEqual([]);
+      expect(recovered).toBe(0);
       expect(await pendingUpdateIds(tempDir)).toEqual([43]);
       expect((await fs.readdir(tempDir)).toSorted()).toEqual([
         "0000000000000042.json.processing",
         "0000000000000043.json",
       ]);
-      abort.abort();
-      stopWorker();
-      await runPromise;
     });
-  }, 240_000);
+  });
 
   it("scans past active-lane backlogs to start unrelated lanes", async () => {
     await withTempSpool(async (tempDir) => {
