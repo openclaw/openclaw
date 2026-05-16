@@ -576,7 +576,8 @@ export function normalizeStoredCronJobs(
     }
     if (
       invalidPersistedReason === "missing-payload" ||
-      invalidPersistedReason === "invalid-payload"
+      invalidPersistedReason === "invalid-payload" ||
+      invalidPersistedReason === "missing-payload-text"
     ) {
       trackIssue("invalidPayload");
       mutated = true;

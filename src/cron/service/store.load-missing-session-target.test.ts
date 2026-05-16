@@ -219,8 +219,8 @@ describe("cron service store load: missing sessionTarget", () => {
       "missing-schedule",
       "missing-payload",
       "invalid-schedule",
-      "invalid-payload",
-      "invalid-payload",
+      "missing-payload-text",
+      "missing-payload-text",
     ]);
     warnSpy.mockRestore();
   });
