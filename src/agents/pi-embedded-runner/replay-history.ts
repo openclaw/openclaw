@@ -355,7 +355,8 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
-    const replayContent = (message as { content?: unknown }).content;
+    let assistantMessage = message;
+    let replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
       const normalized = normalizeAssistantReplayTextContent(message, replayContent);
       if (normalized) {
@@ -364,9 +365,15 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
+    if (!Array.isArray(replayContent)) {
+      replayContent =
+        replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
+      assistantMessage = { ...message, content: replayContent } as AgentMessage;
+      touched = true;
+    }
     if (Array.isArray(replayContent)) {
-      const normalized = normalizeAssistantReplayBlockContent(message, replayContent);
-      if (normalized !== message) {
+      const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
+      if (normalized !== assistantMessage) {
         if (normalized) {
           out.push(normalized);
         }
@@ -401,7 +408,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
         continue;
       }
     }
-    out.push(message);
+    out.push(assistantMessage);
   }
 
   // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The
