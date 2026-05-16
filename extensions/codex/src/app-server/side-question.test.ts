@@ -319,7 +319,13 @@ describe("runCodexAppServerSideQuestion", () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    const result = await runCodexAppServerSideQuestion(sideParams());
+    const result = await runCodexAppServerSideQuestion(
+      sideParams({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        currentChannelId: "voice-room",
+      }),
+    );
 
     expect(result).toEqual({ text: "Side answer." });
     const forkCall = mockCall(client.request);
@@ -411,6 +417,8 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("sessionId", "session-1");
     expect(toolOptions).toHaveProperty("modelProvider", "openai");
     expect(toolOptions).toHaveProperty("modelId", "gpt-5.5");
+    expect(toolOptions).toHaveProperty("messageProvider", "discord-voice");
+    expect(toolOptions).toHaveProperty("currentChannelId", "voice-room");
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 

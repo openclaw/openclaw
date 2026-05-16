@@ -509,8 +509,8 @@ async function createCodexSideToolBridge(input: {
       modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
         workspaceDir: input.cwd,
       }),
-      ...(input.params.messageChannel || input.params.messageProvider
-        ? { messageProvider: input.params.messageChannel ?? input.params.messageProvider }
+      ...(input.params.messageProvider || input.params.messageChannel
+        ? { messageProvider: input.params.messageProvider ?? input.params.messageChannel }
         : {}),
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       sandbox,
