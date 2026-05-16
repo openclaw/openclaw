@@ -30,6 +30,18 @@ export type MediaGenerationTaskHandle = {
   taskLabel: string;
 };
 
+export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
+
+export type MediaGenerationExecutionResult = {
+  provider: string;
+  model: string;
+  count: number;
+  paths: string[];
+  wakeResult: string;
+  attachments?: AgentGeneratedAttachment[];
+  mediaUrls?: string[];
+};
+
 type CreateMediaGenerationTaskRunParams = {
   sessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -65,6 +77,14 @@ type WakeMediaGenerationTaskCompletionParams = {
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
+};
+
+type MediaGenerationTaskLifecycle = {
+  createTaskRun: (params: CreateMediaGenerationTaskRunParams) => MediaGenerationTaskHandle | null;
+  recordTaskProgress: (params: RecordMediaGenerationTaskProgressParams) => void;
+  completeTaskRun: (params: CompleteMediaGenerationTaskRunParams) => void;
+  failTaskRun: (params: FailMediaGenerationTaskRunParams) => void;
+  wakeTaskCompletion: (params: WakeMediaGenerationTaskCompletionParams) => Promise<void>;
 };
 
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
@@ -247,6 +267,119 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
+export function createDefaultMediaGenerateBackgroundScheduler(params: {
+  toolName: string;
+  onCrash: (message: string, meta?: Record<string, unknown>) => void;
+}): MediaGenerateBackgroundScheduler {
+  return (work) => {
+    queueMicrotask(() => {
+      void work().catch((error) => {
+        params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+      });
+    });
+  };
+}
+
+export function buildMediaGenerationStartedToolResult(params: {
+  toolName: string;
+  generationLabel: string;
+  completionLabel: string;
+  taskHandle: MediaGenerationTaskHandle | null;
+  detailExtras?: Record<string, unknown>;
+  messages?: Array<string | undefined>;
+}) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: [
+          `Background task started for ${params.generationLabel} generation (${params.taskHandle?.taskId ?? "unknown"}). Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
+          ...(params.messages ?? []),
+        ]
+          .filter((entry): entry is string => Boolean(entry))
+          .join("\n"),
+      },
+    ],
+    details: {
+      async: true,
+      status: "started",
+      ...(params.taskHandle
+        ? {
+            taskId: params.taskHandle.taskId,
+            runId: params.taskHandle.runId,
+            task: {
+              taskId: params.taskHandle.taskId,
+              runId: params.taskHandle.runId,
+            },
+          }
+        : {}),
+      ...params.detailExtras,
+    },
+  };
+}
+
+export function scheduleMediaGenerationTaskCompletion<
+  T extends MediaGenerationExecutionResult,
+>(params: {
+  lifecycle: MediaGenerationTaskLifecycle;
+  handle: MediaGenerationTaskHandle | null;
+  scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
+  progressSummary: string;
+  config?: OpenClawConfig;
+  toolName: string;
+  run: () => Promise<T>;
+  onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
+}) {
+  params.scheduleBackgroundWork(async () => {
+    try {
+      const executed = await withMediaGenerationTaskKeepalive({
+        handle: params.handle,
+        progressSummary: params.progressSummary,
+        run: params.run,
+      });
+      params.lifecycle.completeTaskRun({
+        handle: params.handle,
+        provider: executed.provider,
+        model: executed.model,
+        count: executed.count,
+        paths: executed.paths,
+      });
+      try {
+        await params.lifecycle.wakeTaskCompletion({
+          config: params.config,
+          handle: params.handle,
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: executed.wakeResult,
+          attachments: executed.attachments,
+          mediaUrls: executed.mediaUrls,
+        });
+      } catch (error) {
+        params.onWakeFailure(
+          `${params.toolName} completion wake failed after successful generation`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+            error,
+          },
+        );
+      }
+    } catch (error) {
+      params.lifecycle.failTaskRun({
+        handle: params.handle,
+        error,
+      });
+      await params.lifecycle.wakeTaskCompletion({
+        config: params.config,
+        handle: params.handle,
+        status: "error",
+        statusLabel: "failed",
+        result: formatErrorMessage(error),
+      });
+    }
+  });
+}
+
 async function wakeMediaGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
@@ -315,7 +448,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     directIdempotencyKey: announceId,
   });
   if (!delivery.delivered && delivery.error) {
-    log.error("Media generation completion wake failed; generated media may not be delivered", {
+    log.error("Media generation completion wake failed; requester session was not woken", {
       taskId: params.handle.taskId,
       runId: params.handle.runId,
       toolName: params.toolName,
@@ -334,7 +467,7 @@ export function createMediaGenerationTaskLifecycle(params: {
   eventSource: AgentInternalEvent["source"];
   announceType: string;
   completionLabel: string;
-}) {
+}): MediaGenerationTaskLifecycle {
   return {
     createTaskRun(runParams: CreateMediaGenerationTaskRunParams): MediaGenerationTaskHandle | null {
       return createMediaGenerationTaskRun({

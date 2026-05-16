@@ -32,6 +32,23 @@ const musicGenerationRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const musicGenerateBackgroundMocks = vi.hoisted(() => ({
+  musicGenerationTaskLifecycle: {
+    createTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.createMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.createMusicGenerationTaskRun(params),
+    recordTaskProgress: (
+      params: Parameters<typeof musicGenerateBackground.recordMusicGenerationTaskProgress>[0],
+    ) => musicGenerateBackgroundMocks.recordMusicGenerationTaskProgress(params),
+    completeTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.completeMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.completeMusicGenerationTaskRun(params),
+    failTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.failMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.failMusicGenerationTaskRun(params),
+    wakeTaskCompletion: (
+      params: Parameters<typeof musicGenerateBackground.wakeMusicGenerationTaskCompletion>[0],
+    ) => musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion(params),
+  },
   completeMusicGenerationTaskRun: vi.fn((params) => {
     if (!params.handle) {
       return;

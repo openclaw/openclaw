@@ -9,10 +9,11 @@ sidebarTitle: "Image generation"
 ---
 
 The `image_generate` tool lets the agent create and edit images using your
-configured providers. Generated images are returned as structured media
-attachments. On routes that require the `message` tool for visible replies,
-the agent must send the generated images through `message`; OpenClaw does not
-auto-post a private final reply as a fallback.
+configured providers. In chat sessions, image generation runs asynchronously:
+OpenClaw records a background task, returns the task id immediately, and wakes
+the agent when the provider finishes. The completion agent must send generated
+images through the `message` tool; OpenClaw does not auto-post a private final
+reply as a fallback.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -54,9 +55,9 @@ or sign in with OpenAI Codex OAuth.
     _"Generate an image of a friendly robot mascot."_
 
     The agent calls `image_generate` automatically. No tool allow-listing
-    needed - it is enabled by default when a provider is available. In
-    message-tool-only channels, the agent then sends the generated attachment
-    through the `message` tool.
+    needed - it is enabled by default when a provider is available. The tool
+    returns a background task id, then the completion agent sends the generated
+    attachment through the `message` tool when it is ready.
 
   </Step>
 </Steps>
@@ -109,6 +110,13 @@ Use `action: "list"` to inspect available providers and models at runtime:
 /tool image_generate action=list
 ```
 
+Use `action: "status"` to inspect the active image-generation task for the
+current session:
+
+```text
+/tool image_generate action=status
+```
+
 ## Provider capabilities
 
 | Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
@@ -124,8 +132,9 @@ Use `action: "list"` to inspect available providers and models at runtime:
 <ParamField path="prompt" type="string" required>
   Image generation prompt. Required for `action: "generate"`.
 </ParamField>
-<ParamField path="action" type='"generate" | "list"' default="generate">
-  Use `"list"` to inspect available providers and models at runtime.
+<ParamField path="action" type='"generate" | "status" | "list"' default="generate">
+  Use `"status"` to inspect the active session task or `"list"` to inspect
+  available providers and models at runtime.
 </ParamField>
 <ParamField path="model" type="string">
   Provider/model override (e.g. `openai/gpt-image-2`). Use
