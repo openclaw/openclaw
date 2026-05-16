@@ -639,6 +639,105 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("lets isolated ingress drain interleave different Telegram chats", async () => {
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const events: string[] = [];
+    let releaseFirstChatTurn: (() => void) | undefined;
+    const firstChatTurnDone = new Promise<void>((resolve) => {
+      releaseFirstChatTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async (update: { update_id?: number }) => {
+      if (update.update_id === 42) {
+        events.push("chatA:start");
+        await firstChatTurnDone;
+        events.push("chatA:end");
+        return;
+      }
+      if (update.update_id === 43) {
+        events.push("chatB");
+        return;
+      }
+      if (update.update_id === 44) {
+        events.push("chatA:second");
+      }
+    });
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    for (const { updateId, chatId, text } of [
+      { updateId: 42, chatId: -100, text: "long first chat turn" },
+      { updateId: 43, chatId: 854067528, text: "second chat turn" },
+      { updateId: 44, chatId: -100, text: "second first chat turn" },
+    ]) {
+      await writeTelegramSpooledUpdate({
+        spoolDir: tempDir,
+        update: {
+          update_id: updateId,
+          message: {
+            text,
+            chat: { id: chatId, type: chatId < 0 ? "supergroup" : "private" },
+          },
+        },
+      });
+    }
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn(() => () => undefined),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 10,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["chatA:start", "chatB"]));
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map((update) => update.updateId),
+      ).toEqual([42, 44]);
+
+      releaseFirstChatTurn?.();
+      await vi.waitFor(() =>
+        expect(events).toEqual(["chatA:start", "chatB", "chatA:end", "chatA:second"]),
+      );
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map(
+            (update) => update.updateId,
+          ),
+        ).toEqual([]),
+      );
+      abort.abort();
+      await runPromise;
+    } finally {
+      releaseFirstChatTurn?.();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("lets isolated ingress control updates bypass an active spooled turn", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
