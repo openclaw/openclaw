@@ -530,6 +530,7 @@ export class CodexAppServerEventProjector {
           threadId: this.threadId,
           turnId: this.turnId,
           itemId,
+          completed: true,
         },
       });
     }

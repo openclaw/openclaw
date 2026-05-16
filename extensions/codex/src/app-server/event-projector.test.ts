@@ -1008,6 +1008,10 @@ describe("CodexAppServerEventProjector", () => {
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );
+    const compactionEnd = findAgentEvent(onAgentEvent, { stream: "compaction", phase: "end" }).data;
+    expect(compactionEnd.itemId).toBe("compact-1");
+    expect(compactionEnd.completed).toBe(true);
+    expect(compactionEnd.backend).toBe("codex-app-server");
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
