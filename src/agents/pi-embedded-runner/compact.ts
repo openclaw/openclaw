@@ -142,7 +142,10 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
-import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
+import {
+  createEmbeddedPiResourceLoader,
+  markResourceLoaderReloaded,
+} from "./resource-loader.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
@@ -1016,6 +1019,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         extensionFactories,
       });
       await resourceLoader.reload();
+      markResourceLoaderReloaded(resolvedWorkspace, agentDir);
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
       // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
       // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
