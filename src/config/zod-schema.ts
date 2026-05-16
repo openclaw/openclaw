@@ -413,6 +413,7 @@ export const OpenClawSchema = z
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
         stuckSessionAbortMs: z.number().int().positive().optional(),
+        memoryPressureSnapshot: z.boolean().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
