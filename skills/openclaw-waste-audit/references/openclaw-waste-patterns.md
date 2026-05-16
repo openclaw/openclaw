@@ -56,8 +56,9 @@ for j in d.get('jobs',[]):
 
 # Check actual token burn from JSONL runs (use usage.total_tokens, NOT top-level totalTokens)
 python3 -c "
-import json, glob
-runs_dir = '/root/.openclaw/cron/runs'
+import json, glob, os
+runs_dir = os.environ.get('OPENCLAW_HOME', os.path.expanduser('~/.openclaw'))
+runs_dir = os.path.join(runs_dir, 'cron', 'runs')
 for f in glob.glob(f'{runs_dir}/*.jsonl'):
     total = 0
     count = 0
@@ -78,7 +79,7 @@ openclaw-env cron runs --id <job_id> --limit 3
 # Show last N run summaries for a job (to detect CLEAN_LOOP pattern)
 python3 -c "
 import json
-fpath = '/root/.openclaw/cron/runs/<job_id>.jsonl'
+fpath = os.path.join(os.environ.get('OPENCLAW_HOME', os.path.expanduser('~/.openclaw')), 'cron', 'runs', '<job_id>.jsonl')
 with open(fpath) as f:
     lines = f.readlines()
 for line in lines[-3:]:

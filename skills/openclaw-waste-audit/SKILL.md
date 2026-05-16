@@ -36,8 +36,9 @@ JSONL top-level `totalTokens` is always 0. Real data lives at `usage.total_token
 
 ```bash
 python3 -c "
-import json, glob
-runs_dir = '/root/.openclaw/cron/runs'
+import json, glob, os
+runs_dir = os.environ.get('OPENCLAW_HOME', os.path.expanduser('~/.openclaw'))
+runs_dir = os.path.join(runs_dir, 'cron', 'runs')
 for f in sorted(glob.glob(f'{runs_dir}/*.jsonl')):
     total = 0; count = 0
     with open(f) as fh:
@@ -66,8 +67,10 @@ For D8 candidates, check response size pattern — tiny output every run = silen
 
 ```bash
 python3 -c "
-import json, glob
-f = '/root/.openclaw/cron/runs/<job_id>.jsonl'
+import json, glob, os
+runs_dir = os.environ.get('OPENCLAW_HOME', os.path.expanduser('~/.openclaw'))
+runs_dir = os.path.join(runs_dir, 'cron', 'runs')
+f = os.path.join(runs_dir, '<job_id>.jsonl')
 total=0;count=0;errors=0;delivered=0;resp_lens=[]
 with open(f) as fh:
     for line in fh:
