@@ -876,10 +876,11 @@ Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 `gateway.remote.token` and `gateway.remote.password` are client credential sources. They do **not** protect local WS access by themselves. Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 </Note>
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
-Plaintext `ws://` is loopback-only by default. For trusted private-network
-paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
-break-glass. This is intentionally process environment only, not an
-`openclaw.json` config key.
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
+Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
+`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
+This is intentionally process environment only, not an `openclaw.json` config
+key.
 Mobile pairing and Android manual or scanned gateway routes are stricter:
 cleartext is accepted for loopback, but private-LAN, link-local, `.local`, and
 dotless hostnames must use TLS unless you explicitly opt into the trusted
