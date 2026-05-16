@@ -65,7 +65,12 @@ function requireRecord(
   return value;
 }
 
-async function getConnectedNodeId(ws: WebSocket, command = "system.run"): Promise<string> {
+async function getConnectedNodeId(
+  ws: WebSocket,
+  command = "system.run",
+  opts?: { requireCommand?: boolean },
+): Promise<string> {
+  const requireCommand = opts?.requireCommand ?? true;
   const deadline = Date.now() + NODE_LIST_WAIT_MS;
   let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
   while (Date.now() <= deadline) {
@@ -74,15 +79,16 @@ async function getConnectedNodeId(ws: WebSocket, command = "system.run"): Promis
     }>(ws, "node.list", {});
     expect(nodes.ok).toBe(true);
     lastNodes = nodes.payload?.nodes ?? [];
-    const matchingNode = lastNodes.find((n) => n.connected && n.commands?.includes(command));
+    const matchingNode = lastNodes.find(
+      (n) => n.connected && (!requireCommand || n.commands?.includes(command)),
+    );
     if (matchingNode?.nodeId) {
       return matchingNode.nodeId;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, NODE_LIST_POLL_MS));
   }
-  throw new Error(
-    `expected connected ${command} node id; last nodes: ${JSON.stringify(lastNodes)}`,
-  );
+  const label = requireCommand ? `connected ${command} node id` : "connected node id";
+  throw new Error(`expected ${label}; last nodes: ${JSON.stringify(lastNodes)}`);
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
@@ -441,7 +447,7 @@ describe("node.invoke approval bypass", () => {
     );
     const ws = await connectOperator(["operator.write"]);
     try {
-      const nodeId = await getConnectedNodeId(ws, "browser.proxy");
+      const nodeId = await getConnectedNodeId(ws, "browser.proxy", { requireCommand: false });
       const res = await rpcReq(ws, "node.invoke", {
         nodeId,
         command: "browser.proxy",
