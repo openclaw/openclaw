@@ -141,20 +141,18 @@ struct AmbientCommandDockActionEnvironment {
 
     private static func sendPromptToGateway(_ prompt: String) async -> AmbientCommandResult {
         let options = await VoiceWakeForwarder.selectedSessionOptions()
-        let deliver = options.channel.shouldDeliver(options.deliver)
-        let result = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
-            message: prompt,
-            sessionKey: options.sessionKey,
-            thinking: options.thinking,
-            deliver: deliver,
-            to: options.to,
-            channel: options.channel,
-            voiceWakeTrigger: nil))
-
-        if result.ok {
-            return .success("Sent to Thomas")
+        do {
+            let response = try await GatewayConnection.shared.chatSend(
+                sessionKey: options.sessionKey,
+                message: prompt,
+                thinking: options.thinking,
+                idempotencyKey: UUID().uuidString,
+                attachments: [])
+            await WebChatManager.shared.recordActiveSessionKey(options.sessionKey)
+            return .success("Sent to Thomas · \(response.runId)")
+        } catch {
+            return .failure(error.localizedDescription)
         }
-        return .failure(result.error ?? "agent rpc unavailable")
     }
 }
 

@@ -178,6 +178,10 @@ struct AmbientCommandDockView: View {
         }
         .task {
             await self.model.refreshAssistantSnapshot()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                await self.model.refreshAssistantSnapshot()
+            }
         }
     }
 
@@ -222,7 +226,13 @@ struct AmbientCommandDockView: View {
             }
 
             HStack(spacing: 8) {
-                ForEach(Array(self.model.assistantSnapshot.subagents.prefix(3))) { item in
+                ForEach(Array(self.model.assistantSnapshot.liveCards.prefix(3))) { item in
+                    self.laneItem(item)
+                }
+            }
+
+            HStack(spacing: 8) {
+                ForEach(Array(self.model.assistantSnapshot.subagents.prefix(2))) { item in
                     self.laneItem(item)
                 }
                 if let proposal = self.model.assistantSnapshot.proposals.first {
