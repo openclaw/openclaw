@@ -84,10 +84,13 @@ const MAX_STARTUP_STATE_STRING_LENGTH = 500;
 
 export function redactStartupRuntimeText(value: string): string {
   return value
-    .replace(/\b(authorization\s*:\s*bearer)\s+[^\s,;"'}\]]+/gi, `$1 ${REDACTED}`)
-    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, `Bearer ${REDACTED}`)
-    .replace(/\b(token|access_token|refresh_token|api_key|apikey|secret|password|passwd)\s*=\s*[^\s,;"'}\]]+/gi, `$1=${REDACTED}`)
-    .replace(/\b(password|pwd)\s*[:=]\s*[^\s,;"'}\]]+/gi, `$1=${REDACTED}`)
+    .replace(/\b(authorization\s*:\s*bearer)\s+(?!\[REDACTED\])[^\s,;"'}\]]+\]?/gi, `$1 ${REDACTED}`)
+    .replace(/\bbearer\s+(?!\[REDACTED\])[A-Za-z0-9._~+/=-]{16,}\]?/gi, `Bearer ${REDACTED}`)
+    .replace(
+      /\b(token|access_token|refresh_token|api_key|apikey|secret|password|passwd)\s*=\s*(?!\[REDACTED\])[^\s,;"'}\]]+\]?/gi,
+      `$1=${REDACTED}`,
+    )
+    .replace(/\b(password|pwd)\s*[:=]\s*(?!\[REDACTED\])[^\s,;"'}\]]+\]?/gi, `$1=${REDACTED}`)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+):([^\s/@]+)@/gi, `$1${REDACTED}:${REDACTED}@`)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\b(openclaw\.json|OPENCLAW_[A-Z0-9_]*|gateway\.auth|secrets?\.[A-Za-z0-9_.-]+)\b[^\n\r]{0,120}/gi, `$1 ${REDACTED}`);

@@ -545,6 +545,36 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }),
             ),
           );
+          let immediateStartResult:
+            | { status: "pending" }
+            | { status: "resolved" }
+            | { status: "rejected"; error: unknown } = { status: "pending" };
+          task.then(
+            () => {
+              if (immediateStartResult.status === "pending") {
+                immediateStartResult = { status: "resolved" };
+              }
+            },
+            (error: unknown) => {
+              if (immediateStartResult.status === "pending") {
+                immediateStartResult = { status: "rejected", error };
+              }
+            },
+          );
+          for (let turn = 0; turn < 4 && immediateStartResult.status === "pending"; turn += 1) {
+            await Promise.resolve();
+          }
+          if (immediateStartResult.status === "rejected") {
+            const message = formatErrorMessage(immediateStartResult.error);
+            setRuntime(channelId, id, {
+              accountId: id,
+              running: false,
+              restartPending: false,
+              lastError: message,
+            });
+            log.error?.(`[${id}] channel startup failed: ${message}`);
+            throw immediateStartResult.error;
+          }
           const trackedPromise = task
             .then(() => {
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {

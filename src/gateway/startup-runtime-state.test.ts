@@ -125,6 +125,9 @@ describe("gateway startup runtime state", () => {
     expect(redactStartupRuntimeText("api_key=abc token=def password=ghi secret=jkl")).toBe(
       "api_key=[REDACTED] token=[REDACTED] password=[REDACTED] secret=[REDACTED]",
     );
+    expect(redactStartupRuntimeText("password=[REDACTED]")).toBe("password=[REDACTED]");
+    expect(redactStartupRuntimeText("password=supersecret]")).toBe("password=[REDACTED]");
+    expect(redactStartupRuntimeText("password=supersecret;")).toBe("password=[REDACTED];");
     expect(redactStartupRuntimeText("Server=a;Password=super-secret;User Id=b")).toContain(
       "Password=[REDACTED]",
     );
