@@ -335,6 +335,42 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(unscopedAgain.index.plugins[0]?.pluginId).toBe("unscoped");
   });
 
+  it("does not let one workspace's discovery watches invalidate another workspace slot", () => {
+    const stateDir = tempStateDir();
+    const firstWorkspaceDir = path.join(stateDir, "workspace-a");
+    const secondWorkspaceDir = path.join(stateDir, "workspace-b");
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockImplementation(
+      (params: { workspaceDir?: string }) => ({
+        source: "derived",
+        snapshot: makeIndex(params.workspaceDir === firstWorkspaceDir ? "first" : "second"),
+        diagnostics: [
+          {
+            level: "warn",
+            code: "persisted-registry-stale-source",
+            message: "source changed",
+          },
+        ],
+      }),
+    );
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: firstWorkspaceDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: secondWorkspaceDir });
+    writeJson(
+      path.join(firstWorkspaceDir, ".openclaw", "extensions", "new-plugin", "package.json"),
+      { name: "new-plugin" },
+    );
+    const secondAgain = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      stateDir,
+      workspaceDir: secondWorkspaceDir,
+    });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(secondAgain.index.plugins[0]?.pluginId).toBe("second");
+  });
+
   it("keeps separate source-stale memo entries reachable across registry contexts", () => {
     const firstStateDir = tempStateDir();
     const secondStateDir = tempStateDir();
@@ -399,6 +435,46 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
 
+  it("invalidates source-stale memo entries when orphaned diagnostic sources appear", () => {
+    const stateDir = tempStateDir();
+    const orphanedDiagnosticSource = path.join(stateDir, "extensions", "orphaned", "index.js");
+    writeJson(path.join(stateDir, "plugins", "installs.json"), {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "orphaned",
+          source: orphanedDiagnosticSource,
+          message: "missing diagnostic source",
+        },
+      ],
+    });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    writeJson(orphanedDiagnosticSource, "restored");
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("invalidates source-stale memo entries when discovery roots gain plugins", () => {
     const stateDir = tempStateDir();
     const loadPath = path.join(stateDir, "configured-plugins");
@@ -411,6 +487,30 @@ describe("loadPluginMetadataSnapshot process memo", () => {
           level: "warn",
           code: "persisted-registry-stale-source",
           message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    writeJson(path.join(loadPath, "new-plugin", "openclaw.plugin.json"), { id: "new-plugin" });
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates policy-stale memo entries when discovery roots gain plugins", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-policy",
+          message: "policy changed",
         },
       ],
     });
@@ -477,6 +577,149 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       openclaw: { extensions: ["index.js"] },
     });
     loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates source-stale memo entries when nested bundle default markers appear", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    const pluginDir = path.join(loadPath, "cursor-bundle");
+    writeJson(path.join(pluginDir, ".cursor-plugin", "plugin.json"), { name: "cursor-bundle" });
+    fs.mkdirSync(path.join(pluginDir, ".cursor"), { recursive: true });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    fs.mkdirSync(path.join(pluginDir, ".cursor", "commands"), { recursive: true });
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates source-stale memo entries when package-declared nested entry files appear", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    const pluginDir = path.join(loadPath, "nested-plugin");
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "nested-plugin",
+      openclaw: { extensions: ["src/index.ts"] },
+    });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    fs.writeFileSync(path.join(pluginDir, "src", "index.js"), "export {};\n");
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores malformed package manifests while caching source-stale discovery watches", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    const pluginDir = path.join(loadPath, "malformed-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "package.json"), "{", "utf8");
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not read package-declared entry watches from package manifests outside the plugin root", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    const pluginDir = path.join(loadPath, "symlinked-package");
+    const sourceDir = path.join(pluginDir, "src");
+    const outsidePackageJson = path.join(stateDir, "outside", "package.json");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    writeJson(outsidePackageJson, {
+      name: "outside-package",
+      openclaw: { extensions: ["src/index.ts"] },
+    });
+    fs.symlinkSync(outsidePackageJson, path.join(pluginDir, "package.json"));
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    fs.writeFileSync(path.join(sourceDir, "index.js"), "export {};\n");
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates source-stale memo entries when bundled source checkout roots gain plugins", () => {
+    const stateDir = tempStateDir();
+    const packageRoot = path.join(stateDir, "openclaw-package");
+    const stockRoot = path.join(packageRoot, "dist", "extensions");
+    const sourceRoot = path.join(packageRoot, "extensions");
+    fs.mkdirSync(stockRoot, { recursive: true });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const env = { OPENCLAW_BUNDLED_PLUGINS_DIR: stockRoot };
+
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    writeJson(path.join(sourceRoot, "new-plugin", "openclaw.plugin.json"), { id: "new-plugin" });
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });

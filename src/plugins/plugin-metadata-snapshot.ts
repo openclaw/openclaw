@@ -13,6 +13,8 @@ import {
   CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
   CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
 } from "./bundle-manifest.js";
+import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -24,7 +26,14 @@ import {
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  getPackageManifestMetadata,
+  PLUGIN_MANIFEST_FILENAME,
+  resolvePackageExtensionEntries,
+  type PackageManifest,
+} from "./manifest.js";
+import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 import {
   resolvePluginControlPlaneFingerprint,
   resolvePluginDiscoveryContext,
@@ -49,9 +58,15 @@ type PersistedRegistryMemoState = {
   contextHash: string;
   fastHash: string;
   fingerprint: unknown;
+  scopeHash?: string;
   watchedFilesHash: string;
   watchedFiles: readonly string[];
 };
+
+type PersistedRegistryMemoLookupIdentity = Pick<
+  PersistedRegistryMemoState,
+  "contextHash" | "fastHash" | "scopeHash"
+>;
 
 const PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES = 8;
 const pluginMetadataSnapshotMemo = new Map<string, PluginMetadataSnapshotMemo>();
@@ -64,11 +79,18 @@ const PLUGIN_DISCOVERY_CANDIDATE_MARKER_PATHS = [
   CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   "skills",
+  "hooks",
+  ".app.json",
   "commands",
   "agents",
   path.join("hooks", "hooks.json"),
+  path.join(".cursor", "commands"),
+  path.join(".cursor", "agents"),
+  path.join(".cursor", "hooks.json"),
+  path.join(".cursor", "rules"),
   ".mcp.json",
   ".lsp.json",
+  "output-styles",
   "settings.json",
 ] as const;
 
@@ -222,6 +244,23 @@ function watchedFileFingerprint(filePath: string | undefined, watchedFiles: Set<
   }
   watchedFiles.add(filePath);
   return fileFingerprint(filePath);
+}
+
+function persistedDiagnosticSourceFingerprint(params: {
+  pluginRootDir: string | undefined;
+  source: string | undefined;
+  watchedFiles: Set<string>;
+}): unknown {
+  if (params.pluginRootDir) {
+    return persistedPluginFileFingerprint(params.pluginRootDir, params.source, {
+      watchedFiles: params.watchedFiles,
+    });
+  }
+  return params.source && path.isAbsolute(params.source)
+    ? watchedFileFingerprint(params.source, params.watchedFiles)
+    : persistedPluginFileFingerprint(params.pluginRootDir, params.source, {
+        watchedFiles: params.watchedFiles,
+      });
 }
 
 function resolveInstallRecordPath(value: unknown, env: NodeJS.ProcessEnv): string | undefined {
@@ -410,6 +449,20 @@ function resolvePersistedRegistryMemoContextHash(params: {
   });
 }
 
+function resolvePersistedRegistryMemoLookupIdentity(params: {
+  env: NodeJS.ProcessEnv;
+  preferPersisted?: boolean;
+  stateDir?: string;
+}): PersistedRegistryMemoLookupIdentity {
+  const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
+  const fastHash = hashJson(fastFingerprint);
+  const contextHash = resolvePersistedRegistryMemoContextHash({
+    ...params,
+    fastFingerprint,
+  });
+  return { contextHash, fastHash };
+}
+
 function hashWatchedFiles(watchedFiles: readonly string[]): string {
   return hashJson(watchedFiles.map((filePath) => fileFingerprint(filePath)));
 }
@@ -419,6 +472,7 @@ function setCappedMemoEntry<Key, Value>(params: {
   key: Key;
   value: Value;
 }): void {
+  // Map iteration is insertion-ordered; re-inserting on hits makes this an LRU cap.
   params.memo.delete(params.key);
   params.memo.set(params.key, params.value);
   if (params.memo.size > PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES) {
@@ -431,10 +485,12 @@ function setCappedMemoEntry<Key, Value>(params: {
 
 function computePersistedRegistryMemoStateMemoKey(
   state: Pick<PersistedRegistryMemoState, "contextHash" | "fastHash">,
+  scopeHash: string,
 ): string {
   return hashJson({
     contextHash: state.contextHash,
     fastHash: state.fastHash,
+    scopeHash,
   });
 }
 
@@ -448,11 +504,23 @@ function mergePersistedRegistryMemoStates(params: {
   );
   return {
     ...merged,
+    scopeHash: params.lookup.scopeHash,
     fingerprint: {
       derived: params.derived.fingerprint,
-      lookup: params.lookup.fingerprint,
+      lookup: unwrapMergedPersistedRegistryLookupFingerprint(params.lookup.fingerprint),
     },
   };
+}
+
+function unwrapMergedPersistedRegistryLookupFingerprint(fingerprint: unknown): unknown {
+  if (
+    isRecord(fingerprint) &&
+    Object.prototype.hasOwnProperty.call(fingerprint, "derived") &&
+    Object.prototype.hasOwnProperty.call(fingerprint, "lookup")
+  ) {
+    return fingerprint.lookup;
+  }
+  return fingerprint;
 }
 
 function mergePersistedRegistryMemoStateWatchedFiles(
@@ -548,10 +616,13 @@ function resolvePersistedRegistryMemoState(params: {
     }
     const pluginId = normalizeString(rawDiagnostic.pluginId);
     const source = normalizeString(rawDiagnostic.source);
+    const pluginRootDir = pluginId ? pluginRootById.get(pluginId) : undefined;
     return [
       pluginId,
       source,
-      persistedPluginFileFingerprint(pluginId ? pluginRootById.get(pluginId) : undefined, source, {
+      persistedDiagnosticSourceFingerprint({
+        pluginRootDir,
+        source,
         watchedFiles,
       }),
     ];
@@ -582,22 +653,21 @@ function resolvePersistedRegistryMemoState(params: {
 }
 
 function resolvePersistedRegistryMemoStateForLookup(params: {
+  config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
   stateDir?: string;
+  workspaceDir?: string;
 }): PersistedRegistryMemoState {
-  const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
-  const fastHash = hashJson(fastFingerprint);
-  const contextHash = resolvePersistedRegistryMemoContextHash({
-    ...params,
-    fastFingerprint,
-  });
-  const memoKey = computePersistedRegistryMemoStateMemoKey({ contextHash, fastHash });
+  const { contextHash, fastHash } = resolvePersistedRegistryMemoLookupIdentity(params);
+  const scopeHash = resolvePersistedRegistryMemoStateScopeHash(params);
+  const memoKey = computePersistedRegistryMemoStateMemoKey({ contextHash, fastHash }, scopeHash);
   const registryState = pluginMetadataSnapshotRegistryStateMemo.get(memoKey);
   if (
     registryState &&
     registryState.contextHash === contextHash &&
     registryState.fastHash === fastHash &&
+    registryState.scopeHash === scopeHash &&
     hashWatchedFiles(registryState.watchedFiles) === registryState.watchedFilesHash
   ) {
     setCappedMemoEntry({
@@ -607,27 +677,35 @@ function resolvePersistedRegistryMemoStateForLookup(params: {
     });
     return registryState;
   }
-  return resolvePersistedRegistryMemoState(params);
+  return {
+    ...resolvePersistedRegistryMemoState(params),
+    scopeHash,
+  };
 }
 
 function isPersistedRegistryMemoStateFreshForLookup(
-  params: {
-    env: NodeJS.ProcessEnv;
-    preferPersisted?: boolean;
-    stateDir?: string;
-  },
+  identity: PersistedRegistryMemoLookupIdentity,
   registryState: PersistedRegistryMemoState,
 ): boolean {
-  const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
-  const fastHash = hashJson(fastFingerprint);
-  const contextHash = resolvePersistedRegistryMemoContextHash({
-    ...params,
-    fastFingerprint,
-  });
   return (
-    registryState.contextHash === contextHash &&
-    registryState.fastHash === fastHash &&
+    registryState.contextHash === identity.contextHash &&
+    registryState.fastHash === identity.fastHash &&
+    registryState.scopeHash === identity.scopeHash &&
     hashWatchedFiles(registryState.watchedFiles) === registryState.watchedFilesHash
+  );
+}
+
+function resolvePersistedRegistryMemoStateScopeHash(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): string {
+  return hashJson(
+    resolvePluginDiscoveryContext({
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+    }),
   );
 }
 
@@ -815,7 +893,9 @@ export function loadPluginMetadataSnapshot(
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   const env = params.env ?? process.env;
   const registryStateLookupParams = {
+    config: params.config,
     env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   };
@@ -823,7 +903,6 @@ export function loadPluginMetadataSnapshot(
   const memoLookup = resolvePluginMetadataSnapshotMemoLookup({
     params,
     registryState,
-    registryStateLookupParams,
   });
   if (memoLookup) {
     setCappedMemoEntry({
@@ -867,13 +946,18 @@ export function loadPluginMetadataSnapshot(
       registryState,
       result,
     });
+    // Derived entries keep lookup-side context/fast hashes; the derived index
+    // only changes the richer fingerprint used by the snapshot memo key.
     const cachedMemoKey = computePluginMetadataSnapshotMemoKey({
       params,
       registryState: cachedRegistryState,
     });
     setCappedMemoEntry({
       memo: pluginMetadataSnapshotRegistryStateMemo,
-      key: computePersistedRegistryMemoStateMemoKey(cachedRegistryState),
+      key: computePersistedRegistryMemoStateMemoKey(
+        cachedRegistryState,
+        resolvePersistedRegistryMemoStateScopeHash(registryStateLookupParams),
+      ),
       value: cachedRegistryState,
     });
     setCappedMemoEntry({
@@ -891,11 +975,6 @@ export function loadPluginMetadataSnapshot(
 function resolvePluginMetadataSnapshotMemoLookup(params: {
   params: LoadPluginMetadataSnapshotParams;
   registryState: PersistedRegistryMemoState;
-  registryStateLookupParams: {
-    env: NodeJS.ProcessEnv;
-    preferPersisted?: boolean;
-    stateDir?: string;
-  };
 }): { memoKey: string; memo: PluginMetadataSnapshotMemo } | undefined {
   const memoKey = computePluginMetadataSnapshotMemoKey({
     params: params.params,
@@ -905,18 +984,20 @@ function resolvePluginMetadataSnapshotMemoLookup(params: {
   if (memo) {
     return { memoKey, memo };
   }
+  const lookupIdentity = {
+    contextHash: params.registryState.contextHash,
+    fastHash: params.registryState.fastHash,
+    scopeHash: params.registryState.scopeHash,
+  };
   for (const [candidateKey, candidate] of pluginMetadataSnapshotMemo) {
     if (!candidate.registryState) {
       continue;
     }
-    if (
-      !isPersistedRegistryMemoStateFreshForLookup(
-        params.registryStateLookupParams,
-        candidate.registryState,
-      )
-    ) {
+    if (!isPersistedRegistryMemoStateFreshForLookup(lookupIdentity, candidate.registryState)) {
       continue;
     }
+    // The registry-state memo can evict independently; probe each snapshot with
+    // its own state so still-fresh snapshot slots remain reachable.
     const candidateMemoKey = computePluginMetadataSnapshotMemoKey({
       params: params.params,
       registryState: candidate.registryState,
@@ -932,15 +1013,6 @@ const CACHEABLE_DERIVED_REGISTRY_DIAGNOSTIC_CODES = new Set([
   "persisted-registry-stale-policy",
   "persisted-registry-stale-source",
 ]);
-
-function hasRegistryDiagnosticCode(
-  result: {
-    snapshot: PluginMetadataSnapshot;
-  },
-  code: string,
-): boolean {
-  return result.snapshot.registryDiagnostics.some((diagnostic) => diagnostic.code === code);
-}
 
 function resolveCachedRegistryStateForResult(params: {
   env: NodeJS.ProcessEnv;
@@ -964,18 +1036,16 @@ function resolveCachedRegistryStateForResult(params: {
       ? { preferPersisted: params.params.preferPersisted }
       : {}),
   });
-  return hasRegistryDiagnosticCode(params.result, "persisted-registry-stale-source")
-    ? mergePersistedRegistryMemoStates({
-        derived: mergePersistedRegistryMemoStateWatchedFiles(
-          derivedRegistryState,
-          resolvePluginDiscoveryWatchPaths({
-            env: params.env,
-            params: params.params,
-          }),
-        ),
-        lookup: params.registryState,
-      })
-    : derivedRegistryState;
+  return mergePersistedRegistryMemoStates({
+    derived: mergePersistedRegistryMemoStateWatchedFiles(
+      derivedRegistryState,
+      resolvePluginDiscoveryWatchPaths({
+        env: params.env,
+        params: params.params,
+      }),
+    ),
+    lookup: params.registryState,
+  });
 }
 
 function resolvePluginDiscoveryWatchPaths(params: {
@@ -988,11 +1058,19 @@ function resolvePluginDiscoveryWatchPaths(params: {
     workspaceDir: params.params.workspaceDir,
   });
   const watchedFiles = new Set<string>();
+  const bundledSourceRoot = discovery.roots.stock
+    ? buildLegacyBundledRootPath(discovery.roots.stock)
+    : null;
   for (const filePath of [
     discovery.roots.stock,
+    bundledSourceRoot,
     discovery.roots.global,
     discovery.roots.workspace,
     ...discovery.loadPaths,
+    ...listBundledSourceOverlayDirs({
+      bundledRoot: discovery.roots.stock,
+      env: params.env,
+    }),
   ]) {
     addPluginDiscoveryWatchPath(watchedFiles, filePath);
   }
@@ -1001,7 +1079,7 @@ function resolvePluginDiscoveryWatchPaths(params: {
 
 function addPluginDiscoveryWatchPath(
   watchedFiles: Set<string>,
-  filePath: string | undefined,
+  filePath: string | null | undefined,
 ): void {
   if (!filePath) {
     return;
@@ -1011,6 +1089,9 @@ function addPluginDiscoveryWatchPath(
   if (!stat?.isDirectory()) {
     return;
   }
+  // Stale derived scans can discover plugins outside the persisted index, so
+  // keep the cache tied to the same first-level markers discovery uses. Directory
+  // fingerprints catch missing marker creation; existing markers catch content changes.
   addPluginDiscoveryCandidateMarkerWatchPaths(watchedFiles, filePath);
   let entries: fs.Dirent[] = [];
   try {
@@ -1032,7 +1113,106 @@ function addPluginDiscoveryCandidateMarkerWatchPaths(
   candidateRoot: string,
 ): void {
   for (const markerPath of PLUGIN_DISCOVERY_CANDIDATE_MARKER_PATHS) {
-    watchedFiles.add(path.join(candidateRoot, markerPath));
+    const resolvedMarkerPath = path.join(candidateRoot, markerPath);
+    addExistingWatchPath(watchedFiles, resolvedMarkerPath);
+    if (path.dirname(markerPath) !== ".") {
+      addNearestExistingParentDirectory(watchedFiles, candidateRoot, resolvedMarkerPath);
+    }
+  }
+  addPackageDeclaredEntryWatchPaths(watchedFiles, candidateRoot);
+}
+
+function addExistingWatchPath(watchedFiles: Set<string>, filePath: string): void {
+  if (safeStat(filePath)) {
+    watchedFiles.add(filePath);
+  }
+}
+
+function addPackageDeclaredEntryWatchPaths(watchedFiles: Set<string>, candidateRoot: string): void {
+  const packageJson = readPluginRootPackageJson(candidateRoot);
+  if (!packageJson) {
+    return;
+  }
+  const packageManifest = getPackageManifestMetadata(packageJson);
+  const extensionResolution = resolvePackageExtensionEntries(packageJson);
+  if (extensionResolution.status === "ok") {
+    for (const entryPath of extensionResolution.entries) {
+      addPackageEntryWatchPath(watchedFiles, candidateRoot, entryPath);
+    }
+  }
+  for (const entryPath of [
+    ...normalizeStringList(packageManifest?.runtimeExtensions),
+    packageManifest?.setupEntry,
+    packageManifest?.runtimeSetupEntry,
+  ]) {
+    addPackageEntryWatchPath(watchedFiles, candidateRoot, entryPath);
+  }
+}
+
+function readPluginRootPackageJson(candidateRoot: string): PackageManifest | undefined {
+  const resolved = resolvePluginFilePath(candidateRoot, "package.json");
+  if (resolved.status !== "ok") {
+    return undefined;
+  }
+  return readJsonObject(resolved.path) as PackageManifest | undefined;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+function addPackageEntryWatchPath(
+  watchedFiles: Set<string>,
+  candidateRoot: string,
+  entryPath: string | undefined,
+): void {
+  if (!entryPath) {
+    return;
+  }
+  const rootDir = path.resolve(candidateRoot);
+  const resolved = path.resolve(rootDir, entryPath);
+  if (!isPathInsideOrEqual(resolved, rootDir)) {
+    return;
+  }
+  addPackageEntryTargetWatchPath(watchedFiles, rootDir, resolved);
+  for (const candidate of listBuiltRuntimeEntryCandidates(entryPath)) {
+    const built = path.resolve(rootDir, candidate);
+    if (isPathInsideOrEqual(built, rootDir)) {
+      addPackageEntryTargetWatchPath(watchedFiles, rootDir, built);
+    }
+  }
+}
+
+function addPackageEntryTargetWatchPath(
+  watchedFiles: Set<string>,
+  rootDir: string,
+  targetPath: string,
+): void {
+  addExistingWatchPath(watchedFiles, targetPath);
+  addNearestExistingParentDirectory(watchedFiles, rootDir, targetPath);
+}
+
+function addNearestExistingParentDirectory(
+  watchedFiles: Set<string>,
+  rootDir: string,
+  targetPath: string,
+): void {
+  let current = path.dirname(targetPath);
+  while (isPathInsideOrEqual(current, rootDir)) {
+    if (safeStat(current)?.isDirectory()) {
+      watchedFiles.add(current);
+      return;
+    }
+    const next = path.dirname(current);
+    if (next === current) {
+      return;
+    }
+    current = next;
   }
 }
 
