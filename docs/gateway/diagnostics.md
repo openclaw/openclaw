@@ -190,17 +190,17 @@ Disabling diagnostics reduces bug-report detail. It does not affect normal
 Gateway logging.
 
 To keep diagnostics events but skip the critical memory-pressure stability
-bundle write:
+snapshot write:
 
 ```json5
 {
   diagnostics: {
-    memoryPressureBundle: false,
+    memoryPressureSnapshot: false,
   },
 }
 ```
 
-Use this only when file-system scanning or bundle writes are not acceptable on
+Use this only when file-system scanning or snapshot writes are not acceptable on
 that host. Normal memory pressure events still record RSS, heap, threshold, and
 growth facts.
 

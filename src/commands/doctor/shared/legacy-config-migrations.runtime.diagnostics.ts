@@ -6,30 +6,43 @@ import {
 } from "../../../config/legacy.shared.js";
 
 function isLegacyMemoryPressureBundleConfig(value: unknown): boolean {
-  return getRecord(value) !== null;
+  return typeof value === "boolean" || getRecord(value) !== null;
 }
 
 const MEMORY_PRESSURE_BUNDLE_RULE: LegacyConfigRule = {
   path: ["diagnostics", "memoryPressureBundle"],
   message:
-    'diagnostics.memoryPressureBundle object form is legacy; use a boolean instead. Run "openclaw doctor --fix".',
+    'diagnostics.memoryPressureBundle was renamed; use diagnostics.memoryPressureSnapshot instead. Run "openclaw doctor --fix".',
   match: isLegacyMemoryPressureBundleConfig,
   requireSourceLiteral: true,
 };
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
-    id: "diagnostics.memoryPressureBundle.enabled->boolean",
-    describe: "Move diagnostics.memoryPressureBundle.enabled to diagnostics.memoryPressureBundle",
+    id: "diagnostics.memoryPressureBundle->memoryPressureSnapshot",
+    describe: "Move diagnostics.memoryPressureBundle to diagnostics.memoryPressureSnapshot",
     legacyRules: [MEMORY_PRESSURE_BUNDLE_RULE],
     apply: (raw, changes) => {
       const diagnostics = getRecord(raw.diagnostics);
       if (!diagnostics || !isLegacyMemoryPressureBundleConfig(diagnostics.memoryPressureBundle)) {
         return;
       }
+      if (Object.prototype.hasOwnProperty.call(diagnostics, "memoryPressureSnapshot")) {
+        delete diagnostics.memoryPressureBundle;
+        changes.push(
+          "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
+        );
+        return;
+      }
       const legacy = getRecord(diagnostics.memoryPressureBundle);
-      diagnostics.memoryPressureBundle = legacy?.enabled === false ? false : true;
-      changes.push("Moved diagnostics.memoryPressureBundle object → boolean value.");
+      diagnostics.memoryPressureSnapshot =
+        typeof diagnostics.memoryPressureBundle === "boolean"
+          ? diagnostics.memoryPressureBundle
+          : legacy?.enabled === false
+            ? false
+            : true;
+      delete diagnostics.memoryPressureBundle;
+      changes.push("Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.");
     },
   }),
 ];

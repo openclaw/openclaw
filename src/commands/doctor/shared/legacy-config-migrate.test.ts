@@ -133,8 +133,41 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
-describe("legacy diagnostics memory pressure bundle migrate", () => {
-  it("moves nested enabled to a boolean", () => {
+describe("legacy diagnostics memory pressure snapshot migrate", () => {
+  it("renames the boolean toggle", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: false,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("preserves the renamed toggle when both keys are present", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: false,
+        memoryPressureSnapshot: true,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
+    ]);
+  });
+
+  it("moves nested enabled to the renamed boolean", () => {
     const res = migrateLegacyConfigForTest({
       diagnostics: {
         enabled: true,
@@ -146,14 +179,14 @@ describe("legacy diagnostics memory pressure bundle migrate", () => {
 
     expect(res.config?.diagnostics).toEqual({
       enabled: true,
-      memoryPressureBundle: false,
+      memoryPressureSnapshot: false,
     });
     expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle object → boolean value.",
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
     ]);
   });
 
-  it("moves empty object form to the default boolean", () => {
+  it("moves empty object form to the renamed default boolean", () => {
     const res = migrateLegacyConfigForTest({
       diagnostics: {
         memoryPressureBundle: {},
@@ -161,10 +194,10 @@ describe("legacy diagnostics memory pressure bundle migrate", () => {
     });
 
     expect(res.config?.diagnostics).toEqual({
-      memoryPressureBundle: true,
+      memoryPressureSnapshot: true,
     });
     expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle object → boolean value.",
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
     ]);
   });
 });

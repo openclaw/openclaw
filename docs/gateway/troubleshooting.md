@@ -400,7 +400,7 @@ Common signatures:
 - `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
 - `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure, reduce concurrent work, or raise the Node heap limit only after confirming the workload is expected.
 - `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
-- Critical memory pressure appears in logs but no bundle exists → check whether `diagnostics.enabled: false` or `diagnostics.memoryPressureBundle: false` is set.
+- Critical memory pressure appears in logs but no bundle exists → check whether `diagnostics.enabled: false` or `diagnostics.memoryPressureSnapshot: false` is set.
 
 The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
 

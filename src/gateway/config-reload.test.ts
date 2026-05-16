@@ -397,10 +397,10 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
   });
 
-  it("hot-reloads diagnostics memory pressure bundle toggles", () => {
-    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureBundle"]);
+  it("hot-reloads diagnostics memory pressure snapshot toggles", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureSnapshot"]);
     expect(plan.restartGateway).toBe(false);
-    expect(plan.hotReasons).toContain("diagnostics.memoryPressureBundle");
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureSnapshot");
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
@@ -892,22 +892,22 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
-  it("hot-reloads direct diagnostics memory pressure bundle edits", async () => {
+  it("hot-reloads direct diagnostics memory pressure snapshot edits", async () => {
     const nextConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      diagnostics: { memoryPressureBundle: false },
+      diagnostics: { memoryPressureSnapshot: false },
     };
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
         config: nextConfig,
         sourceConfig: nextConfig,
         runtimeConfig: nextConfig,
-        hash: "diagnostics-memory-pressure-bundle-1",
+        hash: "diagnostics-memory-pressure-snapshot-1",
       }),
     );
     const previousConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      diagnostics: { memoryPressureBundle: true },
+      diagnostics: { memoryPressureSnapshot: true },
     };
     const harness = createReloaderHarness(readSnapshot, {
       initialCompareConfig: previousConfig,
@@ -918,7 +918,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onRestart).not.toHaveBeenCalled();
     const [plan, hotConfig] = getOnlyHotReloadCall(harness);
-    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureBundle"]);
+    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureSnapshot"]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

@@ -28,8 +28,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
-  "diagnostics.memoryPressureBundle":
-    "Whether critical memory pressure automatically writes a redacted stability bundle. Default: true. Disable only when file-system scanning or bundle writes are not acceptable on this host.",
+  "diagnostics.memoryPressureSnapshot":
+    "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: true. Disable only when file-system scanning or snapshot writes are not acceptable on this host.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
