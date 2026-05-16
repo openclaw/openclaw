@@ -39,6 +39,11 @@ import {
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
 import { persistSessionEntry } from "./attempt-execution.shared.js";
+import {
+  profileIdProvider,
+  resolveOrderedOpenAIPiAuthProfileSelection,
+  type HarnessAuthProfileSelection,
+} from "./auth-profile-selection.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -99,13 +104,6 @@ type PersistTextTurnTranscriptParams = {
   };
 };
 
-type HarnessAuthProfileSelection = {
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  authProfileProvider: string;
-  authProfileMode?: string;
-};
-
 function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
   provider?: string;
   mode?: string;
@@ -141,7 +139,7 @@ function resolveHarnessAuthProfileSelection(params: {
     return {
       authProfileId: sessionAuthProfileId,
       authProfileIdSource: params.sessionAuthProfileSource,
-      authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
+      authProfileProvider: profileAuth.provider ?? profileIdProvider(sessionAuthProfileId),
       authProfileMode: profileAuth.mode,
     };
   }
@@ -157,6 +155,10 @@ function resolveHarnessAuthProfileSelection(params: {
   });
   const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
   if (!harnessAuthProvider) {
+    const openAIPiSelection = resolveOrderedOpenAIPiAuthProfileSelection(params);
+    if (openAIPiSelection) {
+      return openAIPiSelection;
+    }
     return { authProfileProvider: params.authProfileProvider };
   }
 

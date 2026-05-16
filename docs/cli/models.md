@@ -191,12 +191,15 @@ specific configured agent store. The parent `--agent` flag is honored by
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
 Use `--method api-key` only when you want to add an OpenAI API-key profile,
 usually as a backup for Codex subscription limits. The legacy
-`--provider openai-codex` spelling still works for existing scripts.
+`--provider openai-codex` spelling still works for existing scripts. Use
+`--device-code` when you need the ChatGPT/Codex browser device-code flow instead
+of the localhost OAuth callback.
 
 Examples:
 
 ```bash
 openclaw models auth login --provider openai --set-default
+openclaw models auth login --provider openai-codex --device-code
 openclaw models auth login --provider openai --method api-key
 openclaw models auth list --provider openai
 ```

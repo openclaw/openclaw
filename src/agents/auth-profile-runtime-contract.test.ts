@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { runAgentAttempt } from "./command/attempt-execution.js";
 import type { RunEmbeddedPiAgentParams } from "./pi-embedded-runner/run/params.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded.js";
@@ -165,7 +167,7 @@ async function runAuthContractAttempt(params: {
   storePath: string;
   providerOverride: string;
   authProfileProvider: string;
-  authProfileOverride: string;
+  authProfileOverride?: string;
   cfg?: OpenClawConfig;
   sessionHasHistory?: boolean;
 }) {
@@ -173,8 +175,12 @@ async function runAuthContractAttempt(params: {
   const sessionEntry: SessionEntry = {
     sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
     updatedAt: Date.now(),
-    authProfileOverride: params.authProfileOverride,
-    authProfileOverrideSource: "user",
+    ...(params.authProfileOverride
+      ? {
+          authProfileOverride: params.authProfileOverride,
+          authProfileOverrideSource: "user" as const,
+        }
+      : {}),
   };
   const sessionStore: Record<string, SessionEntry> = {
     [AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey]: sessionEntry,
@@ -394,6 +400,93 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     const params = capturedEmbeddedRunParams();
     expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
     expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
+  });
+
+  it("auto-selects configured OpenAI Codex auth order for embedded OpenAI PI runs", async () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId]: {
+          type: "oauth",
+          provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+          access: "codex-access",
+          refresh: "codex-refresh",
+          expires: Date.now() + 60_000,
+        },
+        [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId]: {
+          type: "api_key",
+          provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+          key: "sk-openai",
+        },
+      },
+    };
+    saveAuthProfileStore(authStore, tmpDir);
+
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      cfg: {
+        ...providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "pi"),
+        auth: {
+          order: {
+            [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider]: [
+              AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+              AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+            ],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const params = capturedEmbeddedRunParams();
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider);
+    expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
+    expect(params.authProfileIdSource).toBe("auto");
+  });
+
+  it("preserves OpenAI auth order when an OpenAI API-key profile comes before Codex OAuth", async () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId]: {
+          type: "api_key",
+          provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+          key: "sk-openai",
+        },
+        [AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId]: {
+          type: "oauth",
+          provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+          access: "codex-access",
+          refresh: "codex-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    saveAuthProfileStore(authStore, tmpDir);
+
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      cfg: {
+        ...providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "pi"),
+        auth: {
+          order: {
+            [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider]: [
+              AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+              AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+            ],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const params = capturedEmbeddedRunParams();
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(params.authProfileId).toBeUndefined();
   });
 
   it("forwards an OpenAI Codex auth profile through the default OpenAI Codex harness path", async () => {

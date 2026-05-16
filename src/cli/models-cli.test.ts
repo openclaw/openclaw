@@ -209,6 +209,40 @@ describe("models cli", () => {
     });
   });
 
+  it("maps --device-code to the provider device-code auth method", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--device-code",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai-codex",
+      method: "device-code",
+    });
+  });
+
+  it("rejects conflicting --device-code and --method values", async () => {
+    await expect(
+      runModelsCommand([
+        "models",
+        "auth",
+        "login",
+        "--provider",
+        "openai-codex",
+        "--device-code",
+        "--method",
+        "oauth",
+      ]),
+    ).rejects.toThrow(
+      "--device-code cannot be combined with --method unless --method is device-code",
+    );
+    expect(modelsAuthLoginCommand).not.toHaveBeenCalled();
+  });
+
   it("passes list-specific --agent and --json to models auth list", async () => {
     await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
 

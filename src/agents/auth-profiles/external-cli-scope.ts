@@ -35,6 +35,18 @@ function addProviderScopeFromModelRef(out: Set<string>, value: string | undefine
   addProviderScopeId(out, raw.slice(0, slash));
 }
 
+function addProviderScopeFromProfileId(out: Set<string>, value: string | undefined): void {
+  const raw = value?.trim();
+  if (!raw) {
+    return;
+  }
+  const colon = raw.indexOf(":");
+  if (colon <= 0) {
+    return;
+  }
+  addProviderScopeId(out, raw.slice(0, colon));
+}
+
 function addProviderScopeFromModelConfig(out: Set<string>, model: AgentModelConfig | undefined) {
   addProviderScopeFromModelRef(out, resolveAgentModelPrimaryValue(model));
   for (const fallback of resolveAgentModelFallbackValues(model)) {
@@ -80,6 +92,7 @@ export function resolveExternalCliAuthScopeFromConfig(
     const normalizedProfileId = profileId.trim();
     if (normalizedProfileId) {
       profileIds.add(normalizedProfileId);
+      addProviderScopeFromProfileId(providerIds, normalizedProfileId);
     }
     addProviderScopeId(providerIds, profile?.provider);
   }
@@ -89,6 +102,7 @@ export function resolveExternalCliAuthScopeFromConfig(
       const normalizedProfileId = profileId.trim();
       if (normalizedProfileId) {
         profileIds.add(normalizedProfileId);
+        addProviderScopeFromProfileId(providerIds, normalizedProfileId);
       }
     }
   }

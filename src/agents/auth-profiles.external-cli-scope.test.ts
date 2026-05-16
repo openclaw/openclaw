@@ -87,6 +87,20 @@ describe("external CLI auth scope", () => {
     expect(scope?.profileIds).toContain("openai-codex:default");
   });
 
+  it("scopes Codex CLI discovery from OpenAI auth order profile ids", () => {
+    const scope = resolveExternalCliAuthScopeFromConfig({
+      auth: {
+        order: {
+          openai: ["openai-codex:work"],
+        },
+      },
+    });
+
+    expect(scope?.providerIds).toContain("openai");
+    expect(scope?.providerIds).toContain("openai-codex");
+    expect(scope?.profileIds).toEqual(["openai-codex:work"]);
+  });
+
   it("includes a CLI provider only when it is the active runtime", () => {
     const scope = resolveExternalCliAuthScopeFromConfig({
       agents: {
