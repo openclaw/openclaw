@@ -37,6 +37,16 @@ if you want the raw npm beta dist-tag for a one-off package update.
 
 See [Development channels](/install/development-channels) for channel semantics.
 
+<Note>
+If you run OpenClaw through a custom Docker wrapper that tracks `latest` with
+local `backup.sh` / `update.sh` / `restore.sh` helpers, prefer the repo's
+documented Docker recovery flow instead of mixing `openclaw update` into that
+stack. The custom Docker path should take a pre-update snapshot, run
+`doctor --fix --non-interactive` during the image swap, restart the gateway
+after repair, and keep a tested restore path for both `~/.openclaw` state and
+QMD-backed memory indexes. See [Docker](/install/docker#backup-and-restore-protocol).
+</Note>
+
 ## Switch between npm and git installs
 
 Use channels when you want to change the install type. The updater keeps your

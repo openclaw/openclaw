@@ -118,6 +118,61 @@ and setup-time config writes through `openclaw-gateway` with
 `--no-deps --entrypoint node`.
 </Note>
 
+### Local code iteration best practice
+
+For local code-only changes on this Docker stack, keep Docker as the runtime
+and mount the specific built artifacts you changed over the container's packaged
+runtime instead of rebuilding the image every time.
+
+This is the preferred maintainer loop when:
+
+- you changed runtime code under `src/`, `extensions/`, or other inputs that
+  end up in `dist`
+- the image already has the right `node_modules`
+- you do not need new apt packages, native addons, or Dockerfile changes
+
+Use a Compose override such as `docker-compose.extra.yml`:
+
+```yaml
+services:
+  openclaw-gateway:
+    volumes:
+      - ./dist/channel-bootstrap.runtime.js:/app/dist/channel-bootstrap.runtime.js:ro
+  openclaw-cli:
+    volumes:
+      - ./dist/channel-bootstrap.runtime.js:/app/dist/channel-bootstrap.runtime.js:ro
+```
+
+Then iterate with:
+
+```bash
+pnpm build:docker
+docker compose up -d --no-deps --force-recreate openclaw-gateway
+```
+
+Why this is preferred for local Docker development:
+
+- the gateway still runs inside Docker
+- startup uses the host-built artifact you changed instead of a newly baked image
+- restart time is much shorter than a full `docker compose build`
+- the packaged image keeps its own Control UI assets, bundled plugin metadata,
+  and runtime dependency plan
+
+Rebuild the image only when the change affects more than `dist`, for example:
+
+- dependency changes that must update `/app/node_modules`
+- package metadata or bundled plugin manifests that change runtime dependency staging
+- Dockerfile or base-image changes
+- new apt packages or browser tooling
+- native runtime changes that require a fresh packaged image
+
+Avoid mounting the entire `./dist` tree as the default maintainer loop. A full
+`dist` overlay can hide packaged Control UI assets unless you also run
+`pnpm ui:build`, and it can introduce checkout-versus-image skew that forces
+bundled plugin runtime-dependency repair or changes startup behavior in ways
+unrelated to the patch you are testing. Use a whole-`dist` overlay only when
+you intentionally want to replace the image's full packaged runtime surface.
+
 ### Environment variables
 
 The setup script accepts these optional environment variables:
@@ -281,6 +336,38 @@ For full persistence details on VM deployments, see
 **Disk growth hotspots:** watch `media/`, session JSONL files,
 `cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
 under `/tmp/openclaw/`.
+
+### Backup and restore protocol
+
+If you run a custom Docker stack with local helper scripts such as `backup.sh`,
+`update.sh`, and `restore.sh`, treat `~/.openclaw` plus the Compose project
+files as the recovery boundary.
+
+Recommended protocol:
+
+1. Run `backup.sh` before any image update, Compose change, or gateway config change.
+2. Let the update replace the container image, then run `openclaw doctor --fix --non-interactive`.
+3. Restart the gateway after `doctor --fix` so repaired config and runtime deps are loaded by the running container.
+4. If recovery is needed, restore the snapshot first, then run `doctor --fix --non-interactive` against the restored state before starting normal traffic.
+5. Finish with live smoke checks such as `openclaw gateway status --deep --require-rpc`, `openclaw health --verbose`, and `openclaw doctor --non-interactive`.
+
+For MCP-driven memory setups, make sure the backup covers both:
+
+- `memory/main.sqlite` when builtin memory is still in use
+- `agents/<agentId>/qmd/` when QMD owns the searchable index, cache, models, or sessions
+
+The QMD tree can be large because it may include downloaded embedding/reranker
+models and cached index data. Keep enough free disk for multiple retained
+snapshots.
+
+For this repo's helper scripts, the validated flow is:
+
+- `backup.sh` snapshots OpenClaw config/state, QMD state, the local Docker image, and the build stack files
+- `update.sh` runs a pre-update backup, rebuilds from `ghcr.io/openclaw/openclaw:latest`, runs `doctor --fix --non-interactive` in update mode, then restarts the gateway
+- `restore.sh` restores the chosen snapshot, repairs it with `doctor --fix --non-interactive`, restarts the gateway, and runs post-restore smoke checks
+
+That flow was validated end-to-end against a real Dockerized `latest` image in
+an isolated test environment, not just with shell dry runs.
 
 ### Shell helpers (optional)
 
