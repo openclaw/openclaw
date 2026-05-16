@@ -910,7 +910,8 @@ export async function runRuntimeParityScenario(params: {
   scenarioId: string;
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
-  const [pi, codex] = await Promise.all([params.runCell("pi"), params.runCell("codex")]);
+  const pi = await params.runCell("pi");
+  const codex = await params.runCell("codex");
   const drift = classifyRuntimeParityCells({
     pi: pi.cell,
     codex: codex.cell,

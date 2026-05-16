@@ -138,6 +138,25 @@ describe("runtime parity", () => {
     expect(result.drift).toBe("none");
   });
 
+  it("runs runtime cells serially so shared QA state cannot cross-contaminate", async () => {
+    const events: string[] = [];
+    const result = await runRuntimeParityScenario({
+      scenarioId: "serial",
+      runCell: async (runtime) => {
+        events.push(`start:${runtime}`);
+        await Promise.resolve();
+        events.push(`finish:${runtime}`);
+        return {
+          scenarioStatus: "pass",
+          cell: makeCell(runtime),
+        };
+      },
+    });
+
+    expect(result.drift).toBe("none");
+    expect(events).toEqual(["start:pi", "finish:pi", "start:codex", "finish:codex"]);
+  });
+
   it("classifies final-text-only differences as text-only", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "text-only",
