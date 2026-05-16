@@ -1,7 +1,8 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
@@ -29,9 +30,9 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-export const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
-export const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
-export const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
+const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
+const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
+const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
@@ -71,11 +72,22 @@ const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
 // Defensive guard for the outer run loop across all retry branches.
-export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
-  const scaled =
-    BASE_RUN_RETRY_ITERATIONS +
-    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
-  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
+export function resolveMaxRunRetryIterations(
+  profileCandidateCount: number,
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): number {
+  const configRetries =
+    (cfg && agentId ? resolveAgentConfig(cfg, agentId)?.runRetries : undefined) ??
+    cfg?.agents?.defaults?.runRetries;
+
+  const base = Math.max(1, configRetries?.base ?? BASE_RUN_RETRY_ITERATIONS);
+  const perProfile = Math.max(0, configRetries?.perProfile ?? RUN_RETRY_ITERATIONS_PER_PROFILE);
+  const minLimit = Math.max(1, configRetries?.min ?? MIN_RUN_RETRY_ITERATIONS);
+  const maxLimit = Math.max(minLimit, configRetries?.max ?? MAX_RUN_RETRY_ITERATIONS);
+
+  const scaled = base + Math.max(1, profileCandidateCount) * perProfile;
+  return Math.min(maxLimit, Math.max(minLimit, scaled));
 }
 
 export function resolveActiveErrorContext(params: {
@@ -86,10 +98,37 @@ export function resolveActiveErrorContext(params: {
   provider: string;
   model: string;
 } {
+  return resolveReportedModelRef(params);
+}
+
+function isEmbeddedHarnessProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "pi";
+}
+
+export function resolveReportedModelRef(params: {
+  provider: string;
+  model: string;
+  assistant?: { provider?: string; model?: string } | null;
+}): {
+  provider: string;
+  model: string;
+} {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
+  if (!assistantProvider) {
+    return {
+      provider: params.provider,
+      model: assistantModel || params.model,
+    };
+  }
+  if (isEmbeddedHarnessProvider(assistantProvider)) {
+    return {
+      provider: params.provider,
+      model: params.model,
+    };
+  }
   return {
-    provider: assistantProvider || params.provider,
+    provider: assistantProvider,
     model: assistantModel || params.model,
   };
 }
@@ -122,6 +161,7 @@ export function buildUsageAgentMetaFields(params: {
  */
 export function buildErrorAgentMeta(params: {
   sessionId: string;
+  sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
@@ -138,6 +178,7 @@ export function buildErrorAgentMeta(params: {
   });
   return {
     sessionId: params.sessionId,
+    ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
     provider: params.provider,
     model: params.model,
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),

@@ -84,6 +84,19 @@ describe("memory-lancedb config", () => {
     }).toThrow("embedding config must include at least one setting");
   });
 
+  it("allows missing embedding config in the manifest so setup can discover fields", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.missing-embedding",
+      value: {},
+    });
+
+    expect(manifestResult.ok).toBe(true);
+    expect(() => {
+      memoryConfigSchema.parse({});
+    }).toThrow("embedding config required");
+  });
+
   it("rejects empty embedding providers", () => {
     expect(() => {
       memoryConfigSchema.parse({
@@ -107,6 +120,49 @@ describe("memory-lancedb config", () => {
         unexpected: true,
       });
     }).toThrow("memory config has unknown keys: unexpected");
+  });
+
+  it("accepts custom trigger literals in the manifest schema and runtime parser", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.custom-triggers",
+      value: {
+        embedding: {
+          apiKey: "sk-test",
+        },
+        customTriggers: ["记住", "important project"],
+      },
+    });
+
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        apiKey: "sk-test",
+      },
+      customTriggers: ["  记住  ", "important project"],
+    });
+
+    expect(manifestResult.ok).toBe(true);
+    expect(parsed.customTriggers).toEqual(["记住", "important project"]);
+  });
+
+  it("rejects unsafe custom trigger config values", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          apiKey: "sk-test",
+        },
+        customTriggers: ["记住", ""],
+      });
+    }).toThrow("customTriggers.1 must not be empty");
+
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          apiKey: "sk-test",
+        },
+        customTriggers: ["x".repeat(101)],
+      });
+    }).toThrow("customTriggers.0 must be at most 100 characters");
   });
 
   it("rejects non-object dreaming values in runtime parsing", () => {

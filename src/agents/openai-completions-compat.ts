@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
@@ -11,7 +11,7 @@ type OpenAICompletionsCompatDefaultsInput = {
   usesExplicitProxyLikeEndpoint?: boolean;
 };
 
-export type OpenAICompletionsCompatDefaults = {
+type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
   supportsDeveloperRole: boolean;
   supportsReasoningEffort: boolean;
@@ -20,9 +20,10 @@ export type OpenAICompletionsCompatDefaults = {
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
+  requiresReasoningContentOnAssistantMessages: boolean;
 };
 
-export type DetectedOpenAICompletionsCompat = {
+type DetectedOpenAICompletionsCompat = {
   capabilities: ProviderRequestCapabilities;
   defaults: OpenAICompletionsCompatDefaults;
 };
@@ -56,6 +57,9 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isDeepSeek =
     endpointClass === "deepseek-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
+  const isXiaomi =
+    endpointClass === "xiaomi-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
@@ -63,10 +67,12 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
     endpointClass === "xai-native" ||
+    isXiaomi ||
     isZai ||
     (isDefaultRoute &&
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
+  const isLocalEndpoint = endpointClass === "local";
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
@@ -83,21 +89,24 @@ export function resolveOpenAICompletionsCompatDefaults(
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
-      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
+      (!isNonStandard &&
+        (isLocalEndpoint || !usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
-    thinkingFormat: isDeepSeek
-      ? "deepseek"
-      : isZai
-        ? "zai"
-        : isOpenRouterLike
-          ? "openrouter"
-          : "openai",
+    thinkingFormat:
+      isDeepSeek || isXiaomi
+        ? "deepseek"
+        : isZai
+          ? "zai"
+          : isOpenRouterLike
+            ? "openrouter"
+            : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
   };
 }
 
-export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
+function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   input: Pick<
     ProviderRequestCapabilities,
     | "endpointClass"

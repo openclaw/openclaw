@@ -14,6 +14,8 @@ import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
+import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
+import { mergeProviderModels } from "./models-config.merge.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -47,6 +49,7 @@ type ImplicitProviderParams = {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
+  providerDiscoveryEntriesOnly?: boolean;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -256,6 +259,7 @@ function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
+  dynamicProviderModels?: boolean;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -264,6 +268,9 @@ function mergeImplicitProviderConfig(params: {
   const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
   if (merge) {
     return merge({ existing, implicit });
+  }
+  if (params.dynamicProviderModels) {
+    return mergeProviderModels(implicit, existing);
   }
   return {
     ...implicit,
@@ -304,6 +311,15 @@ function resolveExistingImplicitProviderFromContext(params: {
       configuredProviders: params.ctx.config?.models?.providers,
       providerIds: params.providerIds,
     })
+  );
+}
+
+function hasProviderWildcardVisibility(params: {
+  config?: OpenClawConfig;
+  providerId: string;
+}): boolean {
+  return parseConfiguredModelVisibilityEntries({ cfg: params.config }).providerWildcards.has(
+    normalizeProviderId(params.providerId),
   );
 }
 
@@ -387,6 +403,10 @@ async function resolvePluginImplicitProviders(
             ],
           }),
         implicit: implicitProvider,
+        dynamicProviderModels: hasProviderWildcardVisibility({
+          config: ctx.config,
+          providerId,
+        }),
       });
     }
   }
@@ -456,6 +476,7 @@ export async function resolveImplicitProviders(
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
+      externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
   const context: ImplicitProviderContext = {
     ...params,
@@ -482,6 +503,7 @@ export async function resolveImplicitProviders(
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),
+    ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
   });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {

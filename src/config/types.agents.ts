@@ -2,7 +2,9 @@ import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
+  AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
+  SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
@@ -86,14 +88,26 @@ export type AgentConfig = {
   /** @deprecated Use agentRuntime. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
+  /** Per-model metadata overrides for this agent. */
+  models?: Record<string, AgentModelEntryConfig>;
+  /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
+  compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
+  /** Optional per-agent tool progress detail mode. */
+  toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
+  /** Optional per-agent bootstrap/context injection mode override. */
+  contextInjection?: AgentDefaultsConfig["contextInjection"];
+  /** Optional per-agent max chars for each injected bootstrap file. */
+  bootstrapMaxChars?: AgentDefaultsConfig["bootstrapMaxChars"];
+  /** Optional per-agent max total chars across injected bootstrap files. */
+  bootstrapTotalMaxChars?: AgentDefaultsConfig["bootstrapTotalMaxChars"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
@@ -111,6 +125,8 @@ export type AgentConfig = {
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
+    /** Prompt-only guidance for how strongly this agent should delegate work. */
+    delegationMode?: SubagentDelegationMode;
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
@@ -118,6 +134,8 @@ export type AgentConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
+  /** Optional outer run loop retry boundaries. */
+  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded Pi overrides. */
   embeddedPi?: {
     /** Optional per-agent execution contract override. */

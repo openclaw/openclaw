@@ -105,7 +105,7 @@ Required behavior when ACP backend is unavailable:
 
 1. Do not immediately ask the user to pick an alternate path.
 2. First attempt automatic local repair:
-   - ensure plugin-local pinned acpx is installed in the bundled ACPX plugin package
+   - ensure plugin-local pinned acpx is installed in the ACPX plugin package
    - verify `${ACPX_CMD} --version`
 3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
 4. Retry ACP thread spawn once after repair.
@@ -211,8 +211,8 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 Defaults are:
 
 - `openclaw -> openclaw acp`
-- `claude -> npx -y @agentclientprotocol/claude-agent-acp@^0.31.0`
-- `codex -> bundled @zed-industries/codex-acp@0.12.0 through OpenClaw's isolated CODEX_HOME wrapper`
+- `claude -> bundled @agentclientprotocol/claude-agent-acp@0.32.0`
+- `codex -> bundled @zed-industries/codex-acp@0.13.0 through OpenClaw's isolated CODEX_HOME wrapper`
 - `copilot -> copilot --acp --stdio`
 - `cursor -> cursor-agent acp`
 - `droid -> droid exec --output-format acp`
@@ -231,7 +231,7 @@ If your local Cursor install still exposes ACP as `agent acp`, set that as the `
 ### Failure handling
 
 - `acpx: command not found`:
-  - for thread-spawn ACP requests, install plugin-local pinned acpx in the bundled ACPX plugin package immediately
+  - for thread-spawn ACP requests, install plugin-local pinned acpx in the ACPX plugin package immediately
   - restart gateway after install and offer to run the restart automatically
   - then retry once
   - do not ask for install permission first unless policy explicitly requires it

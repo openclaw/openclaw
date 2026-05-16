@@ -1,7 +1,7 @@
 ---
 summary: "Import map, registration API reference, and SDK architecture"
 title: "Plugin SDK overview"
-sidebarTitle: "SDK overview"
+sidebarTitle: "Plugin SDK overview"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
@@ -11,8 +11,16 @@ read_when:
 The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
 
+<Note>
+  This page is for plugin authors using `openclaw/plugin-sdk/*` inside
+  OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
+  that want to run agents through the Gateway, use the
+  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
+  instead.
+</Note>
+
 <Tip>
-Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
 </Tip>
 
 ## Import convention
@@ -50,6 +58,11 @@ A small set of bundled-plugin helper seams still appear in the generated export
 map when they have tracked owner usage. They exist for bundled-plugin
 maintenance only and are not recommended import paths for new third-party
 plugins.
+
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
+also kept as deprecated compatibility facades for tracked owner usage. Do not
+copy those import paths into new plugins; use injected runtime helpers and
+generic channel SDK subpaths instead.
 </Warning>
 
 ## Subpath reference
@@ -59,7 +72,15 @@ entry, channel, provider, auth, runtime, capability, memory, and reserved
 bundled-plugin helpers). For the full catalog — grouped and linked — see
 [Plugin SDK subpaths](/plugins/sdk-subpaths).
 
-The generated list of 200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
+The compiler entrypoint inventory lives in
+`scripts/lib/plugin-sdk-entrypoints.json`; package exports are generated from
+the public subset after subtracting repo-local test/internal subpaths listed in
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Run
+`pnpm plugin-sdk:surface` to audit the public export count. Deprecated public
+subpaths that are old enough and unused by bundled extension production code are
+tracked in `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; broad
+deprecated re-export barrels are tracked in
+`scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json`.
 
 ## Registration API
 
@@ -104,6 +125,7 @@ provider- or plugin-specific policy to core prompt builders.
 | `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
 | `api.registerGatewayDiscoveryService(service)` | Local Gateway discovery advertiser      |
 | `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
+| `api.registerNodeCliFeature(registrar, opts?)` | Node feature CLI under `openclaw nodes` |
 | `api.registerService(service)`                 | Background service                      |
 | `api.registerInteractiveHandler(registration)` | Interactive handler                     |
 | `api.registerAgentToolResultMiddleware(...)`   | Runtime tool-result middleware          |
@@ -118,18 +140,52 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                   | Contract it owns                                                                  |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions    |
-| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session    |
-| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params      |
-| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation            |
-| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`             |
-| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces  |
-| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths |
-| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                     |
-| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                    |
-| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup             |
+| Method                                                                               | Contract it owns                                                                                                                  |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
+| `api.registerTrustedToolPolicy(...)`                                                 | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                    |
+
+Use the grouped namespaces for new plugin code:
+
+- `api.session.state.registerSessionExtension(...)`
+- `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.registerSessionSchedulerJob(...)`
+- `api.session.workflow.sendSessionAttachment(...)`
+- `api.session.workflow.scheduleSessionTurn(...)`
+- `api.session.workflow.unscheduleSessionTurnsByTag(...)`
+- `api.session.controls.registerSessionAction(...)`
+- `api.session.controls.registerControlUiDescriptor(...)`
+- `api.agent.events.registerAgentEventSubscription(...)`
+- `api.agent.events.emitAgentEvent(...)`
+- `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
+- `api.lifecycle.registerRuntimeLifecycle(...)`
+
+The equivalent flat methods remain available as deprecated compatibility
+aliases for existing plugins. Do not add new plugin code that calls
+`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
+`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
+`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
+`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
+`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
+`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
+`api.unscheduleSessionTurnsByTag` directly.
+
+`scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
+Cron scheduler. Cron owns timing and creates the background task record when the
+turn runs; the Plugin SDK only constrains the target session, plugin-owned
+naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
+turn when the work itself needs durable multi-step Task Flow state.
 
 The contracts intentionally split authority:
 
@@ -201,11 +257,18 @@ own trust.
 
 ### CLI registration metadata
 
-`api.registerCli(registrar, opts?)` accepts two kinds of top-level metadata:
+`api.registerCli(registrar, opts?)` accepts two kinds of command metadata:
 
-- `commands`: explicit command roots owned by the registrar
-- `descriptors`: parse-time command descriptors used for root CLI help,
+- `commands`: explicit command names owned by the registrar
+- `descriptors`: parse-time command descriptors used for CLI help,
   routing, and lazy plugin CLI registration
+- `parentPath`: optional parent command path for nested command groups, such as
+  `["nodes"]`
+
+For paired-node features, prefer
+`api.registerNodeCliFeature(registrar, opts?)`. It is a small wrapper around
+`api.registerCli(..., { parentPath: ["nodes"] })` and makes commands such as
+`openclaw nodes canvas` explicit plugin-owned node features.
 
 If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
@@ -229,6 +292,27 @@ api.registerCli(
 );
 ```
 
+Nested commands receive the resolved parent command as `program`:
+
+```typescript
+api.registerCli(
+  async ({ program }) => {
+    const { registerNodesCanvasCommands } = await import("./src/cli.js");
+    registerNodesCanvasCommands(program);
+  },
+  {
+    parentPath: ["nodes"],
+    descriptors: [
+      {
+        name: "canvas",
+        description: "Capture or render canvas content from a paired node",
+        hasSubcommands: true,
+      },
+    ],
+  },
+);
+```
+
 Use `commands` by itself only when you do not need lazy root CLI registration.
 That eager compatibility path remains supported, but it does not install
 descriptor-backed placeholders for parse-time lazy loading.
@@ -236,14 +320,20 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.
 - Use `normalizeConfig` when a backend needs compatibility rewrites after merge
   (for example normalizing old flag shapes).
+- Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
+  the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
+  flag.
+
+For an end-to-end authoring guide, see
+[CLI backend plugins](/plugins/cli-backend-plugins).
 
 ### Exclusive slots
 
@@ -300,6 +390,7 @@ semantics.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
 - `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. Use `event.job?.state?.nextRunAtMs` and `ctx.getCron?.()` when syncing external wake schedulers, and keep OpenClaw as the source of truth for due checks and execution.
 
 ### API object fields
 
@@ -340,9 +431,9 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 `index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
-Packaged bundled plugin facades should be loaded through the OpenClaw SDK
-facade loaders; direct imports from `dist/extensions/...` bypass staged runtime
-dependency mirrors that packaged installs use for plugin-owned dependencies.
+Packaged bundled plugin facades should be loaded through OpenClaw's plugin
+facade loaders; direct imports from `dist/extensions/...` bypass the manifest
+and runtime sidecar checks that packaged installs use for plugin-owned code.
 
 Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK

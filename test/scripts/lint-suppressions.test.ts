@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -13,7 +14,48 @@ type SuppressionEntry = {
   rule: string;
 };
 
+function isProductionCodeFile(relativePath: string): boolean {
+  const basename = path.posix.basename(relativePath);
+  if (!CODE_EXTENSIONS.has(path.extname(relativePath))) {
+    return false;
+  }
+  if (basename.startsWith("__rootdir_boundary_canary__.")) {
+    return false;
+  }
+  return !(
+    relativePath.includes("/test/") ||
+    relativePath.endsWith(".test.ts") ||
+    relativePath.endsWith(".test.tsx") ||
+    relativePath.endsWith(".spec.ts") ||
+    relativePath.endsWith(".spec.tsx")
+  );
+}
+
+function listGitCodeFiles(root: string): string[] | null {
+  const result = spawnSync("git", ["ls-files", "--", root], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.length > 0 && isProductionCodeFile(line));
+}
+
 function walkCodeFiles(dir: string, files: string[] = []): string[] {
+  const relativeRoot = path.relative(repoRoot, dir).replaceAll(path.sep, "/");
+  if (relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)) {
+    const gitFiles = listGitCodeFiles(relativeRoot);
+    if (gitFiles) {
+      files.push(...gitFiles);
+      return files;
+    }
+  }
+
   if (!fs.existsSync(dir)) {
     return files;
   }
@@ -26,20 +68,8 @@ function walkCodeFiles(dir: string, files: string[] = []): string[] {
       walkCodeFiles(fullPath, files);
       continue;
     }
-    if (!CODE_EXTENSIONS.has(path.extname(entry.name))) {
-      continue;
-    }
-    if (entry.name.startsWith("__rootdir_boundary_canary__.")) {
-      continue;
-    }
     const relativePath = path.relative(repoRoot, fullPath).replaceAll(path.sep, "/");
-    if (
-      relativePath.includes("/test/") ||
-      relativePath.endsWith(".test.ts") ||
-      relativePath.endsWith(".test.tsx") ||
-      relativePath.endsWith(".spec.ts") ||
-      relativePath.endsWith(".spec.tsx")
-    ) {
+    if (!isProductionCodeFile(relativePath)) {
       continue;
     }
     files.push(relativePath);
@@ -76,6 +106,19 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 }
 
 describe("production lint suppressions", () => {
+  it("lists production files from git without walking source roots", () => {
+    const readdirSync = vi.spyOn(fs, "readdirSync");
+    try {
+      const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+      expect(readdirSync).not.toHaveBeenCalled();
+    } finally {
+      readdirSync.mockRestore();
+    }
+  });
+
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
       "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
@@ -86,12 +129,14 @@ describe("production lint suppressions", () => {
       "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+      "extensions/telegram/src/telegram-ingress-worker.runtime.ts|unicorn/require-post-message-target-origin|1",
+      "extensions/telegram/src/telegram-ingress-worker.ts|unicorn/require-post-message-target-origin|1",
       "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
       "scripts/lib/extension-package-boundary.ts|typescript/no-unnecessary-type-parameters|1",
       "scripts/lib/plugin-npm-release.ts|typescript/no-unnecessary-type-parameters|1",
       "src/agents/agent-scope.ts|no-control-regex|1",
+      "src/agents/code-mode.worker.ts|unicorn/require-post-message-target-origin|1",
       "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
-      "src/agents/skills-clawhub.ts|no-control-regex|1",
       "src/agents/subagent-attachments.ts|no-control-regex|1",
       "src/agents/subagent-spawn.ts|no-control-regex|1",
       "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
@@ -106,25 +151,27 @@ describe("production lint suppressions", () => {
       "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
       "src/infra/channel-runtime-context.ts|typescript/no-unnecessary-type-parameters|1",
       "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/infra/json-file.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
       "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
       "src/node-host/invoke.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/channel-entry-contract.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/facade-loader.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
+      "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/test-helpers/package-manifest-contract.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/host-hook-runtime.ts|typescript/no-unnecessary-type-parameters|2",
+      "src/plugins/host-hook-state.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|2",
+      "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/types.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
       "src/tasks/task-flow-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",
       "src/tasks/task-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",
       "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",

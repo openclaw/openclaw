@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -8,6 +8,7 @@ import {
   createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-transport-stream.js";
+import { getModelProviderLocalService } from "./provider-local-service.js";
 import { getModelProviderRequestTransport } from "./provider-request-config.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
@@ -93,9 +94,9 @@ function createSupportedTransportStreamFn(
   }
 }
 
-function hasTransportOverrides(model: Model<Api>): boolean {
+function hasOpenClawTransportRequirement(model: Model<Api>): boolean {
   const request = getModelProviderRequestTransport(model);
-  return Boolean(request?.proxy || request?.tls);
+  return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
 }
 
 export function isTransportAwareApiSupported(api: Api): boolean {
@@ -110,13 +111,27 @@ export function createTransportAwareStreamFnForModel(
   model: Model<Api>,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  if (!hasTransportOverrides(model)) {
+  if (!hasOpenClawTransportRequirement(model)) {
     return undefined;
   }
   if (!isTransportAwareApiSupported(model.api)) {
     throw new Error(
-      `Model-provider request.proxy/request.tls is not yet supported for api "${model.api}"`,
+      `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
     );
+  }
+  return createSupportedTransportStreamFn(model, ctx);
+}
+
+export function createOpenClawTransportStreamFnForModel(
+  model: Model<Api>,
+  ctx?: ProviderTransportStreamContext,
+): StreamFn | undefined {
+  // Explicit fallback callers use this when they need OpenClaw's HTTP
+  // transport semantics regardless of the default embedded-runner strategy.
+  // Native OpenAI HTTP still depends on this path for strict tool shaping,
+  // attribution, cache-boundary stripping, and runtime credential injection.
+  if (!isTransportAwareApiSupported(model.api)) {
+    return undefined;
   }
   return createSupportedTransportStreamFn(model, ctx);
 }
@@ -125,6 +140,8 @@ export function createBoundaryAwareStreamFnForModel(
   model: Model<Api>,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
+  // Default embedded-runner fallback. Keep OpenAI-family APIs here until PI's
+  // native HTTP streams preserve the same OpenClaw request contract.
   if (!isTransportAwareApiSupported(model.api)) {
     return undefined;
   }

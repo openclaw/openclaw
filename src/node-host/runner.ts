@@ -1,4 +1,5 @@
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
@@ -35,6 +36,32 @@ type NodeHostRunOptions = {
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
+export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
+  switch (platform) {
+    case "darwin":
+      return "macos";
+    case "win32":
+      return "windows";
+    case "linux":
+      return "linux";
+    default:
+      return "unknown";
+  }
+}
+
+export function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
+  switch (platform) {
+    case "darwin":
+      return "Mac";
+    case "win32":
+      return "Windows";
+    case "linux":
+      return "Linux";
+    default:
+      return undefined;
+  }
+}
+
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
@@ -56,7 +83,7 @@ export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): 
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
-export function formatNodeHostReconnectPausedMessage(
+function formatNodeHostReconnectPausedMessage(
   info: GatewayReconnectPausedInfo,
   params?: { exiting?: boolean },
 ): string {
@@ -222,11 +249,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     url,
     token: token || undefined,
     password: password || undefined,
+    preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
     clientVersion: VERSION,
-    platform: process.platform,
+    platform: resolveNodeHostGatewayPlatform(process.platform),
+    deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
@@ -268,6 +297,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     return bins;
   }, pathEnv);
 
-  client.start();
+  const readiness = await startGatewayClientWhenEventLoopReady(client, {
+    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
+  });
+  if (!readiness.ready) {
+    throw new Error("node host gateway event loop readiness timeout");
+  }
   await new Promise(() => {});
 }

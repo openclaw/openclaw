@@ -6,10 +6,14 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecutable } from "../infra/executable-path.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
 import {
@@ -26,6 +30,38 @@ let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
+let gogBin: string | undefined;
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
+
+function escapeForCmdExe(arg: string): string {
+  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+    throw new Error(`Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
+  }
+  if (!arg.includes(" ") && !arg.includes('"')) {
+    return arg;
+  }
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function resolveGogServeInvocation(args: string[]): {
+  args: string[];
+  command: string;
+  windowsHide?: true;
+  windowsVerbatimArguments?: true;
+} {
+  const command = (gogBin ??= resolveExecutable("gog"));
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(command));
+  if (process.platform !== "win32" || (ext !== ".cmd" && ext !== ".bat")) {
+    return { command, args, windowsHide: process.platform === "win32" ? true : undefined };
+  }
+  const cmdExe = path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+  return {
+    command: cmdExe,
+    args: ["/d", "/s", "/c", [command, ...args].map(escapeForCmdExe).join(" ")],
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+  };
+}
 
 /**
  * Check if gog binary is available
@@ -39,10 +75,14 @@ function isGogAvailable(): boolean {
  */
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
+  options: { signal?: AbortSignal } = {},
 ): Promise<boolean> {
-  const args = ["gog", ...buildGogWatchStartArgs(cfg)];
+  const args = [(gogBin ??= resolveExecutable("gog")), ...buildGogWatchStartArgs(cfg)];
   try {
-    const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
+    const result = await runCommandWithTimeout(args, {
+      timeoutMs: 120_000,
+      signal: options.signal,
+    });
     if (result.code !== 0) {
       const message = result.stderr || result.stdout || "gog watch start failed";
       log.error(`watch start failed: ${message}`);
@@ -63,10 +103,13 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
+  const invocation = resolveGogServeInvocation(args);
 
-  const child = spawn("gog", args, {
+  const child = spawn(invocation.command, invocation.args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
+    windowsHide: invocation.windowsHide,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 
   child.stdout?.on("data", (data: Buffer) => {
@@ -121,11 +164,84 @@ export type GmailWatcherStartResult = {
   reason?: string;
 };
 
+type GmailWatcherCancellation = {
+  dispose: () => void;
+  isCancelled: () => boolean;
+  signal?: AbortSignal;
+};
+
+type GmailWatcherStartOptions = {
+  isCancelled?: () => boolean;
+  signal?: AbortSignal;
+};
+
+function cancelledGmailWatcherStart(
+  expectedConfig: GmailHookRuntimeConfig,
+): GmailWatcherStartResult {
+  if (currentConfig === expectedConfig) {
+    currentConfig = null;
+  }
+  return { started: false, reason: "startup cancelled" };
+}
+
+function isGmailWatcherStartCancelled(options: GmailWatcherStartOptions): boolean {
+  return options.signal?.aborted === true || options.isCancelled?.() === true;
+}
+
+function createGmailWatcherCancellation(
+  options: GmailWatcherStartOptions,
+): GmailWatcherCancellation {
+  if (!options.signal && !options.isCancelled) {
+    return {
+      dispose: () => {},
+      isCancelled: () => false,
+    };
+  }
+
+  const abortController = new AbortController();
+  const abort = () => {
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
+  };
+  const onAbort = () => abort();
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+
+  let cancelPoll: ReturnType<typeof setInterval> | null = null;
+  if (options.isCancelled) {
+    cancelPoll = setInterval(() => {
+      if (options.isCancelled?.()) {
+        abort();
+      }
+    }, 100);
+    cancelPoll.unref?.();
+  }
+
+  if (isGmailWatcherStartCancelled(options)) {
+    abort();
+  }
+
+  return {
+    dispose: () => {
+      if (cancelPoll) {
+        clearInterval(cancelPoll);
+        cancelPoll = null;
+      }
+      options.signal?.removeEventListener("abort", onAbort);
+    },
+    isCancelled: () => abortController.signal.aborted || isGmailWatcherStartCancelled(options),
+    signal: abortController.signal,
+  };
+}
+
 /**
  * Start the Gmail watcher service.
  * Called automatically by the gateway if hooks.gmail is configured.
  */
-export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatcherStartResult> {
+export async function startGmailWatcher(
+  cfg: OpenClawConfig,
+  options: GmailWatcherStartOptions = {},
+): Promise<GmailWatcherStartResult> {
   // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {
     return { started: false, reason: "hooks not enabled" };
@@ -148,36 +264,57 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
   }
 
   const runtimeConfig = resolved.value;
+  if (isGmailWatcherStartCancelled(options)) {
+    return cancelledGmailWatcherStart(runtimeConfig);
+  }
   currentConfig = runtimeConfig;
 
   // Set up Tailscale endpoint if needed
   if (runtimeConfig.tailscale.mode !== "off") {
+    const cancellation = createGmailWatcherCancellation(options);
     try {
       await ensureTailscaleEndpoint({
         mode: runtimeConfig.tailscale.mode,
         path: runtimeConfig.tailscale.path,
         port: runtimeConfig.serve.port,
+        signal: cancellation.signal,
         target: runtimeConfig.tailscale.target,
       });
       log.info(
         `tailscale ${runtimeConfig.tailscale.mode} configured for port ${runtimeConfig.serve.port}`,
       );
+      if (cancellation.isCancelled()) {
+        return cancelledGmailWatcherStart(runtimeConfig);
+      }
     } catch (err) {
+      if (cancellation.isCancelled()) {
+        return cancelledGmailWatcherStart(runtimeConfig);
+      }
       log.error(`tailscale setup failed: ${String(err)}`);
       return {
         started: false,
         reason: `tailscale setup failed: ${String(err)}`,
       };
+    } finally {
+      cancellation.dispose();
     }
   }
 
   // Start the Gmail watch (register with Gmail API)
-  const watchStarted = await startGmailWatch(runtimeConfig);
+  const cancellation = createGmailWatcherCancellation(options);
+  const watchStarted = await startGmailWatch(runtimeConfig, { signal: cancellation.signal });
+  cancellation.dispose();
+  if (cancellation.isCancelled()) {
+    return cancelledGmailWatcherStart(runtimeConfig);
+  }
   if (!watchStarted) {
     log.warn("gmail watch start failed, but continuing with serve");
   }
 
   // Spawn the gog serve process
+  if (isGmailWatcherStartCancelled(options)) {
+    return cancelledGmailWatcherStart(runtimeConfig);
+  }
   shuttingDown = false;
   watcherProcess = spawnGogServe(runtimeConfig);
 
@@ -232,11 +369,4 @@ export async function stopGmailWatcher(): Promise<void> {
 
   currentConfig = null;
   log.info("gmail watcher stopped");
-}
-
-/**
- * Check if the Gmail watcher is running.
- */
-export function isGmailWatcherRunning(): boolean {
-  return watcherProcess !== null && !shuttingDown;
 }

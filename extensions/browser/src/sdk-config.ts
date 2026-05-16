@@ -1,15 +1,16 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export {
   getRuntimeConfig,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-export { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+export { mutateConfigFile, replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 export {
   type BrowserConfig,
   type BrowserProfileConfig,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 export {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -20,10 +21,8 @@ export {
   escapeRegExp,
   resolveUserPath,
   shortenHomePath,
-} from "openclaw/plugin-sdk/text-runtime";
-export { normalizeOptionalLowercaseString };
-
-export type PortRange = { start: number; end: number };
+} from "openclaw/plugin-sdk/text-utility-runtime";
+type PortRange = { start: number; end: number };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
 const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
@@ -60,7 +59,7 @@ export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): Po
   };
 }
 
-export type BooleanParseOptions = {
+type BooleanParseOptions = {
   truthy?: string[];
   falsy?: string[];
 };

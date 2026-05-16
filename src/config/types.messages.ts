@@ -5,7 +5,14 @@ export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
   /**
-   * Controls how group/channel turns produce visible room replies.
+   * Controls how unmentioned always-on group chatter is submitted.
+   * Default: "user_request".
+   */
+  ambientTurns?: "user_request" | "room_event";
+  /**
+   * Controls how group/channel turns produce visible room replies. The
+   * message-tool mode requires explicit message sends for visible room output;
+   * final text stays private when the model misses the tool.
    * Default: "message_tool".
    */
   visibleReplies?: "automatic" | "message_tool";
@@ -59,6 +66,9 @@ export type StatusReactionsEmojiConfig = {
   tool?: string;
   coding?: string;
   web?: string;
+  deploy?: string;
+  build?: string;
+  concierge?: string;
   done?: string;
   error?: string;
   stallSoft?: string;
@@ -91,6 +101,16 @@ export type StatusReactionsConfig = {
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
+  /**
+   * Controls how source turns produce visible replies across direct, group, and
+   * channel conversations. Group/channel turns still default to
+   * `groupChat.visibleReplies` when it is set.
+   *
+   * Default: "automatic" for direct chats, "message_tool" for groups/channels.
+   * In group/channel rooms, "message_tool" keeps final text private unless the
+   * model sends visibly through the message tool.
+   */
+  visibleReplies?: "automatic" | "message_tool";
   /**
    * Prefix auto-added to all outbound replies.
    *

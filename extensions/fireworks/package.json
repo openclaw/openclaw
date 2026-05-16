@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/fireworks-provider",
-  "version": "2026.4.25",
+  "version": "2026.5.17",
   "private": true,
   "description": "OpenClaw Fireworks provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.70.5"
+    "@earendil-works/pi-ai": "0.74.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

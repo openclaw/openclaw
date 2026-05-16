@@ -24,6 +24,7 @@ describe("qa channel transport", () => {
       messages: {
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
+          visibleReplies: "automatic",
         },
       },
     });
@@ -106,14 +107,14 @@ describe("qa channel transport", () => {
     });
 
     expect(transport.capabilities.getNormalizedMessageState().messages).toHaveLength(1);
-    expect(
-      await transport.capabilities.readNormalizedMessage({
-        messageId: inbound.id,
-      }),
-    ).toMatchObject({
-      id: inbound.id,
-      text: "hello from the operator",
+    const message = await transport.capabilities.readNormalizedMessage({
+      messageId: inbound.id,
     });
+    if (!message) {
+      throw new Error("expected normalized QA message");
+    }
+    expect(message.id).toBe(inbound.id);
+    expect(message.text).toBe("hello from the operator");
   });
 
   it("inherits the shared failure-aware wait helper", async () => {

@@ -1,9 +1,12 @@
+import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import type {
   ProviderPlugin,
   ProviderCatalogContext,
   ProviderCatalogResult,
+  ProviderAuthMethod,
   ProviderPluginCatalog,
+  UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
@@ -46,6 +49,11 @@ export type SingleProviderPluginOptions = {
   id: string;
   name: string;
   description: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
+   * fallback for older plugins.
+   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   provider?: {
@@ -55,6 +63,7 @@ export type SingleProviderPluginOptions = {
     aliases?: string[];
     envVars?: string[];
     auth?: SingleProviderPluginApiKeyAuthOptions[];
+    extraAuth?: ProviderAuthMethod[];
     catalog: SingleProviderPluginCatalogOptions;
   } & Omit<
     ProviderPlugin,
@@ -101,6 +110,47 @@ function resolveEnvVars(params: {
   return combined.length > 0 ? [...new Set(combined)] : undefined;
 }
 
+function projectProviderCatalogResultToUnifiedTextRows(params: {
+  providerId: string;
+  result: ProviderCatalogResult;
+  source: UnifiedModelCatalogEntry["source"];
+}): UnifiedModelCatalogEntry[] {
+  if (!params.result) {
+    return [];
+  }
+  const providers =
+    "provider" in params.result
+      ? { [params.providerId]: params.result.provider }
+      : params.result.providers;
+  const rows: UnifiedModelCatalogEntry[] = [];
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    for (const model of providerConfig.models ?? []) {
+      rows.push({
+        kind: "text",
+        provider: providerId,
+        model: model.id,
+        ...(model.name ? { label: model.name } : {}),
+        source: params.source,
+      });
+    }
+  }
+  return rows;
+}
+
+async function runUnifiedTextCatalog(params: {
+  providerId: string;
+  catalog: ProviderPluginCatalog;
+  ctx: UnifiedModelCatalogProviderContext;
+  source: UnifiedModelCatalogEntry["source"];
+}): Promise<UnifiedModelCatalogEntry[]> {
+  const result = await params.catalog.run(params.ctx);
+  return projectProviderCatalogResultToUnifiedTextRows({
+    providerId: params.providerId,
+    result,
+    source: params.source,
+  });
+}
+
 export function defineSingleProviderPluginEntry(options: SingleProviderPluginOptions) {
   return definePluginEntry({
     id: options.id,
@@ -130,6 +180,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             ...(wizard ? { wizard } : {}),
           });
         });
+        auth.push(...(provider.extraAuth ?? []));
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
@@ -185,11 +236,34 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                   "aliases",
                   "envVars",
                   "auth",
+                  "extraAuth",
                   "catalog",
                   "staticCatalog",
                 ].includes(key),
             ),
           ),
+        });
+        api.registerModelCatalogProvider({
+          provider: providerId,
+          kinds: ["text"],
+          ...(staticCatalog
+            ? {
+                staticCatalog: (ctx: UnifiedModelCatalogProviderContext) =>
+                  runUnifiedTextCatalog({
+                    providerId,
+                    catalog: staticCatalog,
+                    ctx,
+                    source: "static",
+                  }),
+              }
+            : {}),
+          liveCatalog: (ctx: UnifiedModelCatalogProviderContext) =>
+            runUnifiedTextCatalog({
+              providerId,
+              catalog,
+              ctx,
+              source: "live",
+            }),
         });
       }
       options.register?.(api);

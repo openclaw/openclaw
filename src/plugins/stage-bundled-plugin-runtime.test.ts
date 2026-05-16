@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("stages bundled dist plugins as runtime wrappers and links staged dist node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = createDistPluginDir(repoRoot, "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -124,10 +124,7 @@ describe("stageBundledPluginRuntime", () => {
       pluginId: "diffs",
       expectedImport: distRuntimeImportPath("diffs"),
     });
-    expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
-      fs.realpathSync(path.join(distPluginDir, "node_modules")),
-    );
+    expect(fs.existsSync(path.join(runtimePluginDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
     expect(
       fs
@@ -334,12 +331,15 @@ describe("stageBundledPluginRuntime", () => {
     ]);
 
     const match = commandsModule.matchPluginCommand("/pair now");
-    expect(match).not.toBeNull();
-    expect(match?.args).toBe("now");
+    if (match === null) {
+      throw new Error("Expected plugin command match");
+    }
+    expect(match.args).toBe("now");
+    expect(typeof match.command.handler).toBe("function");
     await expect(
       commandsModule.executePluginCommand({
-        command: match!.command,
-        args: match?.args,
+        command: match.command,
+        args: match.args,
       }),
     ).resolves.toEqual({ text: "paired:now" });
   });
@@ -454,11 +454,9 @@ describe("stageBundledPluginRuntime", () => {
     };
     const discovery = discoverOpenClawPlugins({
       env,
-      cache: false,
     });
     const manifestRegistry = loadPluginManifestRegistry({
       env,
-      cache: false,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
     });
@@ -523,7 +521,7 @@ describe("stageBundledPluginRuntime", () => {
       return realSymlinkSync(String(target), linkPath, type);
     }) as typeof fs.symlinkSync);
 
-    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+    stageBundledPluginRuntime({ repoRoot });
 
     const runtimeAssetPath = path.join(
       repoRoot,

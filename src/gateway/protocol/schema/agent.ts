@@ -30,6 +30,8 @@ export const AgentEventSchema = Type.Object(
     seq: Type.Integer({ minimum: 0 }),
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
+    spawnedBy: Type.Optional(NonEmptyString),
+    isHeartbeat: Type.Optional(Type.Boolean()),
     data: Type.Record(Type.String(), Type.Unknown()),
   },
   { additionalProperties: false },
@@ -77,6 +79,7 @@ export const MessageActionParamsSchema = Type.Object(
     senderIsOwner: Type.Optional(Type.Boolean()),
     sessionKey: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),
+    inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
     agentId: Type.Optional(Type.String()),
     toolContext: Type.Optional(MessageActionToolContextSchema),
     idempotencyKey: NonEmptyString,
@@ -90,6 +93,7 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    asVoice: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
@@ -99,6 +103,12 @@ export const SendParamsSchema = Type.Object(
     replyToId: Type.Optional(Type.String()),
     /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
     threadId: Type.Optional(Type.String()),
+    /** Force document-style media sends where supported. */
+    forceDocument: Type.Optional(Type.Boolean()),
+    /** Send silently (no notification) where supported. */
+    silent: Type.Optional(Type.Boolean()),
+    /** Channel-specific parse mode for formatted text. */
+    parseMode: Type.Optional(Type.Literal("HTML")),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
@@ -167,8 +177,12 @@ export const AgentParamsSchema = Type.Object(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
+    internalRuntimeHandoffId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    sourceReplyDeliveryMode: Type.Optional(
+      Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
+    ),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
@@ -209,6 +223,9 @@ export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
+    // Typed field; misspelled variants remain opaque metadata because wake
+    // senders already rely on additionalProperties.
+    sessionKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

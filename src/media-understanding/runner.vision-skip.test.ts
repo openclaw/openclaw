@@ -97,6 +97,24 @@ function setCompatibleActiveMediaUnderstandingRegistry(
   setActivePluginRegistry(pluginRegistry, cacheKey);
 }
 
+type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
+
+function requireDecisionAttachment(result: CapabilityResult, index: number) {
+  const attachment = result.decision.attachments[index];
+  if (!attachment) {
+    throw new Error(`expected media-understanding decision attachment ${index}`);
+  }
+  return attachment;
+}
+
+function requireCapabilityOutput(result: CapabilityResult, index: number) {
+  const output = result.outputs[index];
+  if (!output) {
+    throw new Error(`expected media-understanding output ${index}`);
+  }
+  return output;
+}
+
 describe("runCapability image skip", () => {
   beforeAll(async () => {
     vi.doMock("../agents/model-catalog.js", async () => {
@@ -138,11 +156,14 @@ describe("runCapability image skip", () => {
       expect(result.outputs).toHaveLength(0);
       expect(result.decision.outcome).toBe("skipped");
       expect(result.decision.attachments).toHaveLength(1);
-      expect(result.decision.attachments[0]?.attachmentIndex).toBe(0);
-      expect(result.decision.attachments[0]?.attempts[0]?.outcome).toBe("skipped");
-      expect(result.decision.attachments[0]?.attempts[0]?.reason).toBe(
-        "primary model supports vision natively",
-      );
+      const attachment = requireDecisionAttachment(result, 0);
+      expect(attachment.attachmentIndex).toBe(0);
+      const attempt = attachment.attempts[0];
+      if (!attempt) {
+        throw new Error("expected media-understanding skipped attempt");
+      }
+      expect(attempt.outcome).toBe("skipped");
+      expect(attempt.reason).toBe("primary model supports vision natively");
     } finally {
       await cache.cleanup();
     }
@@ -183,11 +204,64 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]).toMatchObject({
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
           provider: "openrouter",
           model: "google/gemini-2.5-flash",
           text: "explicit ok",
         });
+      },
+    );
+  });
+
+  it("lets per-request image prompts override entry prompts", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-request-prompt",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        let seenPrompt: string | undefined;
+        const cfg = {} as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "openrouter",
+              {
+                id: "openrouter",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  seenPrompt = req.prompt;
+                  return { text: "request prompt ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+          config: {
+            _requestPromptOverride: "Use this request prompt",
+            models: [
+              {
+                provider: "openrouter",
+                model: "google/gemini-2.5-flash",
+                prompt: "entry prompt",
+              },
+            ],
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenPrompt).toBe("Use this request prompt");
       },
     );
   });
@@ -334,9 +408,10 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]?.provider).toBe("openrouter");
-        expect(result.outputs[0]?.model).toBe("auto");
-        expect(result.outputs[0]?.text).toBe("openrouter ok");
+        const output = requireCapabilityOutput(result, 0);
+        expect(output.provider).toBe("openrouter");
+        expect(output.model).toBe("auto");
+        expect(output.text).toBe("openrouter ok");
         expect(seenModel).toBe("auto");
       },
     );

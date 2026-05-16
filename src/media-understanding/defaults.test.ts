@@ -57,10 +57,18 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         defaultModels: { image: "gpt-5.4-mini", audio: "gpt-4o-transcribe" },
         autoPriority: { image: 10, audio: 10 },
       },
-      "openai-codex": { capabilities: ["image"], defaultModels: { image: "gpt-5.5" } },
+      "openai-codex": {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
+        autoPriority: { image: 20, audio: 20 },
+      },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
-      openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+      openrouter: {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "auto", audio: "openai/whisper-large-v3-turbo" },
+        autoPriority: { audio: 35 },
+      },
       qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
       zai: { capabilities: ["image"], autoPriority: { image: 60 } },
@@ -72,6 +80,24 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({
     plugins: mediaMetadataPlugins,
     diagnostics: [],
+  }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({
+    index: { plugins: [] },
+    plugins: mediaMetadataPlugins,
+  }),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => ({
+    plugins: mediaMetadataPlugins,
   }),
 }));
 
@@ -85,6 +111,12 @@ describe("resolveDefaultMediaModel", () => {
   it("resolves bundled audio defaults from provider metadata", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
+      "gpt-4o-transcribe",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "audio" })).toBe(
+      "openai/whisper-large-v3-turbo",
     );
   });
 
@@ -114,7 +146,9 @@ describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
+      "openai-codex",
       "xai",
+      "openrouter",
       "google",
       "mistral",
     ]);
@@ -124,6 +158,7 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
       "openai",
       "anthropic",
+      "openai-codex",
       "google",
       "minimax",
       "minimax-portal",

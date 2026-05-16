@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,12 +77,25 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
   for (const home of homes) {
-    const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-    if (filePath.startsWith(prefix)) {
-      return "~/" + filePath.slice(prefix.length);
+    for (const prefix of compactHomePrefixesForHome(home)) {
+      if (filePath.startsWith(prefix)) {
+        return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
+      }
     }
   }
   return filePath;
+}
+
+function compactHomePrefixesForHome(home: string): string[] {
+  const prefixes = [home.endsWith(path.sep) ? home : home + path.sep];
+  if (home.includes("\\") && !home.endsWith("\\")) {
+    prefixes.push(home + "\\");
+  }
+  return prefixes;
+}
+
+function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string): string {
+  return matchedHomePrefix.includes("\\") ? filePath.replace(/\\/g, "/") : filePath;
 }
 
 function compactPathForConsoleMessage(filePath: string): string {
@@ -126,6 +140,8 @@ const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
+const DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN = 1_000;
+const DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN = 10_000;
 
 type ResolvedSkillsLimits = {
   maxCandidatesPerRoot: number;
@@ -138,6 +154,21 @@ type ResolvedSkillsLimits = {
 type LoadedSkillRecord = {
   skill: Skill;
   frontmatter?: ParsedSkillFrontmatter;
+  syncSourceDir?: string;
+  syncDirName?: string;
+};
+
+type CandidateSkillDir = {
+  skillDir: string;
+  skillDirRealPath: string;
+  name: string;
+  skillMdRealPath: string;
+};
+
+type ChildDirectoryScan = {
+  dirs: string[];
+  scannedEntryCount: number;
+  truncated: boolean;
 };
 
 function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): ResolvedSkillsLimits {
@@ -156,32 +187,46 @@ function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): Resolve
   };
 }
 
-function listChildDirectories(dir: string): string[] {
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    const dirs: string[] = [];
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.name === "node_modules") continue;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        dirs.push(entry.name);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        try {
-          if (fs.statSync(fullPath).isDirectory()) {
-            dirs.push(entry.name);
-          }
-        } catch {
-          // ignore broken symlinks
-        }
-      }
-    }
-    return dirs;
-  } catch {
-    return [];
+function listChildDirectories(
+  dir: string,
+  opts?: {
+    maxCandidateDirs?: number;
+    maxRawEntriesToScan?: number;
+  },
+): ChildDirectoryScan {
+  const maxRawEntriesToScan =
+    opts?.maxRawEntriesToScan === undefined
+      ? resolveRawEntryScanLimit(opts?.maxCandidateDirs)
+      : Math.max(0, opts.maxRawEntriesToScan);
+  const scan = walkDirectorySync(dir, {
+    maxDepth: 1,
+    maxEntries: maxRawEntriesToScan,
+    symlinks: "follow",
+    include: (entry) =>
+      entry.kind === "directory" && !entry.name.startsWith(".") && entry.name !== "node_modules",
+  });
+  if (scan.scannedEntryCount === 0 && scan.entries.length === 0) {
+    return { dirs: [], scannedEntryCount: 0, truncated: false };
   }
+  return {
+    dirs: scan.entries.map((entry) => entry.name),
+    scannedEntryCount: scan.scannedEntryCount,
+    truncated: scan.truncated,
+  };
+}
+
+function resolveRawEntryScanLimit(maxCandidateDirs: number | undefined): number {
+  if (maxCandidateDirs === undefined) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const normalized = Math.max(0, maxCandidateDirs);
+  if (normalized === 0) {
+    return 0;
+  }
+  return Math.min(
+    DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN,
+    Math.max(DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN, normalized * 10),
+  );
 }
 
 function tryRealpath(filePath: string): string | null {
@@ -270,12 +315,16 @@ function resolveContainedSkillPath(params: {
   rootDir: string;
   rootRealPath: string;
   candidatePath: string;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): string | null {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
     return null;
   }
-  if (isPathInside(params.rootRealPath, candidateRealPath)) {
+  if (
+    isPathInside(params.rootRealPath, candidateRealPath) ||
+    isPathInsideAnyRoot(params.allowedSymlinkTargetRealPaths ?? [], candidateRealPath)
+  ) {
     return candidateRealPath;
   }
   warnEscapedSkillPath({
@@ -286,32 +335,6 @@ function resolveContainedSkillPath(params: {
     candidateRealPath,
   });
   return null;
-}
-
-function filterLoadedSkillRecordsInsideRoot(params: {
-  records: LoadedSkillRecord[];
-  source: string;
-  rootDir: string;
-  rootRealPath: string;
-}): LoadedSkillRecord[] {
-  return params.records.filter(({ skill }) => {
-    const baseDirRealPath = resolveContainedSkillPath({
-      source: params.source,
-      rootDir: params.rootDir,
-      rootRealPath: params.rootRealPath,
-      candidatePath: skill.baseDir,
-    });
-    if (!baseDirRealPath) {
-      return false;
-    }
-    const skillFileRealPath = resolveContainedSkillPath({
-      source: params.source,
-      rootDir: params.rootDir,
-      rootRealPath: params.rootRealPath,
-      candidatePath: skill.filePath,
-    });
-    return Boolean(skillFileRealPath);
-  });
 }
 
 function resolveNestedSkillsRoot(
@@ -331,11 +354,10 @@ function resolveNestedSkillsRoot(
 
   // Heuristic: if `dir/skills/*/SKILL.md` exists for any entry, treat `dir/skills` as the real root.
   // Note: don't stop at 25, but keep a cap to avoid pathological scans.
-  const nestedDirs = listChildDirectories(nested);
   const scanLimit = Math.max(0, opts?.maxEntriesToScan ?? 100);
-  const toScan = scanLimit === 0 ? [] : nestedDirs.slice(0, Math.min(nestedDirs.length, scanLimit));
+  const nestedDirs = listChildDirectories(nested, { maxCandidateDirs: scanLimit }).dirs;
 
-  for (const name of toScan) {
+  for (const name of nestedDirs) {
     const skillMd = path.join(nested, name, "SKILL.md");
     if (fs.existsSync(skillMd)) {
       return { baseDir: nested, note: `Detected nested skills root at ${nested}` };
@@ -365,6 +387,222 @@ function unwrapLoadedSkillRecords(loaded: unknown): LoadedSkillRecord[] {
   return [];
 }
 
+function loadContainedSkillRecords(params: {
+  skillDir: string;
+  source: string;
+  maxSkillFileBytes: number;
+  canonicalSkillDir?: string;
+}): LoadedSkillRecord[] {
+  const expectedBaseDir = path.resolve(params.skillDir);
+  const loaded = loadSkillsFromDirSafe({
+    dir: params.skillDir,
+    source: params.source,
+    maxBytes: params.maxSkillFileBytes,
+  });
+  const records = unwrapLoadedSkillRecords(loaded).filter(
+    (record) => path.resolve(record.skill.baseDir) === expectedBaseDir,
+  );
+  const canonicalSkillDir = params.canonicalSkillDir;
+  return canonicalSkillDir
+    ? records.map((record) => canonicalizeLoadedSkillRecord(record, canonicalSkillDir))
+    : records;
+}
+
+function canonicalizeLoadedSkillRecord(
+  record: LoadedSkillRecord,
+  canonicalSkillDir: string,
+): LoadedSkillRecord {
+  const originalBaseDir = path.resolve(record.skill.baseDir);
+  const canonicalBaseDir = path.resolve(canonicalSkillDir);
+  if (originalBaseDir === canonicalBaseDir) {
+    return record;
+  }
+  const filePath = path.join(
+    canonicalBaseDir,
+    path.relative(originalBaseDir, record.skill.filePath),
+  );
+  return {
+    ...record,
+    syncSourceDir: canonicalBaseDir,
+    syncDirName: path.basename(originalBaseDir),
+    skill: {
+      ...record.skill,
+      filePath,
+      baseDir: canonicalBaseDir,
+      sourceInfo: record.skill.sourceInfo
+        ? {
+            ...record.skill.sourceInfo,
+            path: filePath,
+            baseDir: canonicalBaseDir,
+          }
+        : record.skill.sourceInfo,
+    },
+  };
+}
+
+function isPathInsideAnyRoot(rootRealPaths: readonly string[], candidateRealPath: string): boolean {
+  return rootRealPaths.some((rootRealPath) => isPathInside(rootRealPath, candidateRealPath));
+}
+
+function shouldEnforceConfiguredSkillRootContainment(source: string): boolean {
+  return source !== "openclaw-managed" && source !== "agents-skills-personal";
+}
+
+function shouldUseConfiguredSymlinkTargets(source: string): boolean {
+  return (
+    source === "openclaw-workspace" ||
+    source === "openclaw-extra" ||
+    source === "agents-skills-project"
+  );
+}
+
+function resolveSkillRootCandidatePath(params: {
+  source: string;
+  rootDir: string;
+  rootRealPath: string;
+  candidatePath: string;
+  allowedSymlinkTargetRealPaths: readonly string[];
+}): string | null {
+  if (!shouldEnforceConfiguredSkillRootContainment(params.source)) {
+    return tryRealpath(params.candidatePath);
+  }
+  return resolveContainedSkillPath({
+    source: params.source,
+    rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
+    candidatePath: params.candidatePath,
+    allowedSymlinkTargetRealPaths: shouldUseConfiguredSymlinkTargets(params.source)
+      ? params.allowedSymlinkTargetRealPaths
+      : [],
+  });
+}
+
+function canonicalSkillDirForSource(source: string, skillDirRealPath: string): string | undefined {
+  return shouldEnforceConfiguredSkillRootContainment(source) ? undefined : skillDirRealPath;
+}
+
+function resolveSkillFilePath(params: {
+  source: string;
+  skillDir: string;
+  skillDirRealPath: string;
+  candidatePath: string;
+}): string | null {
+  return resolveContainedSkillPath({
+    source: params.source,
+    rootDir: params.skillDir,
+    rootRealPath: params.skillDirRealPath,
+    candidatePath: params.candidatePath,
+  });
+}
+
+function resolvePluginSkillRootRealPaths(pluginSkillDirs: readonly string[]): string[] {
+  return pluginSkillDirs
+    .map((dir) => tryRealpath(dir))
+    .filter((dir): dir is string => Boolean(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index);
+}
+
+function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
+  const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
+  return rawTargets
+    .map((dir) => normalizeOptionalString(dir) ?? "")
+    .filter(Boolean)
+    .map((dir) => tryRealpath(resolveUserPath(dir)))
+    .filter((dir): dir is string => Boolean(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index);
+}
+
+function loadGeneratedPluginSkillRecords(params: {
+  pluginSkillsDir: string;
+  pluginSkillDirs: readonly string[];
+  source: string;
+  limits: ResolvedSkillsLimits;
+}): LoadedSkillRecord[] {
+  const allowedRootRealPaths = resolvePluginSkillRootRealPaths(params.pluginSkillDirs);
+  if (allowedRootRealPaths.length === 0) {
+    return [];
+  }
+
+  const rootDir = path.resolve(params.pluginSkillsDir);
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+  const rootRealPath = tryRealpath(rootDir) ?? rootDir;
+  const maxCandidatesPerRoot = Math.max(0, params.limits.maxCandidatesPerRoot);
+  const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
+  const childDirScan = listChildDirectories(rootDir, {
+    maxCandidateDirs: maxCandidatesPerRoot,
+  });
+  const childDirs =
+    maxSkillsLoadedPerSource === 0
+      ? []
+      : childDirScan.dirs.toSorted().slice(0, maxCandidatesPerRoot);
+  const loadedSkills: LoadedSkillRecord[] = [];
+
+  for (const name of childDirs) {
+    const skillDir = path.join(rootDir, name);
+    if (!isSymlinkPath(skillDir)) {
+      continue;
+    }
+    const skillDirRealPath = tryRealpath(skillDir);
+    if (!skillDirRealPath || !isPathInsideAnyRoot(allowedRootRealPaths, skillDirRealPath)) {
+      if (skillDirRealPath) {
+        warnEscapedSkillPath({
+          source: params.source,
+          rootDir,
+          rootRealPath,
+          candidatePath: path.resolve(skillDir),
+          candidateRealPath: skillDirRealPath,
+        });
+      }
+      continue;
+    }
+
+    const skillMd = path.join(skillDir, "SKILL.md");
+    let skillMdStat: fs.Stats;
+    try {
+      skillMdStat = fs.lstatSync(skillMd);
+    } catch {
+      continue;
+    }
+    if (!skillMdStat.isFile() || skillMdStat.isSymbolicLink()) {
+      continue;
+    }
+    const skillMdRealPath = tryRealpath(skillMd);
+    if (!skillMdRealPath || !isPathInside(skillDirRealPath, skillMdRealPath)) {
+      continue;
+    }
+    if (skillMdStat.size > params.limits.maxSkillFileBytes) {
+      skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
+        skill: name,
+        filePath: skillMd,
+        size: skillMdStat.size,
+        maxSkillFileBytes: params.limits.maxSkillFileBytes,
+      });
+      continue;
+    }
+
+    loadedSkills.push(
+      ...loadContainedSkillRecords({
+        skillDir,
+        source: params.source,
+        maxSkillFileBytes: params.limits.maxSkillFileBytes,
+      }),
+    );
+    if (loadedSkills.length >= maxSkillsLoadedPerSource) {
+      break;
+    }
+  }
+
+  if (loadedSkills.length > maxSkillsLoadedPerSource) {
+    return loadedSkills
+      .slice()
+      .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+      .slice(0, maxSkillsLoadedPerSource);
+  }
+  return loadedSkills;
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -372,9 +610,11 @@ function loadSkillEntries(
     agentId?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    pluginSkillsDir?: string;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
+  const allowedSymlinkTargetRealPaths = resolveAllowedSymlinkTargetRealPaths(opts?.config);
 
   const loadSkills = (params: { dir: string; source: string }): LoadedSkillRecord[] => {
     const rootDir = path.resolve(params.dir);
@@ -386,11 +626,12 @@ function loadSkillEntries(
       maxEntriesToScan: limits.maxCandidatesPerRoot,
     });
     const baseDir = resolved.baseDir;
-    const baseDirRealPath = resolveContainedSkillPath({
+    const baseDirRealPath = resolveSkillRootCandidatePath({
       source: params.source,
       rootDir,
       rootRealPath,
       candidatePath: baseDir,
+      allowedSymlinkTargetRealPaths,
     });
     if (!baseDirRealPath) {
       return [];
@@ -399,10 +640,10 @@ function loadSkillEntries(
     // If the root itself is a skill directory, just load it directly (but enforce size cap).
     const rootSkillMd = path.join(baseDir, "SKILL.md");
     if (fs.existsSync(rootSkillMd)) {
-      const rootSkillRealPath = resolveContainedSkillPath({
+      const rootSkillRealPath = resolveSkillFilePath({
         source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
+        skillDir: baseDir,
+        skillDirRealPath: baseDirRealPath,
         candidatePath: rootSkillMd,
       });
       if (!rootSkillRealPath) {
@@ -423,108 +664,178 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDirSafe({
-        dir: baseDir,
+      return loadContainedSkillRecords({
+        skillDir: baseDir,
         source: params.source,
-        maxBytes: limits.maxSkillFileBytes,
-      });
-      return filterLoadedSkillRecordsInsideRoot({
-        records: unwrapLoadedSkillRecords(loaded),
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
+        maxSkillFileBytes: limits.maxSkillFileBytes,
+        canonicalSkillDir: canonicalSkillDirForSource(params.source, baseDirRealPath),
       });
     }
 
-    const childDirs = listChildDirectories(baseDir);
-    const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
-
-    const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const limitedChildren = childDirs.toSorted().slice(0, maxCandidates);
+    const maxCandidatesPerRoot = Math.max(0, limits.maxCandidatesPerRoot);
+    const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
+    const childDirScan = listChildDirectories(baseDir, {
+      maxCandidateDirs: maxCandidatesPerRoot,
+    });
+    const childDirs = childDirScan.dirs;
+    const suspicious = childDirScan.truncated;
+    const limitedChildren =
+      maxSkillsLoadedPerSource === 0 ? [] : childDirs.toSorted().slice(0, maxCandidatesPerRoot);
 
     if (suspicious) {
       skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
         dir: params.dir,
         baseDir,
         childDirCount: childDirs.length,
+        scannedEntryCount: childDirScan.scannedEntryCount,
+        maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
-    } else if (childDirs.length > maxCandidates) {
+    } else if (childDirs.length > maxCandidatesPerRoot) {
       skillsLogger.warn("Skills root has many entries, truncating discovery.", {
         dir: params.dir,
         baseDir,
         childDirCount: childDirs.length,
+        maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
     }
 
     const loadedSkills: LoadedSkillRecord[] = [];
-
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
-    for (const name of limitedChildren) {
-      const skillDir = path.join(baseDir, name);
-      const skillDirRealPath = resolveContainedSkillPath({
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-        candidatePath: skillDir,
-      });
-      if (!skillDirRealPath) {
-        continue;
-      }
-      const skillMd = path.join(skillDir, "SKILL.md");
-      if (!fs.existsSync(skillMd)) {
-        continue;
-      }
-      const skillMdRealPath = resolveContainedSkillPath({
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-        candidatePath: skillMd,
-      });
-      if (!skillMdRealPath) {
-        continue;
-      }
+    const loadCandidateSkill = ({
+      skillDir,
+      skillDirRealPath,
+      name,
+      skillMdRealPath,
+    }: CandidateSkillDir) => {
       try {
         const size = fs.statSync(skillMdRealPath).size;
         if (size > limits.maxSkillFileBytes) {
           skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
             skill: name,
-            filePath: skillMd,
+            filePath: path.join(skillDir, "SKILL.md"),
             size,
             maxSkillFileBytes: limits.maxSkillFileBytes,
           });
-          continue;
+          return;
         }
       } catch {
-        continue;
+        return;
       }
 
-      const loaded = loadSkillsFromDirSafe({
-        dir: skillDir,
-        source: params.source,
-        maxBytes: limits.maxSkillFileBytes,
-      });
       loadedSkills.push(
-        ...filterLoadedSkillRecordsInsideRoot({
-          records: unwrapLoadedSkillRecords(loaded),
+        ...loadContainedSkillRecords({
+          skillDir,
           source: params.source,
-          rootDir,
-          rootRealPath: baseDirRealPath,
+          maxSkillFileBytes: limits.maxSkillFileBytes,
+          canonicalSkillDir: canonicalSkillDirForSource(params.source, skillDirRealPath),
         }),
       );
+    };
 
-      if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
+    // Consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
+    // When an immediate subfolder does NOT have a SKILL.md, check one level deeper for grouped
+    // skill directories (e.g. ~/.openclaw/skills/coze/koze-retrieval/SKILL.md).
+    for (const name of limitedChildren) {
+      const skillDir = path.join(baseDir, name);
+      const skillDirRealPath = resolveSkillRootCandidatePath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: skillDir,
+        allowedSymlinkTargetRealPaths,
+      });
+      if (!skillDirRealPath) {
+        continue;
+      }
+      const skillMd = path.join(skillDir, "SKILL.md");
+      if (fs.existsSync(skillMd)) {
+        const skillMdRealPath = resolveSkillFilePath({
+          source: params.source,
+          skillDir,
+          skillDirRealPath,
+          candidatePath: skillMd,
+        });
+        if (skillMdRealPath) {
+          loadCandidateSkill({ skillDir, skillDirRealPath, name, skillMdRealPath });
+        }
+      } else {
+        // No SKILL.md here — check one level deeper for grouped skill directories.
+        // Apply the same per-root cap as the outer scan to avoid scanning huge nested trees.
+        const nestedChildScan = listChildDirectories(skillDir, {
+          maxCandidateDirs: maxCandidatesPerRoot,
+        });
+        const nestedChildren = nestedChildScan.dirs;
+        const nestedSuspicious = nestedChildScan.truncated;
+        if (nestedSuspicious) {
+          skillsLogger.warn(
+            "Nested skills directory looks suspiciously large, truncating discovery.",
+            {
+              dir: params.dir,
+              baseDir,
+              nestedDir: skillDir,
+              nestedChildDirCount: nestedChildren.length,
+              scannedEntryCount: nestedChildScan.scannedEntryCount,
+              maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
+              maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+              maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+            },
+          );
+        } else if (nestedChildren.length > maxCandidatesPerRoot) {
+          skillsLogger.warn("Nested skills directory has many entries, truncating discovery.", {
+            dir: params.dir,
+            baseDir,
+            nestedDir: skillDir,
+            nestedChildDirCount: nestedChildren.length,
+            maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+            maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+          });
+        }
+        const limitedNested = nestedChildren.toSorted().slice(0, maxCandidatesPerRoot);
+        for (const nestedName of limitedNested) {
+          const nestedDir = path.join(skillDir, nestedName);
+          const nestedSkillMd = path.join(nestedDir, "SKILL.md");
+          if (fs.existsSync(nestedSkillMd)) {
+            const nestedDirRealPath = resolveSkillRootCandidatePath({
+              source: params.source,
+              rootDir,
+              rootRealPath: baseDirRealPath,
+              candidatePath: nestedDir,
+              allowedSymlinkTargetRealPaths,
+            });
+            const nestedSkillMdRealPath = nestedDirRealPath
+              ? resolveSkillFilePath({
+                  source: params.source,
+                  skillDir: nestedDir,
+                  skillDirRealPath: nestedDirRealPath,
+                  candidatePath: nestedSkillMd,
+                })
+              : null;
+            if (nestedDirRealPath && nestedSkillMdRealPath) {
+              loadCandidateSkill({
+                skillDir: nestedDir,
+                skillDirRealPath: nestedDirRealPath,
+                name: `${name}/${nestedName}`,
+                skillMdRealPath: nestedSkillMdRealPath,
+              });
+            }
+          }
+          if (loadedSkills.length >= maxSkillsLoadedPerSource) {
+            break;
+          }
+        }
+      }
+      if (loadedSkills.length >= maxSkillsLoadedPerSource) {
         break;
       }
     }
 
-    if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
+    if (loadedSkills.length > maxSkillsLoadedPerSource) {
       return loadedSkills
         .slice()
         .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
-        .slice(0, limits.maxSkillsLoadedPerSource);
+        .slice(0, maxSkillsLoadedPerSource);
     }
 
     return loadedSkills;
@@ -533,11 +844,13 @@ function loadSkillEntries(
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const pluginSkillsDir = opts?.pluginSkillsDir ?? path.join(CONFIG_DIR, "plugin-skills");
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
   const pluginSkillDirs = resolvePluginSkillDirs({
     workspaceDir,
     config: opts?.config,
+    pluginSkillsDir,
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
@@ -547,13 +860,21 @@ function loadSkillEntries(
         source: "openclaw-bundled",
       })
     : [];
-  const extraSkills = mergedExtraDirs.flatMap((dir) => {
-    const resolved = resolveUserPath(dir);
-    return loadSkills({
-      dir: resolved,
+  const extraSkills = [
+    ...mergedExtraDirs.flatMap((dir) => {
+      const resolved = resolveUserPath(dir);
+      return loadSkills({
+        dir: resolved,
+        source: "openclaw-extra",
+      });
+    }),
+    ...loadGeneratedPluginSkillRecords({
+      pluginSkillsDir,
+      pluginSkillDirs,
       source: "openclaw-extra",
-    });
-  });
+      limits,
+    }),
+  ];
   const managedSkills = loadSkills({
     dir: managedSkillsDir,
     source: "openclaw-managed",
@@ -615,6 +936,8 @@ function loadSkillEntries(
         frontmatter,
         metadata: resolveOpenClawMetadata(frontmatter),
         invocation,
+        ...(record.syncSourceDir !== undefined ? { syncSourceDir: record.syncSourceDir } : {}),
+        ...(record.syncDirName !== undefined ? { syncDirName: record.syncDirName } : {}),
         exposure: {
           includeInRuntimeRegistry: true,
           // Freshly loaded entries preserve the documented disable-model-invocation
@@ -742,6 +1065,10 @@ export function buildWorkspaceSkillsPrompt(
   return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
 }
 
+export const __testing = {
+  compactHomePath,
+};
+
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
@@ -839,6 +1166,7 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    pluginSkillsDir?: string;
     skillFilter?: string[];
     agentId?: string;
     eligibility?: SkillEligibilityContext;
@@ -895,7 +1223,9 @@ function resolveSyncedSkillDestinationPath(params: {
   entry: SkillEntry;
   usedDirNames: Set<string>;
 }): string | null {
-  const sourceDirName = path.basename(params.entry.skill.baseDir).trim();
+  const sourceDirName = (
+    params.entry.syncDirName ?? path.basename(params.entry.skill.baseDir)
+  ).trim();
   if (!sourceDirName || sourceDirName === "." || sourceDirName === "..") {
     return null;
   }
@@ -959,7 +1289,7 @@ export async function syncSkillsToWorkspace(params: {
         continue;
       }
       try {
-        await fsp.cp(entry.skill.baseDir, dest, {
+        await fsp.cp(entry.syncSourceDir ?? entry.skill.baseDir, dest, {
           recursive: true,
           force: true,
           filter: (src) => {

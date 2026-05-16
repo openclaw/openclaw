@@ -3,6 +3,8 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripMinimaxToolCallXml,
+  stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
@@ -131,6 +133,39 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText('Result:\n<tool_result>\n{"output": "data"}\n', "Result:\n");
     });
 
+    it("strips workflow <function_response> blocks with plain output", () => {
+      expectVisibleText(
+        [
+          "Before",
+          "<function_response>",
+          'Searching for: "what skills matter most in the age of AI"',
+          "...",
+          "</function_response>",
+          "After",
+        ].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("strips dangling workflow <function_response> content to end-of-string", () => {
+      expectVisibleText("Before\n<function_response>\nraw command output\n", "Before\n");
+    });
+
+    it("preserves inline multi-line function_response examples in prose", () => {
+      expectVisibleText(
+        [
+          "Before <function_response>",
+          'Searching for: "what skills matter most in the age of AI"',
+          "</function_response> After",
+        ].join("\n"),
+        [
+          "Before <function_response>",
+          'Searching for: "what skills matter most in the age of AI"',
+          "</function_response> After",
+        ].join("\n"),
+      );
+    });
+
     it("strips <tool_result> closed with mismatched </tool_call> and preserves trailing text", () => {
       expectVisibleText(
         'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
@@ -161,7 +196,7 @@ describe("stripAssistantInternalScaffolding", () => {
           "[END_TOOL_REQUEST]",
           "Done.",
         ].join("\n"),
-        "Let me check.\n\nDone.",
+        "Let me check.\nDone.",
       );
     });
 
@@ -174,8 +209,50 @@ describe("stripAssistantInternalScaffolding", () => {
           "[/mempalace_mempalace_search]",
           "After",
         ].join("\n"),
+        "Before\nAfter",
+      );
+    });
+
+    it("strips legacy uppercase TOOL_CALL blocks with hash-style payloads", () => {
+      expectVisibleText(
+        [
+          "Before",
+          '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+          "After",
+        ].join("\n"),
         "Before\n\nAfter",
       );
+    });
+
+    it("hides dangling legacy uppercase TOOL_CALL blocks to end-of-string", () => {
+      expectVisibleText(
+        'Before\n[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}',
+        "Before\n",
+      );
+    });
+
+    it("strips legacy uppercase TOOL_RESULT blocks with object payloads", () => {
+      expectVisibleText(
+        ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("preserves literal legacy TOOL_CALL examples without tool args payloads", () => {
+      expectVisibleText(
+        "Use `[TOOL_CALL]` only when describing legacy logs.",
+        "Use `[TOOL_CALL]` only when describing legacy logs.",
+      );
+    });
+
+    it("preserves legacy uppercase TOOL_CALL blocks inside fenced code", () => {
+      const input = [
+        "```text",
+        '[TOOL_CALL]{tool => "web_search", args => {"query":"x"}}[/TOOL_CALL]',
+        "```",
+        "Visible",
+      ].join("\n");
+      expectVisibleText(input, input);
     });
 
     it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
@@ -342,6 +419,27 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("preserves inline function_response examples in prose", () => {
+      expectVisibleText(
+        "Use <function_response> to describe the response wrapper.",
+        "Use <function_response> to describe the response wrapper.",
+      );
+    });
+
+    it("preserves inline closed function_response examples in prose", () => {
+      expectVisibleText(
+        "Use <function_response>ok</function_response> to describe the response wrapper.",
+        "Use <function_response>ok</function_response> to describe the response wrapper.",
+      );
+    });
+
+    it("preserves line-leading function_response prose examples", () => {
+      expectVisibleText(
+        "<function_response> is the response wrapper.",
+        "<function_response> is the response wrapper.",
+      );
+    });
+
     it("preserves non-tool tag names that share the tool_call prefix", () => {
       expectVisibleText(
         'prefix <tool_call-example>{"name":"read"}</tool_call-example> suffix',
@@ -504,6 +602,191 @@ describe("stripAssistantInternalScaffolding", () => {
   });
 });
 
+describe("stripToolCallXmlTags", () => {
+  it("strips plural function/tool wrapper XML only when the opt-in flag is enabled", () => {
+    const input =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "prefix  suffix",
+    );
+  });
+
+  it("strips function_response adjacent to an opt-in stripped function_calls block", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
+  });
+
+  it("strips plural function-call XML before function_response without stripping prose examples", () => {
+    const leak =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response>\nAfter';
+    const prose =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+
+    expect(stripToolCallXmlTags(leak, { stripFunctionResponseAfterPluralToolCalls: true })).toBe(
+      "\nAfter",
+    );
+    expect(stripToolCallXmlTags(prose, { stripFunctionResponseAfterPluralToolCalls: true })).toBe(
+      prose,
+    );
+  });
+
+  it("strips function_response adjacent to an inline stripped function_calls block", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "Checking. \nAfter",
+    );
+  });
+
+  it("strips compact function_response after a newline-separated stripped function_calls block", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls>',
+      "<function_response>ok</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "Checking. \n\nAfter",
+    );
+  });
+
+  it("strips dangling function_response adjacent to a stripped function_calls block", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+    ].join("\n");
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("Checking. ");
+  });
+
+  it("strips compact dangling function_response adjacent to a stripped function_calls block", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw output';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("Checking. ");
+  });
+
+  it("strips same-line function_response payloads with leading spaces", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> raw output</function_response>\nAfter';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
+  });
+
+  it("strips same-line function_response payloads that start like prose", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> is enabled</function_response>\nAfter';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
+  });
+
+  it("strips dangling same-line function_response payloads with leading spaces", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> raw output';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("");
+  });
+
+  it("strips function_response-looking prose adjacent to a stripped tool-call block", () => {
+    const input =
+      '<tool_call>{"name":"exec"}</tool_call>\n\n<function_response> is the response wrapper.';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\n\n");
+  });
+
+  it("strips closed function_response-looking prose adjacent to a stripped tool-call block", () => {
+    const input =
+      '<tool_call>{"name":"exec"}</tool_call>\n<function_response> is the response wrapper; close it with </function_response>.';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\n.");
+  });
+
+  it("strips adjacent function_response payloads that match explanation wording", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> response wrapper secret</function_response>\nAfter';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
+  });
+
+  it("strips compact function_response wrappers while preserving same-line prose tails", () => {
+    const input =
+      '<tool_call>{"name":"exec"}</tool_call>\n\n<function_response>ok</function_response> is the response wrapper.';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "\n\n is the response wrapper.",
+    );
+  });
+
+  it("strips chained function_response blocks adjacent to a stripped function_calls block", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      "first result",
+      "</function_response><function_response>",
+      "second result",
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "Checking. \nAfter",
+    );
+  });
+
+  it("strips compact chained function_response blocks adjacent to a stripped function_calls block", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>first</function_response><function_response>second</function_response>\nAfter';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "Checking. \nAfter",
+    );
+  });
+
+  it("strips compact function_response before same-line visible replies", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response> Done.';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "Checking.  Done.",
+    );
+  });
+});
+
+describe("stripMinimaxToolCallXml", () => {
+  it("strips minimax tool-call XML outside code regions", () => {
+    const input = [
+      "Before",
+      '<minimax:tool_call><invoke name="exec">payload</invoke></minimax:tool_call>',
+      "After",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves minimax tool-call XML examples inside inline and fenced code", () => {
+    const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
+    const fenced = [
+      "```xml",
+      '<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>',
+      "```",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(inline)).toBe(inline);
+    expect(stripMinimaxToolCallXml(fenced)).toBe(fenced);
+  });
+});
+
 describe("sanitizeAssistantVisibleText", () => {
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
@@ -516,6 +799,24 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("strips adjacent plural function-call XML on the delivery path", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("preserves prose examples of plural function-call XML on the delivery path", () => {
+    const input =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
   it("strips relevant-memories blocks on the canonical user-visible path", () => {

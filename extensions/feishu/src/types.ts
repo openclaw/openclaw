@@ -1,24 +1,18 @@
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
-import type {
-  FeishuConfigSchema,
-  FeishuGroupSchema,
-  FeishuAccountConfigSchema,
-  z,
-} from "./config-schema.js";
+import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
-export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
-export type FeishuConnectionMode = "websocket" | "webhook";
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
   | "mapped-default"
   | "fallback";
-export type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
+type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
 
 export type ResolvedFeishuAccount = {
   accountId: string;
@@ -60,6 +54,7 @@ export type FeishuMessageContext = {
 export type FeishuSendResult = {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 };
 
 export type FeishuChatType = "p2p" | "group" | "topic_group" | "private";

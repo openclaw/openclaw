@@ -13,12 +13,12 @@ import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -181,12 +181,11 @@ function resolveUsageCredentialProviderIds(params: {
   const providerIds = new Set(normalizeProviderIds([params.provider]));
   const providerIdSet = new Set(providerIds);
   try {
-    const registry = loadPluginManifestRegistryForPluginRegistry({
+    const snapshot = loadManifestMetadataSnapshot({
       config: params.state.cfg,
       env: params.state.env,
-      includeDisabled: true,
     });
-    for (const plugin of registry.plugins) {
+    for (const plugin of snapshot.plugins) {
       const pluginProviderIds = normalizeProviderIds(plugin.providers);
       if (!pluginProviderIds.some((providerId) => providerIdSet.has(providerId))) {
         continue;
@@ -368,14 +367,35 @@ export async function resolveProviderAuths(params: {
     env: params.env ?? process.env,
     agentDir: params.agentDir,
   };
-  const hasAuthProfileStoreSource = hasAnyAuthProfileStoreSource(params.agentDir);
   const authProfileSourceState: UsageAuthState = {
     ...stateBase,
     allowAuthProfileStore: true,
   };
+  const hasAuthProfileStoreSource = params.skipPluginAuthWithoutCredentialSource
+    ? hasAnyAuthProfileStoreSource(params.agentDir)
+    : false;
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
+    if (!params.skipPluginAuthWithoutCredentialSource) {
+      const pluginAuth = await resolveProviderUsageAuthViaPlugin({
+        state: authProfileSourceState,
+        provider,
+      });
+      if (pluginAuth) {
+        auths.push(pluginAuth);
+        continue;
+      }
+      const fallbackAuth = await resolveProviderUsageAuthFallback({
+        state: authProfileSourceState,
+        provider,
+      });
+      if (fallbackAuth) {
+        auths.push(fallbackAuth);
+      }
+      continue;
+    }
+
     const directCredentialState = { ...stateBase, allowAuthProfileStore: false };
     const credentialProviderIds = resolveUsageCredentialProviderIds({
       state: directCredentialState,
@@ -393,7 +413,6 @@ export async function resolveProviderAuths(params: {
         providerIds: credentialProviderIds,
       });
     const allowAuthProfileStore =
-      !params.skipPluginAuthWithoutCredentialSource ||
       hasDirectCredentialSource ||
       (hasAuthProfileStoreSource &&
         hasAuthProfileCredentialSource({
@@ -410,7 +429,7 @@ export async function resolveProviderAuths(params: {
     const hasPluginCredentialSource =
       hasDirectCredentialSource || allowAuthProfileStore || hasLegacyPiAgentCredentialSource;
 
-    if (!params.skipPluginAuthWithoutCredentialSource || hasPluginCredentialSource) {
+    if (hasPluginCredentialSource) {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({
         state,
         provider,

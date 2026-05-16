@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "providers": ["xai"],
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "modelIdNormalization": {
     "providers": {
       "xai": {
@@ -45,11 +45,23 @@
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key",
+      "groupHint": "API key or SuperGrok OAuth",
+      "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
       "cliOption": "--xai-api-key <key>",
       "cliDescription": "xAI API key"
+    },
+    {
+      "provider": "xai",
+      "method": "oauth",
+      "choiceId": "xai-oauth",
+      "choiceLabel": "xAI Grok OAuth",
+      "choiceHint": "SuperGrok subscription",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or SuperGrok OAuth",
+      "onboardingFeatured": true
     }
   ],
   "uiHints": {
@@ -61,6 +73,10 @@
     "webSearch.model": {
       "label": "Grok Search Model",
       "help": "Grok model override for web search."
+    },
+    "webSearch.baseUrl": {
+      "label": "Grok Search Base URL",
+      "help": "Optional xAI Responses API base URL for Grok web_search and x_search fallbacks."
     },
     "webSearch.inlineCitations": {
       "label": "Inline Citations",
@@ -77,6 +93,10 @@
     "xSearch.model": {
       "label": "X Search Model",
       "help": "xAI model override for x_search."
+    },
+    "xSearch.baseUrl": {
+      "label": "X Search Base URL",
+      "help": "Optional xAI Responses API base URL for x_search requests."
     },
     "xSearch.inlineCitations": {
       "label": "X Search Inline Citations",
@@ -127,6 +147,44 @@
       }
     }
   },
+  "toolMetadata": {
+    "code_execution": {
+      "authSignals": [
+        {
+          "provider": "xai"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.xai.config",
+          "overlayPath": "webSearch",
+          "required": ["apiKey"]
+        },
+        {
+          "rootPath": "tools.web.search.grok",
+          "required": ["apiKey"]
+        }
+      ]
+    },
+    "x_search": {
+      "authSignals": [
+        {
+          "provider": "xai"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.xai.config",
+          "overlayPath": "webSearch",
+          "required": ["apiKey"]
+        },
+        {
+          "rootPath": "tools.web.search.grok",
+          "required": ["apiKey"]
+        }
+      ]
+    }
+  },
   "configContracts": {
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
@@ -144,6 +202,9 @@
           "model": {
             "type": "string"
           },
+          "baseUrl": {
+            "type": "string"
+          },
           "inlineCitations": {
             "type": "boolean"
           }
@@ -157,6 +218,9 @@
             "type": "boolean"
           },
           "model": {
+            "type": "string"
+          },
+          "baseUrl": {
             "type": "string"
           },
           "inlineCitations": {

@@ -3,6 +3,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
@@ -11,6 +12,9 @@ import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loa
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -31,13 +35,12 @@ export type DeliveryTargetResolution =
       error: Error;
     };
 
-let targetsRuntimePromise:
-  | Promise<typeof import("../../infra/outbound/targets.runtime.js")>
-  | undefined;
+const targetsRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/targets.runtime.js"),
+);
 
 async function loadTargetsRuntime() {
-  targetsRuntimePromise ??= import("../../infra/outbound/targets.runtime.js");
-  return await targetsRuntimePromise;
+  return await targetsRuntimeLoader.load();
 }
 
 async function resolveOutboundTargetWithRuntime(
@@ -49,7 +52,7 @@ async function resolveOutboundTargetWithRuntime(
       return loaded;
     }
     const { resolveOutboundTarget } = await loadTargetsRuntime();
-    return resolveOutboundTarget(params);
+    return resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
       ok: false as const,
@@ -95,21 +98,19 @@ function deliveryTargetsShareThreadRoute(params: {
   return Boolean(normalizedTo && normalizedLastTo && normalizedTo === normalizedLastTo);
 }
 
-let channelSelectionRuntimePromise:
-  | Promise<typeof import("../../infra/outbound/channel-selection.runtime.js")>
-  | undefined;
-let deliveryTargetRuntimePromise:
-  | Promise<typeof import("./delivery-target.runtime.js")>
-  | undefined;
+const channelSelectionRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/channel-selection.runtime.js"),
+);
+const deliveryTargetRuntimeLoader = createLazyImportLoader(
+  () => import("./delivery-target.runtime.js"),
+);
 
 async function loadChannelSelectionRuntime() {
-  channelSelectionRuntimePromise ??= import("../../infra/outbound/channel-selection.runtime.js");
-  return await channelSelectionRuntimePromise;
+  return await channelSelectionRuntimeLoader.load();
 }
 
 async function loadDeliveryTargetRuntime() {
-  deliveryTargetRuntimePromise ??= import("./delivery-target.runtime.js");
-  return await deliveryTargetRuntimePromise;
+  return await deliveryTargetRuntimeLoader.load();
 }
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -135,9 +136,28 @@ export async function resolveDeliveryTarget(
 
   // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
   // then fall back to the main session entry.
-  const threadSessionKey = jobPayload.sessionKey?.trim();
+  const rawSessionKey = jobPayload.sessionKey?.trim();
+  const threadSessionKey = rawSessionKey
+    ? resolveCronAgentSessionKey({
+        sessionKey: rawSessionKey,
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        cfg,
+      })
+    : undefined;
+  const storedDeliveryContext = resolveCronStoredDeliveryContext({
+    cfg,
+    sessionKey: threadSessionKey,
+  });
+  const storedDeliveryEntry = storedDeliveryContext
+    ? ({
+        sessionId: threadSessionKey ?? mainSessionKey,
+        updatedAt: 0,
+        deliveryContext: storedDeliveryContext,
+      } satisfies SessionEntry)
+    : undefined;
   const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
-  const main = threadEntry ?? store[mainSessionKey];
+  const main = storedDeliveryEntry ?? threadEntry ?? store[mainSessionKey];
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -241,11 +261,8 @@ export async function resolveDeliveryTarget(
 
   let effectiveAllowFrom: string[] | undefined;
   if (mode === "implicit") {
-    const {
-      getLoadedChannelPluginForRead,
-      mapAllowFromEntries,
-      readChannelAllowFromStoreEntriesSync,
-    } = await loadDeliveryTargetRuntime();
+    const { getLoadedChannelPluginForRead, mapAllowFromEntries } =
+      await loadDeliveryTargetRuntime();
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
     const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
@@ -255,12 +272,7 @@ export async function resolveDeliveryTarget(
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];
-    const storeAllowFrom = readChannelAllowFromStoreEntriesSync(
-      channel,
-      process.env,
-      resolvedAccountId,
-    );
-    const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    const allowFromOverride = [...new Set(configuredAllowFrom)];
     effectiveAllowFrom = allowFromOverride;
 
     if (toCandidate && allowFromOverride.length > 0) {

@@ -132,6 +132,25 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    commandSpans: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            startIndex: Type.Integer({
+              minimum: 0,
+              description: "Inclusive UTF-16 code unit offset into command.",
+            }),
+            endIndex: Type.Integer({
+              minimum: 1,
+              description:
+                "Exclusive UTF-16 code unit offset into command; must be greater than startIndex and no greater than command.length.",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
     agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),

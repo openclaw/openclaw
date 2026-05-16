@@ -41,8 +41,14 @@ export type SlackMessageEvent = {
   parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
+  blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackAttachment[];
+  /**
+   * Set by the thread_ts resolver when Slack supplied parent_user_id but the
+   * parent thread timestamp could not be recovered.
+   */
+  _ambiguousThreadReply?: boolean;
 };
 
 export type SlackAppMentionEvent = {

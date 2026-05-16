@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -46,6 +47,14 @@ function createMockBtwPresenter(): MockBtwPresenter & HandlerBtwPresenter {
     showResult: vi.fn(),
     clear: vi.fn(),
   } as unknown as MockBtwPresenter & HandlerBtwPresenter;
+}
+
+function requireFinalizedAssistantText(chatLog: MockChatLog, index = 0): string {
+  const call = chatLog.finalizeAssistant.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected finalizeAssistant call ${index}`);
+  }
+  return String(call[0]);
 }
 
 describe("tui-event-handlers: handleAgentEvent", () => {
@@ -204,6 +213,82 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("updates the displayed model from fallback lifecycle steps", () => {
+    const { state, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-fallback",
+        sessionInfo: {
+          verboseLevel: "on",
+          modelProvider: "llamaforge",
+          model: "qwen/qwen3.5-9b",
+        },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-fallback",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepFinalOutcome: "next_fallback",
+        fallbackStepFromModel: "openai-codex/gpt-5.5",
+        fallbackStepToModel: "openrouter/meta-llama/llama-3.1-70b",
+      },
+    });
+
+    expect(state.sessionInfo.modelProvider).toBe("openrouter");
+    expect(state.sessionInfo.model).toBe("meta-llama/llama-3.1-70b");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("accepts fallback model updates for the pending run before chat registration", () => {
+    const { state, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingChatRunId: "run-pending",
+        sessionInfo: {
+          verboseLevel: "on",
+          modelProvider: "llamaforge",
+          model: "qwen/qwen3.5-9b",
+        },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-pending",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepFinalOutcome: "succeeded",
+        fallbackStepFromModel: "openrouter/meta-llama/llama-3.1-70b",
+        fallbackStepToModel: "nvidia/deepseek-ai/deepseek-v3.2",
+      },
+    });
+
+    expect(state.sessionInfo.modelProvider).toBe("nvidia");
+    expect(state.sessionInfo.model).toBe("deepseek-ai/deepseek-v3.2");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("ignores fallback model updates for unrelated runs", () => {
+    const { state, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-active",
+        sessionInfo: { verboseLevel: "on", modelProvider: "openai", model: "gpt-5.5" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-other",
+      stream: "lifecycle",
+      data: { phase: "fallback_step", fallbackStepToModel: "openrouter/other-model" },
+    });
+
+    expect(state.sessionInfo.modelProvider).toBe("openai");
+    expect(state.sessionInfo.model).toBe("gpt-5.5");
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("captures runId from chat events when activeChatRunId is unset", () => {
     const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -298,6 +383,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state: "final",
     } satisfies ChatEvent);
 
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(btw.showResult).toHaveBeenCalledWith({
+      question: "what changed?",
+      text: "nothing important",
+      isError: undefined,
+    });
+  });
+
+  it("clears stale streaming for a local BTW empty final without hiding the result", () => {
+    const {
+      state,
+      btw,
+      loadHistory,
+      setActivityStatus,
+      noteLocalBtwRunId,
+      handleBtwEvent,
+      handleChatEvent,
+    } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    noteLocalBtwRunId("run-btw");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "nothing important",
+    } satisfies BtwEvent);
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(loadHistory).not.toHaveBeenCalled();
     expect(btw.showResult).toHaveBeenCalledWith({
       question: "what changed?",
@@ -488,6 +613,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("clears pendingChatRunId when an event for that runId arrives", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingOptimisticUserMessage: true,
+        pendingChatRunId: "run-pending",
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.activeChatRunId).toBe("run-pending");
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({
@@ -548,6 +693,48 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
+  it("clears stale streaming when a duplicate final arrives after inactive /btw terminal cleanup", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-finalized",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    noteLocalBtwRunId("run-btw-error");
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "background status update" },
+    });
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "background failure",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("streaming");
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-finalized",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
   it("flushes deferred history reload after stale streaming clear makes the TUI idle", () => {
     const { state, loadHistory, noteLocalRunId, setActivityStatus, handleChatEvent } =
       createHandlersHarness({
@@ -587,6 +774,31 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+  });
+
+  it("does not clear global streaming for inactive local /btw aborted or error events", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    for (const terminalState of ["aborted", "error"] as const) {
+      const runId = `run-btw-${terminalState}`;
+      state.activeChatRunId = null;
+      state.activityStatus = "streaming";
+      setActivityStatus.mockClear();
+      noteLocalBtwRunId(runId);
+
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        state: terminalState,
+        errorMessage: terminalState === "error" ? "boom" : undefined,
+      });
+
+      expect(state.activeChatRunId).toBeNull();
+      expect(state.activityStatus).toBe("streaming");
+      expect(setActivityStatus).not.toHaveBeenCalled();
+    }
   });
 
   it("does not force idle for an inactive final while another tracked run is active", () => {
@@ -640,10 +852,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
-    const [rendered] = chatLog.finalizeAssistant.mock.calls[0] ?? [];
-    expect(String(rendered)).toContain("HTTP 401");
-    expect(String(rendered)).toContain("Missing scopes: model.request");
+    const rendered = requireFinalizedAssistantText(chatLog);
+    expect(rendered).toContain("HTTP 401");
+    expect(rendered).toContain("Missing scopes: model.request");
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
+  });
+
+  it("renders malformed streaming fragment text when chat final only has event errorMessage", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-malformed-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "LLM streaming response contained a malformed fragment. Please try again.",
+      "run-malformed-final",
+    );
+  });
+
+  it("renders malformed streaming fragment text for chat error events", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-malformed-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run error: LLM streaming response contained a malformed fragment. Please try again.",
+    );
   });
 
   it("shows a concise /auth hint for local auth failures", () => {
@@ -750,6 +998,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 });
 
 describe("tui-event-handlers: streaming watchdog", () => {
+  const expectedTimeoutMessage =
+    "This response is taking longer than expected. Send another message to continue.";
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -827,7 +1078,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+    expect(chatLog.addSystem).toHaveBeenCalledWith(expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
@@ -897,6 +1148,147 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
+  it("rearms the watchdog on active-run tool events even when tool verbosity is off", () => {
+    const { state, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+    state.sessionInfo.verboseLevel = "off";
+
+    handlers.handleChatEvent({
+      runId: "run-tools",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "first" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(3_000);
+
+    handlers.handleAgentEvent({
+      runId: "run-tools",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tool-1", name: "read" },
+    } satisfies AgentEvent);
+
+    vi.advanceTimersByTime(3_000);
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(state.activeChatRunId).toBe("run-tools");
+
+    vi.advanceTimersByTime(2_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+
+    handlers.dispose?.();
+  });
+
+  it("pauses the watchdog while disconnected and rearms it on reconnect without clearing the active run", () => {
+    const { state, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-reconnect",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    vi.advanceTimersByTime(10_000);
+
+    expect(state.activeChatRunId).toBe("run-reconnect");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+
+    handlers.reconnectStreamingWatchdog();
+
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+    expect(state.activeChatRunId).toBe("run-reconnect");
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
+  it("reloads history only once when reconnect recovery and deferred history refresh overlap", () => {
+    const { state, loadHistory, noteLocalRunId, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-reconnect",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    noteLocalRunId("run-local-empty");
+    handlers.handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+    vi.advanceTimersByTime(5_001);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
+  it("resets to idle when reconnect drops an active run that is no longer tracked", () => {
+    const { state, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+    state.activeChatRunId = "run-stale";
+    state.activityStatus = "streaming";
+
+    handlers.reconnectStreamingWatchdog();
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+
+    handlers.dispose?.();
+  });
+
+  it("keeps reconnect recovery armed when only terminal lifecycle arrives after reconnect", () => {
+    const { state, chatLog, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-lifecycle-only",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+
+    handlers.handleAgentEvent({
+      runId: "run-lifecycle-only",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    } satisfies AgentEvent);
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
+
+    handlers.dispose?.();
+  });
+
   it("cancels the watchdog when the run finalizes normally", () => {
     const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
@@ -918,10 +1310,8 @@ describe("tui-event-handlers: streaming watchdog", () => {
     vi.advanceTimersByTime(10_000);
 
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
-    expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
-      expect.stringContaining("streaming watchdog"),
-    );
+    expect(statusCalls.reduce((count, s) => count + (s === "idle" ? 1 : 0), 0)).toBe(1);
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
     expect(state.activeChatRunId).toBeNull();
 
     handlers.dispose?.();

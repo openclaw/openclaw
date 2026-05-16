@@ -7,7 +7,7 @@ import {
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 type XaiRealtimeTranscriptionEncoding = "pcm" | "mulaw" | "alaw";
@@ -226,6 +226,7 @@ function createXaiRealtimeTranscriptionSession(
     reconnectDelayMs: XAI_REALTIME_STT_RECONNECT_DELAY_MS,
     maxQueuedBytes: XAI_REALTIME_STT_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "xAI realtime transcription connection timeout",
+    connectClosedBeforeReadyMessage: "xAI realtime transcription connection closed before ready",
     reconnectLimitMessage: "xAI realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendBinary(audio);

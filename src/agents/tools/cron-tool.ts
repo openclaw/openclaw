@@ -1,23 +1,13 @@
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
+import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import {
-  parseAgentSessionKey,
-  parseThreadSessionSuffix,
-} from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
-import {
-  normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
@@ -29,7 +19,17 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-h
 // We spell out job/patch properties so that LLMs know what fields to send.
 // Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
-const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
+const CRON_ACTIONS = [
+  "status",
+  "list",
+  "get",
+  "add",
+  "update",
+  "remove",
+  "run",
+  "runs",
+  "wake",
+] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
@@ -307,6 +307,7 @@ export const CronToolSchema = Type.Object(
     contextMessages: Type.Optional(
       Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
+    agentId: Type.Optional(Type.String({ description: "Filter by agent id (list action)" })),
   },
   { additionalProperties: true },
 );
@@ -314,6 +315,7 @@ export const CronToolSchema = Type.Object(
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
+  selfRemoveOnlyJobId?: string;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -341,6 +343,87 @@ function truncateText(input: string, maxLen: number) {
   }
   const truncated = truncateUtf16Safe(input, Math.max(0, maxLen - 3)).trimEnd();
   return `${truncated}...`;
+}
+
+function readCronJobIdParam(params: Record<string, unknown>) {
+  return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+}
+
+const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to the current cron job.";
+
+function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
+  return opts?.selfRemoveOnlyJobId?.trim() || undefined;
+}
+
+function isCronSelfIntrospectionAction(action: string) {
+  return action === "status" || action === "list";
+}
+
+function assertCronSelfRemoveScope(
+  opts: CronToolOptions | undefined,
+  action: string,
+  params: Record<string, unknown>,
+) {
+  const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
+  if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
+    return;
+  }
+  if (action === "get" || action === "remove" || action === "runs") {
+    const id = readCronJobIdParam(params);
+    if (id && id === selfRemoveOnlyJobId) {
+      return;
+    }
+  }
+  throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
+}
+
+function filterCronDeliveryPreviewsByJobId(previews: unknown, jobId: string): unknown {
+  if (!isRecord(previews)) {
+    return previews;
+  }
+  if (!Object.hasOwn(previews, jobId)) {
+    return {};
+  }
+  return { [jobId]: previews[jobId] };
+}
+
+function filterCronListResultToJobId(result: unknown, jobId: string): unknown {
+  if (!isRecord(result) || !Array.isArray(result.jobs)) {
+    return result;
+  }
+  const jobs = result.jobs.filter((job) => isRecord(job) && job.id === jobId);
+  return {
+    ...result,
+    jobs,
+    total: jobs.length,
+    offset: 0,
+    limit: jobs.length,
+    hasMore: false,
+    nextOffset: null,
+    ...(Object.hasOwn(result, "deliveryPreviews")
+      ? { deliveryPreviews: filterCronDeliveryPreviewsByJobId(result.deliveryPreviews, jobId) }
+      : {}),
+  };
+}
+
+function filterCronStatusResultForSelfScope(result: unknown): unknown {
+  return { enabled: isRecord(result) && result.enabled === true };
+}
+
+function cronListResultHasJob(result: unknown, jobId: string): boolean {
+  return (
+    isRecord(result) &&
+    Array.isArray(result.jobs) &&
+    result.jobs.some((job) => isRecord(job) && job.id === jobId)
+  );
+}
+
+function readCronListNextOffset(result: unknown, currentOffset: number): number | undefined {
+  if (!isRecord(result) || result.hasMore !== true || typeof result.nextOffset !== "number") {
+    return undefined;
+  }
+  const nextOffset = Math.floor(result.nextOffset);
+  return Number.isFinite(nextOffset) && nextOffset > currentOffset ? nextOffset : undefined;
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
@@ -407,131 +490,6 @@ async function buildReminderContextLines(params: {
   }
 }
 
-function stripThreadSuffixFromSessionKey(sessionKey: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  const idx = normalized.lastIndexOf(":thread:");
-  if (idx <= 0) {
-    return sessionKey;
-  }
-  const parent = sessionKey.slice(0, idx).trim();
-  return parent ? parent : sessionKey;
-}
-
-function resolveTelegramDirectThreadId(params: {
-  peerId: string;
-  threadId?: string;
-}): string | undefined {
-  const threadId = normalizeOptionalString(params.threadId);
-  if (!threadId) {
-    return undefined;
-  }
-  const peerId = normalizeOptionalString(params.peerId);
-  if (!peerId) {
-    return undefined;
-  }
-  const [threadChatId, ...threadIdParts] = threadId.split(":");
-  if (threadIdParts.length === 0) {
-    return threadId;
-  }
-  if (normalizeOptionalLowercaseString(threadChatId) !== peerId) {
-    return undefined;
-  }
-  return normalizeOptionalString(threadIdParts.join(":"));
-}
-
-function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
-  const rawSessionKey = agentSessionKey?.trim();
-  if (!rawSessionKey) {
-    return null;
-  }
-  const threadSuffix = parseThreadSessionSuffix(rawSessionKey);
-  const parsed = parseAgentSessionKey(
-    threadSuffix.baseSessionKey ?? stripThreadSuffixFromSessionKey(rawSessionKey),
-  );
-  if (!parsed || !parsed.rest) {
-    return null;
-  }
-  const parts = parsed.rest.split(":").filter(Boolean);
-  if (parts.length === 0) {
-    return null;
-  }
-  const head = normalizeOptionalLowercaseString(parts[0]);
-  if (!head || head === "main" || head === "subagent" || head === "acp") {
-    return null;
-  }
-
-  // buildAgentPeerSessionKey encodes peers as:
-  // - direct:<peerId>
-  // - <channel>:direct:<peerId>
-  // - <channel>:<accountId>:direct:<peerId>
-  // - <channel>:group:<peerId>
-  // - <channel>:channel:<peerId>
-  // Note: legacy keys may use "dm" instead of "direct".
-  // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
-  // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
-  const markerIndex = parts.findIndex(
-    (part) => part === "direct" || part === "dm" || part === "group" || part === "channel",
-  );
-  if (markerIndex === -1) {
-    return null;
-  }
-  const peerId = parts
-    .slice(markerIndex + 1)
-    .join(":")
-    .trim();
-  if (!peerId) {
-    return null;
-  }
-
-  let channel: CronMessageChannel | undefined;
-  if (markerIndex >= 1) {
-    channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
-  }
-
-  const marker = parts[markerIndex];
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
-  if (channel) {
-    delivery.channel = channel;
-  }
-  if (channel === "telegram" && markerIndex === 2) {
-    const accountId = normalizeOptionalString(parts[1]);
-    if (accountId) {
-      delivery.accountId = accountId;
-    }
-  }
-  if (channel === "telegram" && (marker === "direct" || marker === "dm")) {
-    const threadId = resolveTelegramDirectThreadId({
-      peerId,
-      threadId: threadSuffix.threadId,
-    });
-    if (threadId) {
-      delivery.threadId = threadId;
-    }
-  }
-  return delivery;
-}
-
-function inferDeliveryFromContext(context?: DeliveryContext): CronDelivery | null {
-  const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.to) {
-    return null;
-  }
-  const delivery: CronDelivery = {
-    mode: "announce",
-    to: normalized.to,
-  };
-  if (normalized.channel) {
-    delivery.channel = normalized.channel as CronMessageChannel;
-  }
-  if (normalized.accountId) {
-    delivery.accountId = normalized.accountId;
-  }
-  if (normalized.threadId != null) {
-    delivery.threadId = normalized.threadId;
-  }
-  return delivery;
-}
-
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -539,13 +497,14 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: "cron",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
+    description: `Manage Gateway cron jobs (status/list/get/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
 Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
 
 ACTIONS:
 - status: Check cron scheduler status
-- list: List jobs (use includeDisabled:true to include disabled)
+- list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)
+- get: Get one job by id (requires jobId)
 - add: Create job (requires job object, see schema below)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
@@ -607,6 +566,9 @@ CRITICAL CONSTRAINTS:
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
+RESTRICTED CRON RUNS:
+- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, get/runs are allowed for the current job only, and mutation actions remain limited to removing the current cron job.
+
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
 - "now": Wake immediately
@@ -616,6 +578,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      assertCronSelfRemoveScope(opts, action, params);
       const gatewayOpts: GatewayCallOptions = {
         ...readGatewayCallOptions(params),
         timeoutMs:
@@ -625,14 +588,56 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       };
 
       switch (action) {
-        case "status":
-          return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "status": {
+          const result = await callGateway("cron.status", gatewayOpts, {});
           return jsonResult(
-            await callGateway("cron.list", gatewayOpts, {
-              includeDisabled: Boolean(params.includeDisabled),
-            }),
+            readCronSelfRemoveOnlyJobId(opts) ? filterCronStatusResultForSelfScope(result) : result,
           );
+        }
+        case "list": {
+          const cfg = getRuntimeConfig();
+          const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
+          const listAgentId = selfRemoveOnlyJobId
+            ? opts?.agentSessionKey?.trim()
+              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+              : undefined
+            : typeof params.agentId === "string" && params.agentId.trim()
+              ? params.agentId.trim()
+              : opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined;
+          const includeDisabled = Boolean(params.includeDisabled);
+          let offset = 0;
+          let result: unknown;
+          let shouldContinue = true;
+          while (shouldContinue) {
+            result = await callGateway("cron.list", gatewayOpts, {
+              includeDisabled,
+              agentId: listAgentId,
+              ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+            });
+            if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
+              shouldContinue = false;
+            } else {
+              const nextOffset = readCronListNextOffset(result, offset);
+              if (nextOffset === undefined) {
+                shouldContinue = false;
+              } else {
+                offset = nextOffset;
+              }
+            }
+          }
+          return jsonResult(
+            selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
+          );
+        }
+        case "get": {
+          const id = readCronJobIdParam(params);
+          if (!id) {
+            throw new Error("jobId required (id accepted for backward compatibility)");
+          }
+          return jsonResult(await callGateway("cron.get", gatewayOpts, { id }));
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
@@ -656,8 +661,8 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             normalizeCronJobCreate(params.job, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
+          const cfg = getRuntimeConfig();
           if (job && typeof job === "object") {
-            const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
@@ -706,9 +711,11 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred =
-                inferDeliveryFromContext(opts.currentDeliveryContext) ??
-                inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred = resolveCronCreationDelivery({
+                cfg,
+                currentDeliveryContext: opts.currentDeliveryContext,
+                agentSessionKey: opts.agentSessionKey,
+              });
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
                   ...inferred,
@@ -745,7 +752,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
@@ -780,14 +787,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           );
         }
         case "remove": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
@@ -796,7 +803,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }

@@ -49,4 +49,31 @@ describe("resolveProviderPluginLookupKey", () => {
       }),
     ).toBe("google");
   });
+
+  it("falls through when runtime provider models is an object map", () => {
+    expect(
+      resolveProviderPluginLookupKey("openrouter", {
+        baseUrl: "https://openrouter.ai/api/v1",
+        models: { "some/model": { api: "openai-completions" } } as never,
+      }),
+    ).toBe("openrouter");
+  });
+
+  it("falls through when runtime provider models is undefined", () => {
+    expect(
+      resolveProviderPluginLookupKey("openrouter", {
+        baseUrl: "https://openrouter.ai/api/v1",
+        models: undefined as never,
+      }),
+    ).toBe("openrouter");
+  });
+
+  it("falls through to the provider key when runtime provider models is non-array", () => {
+    expect(
+      resolveProviderPluginLookupKey("openrouter", {
+        baseUrl: "https://openrouter.ai/api/v1",
+        models: { some: "garbage" } as never,
+      }),
+    ).toBe("openrouter");
+  });
 });

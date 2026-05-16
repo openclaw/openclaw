@@ -20,6 +20,13 @@ Use it when you need to answer questions like:
 - Which model, plugins, skills, and runtime settings were active?
 - What usage and prompt-cache metadata did the provider return?
 
+If you are filing a broad support report for a live Gateway issue, start with
+[`/diagnostics`](/gateway/diagnostics#chat-command). Diagnostics collects the
+sanitized Gateway bundle and, for OpenAI Codex harness sessions, can also send
+Codex feedback to OpenAI servers after approval. Use `/export-trajectory` when
+you specifically need the detailed per-session prompt, tool, and transcript
+timeline.
+
 ## Quick start
 
 Send this in the active session:
@@ -48,6 +55,20 @@ You can choose a relative output directory name:
 
 The custom path is resolved inside `.openclaw/trajectory-exports/`. Absolute
 paths and `~` paths are rejected.
+
+Trajectory bundles can contain prompts, model messages, tool schemas, tool
+results, runtime events, and local paths. The chat slash command therefore runs
+through exec approval every time. Approve the export once when you intend to
+create the bundle; do not use allow-all. In group chats, OpenClaw sends the
+approval prompt and export result to the owner privately instead of posting the
+trajectory details back to the shared room.
+
+For local inspection or support workflows, you can also run the approved command
+path directly:
+
+```bash
+openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:123" --workspace .
+```
 
 ## Access
 
@@ -147,6 +168,20 @@ This disables runtime trajectory capture. `/export-trajectory` can still export
 the transcript branch, but runtime-only files such as compiled context,
 provider artifacts, and prompt metadata may be missing.
 
+## Tune flush timeout
+
+OpenClaw flushes runtime trajectory sidecars during agent cleanup. The default
+cleanup timeout is 10,000 ms. On slow disks or large stores, set
+`OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS` before starting OpenClaw:
+
+```bash
+export OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS=30000
+```
+
+This controls when OpenClaw logs a `pi-trajectory-flush` timeout and continues.
+It does not change the trajectory size caps. To tune all agent cleanup steps
+that do not pass an explicit timeout, set `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`.
+
 ## Privacy and limits
 
 Trajectory bundles are designed for support and debugging, not public posting.
@@ -160,7 +195,7 @@ OpenClaw redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime sidecar files: 50 MiB
+- runtime sidecar files: live capture stops at 10 MiB and records a truncation event when space remains; export accepts existing runtime sidecars up to 50 MiB
 - session files: 50 MiB
 - runtime events: 200,000
 - total exported events: 250,000

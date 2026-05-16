@@ -164,6 +164,110 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `save dict preserves gateway auth unless explicitly allowed`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "auth": [
+                        "mode": "token",
+                        "token": "existing-token", // pragma: allowlist secret
+                    ],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+            ])
+
+            let root = OpenClawConfigFile.loadDict()
+            let gateway = root["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "existing-token") // pragma: allowlist secret
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+            ], allowGatewayAuthMutation: true)
+
+            let allowedRoot = OpenClawConfigFile.loadDict()
+            let allowedGateway = allowedRoot["gateway"] as? [String: Any]
+            #expect(allowedGateway?["mode"] as? String == "local")
+            #expect((allowedGateway?["auth"] as? [String: Any]) == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict can merge local fallback writes with fresh config`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "auth": [
+                        "mode": "password",
+                        "password": "existing-password", // pragma: allowlist secret
+                    ],
+                ],
+                "browser": [
+                    "enabled": true,
+                    "profile": "work",
+                ],
+                "channels": [
+                    "discord": [
+                        "enabled": true,
+                    ],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+                "browser": [
+                    "enabled": false,
+                ],
+            ], preserveExistingKeys: true)
+
+            let root = OpenClawConfigFile.loadDict()
+            let gateway = root["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            let browser = root["browser"] as? [String: Any]
+            let discord = ((root["channels"] as? [String: Any])?["discord"] as? [String: Any])
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(auth?["mode"] as? String == "password")
+            #expect(auth?["password"] as? String == "existing-password") // pragma: allowlist secret
+            #expect(browser?["enabled"] as? Bool == false)
+            #expect(browser?["profile"] as? String == "work")
+            #expect(discord?["enabled"] as? Bool == true)
+        }
+    }
+
+    @MainActor
+    @Test
     func `load dict audits suspicious out-of-band clobbers`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
@@ -229,6 +333,120 @@ struct OpenClawConfigFileTests {
                     let preserved = try String(contentsOfFile: clobberedPath, encoding: .utf8)
                     #expect(preserved == clobbered)
                 }
+            }
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict records preserved gateway auth in audit`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "test-token", // pragma: allowlist secret
+                    ],
+                ],
+            ])
+
+            let saved = OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+                "browser": [
+                    "enabled": false,
+                ],
+            ])
+
+            #expect(saved)
+            let data = try Data(contentsOf: configPath)
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let gateway = root?["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "test-token") // pragma: allowlist secret
+            #expect((root?["meta"] as? [String: Any]) != nil)
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let last = rawAudit.split(whereSeparator: \.isNewline).map(String.init).last
+            let auditRoot = try JSONSerialization.jsonObject(with: Data((last ?? "{}").utf8)) as? [String: Any]
+            #expect(auditRoot?["result"] as? String == "success")
+            #expect(auditRoot?["preservedGatewayAuth"] as? Bool == true)
+            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
+            #expect(suspicious.contains("gateway-auth-preserved"))
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict rejects gateway mode removal and keeps previous config`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "test-token", // pragma: allowlist secret
+                    ],
+                ],
+                "browser": [
+                    "enabled": true,
+                ],
+            ])
+            let before = try String(contentsOf: configPath, encoding: .utf8)
+
+            let saved = OpenClawConfigFile.saveDict([
+                "browser": [
+                    "enabled": false,
+                ],
+            ])
+
+            #expect(!saved)
+            let after = try String(contentsOf: configPath, encoding: .utf8)
+            #expect(after == before)
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let lines = rawAudit.split(whereSeparator: \.isNewline).map(String.init)
+            guard let last = lines.last else {
+                Issue.record("Missing rejected config audit line")
+                return
+            }
+            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
+            #expect(auditRoot?["result"] as? String == "rejected")
+            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
+            let blocking = auditRoot?["blocking"] as? [String] ?? []
+            #expect(suspicious.contains("gateway-mode-removed"))
+            #expect(blocking.contains("gateway-mode-removed"))
+            if let rejectedPath = auditRoot?["rejectedPath"] as? String {
+                #expect(FileManager().fileExists(atPath: rejectedPath))
+                let attributes = try FileManager().attributesOfItem(atPath: rejectedPath)
+                let mode = attributes[.posixPermissions] as? NSNumber
+                #expect(mode?.intValue == 0o600)
+            } else {
+                Issue.record("Missing rejected payload path")
             }
         }
     }

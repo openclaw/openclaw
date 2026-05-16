@@ -33,7 +33,7 @@ export type PluginShapeSummary = {
   usesLegacyBeforeAgentStart: boolean;
 };
 
-export function buildPluginCapabilityEntries(
+function buildPluginCapabilityEntries(
   plugin: PluginRegistry["plugins"][number],
 ): PluginCapabilityEntry[] {
   return [
@@ -57,7 +57,7 @@ export function buildPluginCapabilityEntries(
   ].filter((entry) => entry.ids.length > 0);
 }
 
-export function derivePluginInspectShape(params: {
+function derivePluginInspectShape(params: {
   capabilityCount: number;
   typedHookCount: number;
   customHookCount: number;
@@ -92,7 +92,7 @@ export function derivePluginInspectShape(params: {
 
 export function buildPluginShapeSummary(params: {
   plugin: PluginRegistry["plugins"][number];
-  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools">;
+  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors">;
 }): PluginShapeSummary {
   const capabilities = buildPluginCapabilityEntries(params.plugin);
   const typedHookCount = params.report.typedHooks.filter(
@@ -104,6 +104,10 @@ export function buildPluginShapeSummary(params: {
   const toolCount = params.report.tools.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
+  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
+    (descriptor) =>
+      descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
+  ).length;
   const capabilityCount = capabilities.length;
   const shape = derivePluginInspectShape({
     capabilityCount,
@@ -114,7 +118,7 @@ export function buildPluginShapeSummary(params: {
     cliCount: params.plugin.cliCommands.length,
     serviceCount: params.plugin.services.length,
     gatewayDiscoveryServiceCount: params.plugin.gatewayDiscoveryServiceIds.length,
-    gatewayMethodCount: params.plugin.gatewayMethods.length,
+    gatewayMethodCount,
     httpRouteCount: params.plugin.httpRoutes,
   });
 

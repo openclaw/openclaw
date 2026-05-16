@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  clearWedgedSubagentRecoveryAbort,
+  formatSubagentRecoveryWedgedReason,
+  isSubagentRecoveryWedgedEntry,
+} from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
@@ -16,9 +21,11 @@ import {
   resolveStorePath,
 } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
+import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -26,6 +33,9 @@ import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
+import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
+import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -82,6 +92,12 @@ function resolveComparableTranscriptPath(filePath: string): string {
   return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
+function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
+  const leftRealPath = tryResolveNativeRealPath(leftPath);
+  const rightRealPath = tryResolveNativeRealPath(rightPath);
+  return leftRealPath !== null && leftRealPath === rightRealPath;
+}
+
 function isReachableConfiguredAgentDir(params: {
   agentsRoot: string;
   dirName: string;
@@ -118,6 +134,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   }
 
   const agentsRoot = path.join(stateDir, "agents");
+  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -127,8 +144,12 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         agentId: normalizeAgentId(entry.name),
       }))
       .filter(({ dirName, agentId }) => {
-        const hasNestedAgentDir = existsDir(path.join(agentsRoot, dirName, "agent"));
+        const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
+        const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {
@@ -560,14 +581,12 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
     }),
   );
   const withoutPersistedAuth = new Set(
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
       includePersistedAuthState: false,
     }),
   );
@@ -863,6 +882,82 @@ export async function noteStateIntegrity(
           `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
         ].join("\n"),
       );
+    }
+
+    const wedgedSubagentSessions = entries.filter(([, entry]) =>
+      isSubagentRecoveryWedgedEntry(entry),
+    );
+    if (wedgedSubagentSessions.length > 0) {
+      const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
+      warnings.push(
+        [
+          `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
+          "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
+          `  Examples: ${wedgedSubagentSessions
+            .slice(0, 3)
+            .map(([key]) => key)
+            .join(", ")}`,
+          `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
+        ].join("\n"),
+      );
+      const repairWedged = await prompter.confirmRuntimeRepair({
+        message: `Clear stale aborted recovery flags for ${wedgedCount}?`,
+        initialValue: true,
+      });
+      if (repairWedged) {
+        let repaired = 0;
+        const repairedAt = Date.now();
+        await updateSessionStore(absoluteStorePath, (currentStore) => {
+          for (const [key] of wedgedSubagentSessions) {
+            const current = currentStore[key];
+            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+              repaired += 1;
+              currentStore[key] = current;
+            }
+          }
+        });
+        if (repaired > 0) {
+          changes.push(
+            `- Cleared aborted restart-recovery flags for ${countLabel(
+              repaired,
+              "wedged subagent session",
+            )}.`,
+          );
+        }
+      }
+
+      const wedgedReasons = wedgedSubagentSessions
+        .map(([, entry]) => formatSubagentRecoveryWedgedReason(entry))
+        .filter((reason, index, all) => all.indexOf(reason) === index)
+        .slice(0, 2);
+      if (wedgedReasons.length > 0) {
+        warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
+      }
+    }
+
+    await runPluginSessionStateDoctorRepairs({
+      cfg,
+      store,
+      absoluteStorePath,
+      prompter,
+      env,
+      warnings,
+      changes,
+    });
+
+    await repairHeartbeatPoisonedMainSession({
+      cfg,
+      store,
+      absoluteStorePath,
+      stateDir,
+      sessionPathOpts,
+      prompter,
+      warnings,
+      changes,
+    });
+
+    for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+      warnings.push(warning);
     }
 
     const mainKey = resolveMainSessionKey(cfg);

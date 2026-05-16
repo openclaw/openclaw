@@ -1,36 +1,37 @@
-import type { Api, Context, Model, ProviderStreamOptions } from "@mariozechner/pi-ai";
-import { complete } from "@mariozechner/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderStreamOptions,
+} from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
   getApiKeyForModel,
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
-import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-selection.js";
+import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelWithRegistry } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
-import { prepareProviderDynamicModel } from "../plugins/provider-runtime.js";
+import {
+  buildCopilotIdeHeaders,
+  COPILOT_INTEGRATION_ID,
+  resolveCopilotApiToken,
+} from "../plugin-sdk/provider-auth.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
-
-let piModelDiscoveryRuntimePromise: Promise<
-  typeof import("../agents/pi-model-discovery-runtime.js")
-> | null = null;
-
-function loadPiModelDiscoveryRuntime() {
-  piModelDiscoveryRuntimePromise ??= import("../agents/pi-model-discovery-runtime.js");
-  return piModelDiscoveryRuntimePromise;
-}
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
   if (
@@ -62,6 +63,10 @@ function isNativeResponsesReasoningPayload(model: Model<Api>): boolean {
     capability: "image",
     transport: "media-understanding",
   }).usesKnownNativeOpenAIRoute;
+}
+
+function formatModelInputCapabilities(input: Model<Api>["input"] | undefined): string {
+  return input && input.length > 0 ? input.join(", ") : "none";
 }
 
 function removeReasoningInclude(value: unknown): unknown {
@@ -139,48 +144,18 @@ async function resolveImageRuntime(params: {
   authStore?: ImageDescriptionRequest["authStore"];
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const configuredProviders = params.cfg.models?.providers;
-  const providerConfig =
-    configuredProviders?.[resolvedRef.provider] ??
-    findNormalizedProviderValue(configuredProviders, resolvedRef.provider);
-  // Fast path: resolve without dynamic model preparation first.
-  // This avoids unnecessary prepare hooks (e.g. OpenRouter catalog fetch)
-  // for models that are already explicitly resolvable.
-  let model = resolveModelWithRegistry({
-    provider: resolvedRef.provider,
-    modelId: resolvedRef.model,
-    modelRegistry,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  }) as Model<Api> | null;
-
-  // If the model is not in the registry yet, prepare dynamic provider models
-  // and retry (needed for provider-runtime-backed dynamic models).
-  if (!model) {
-    await prepareProviderDynamicModel({
-      provider: resolvedRef.provider,
-      config: params.cfg,
-      context: {
-        config: params.cfg,
-        agentDir: params.agentDir,
-        provider: resolvedRef.provider,
-        modelId: resolvedRef.model,
-        modelRegistry,
-        providerConfig,
-      },
-    });
-    model = resolveModelWithRegistry({
-      provider: resolvedRef.provider,
-      modelId: resolvedRef.model,
-      modelRegistry,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    }) as Model<Api> | null;
-  }
+  const resolved = await resolveModelAsync(
+    resolvedRef.provider,
+    resolvedRef.model,
+    params.agentDir,
+    params.cfg,
+    {
+      allowBundledStaticCatalogFallback: true,
+    },
+  );
+  const { authStorage } = resolved;
+  let { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
@@ -192,7 +167,10 @@ async function resolveImageRuntime(params: {
     if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
       throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
     }
-    throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
+    throw new Error(
+      `Model does not support images: ${params.provider}/${params.model} ` +
+        `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
+    );
   }
   const apiKeyInfo = await getApiKeyForModel({
     model,
@@ -202,7 +180,20 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  let apiKey = requireApiKey(apiKeyInfo, model.provider);
+  // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
+  // a short-lived Copilot API token so the integrator scope (vscode-chat)
+  // matches what runtime chat requests send.
+  if (model.provider === "github-copilot") {
+    const copilotToken = await resolveCopilotApiToken({
+      githubToken: apiKey,
+    });
+    apiKey = copilotToken.token;
+    const runtimeBaseUrl = copilotToken.baseUrl?.trim();
+    if (runtimeBaseUrl) {
+      model = { ...model, baseUrl: runtimeBaseUrl };
+    }
+  }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model };
 }
@@ -234,6 +225,13 @@ function buildImageContext(
 }
 
 function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+  // GitHub Copilot models (including Gemini 3.1 Pro Preview) require the
+  // prompt text to be in the user message alongside the image. Placing it
+  // in a separate system message produces "Request must contain at least
+  // one non-empty message" (400).
+  if (model.provider === "github-copilot") {
+    return true;
+  }
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
     api: model.api,
@@ -245,6 +243,19 @@ function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
     capabilities.endpointClass === "openrouter" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
+}
+
+function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | undefined {
+  if (model.provider !== "github-copilot") {
+    return undefined;
+  }
+  return {
+    ...buildCopilotIdeHeaders(),
+    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Openai-Organization": "github-copilot",
+    "x-initiator": "user",
+    "Copilot-Vision-Request": "true",
+  };
 }
 
 async function describeImagesWithMinimax(params: {
@@ -311,16 +322,55 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
+function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined, startedAtMs: number) {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(timeoutMs - (Date.now() - startedAtMs)));
+}
+
+async function withImageDescriptionTimeout<T>(params: {
+  task: Promise<T>;
+  timeoutMs: number | undefined;
+  controller: AbortController;
+}): Promise<T> {
+  if (params.timeoutMs === undefined) {
+    return await params.task;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      params.task,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          params.controller.abort();
+          reject(new Error(`image description timed out after ${params.timeoutMs}ms`));
+        }, params.timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function describeImagesWithModelInternal(
   params: ImagesDescriptionRequest,
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
+  const startedAtMs = Date.now();
+  const controller = new AbortController();
   let apiKey: string;
   let model: Model<Api> | undefined;
 
   try {
-    const resolved = await resolveImageRuntime(params);
+    const resolved = await withImageDescriptionTimeout({
+      controller,
+      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      task: resolveImageRuntime(params),
+    });
     apiKey = resolved.apiKey;
     model = resolved.model;
   } catch (err) {
@@ -349,7 +399,7 @@ async function describeImagesWithModelInternal(
     });
   }
 
-  registerProviderStreamForModel({
+  const providerStreamFn = registerProviderStreamForModel({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -358,50 +408,51 @@ async function describeImagesWithModelInternal(
   const context = buildImageContext(prompt, params.images, {
     promptInUserContent: shouldPlaceImagePromptInUserContent(model),
   });
-  const controller = new AbortController();
-  const timeout =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? setTimeout(() => controller.abort(), params.timeoutMs)
-      : undefined;
 
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
-    return await complete(model, context, {
+    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const headers = buildImageRequestHeaders(model);
+    const streamOptions = {
       apiKey,
       maxTokens,
       signal: controller.signal,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(headers ? { headers } : {}),
       ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+    };
+    const task: Promise<AssistantMessage> = providerStreamFn
+      ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
+      : complete(model, context, streamOptions);
+    return await withImageDescriptionTimeout({
+      controller,
+      timeoutMs,
+      task,
     });
   };
 
+  const message = await completeImage();
   try {
-    const message = await completeImage();
-    try {
-      const text = coerceImageAssistantText({
-        message,
-        provider: model.provider,
-        model: model.id,
-      });
-      return { text, model: model.id };
-    } catch (err) {
-      if (!isImageModelNoTextError(err) || !hasImageReasoningOnlyResponse(message)) {
-        throw err;
-      }
-    }
-
-    const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
     const text = coerceImageAssistantText({
-      message: retryMessage,
+      message,
       provider: model.provider,
       model: model.id,
     });
     return { text, model: model.id };
-  } finally {
-    clearTimeout(timeout);
+  } catch (err) {
+    if (!isImageModelNoTextError(err) || !hasImageReasoningOnlyResponse(message)) {
+      throw err;
+    }
   }
+
+  const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
+  const text = coerceImageAssistantText({
+    message: retryMessage,
+    provider: model.provider,
+    model: model.id,
+  });
+  return { text, model: model.id };
 }
 
 export async function describeImagesWithModel(

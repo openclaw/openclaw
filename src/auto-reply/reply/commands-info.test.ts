@@ -9,7 +9,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 const buildContextReplyMock = vi.hoisted(() => vi.fn());
-const buildExportTrajectoryReplyMock = vi.hoisted(() => vi.fn(async () => ({ text: "exported" })));
+const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
+  vi.fn(async () => ({ text: "exported" })),
+);
 const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
@@ -20,7 +22,7 @@ vi.mock("./commands-context-report.js", () => ({
 }));
 
 vi.mock("./commands-export-trajectory.js", () => ({
-  buildExportTrajectoryReply: buildExportTrajectoryReplyMock,
+  buildExportTrajectoryCommandReply: buildExportTrajectoryCommandReplyMock,
 }));
 
 vi.mock("./commands-status.js", () => ({
@@ -48,6 +50,15 @@ vi.mock("../status.js", async () => {
     buildCommandsMessagePaginated: buildCommandsMessagePaginatedMock,
   };
 });
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  expect(mock.mock.calls).toHaveLength(1);
+  const [arg] = mock.mock.calls.at(0) ?? [];
+  if (!arg) {
+    throw new Error(`expected ${label} to receive arguments`);
+  }
+  return arg;
+}
 
 function buildInfoParams(
   commandBodyNormalized: string,
@@ -92,7 +103,7 @@ function buildInfoParams(
 describe("info command handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    buildExportTrajectoryReplyMock.mockResolvedValue({ text: "exported" });
+    buildExportTrajectoryCommandReplyMock.mockResolvedValue({ text: "exported" });
     buildContextReplyMock.mockImplementation(async (params: HandleCommandsParams) => {
       const normalized = params.command.commandBodyNormalized;
       if (normalized === "/context list") {
@@ -119,7 +130,7 @@ describe("info command handlers", () => {
     const result = await handleExportTrajectoryCommand(params, true);
 
     expect(result).toEqual({ shouldContinue: false });
-    expect(buildExportTrajectoryReplyMock).not.toHaveBeenCalled();
+    expect(buildExportTrajectoryCommandReplyMock).not.toHaveBeenCalled();
   });
 
   it("returns sender details for /whoami", async () => {
@@ -212,11 +223,11 @@ describe("info command handlers", () => {
 
     expect(statusResult?.shouldContinue).toBe(false);
 
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentSessionKey: "discord:group:parent-room",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
   it("preserves the shared session store path when routing /status", async () => {
@@ -229,11 +240,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/target-session-store.json",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
   });
 
   it("prefers the target session entry when routing /status", async () => {
@@ -257,15 +268,13 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-          parentSessionKey: "target-parent",
-        }),
-        parentSessionKey: "target-parent",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.sessionEntry?.sessionId).toBe("target-session");
+    expect(statusReplyParams.sessionEntry?.parentSessionKey).toBe("target-parent");
+    expect(statusReplyParams.parentSessionKey).toBe("target-parent");
   });
 
   it("forwards resolved fast mode to /status", async () => {
@@ -278,11 +287,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resolvedFastMode: true,
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.resolvedFastMode).toBe(true);
   });
 
   it("uses the canonical target session agent when listing /commands", async () => {
@@ -298,10 +307,10 @@ describe("info command handlers", () => {
     const result = await handleCommandsListCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentIds: ["target"],
-      }),
-    );
+    const listParams = firstMockArg(
+      listSkillCommandsForAgentsMock,
+      "listSkillCommandsForAgents",
+    ) as { agentIds?: string[] };
+    expect(listParams.agentIds).toEqual(["target"]);
   });
 });

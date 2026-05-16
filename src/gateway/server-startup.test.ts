@@ -11,8 +11,10 @@ const ensureOpenClawModelsJsonMock = vi.fn<
 const piModelModuleLoadedMock = vi.fn();
 const resolveEmbeddedAgentRuntimeMock = vi.fn(() => "auto");
 
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/agent",
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: () => "/tmp/agent",
+  resolveAgentWorkspaceDir: () => "/tmp/workspace",
+  resolveDefaultAgentId: () => "default",
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -31,13 +33,27 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
   resolveEmbeddedAgentRuntime: () => resolveEmbeddedAgentRuntimeMock(),
 }));
 
-let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
+let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").__testing.prewarmConfiguredPrimaryModel;
+let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").__testing.shouldSkipStartupModelPrewarm;
+
+function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
+  expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+  const [calledConfig, agentDir, options] = ensureOpenClawModelsJsonMock.mock.calls.at(0) ?? [];
+  expect(calledConfig).toBe(cfg);
+  expect(agentDir).toBe("/tmp/agent");
+  expect(options).toEqual({
+    workspaceDir: "/tmp/workspace",
+    providerDiscoveryProviderIds: ["openai-codex"],
+    providerDiscoveryTimeoutMs: 5000,
+    providerDiscoveryEntriesOnly: true,
+  });
+}
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
-      __testing: { prewarmConfiguredPrimaryModel },
-    } = await import("./server-startup.js"));
+      __testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
+    } = await import("./server-startup-post-attach.js"));
   });
 
   beforeEach(() => {
@@ -63,14 +79,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
-      cfg,
-      "/tmp/agent",
-      expect.objectContaining({
-        providerDiscoveryProviderIds: ["openai-codex"],
-        providerDiscoveryTimeoutMs: 5000,
-      }),
-    );
+    expectModelsJsonPrewarmCall(cfg);
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -82,6 +91,20 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("honors the startup model prewarm skip env", () => {
+    expect(shouldSkipStartupModelPrewarm({})).toBe(false);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "true",
+      }),
+    ).toBe(true);
   });
 
   it("skips static warmup for configured CLI backends", async () => {
@@ -144,14 +167,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
-      cfg,
-      "/tmp/agent",
-      expect.objectContaining({
-        providerDiscoveryProviderIds: ["openai-codex"],
-        providerDiscoveryTimeoutMs: 5000,
-      }),
-    );
+    expectModelsJsonPrewarmCall(cfg);
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -173,7 +189,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("startup model warmup failed for codex/gpt-5.4"),
+      "startup model warmup failed for codex/gpt-5.4: Error: models write failed",
     );
   });
 });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
@@ -8,7 +8,7 @@ import {
 } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
-import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
+import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
@@ -27,6 +27,11 @@ export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
   return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
+}
+
+function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : fallback;
 }
 
 export function buildQaGatewayConfig(params: {
@@ -53,9 +58,14 @@ export function buildQaGatewayConfig(params: {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
-  const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const primaryModel = normalizeQaGatewayModelRef(
+    params.primaryModel,
+    defaultQaModelForMode(providerMode),
+  );
+  const alternateModel = normalizeQaGatewayModelRef(
+    params.alternateModel,
+    defaultQaModelForMode(providerMode, { alternate: true }),
+  );
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
     .filter((provider): provider is string => Boolean(provider));

@@ -203,14 +203,7 @@ struct OnboardingWizardView: View {
                             return
                         }
                         if let message = self.detectQRCode(from: data) {
-                            if let link = GatewayConnectDeepLink.fromSetupCode(message) {
-                                self.handleScannedLink(link)
-                                return
-                            }
-                            if let url = URL(string: message),
-                               let route = DeepLinkParser.parse(url),
-                               case let .gateway(link) = route
-                            {
+                            if let link = GatewayConnectDeepLink.fromSetupInput(message) {
                                 self.handleScannedLink(link)
                                 return
                             }
@@ -224,9 +217,9 @@ struct OnboardingWizardView: View {
                 if let currentProblem = self.currentProblem {
                     GatewayProblemDetailsSheet(
                         problem: currentProblem,
-                        primaryActionTitle: "Retry",
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(currentProblem),
                         onPrimaryAction: {
-                            Task { await self.retryLastAttempt() }
+                            Task { await self.handleGatewayProblemPrimaryAction(currentProblem) }
                         })
                 }
             }
@@ -601,9 +594,9 @@ struct OnboardingWizardView: View {
                 if let problem = self.currentProblem {
                     GatewayProblemBanner(
                         problem: problem,
-                        primaryActionTitle: "Retry connection",
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
                         onPrimaryAction: {
-                            Task { await self.retryLastAttempt() }
+                            Task { await self.handleGatewayProblemPrimaryAction(problem) }
                         },
                         onShowDetails: {
                             self.showGatewayProblemDetails = true
@@ -1020,6 +1013,22 @@ struct OnboardingWizardView: View {
         }
         defer { self.connectingGatewayID = nil }
         await self.gatewayController.connectLastKnown()
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
+        if problem.canTrustRotatedCertificate {
+            self.connectingGatewayID = "trust-certificate"
+            self.connectMessage = "Updating gateway certificate…"
+            self.statusLine = "Updating gateway certificate…"
+            defer { self.connectingGatewayID = nil }
+            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
+            return
+        }
+        await self.retryLastAttempt()
     }
 }
 

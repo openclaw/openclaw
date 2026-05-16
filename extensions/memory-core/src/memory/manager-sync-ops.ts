@@ -17,9 +17,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
   listSessionFilesForAgent,
   sessionPathForFile,
-  type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
@@ -29,11 +30,10 @@ import {
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
-  type MemoryFileEntry,
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -59,6 +59,12 @@ import {
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
+import {
+  recordMemoryWatchEventPath,
+  settleMemoryWatchEventPaths,
+  type MemoryWatchEventStats,
+  type MemoryWatchSettleQueue,
+} from "./watch-settle.js";
 
 type MemorySyncProgressState = {
   completed: number;
@@ -67,12 +73,22 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  content?: string;
+};
+
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
+const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
@@ -131,6 +147,18 @@ export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interv
   });
 }
 
+function createSessionSyncYield(total: number): () => Promise<void> {
+  let completed = 0;
+  return async () => {
+    completed += 1;
+    if (completed < total && completed % SESSION_SYNC_YIELD_EVERY === 0) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  };
+}
+
 export abstract class MemoryManagerSyncOps {
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
@@ -151,6 +179,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly vector: {
     enabled: boolean;
     available: boolean | null;
+    semanticAvailable?: boolean;
     extensionPath?: string;
     loadError?: string;
     dims?: number;
@@ -169,6 +198,7 @@ export abstract class MemoryManagerSyncOps {
   protected intervalTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
@@ -197,13 +227,14 @@ export abstract class MemoryManagerSyncOps {
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract indexFile(
-    entry: MemoryFileEntry | SessionFileEntry,
+    entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
   protected resetVectorState(): void {
     this.vectorReady = null;
     this.vector.available = null;
+    this.vector.semanticAvailable = undefined;
     this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.vectorDegradedWriteWarningShown = false;
@@ -426,12 +457,9 @@ export abstract class MemoryManagerSyncOps {
       ignoreInitial: true,
       ignored: (watchPath, stats) =>
         shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-      awaitWriteFinish: {
-        stabilityThreshold: this.settings.sync.watchDebounceMs,
-        pollInterval: 100,
-      },
     });
-    const markDirty = () => {
+    const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
+      recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
@@ -439,6 +467,12 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
     this.watcher.on("unlinkDir", markDirty);
+    this.watcher.on("error", (err) => {
+      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+      // Log the error and continue - memory search still works without auto-sync.
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`memory watcher error: ${message}`);
+    });
   }
 
   protected ensureSessionListener() {
@@ -478,6 +512,24 @@ export abstract class MemoryManagerSyncOps {
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
+      // Usage-counted session archives (`.jsonl.reset.<iso>` and
+      // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
+      // written once by the archive rotation and then never touched again.
+      // They carry no incremental `append` semantics, so the delta-bytes /
+      // delta-messages thresholds (designed for live transcripts accumulating
+      // appended messages) cannot gate them correctly — a short archive
+      // below the threshold would simply never reindex. Mark them dirty
+      // directly and skip the delta accounting.
+      const baseName = path.basename(sessionFile);
+      if (
+        isSessionArchiveArtifactName(baseName) &&
+        isUsageCountedSessionTranscriptFileName(baseName)
+      ) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
         continue;
@@ -661,7 +713,21 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
+      runDetachedMemorySync(async () => {
+        if (this.closed) {
+          return;
+        }
+        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
+          if (!this.closed) {
+            this.scheduleWatchSync();
+          }
+          return;
+        }
+        if (this.closed) {
+          return;
+        }
+        await this.sync({ reason: "watch" });
+      }, "watch");
     }, this.settings.sync.watchDebounceMs);
   }
 
@@ -712,7 +778,7 @@ export abstract class MemoryManagerSyncOps {
         ),
         this.getIndexConcurrency(),
       )
-    ).filter((entry): entry is MemoryFileEntry => entry !== null);
+    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
@@ -835,53 +901,58 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    const yieldAfterSessionFile = createSessionSyncYield(files.length);
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
+      try {
+        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          return;
         }
-        return;
-      }
-      const entry = await buildSessionEntry(absPath);
-      if (!entry) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
+        const entry = await buildSessionEntry(absPath);
+        if (!entry) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          return;
         }
-        return;
-      }
-      const existingHash = resolveMemorySourceExistingHash({
-        db: this.db,
-        source: "sessions",
-        path: entry.path,
-        existingHashes,
-      });
-      if (!params.needsFullReindex && existingHash === entry.hash) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        this.resetSessionDelta(absPath, entry.size);
-        return;
-      }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size);
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
+        const existingHash = resolveMemorySourceExistingHash({
+          db: this.db,
+          source: "sessions",
+          path: entry.path,
+          existingHashes,
         });
+        if (!params.needsFullReindex && existingHash === entry.hash) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          this.resetSessionDelta(absPath, entry.size);
+          return;
+        }
+        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        this.resetSessionDelta(absPath, entry.size);
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+      } finally {
+        await yieldAfterSessionFile();
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
@@ -892,25 +963,31 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    for (const stale of existingRows ?? []) {
-      if (activePaths.has(stale.path)) {
-        continue;
-      }
-      deleteFileByPathAndSource.run(stale.path, "sessions");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "sessions");
-      if (deleteFtsRowsByPathSourceAndModel) {
-        try {
-          deleteFtsRowsByPathSourceAndModel.run(
-            stale.path,
-            "sessions",
-            this.provider?.model ?? "fts-only",
-          );
-        } catch {}
+    const staleRows = existingRows ?? [];
+    const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
+    for (const stale of staleRows) {
+      try {
+        if (activePaths.has(stale.path)) {
+          continue;
+        }
+        deleteFileByPathAndSource.run(stale.path, "sessions");
+        if (deleteVectorRowsByPathAndSource) {
+          try {
+            deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+          } catch {}
+        }
+        deleteChunksByPathAndSource.run(stale.path, "sessions");
+        if (deleteFtsRowsByPathSourceAndModel) {
+          try {
+            deleteFtsRowsByPathSourceAndModel.run(
+              stale.path,
+              "sessions",
+              this.provider?.model ?? "fts-only",
+            );
+          } catch {}
+        }
+      } finally {
+        await yieldAfterStaleSessionRow();
       }
     }
   }
@@ -1143,6 +1220,7 @@ export abstract class MemoryManagerSyncOps {
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
+    let tempDbClosed = false;
     let originalDbClosed = false;
     const originalState = {
       ftsAvailable: this.fts.available,
@@ -1181,6 +1259,12 @@ export abstract class MemoryManagerSyncOps {
       nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
+        beforeTempCleanup: () => {
+          if (!tempDbClosed) {
+            closeMemoryDatabase(tempDb);
+            tempDbClosed = true;
+          }
+        },
         build: async () => {
           await this.seedEmbeddingCache(originalDb);
           const shouldSyncMemory = this.sources.has("memory");
@@ -1230,7 +1314,8 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          closeMemoryDatabase(this.db);
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
           closeMemoryDatabase(originalDb);
           originalDbClosed = true;
           return meta;
@@ -1243,7 +1328,10 @@ export abstract class MemoryManagerSyncOps {
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
       try {
-        closeMemoryDatabase(this.db);
+        if (!tempDbClosed && this.db === tempDb) {
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
+        }
       } catch {}
       restoreOriginalState();
       throw err;

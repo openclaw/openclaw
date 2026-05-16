@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
@@ -12,7 +13,7 @@ import contextPruningExtension from "../pi-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js";
-import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
+import { ensurePiCompactionReserveTokens, resolveEffectiveCompactionMode } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
@@ -33,6 +34,16 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
     : {};
 }
 
+// Only checks "error" and "timeout" — the status values emitted by the
+// adapter's buildToolExecutionErrorResult. The subscribe-side classifier
+// (isErrorLikeStatus) uses a broader regex because it handles arbitrary
+// external tool results; this bridge only elevates adapter-produced statuses.
+function hasErrorToolResultStatus(result: AgentToolResult<unknown>): boolean {
+  const details = recordFromUnknown(result.details);
+  const status = normalizeOptionalLowercaseString(details.status);
+  return status === "error" || status === "timeout";
+}
+
 function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" });
   return (pi) => {
@@ -50,6 +61,7 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
+      const inputHadErrorStatus = hasErrorToolResultStatus(current);
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
         turnId: event.turnId,
@@ -60,9 +72,12 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
         isError: event.isError,
         result: current,
       });
+      const isError =
+        event.isError === true || inputHadErrorStatus || hasErrorToolResultStatus(result);
       return {
         content: result.content,
         details: result.details,
+        ...(isError ? { isError: true } : {}),
       };
     });
   };
@@ -123,15 +138,6 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  const compaction = cfg?.agents?.defaults?.compaction;
-  // A registered compaction provider requires the safeguard extension path
-  if (compaction?.provider) {
-    return "safeguard";
-  }
-  return compaction?.mode === "safeguard" ? "safeguard" : "default";
-}
-
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -140,7 +146,7 @@ export function buildEmbeddedExtensionFactories(params: {
   model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
+  if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     const contextWindowInfo = resolveContextWindowInfo({

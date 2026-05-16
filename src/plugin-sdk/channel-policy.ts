@@ -25,6 +25,7 @@ export {
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   collectOpenProviderGroupPolicyWarnings,
@@ -48,7 +49,8 @@ export {
   resolveDmGroupAccessWithCommandGate,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
-} from "../security/dm-policy-shared.js";
+  resolveOpenDmAllowlistAccess,
+} from "./channel-access-compat.js";
 export {
   evaluateGroupRouteAccessForPolicy,
   evaluateSenderGroupAccessForPolicy,

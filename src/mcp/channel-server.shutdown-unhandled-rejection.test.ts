@@ -79,6 +79,18 @@ vi.mock("./channel-tools.js", () => ({
   registerChannelMcpTools: vi.fn(),
 }));
 
+async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {
+  await vi.waitFor(() => {
+    if (transportState.lastTransport === null) {
+      throw new Error("MCP stdio transport was not created");
+    }
+  });
+  if (!transportState.lastTransport) {
+    throw new Error("MCP stdio transport was not created");
+  }
+  return transportState.lastTransport;
+}
+
 describe("serveOpenClawChannelMcp shutdown", () => {
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
@@ -102,13 +114,13 @@ describe("serveOpenClawChannelMcp shutdown", () => {
     const { serveOpenClawChannelMcp } = await import("./channel-server.js");
 
     const servePromise = serveOpenClawChannelMcp({ verbose: false });
-    await Promise.resolve();
+    const transport = await waitForTransport();
 
-    transportState.lastTransport?.onclose?.();
+    transport.onclose?.();
     await servePromise;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(unhandledRejections).toEqual([]);
+    expect(unhandledRejections).toStrictEqual([]);
     expect(bridgeState.close).toHaveBeenCalledTimes(1);
   });
 });

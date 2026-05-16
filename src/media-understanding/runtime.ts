@@ -1,6 +1,11 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeMediaProviderId } from "./provider-registry.js";
+import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { describeImageWithModel } from "./image-runtime.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
+  normalizeMediaProviderId,
+} from "./provider-registry.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -12,6 +17,7 @@ import type {
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
   DescribeVideoFileParams,
+  ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
@@ -20,6 +26,7 @@ export type {
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
   DescribeVideoFileParams,
+  ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
@@ -45,6 +52,10 @@ function buildFileContext(params: { filePath: string; mime?: string }) {
     MediaPath: params.filePath,
     MediaType: params.mime,
   };
+}
+
+function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"]): boolean {
+  return input.some((entry) => entry.type === "image");
 }
 
 export async function runMediaUnderstandingFile(
@@ -84,7 +95,10 @@ export async function runMediaUnderstandingFile(
   const ctx = buildFileContext(params);
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
-    return { text: undefined };
+    return {
+      text: undefined,
+      decision: { capability: params.capability, outcome: "no-attachment", attachments: [] },
+    };
   }
   const config = cfg.tools?.media?.[params.capability];
   if (config?.enabled === false) {
@@ -93,6 +107,7 @@ export async function runMediaUnderstandingFile(
       provider: undefined,
       model: undefined,
       output: undefined,
+      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
     };
   }
 
@@ -124,12 +139,16 @@ export async function runMediaUnderstandingFile(
       (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
     );
     const text = output?.text?.trim();
-    return {
+    const fileResult: RunMediaUnderstandingFileResult = {
       text: text || undefined,
       provider: output?.provider,
       model: output?.model,
       output,
     };
+    if (result.decision) {
+      fileResult.decision = result.decision;
+    }
+    return fileResult;
   } finally {
     await cache.cleanup();
   }
@@ -145,11 +164,9 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
   const timeoutMs = params.timeoutMs ?? 30_000;
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  if (!provider?.describeImage) {
-    throw new Error(`Provider does not support image analysis: ${params.provider}`);
-  }
-  const buffer = await fs.readFile(params.filePath);
-  return await provider.describeImage({
+  const buffer = (await readLocalFileSafely({ filePath: params.filePath })).buffer;
+  const describeImage = provider?.describeImage ?? describeImageWithModel;
+  return await describeImage({
     buffer,
     fileName: path.basename(params.filePath),
     mime: params.mime,
@@ -157,6 +174,35 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     model: params.model,
     prompt: params.prompt,
     maxTokens: params.maxTokens,
+    timeoutMs,
+    cfg: params.cfg,
+    agentDir: params.agentDir ?? "",
+  });
+}
+
+export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  if (!hasStructuredImageInput(params.input)) {
+    throw new Error("Structured extraction requires at least one image input.");
+  }
+  const provider = getMediaUnderstandingProvider(
+    params.provider,
+    buildMediaUnderstandingRegistry(undefined, params.cfg),
+  );
+  if (!provider?.extractStructured) {
+    throw new Error(`Provider does not support structured extraction: ${params.provider}`);
+  }
+  return await provider.extractStructured({
+    input: params.input,
+    instructions: params.instructions,
+    schemaName: params.schemaName,
+    jsonSchema: params.jsonSchema,
+    jsonMode: params.jsonMode,
+    provider: params.provider,
+    model: params.model,
+    profile: params.profile,
+    preferredProfile: params.preferredProfile,
+    authStore: params.authStore,
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
@@ -171,7 +217,7 @@ export async function describeVideoFile(
 
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
-): Promise<{ text: string | undefined }> {
+): Promise<RunMediaUnderstandingFileResult> {
   const cfg =
     params.language || params.prompt
       ? {
@@ -192,5 +238,5 @@ export async function transcribeAudioFile(
         }
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
-  return { text: result.text };
+  return result;
 }

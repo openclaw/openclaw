@@ -45,6 +45,10 @@ export {
   expectExplicitVideoGenerationCapabilities,
 } from "./test-helpers/provider-media-capability-assertions.js";
 export {
+  expectUnifiedModelCatalogEntries,
+  expectUnifiedModelCatalogProviderRegistration,
+} from "./test-helpers/unified-model-catalog-contract.js";
+export {
   expectProviderOnboardAllowlistAlias,
   expectProviderOnboardMergedLegacyConfig,
   expectProviderOnboardPreservesPrimary,
@@ -69,7 +73,9 @@ export {
 export { expectPassthroughReplayPolicy } from "./test-helpers/provider-replay-policy.js";
 export { createCapturedThinkingConfigStream } from "./test-helpers/stream-hooks.js";
 export {
+  expectOpenClawLiveTranscriptMarker,
   normalizeTranscriptForMatch,
+  OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE,
   runRealtimeSttLiveTest,
   streamAudioForLiveTest,
   synthesizeElevenLabsLiveSpeech,

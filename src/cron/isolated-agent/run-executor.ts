@@ -1,8 +1,12 @@
+import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
@@ -16,6 +20,7 @@ import {
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
+  resolveCronAgentLane,
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
@@ -34,17 +39,49 @@ type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
 
-let cronEmbeddedRuntimePromise: Promise<CronEmbeddedRuntime> | undefined;
-let cronSubagentRegistryRuntimePromise: Promise<CronSubagentRegistryRuntime> | undefined;
+const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
+  () => import("./run-embedded.runtime.js"),
+);
+const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentRegistryRuntime>(
+  () => import("./run-subagent-registry.runtime.js"),
+);
 
 async function loadCronEmbeddedRuntime() {
-  cronEmbeddedRuntimePromise ??= import("./run-embedded.runtime.js");
-  return await cronEmbeddedRuntimePromise;
+  return await cronEmbeddedRuntimeLoader.load();
 }
 
 async function loadCronSubagentRegistryRuntime() {
-  cronSubagentRegistryRuntimePromise ??= import("./run-subagent-registry.runtime.js");
-  return await cronSubagentRegistryRuntimePromise;
+  return await cronSubagentRegistryRuntimeLoader.load();
+}
+
+function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): string[] | undefined {
+  if (!normalizeToolList(toolsAllow).includes("cron")) {
+    return undefined;
+  }
+  return ["cron"];
+}
+
+const COMMAND_STYLE_CRON_PREFIX =
+  /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
+
+export function isCommandStyleCronMessage(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed || trimmed.includes("\n")) {
+    return false;
+  }
+  return COMMAND_STYLE_CRON_PREFIX.test(trimmed);
+}
+
+function resolveCronBootstrapContextMode(
+  payload: AgentTurnPayload,
+): BootstrapContextMode | undefined {
+  if (payload?.lightContext === true) {
+    return "lightweight";
+  }
+  if (payload?.lightContext === false) {
+    return undefined;
+  }
+  return isCommandStyleCronMessage(payload?.message ?? "") ? "lightweight" : undefined;
 }
 
 export type CronExecutionResult = {
@@ -69,6 +106,9 @@ export function createCronPromptExecutor(params: {
   resolvedVerboseLevel: VerboseLevel;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
+  runTimeoutOverrideMs?: number;
+  senderIsOwner: boolean;
   messageChannel: string | undefined;
   suppressExecNotifyOnExit: boolean;
   resolvedDelivery: {
@@ -83,11 +123,16 @@ export function createCronPromptExecutor(params: {
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
+  useSubagentFallbacks: boolean;
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (
+    info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
+      Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
+  ) => void;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -100,6 +145,7 @@ export function createCronPromptExecutor(params: {
     cfg: params.cfg,
     job: params.job,
     agentId: params.agentId,
+    useSubagentFallbacks: params.useSubagentFallbacks,
   });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
@@ -108,6 +154,7 @@ export function createCronPromptExecutor(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
+  const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
 
   const runPrompt = async (promptText: string) => {
     const fallbackResult = await runWithModelFallback({
@@ -115,18 +162,27 @@ export function createCronPromptExecutor(params: {
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
       runId: params.cronSession.sessionEntry.sessionId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
       fallbacksOverride: cronFallbacksOverride,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
+        const executionProvider =
+          resolveCliRuntimeExecutionProvider({
+            provider: providerOverride,
+            cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
+            modelId: modelOverride,
+          }) ?? providerOverride;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+        if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+            : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -137,27 +193,30 @@ export function createCronPromptExecutor(params: {
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
-            provider: providerOverride,
+            provider: executionProvider,
             model: modelOverride,
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
+            lane: resolveCronAgentLane(params.lane),
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
+            onExecutionPhase: params.onExecutionPhase,
+            bootstrapContextMode,
+            bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
-            senderIsOwner: true,
+            senderIsOwner: params.senderIsOwner,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
           return result;
         }
-        const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
-          await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedPiAgent } = await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: params.messageChannel,
           to: params.resolvedDelivery.to,
@@ -172,6 +231,9 @@ export function createCronPromptExecutor(params: {
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
+          ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+            params.agentPayload?.toolsAllow,
+          ),
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
@@ -186,6 +248,7 @@ export function createCronPromptExecutor(params: {
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
+          modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
@@ -200,7 +263,8 @@ export function createCronPromptExecutor(params: {
           }).enabled,
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
-          bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+          bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
           execOverrides: params.suppressExecNotifyOnExit
@@ -216,6 +280,7 @@ export function createCronPromptExecutor(params: {
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
+          onExecutionPhase: params.onExecutionPhase,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
         });
@@ -268,6 +333,7 @@ export async function executeCronRun(params: {
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
+  useSubagentFallbacks: boolean;
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
@@ -277,8 +343,15 @@ export async function executeCronRun(params: {
   abortReason: () => string;
   isAborted: () => boolean;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (
+    info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
+      Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
+  ) => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
+  runTimeoutOverrideMs?: number;
+  senderIsOwner: boolean;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
 }): Promise<CronExecutionResult> {
@@ -303,17 +376,21 @@ export async function executeCronRun(params: {
     resolvedVerboseLevel,
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     messageChannel: params.resolvedDelivery.channel,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
     toolPolicy: params.toolPolicy,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
+    useSubagentFallbacks: params.useSubagentFallbacks,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
+    onExecutionPhase: params.onExecutionPhase,
+    senderIsOwner: params.senderIsOwner,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   jsonResult,
@@ -10,7 +10,7 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeMessagePresentation,
   presentationToInteractiveReply,
@@ -19,10 +19,12 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
+import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -37,6 +39,7 @@ import {
   sendStickerTelegram,
 } from "./send.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
+import { parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 
 export const telegramActionRuntime = {
@@ -114,6 +117,15 @@ function readTelegramThreadId(params: Record<string, unknown>) {
   );
 }
 
+function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
+  const parsed = parseTelegramTarget(to);
+  const topicId = parsed.messageThreadId ?? messageThreadId;
+  if (topicId == null) {
+    return to;
+  }
+  return `${parsed.chatId}:topic:${topicId}`;
+}
+
 function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   return (
     readNumberParam(params, "replyToMessageId", { integer: true }) ??
@@ -134,6 +146,7 @@ function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
   hasButtons: boolean;
+  interactive?: unknown;
   presentation?: MessagePresentation;
 }) {
   const explicitContent =
@@ -144,7 +157,20 @@ function readTelegramSendContent(params: {
     explicitContent == null && params.presentation
       ? renderMessagePresentationFallbackText({ presentation: params.presentation })
       : undefined;
-  const content = explicitContent ?? (presentationText?.trim() ? presentationText : undefined);
+  const interactiveText =
+    explicitContent == null && !params.presentation
+      ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
+      : undefined;
+  let content =
+    explicitContent ??
+    (presentationText?.trim() ? presentationText : undefined) ??
+    (interactiveText?.trim() ? interactiveText : undefined);
+  if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
+    const fallback = presentationText?.trim() ? presentationText : interactiveText;
+    if (fallback?.trim()) {
+      content = fallback;
+    }
+  }
   if (content == null && !params.mediaUrl && !params.hasButtons) {
     throw new Error("content required.");
   }
@@ -213,6 +239,8 @@ export async function handleTelegramAction(
   options?: {
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    sessionKey?: string | null;
+    inboundTurnKind?: string;
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -223,6 +251,14 @@ export async function handleTelegramAction(
     cfg,
     accountId,
   });
+  const notifyVisibleOutboundSuccess = (to: string, messageThreadId?: number | null) => {
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: options?.sessionKey ?? undefined,
+      to: formatTelegramDeliveryTarget(to, messageThreadId),
+      accountId,
+      inboundTurnKind: options?.inboundTurnKind,
+    });
+  };
 
   if (action === "react") {
     // All react failures return soft results (jsonResult with ok:false) instead
@@ -321,6 +357,7 @@ export async function handleTelegramAction(
       args: params,
       mediaUrl: mediaUrl ?? undefined,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
+      interactive: params.interactive,
       presentation,
     });
     if (buttons) {
@@ -378,6 +415,7 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     });
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     await maybePinTelegramActionSend({
       args: params,
       cfg,
@@ -455,6 +493,7 @@ export async function handleTelegramAction(
         silent: silent ?? undefined,
       },
     );
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
       messageId: result.messageId,
@@ -478,11 +517,14 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+    const result = await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
       cfg,
       token,
       accountId: accountId ?? undefined,
     });
+    if (!result.ok) {
+      return jsonResult({ ok: false, deleted: false, warning: result.warning });
+    }
     return jsonResult({ ok: true, deleted: true });
   }
 
@@ -562,6 +604,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
     });
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
       messageId: result.messageId,

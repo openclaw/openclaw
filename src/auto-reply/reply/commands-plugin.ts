@@ -26,7 +26,7 @@ export const handlePluginCommand: CommandHandler = async (
   }
 
   // Try to match a plugin command
-  const match = matchPluginCommand(command.commandBodyNormalized);
+  const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
   if (!match) {
     return null;
   }
@@ -39,6 +39,7 @@ export const handlePluginCommand: CommandHandler = async (
     channel: command.channel,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
+    senderIsOwner: command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,

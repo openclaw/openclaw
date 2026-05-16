@@ -1,7 +1,10 @@
 import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
-import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
+import {
+  resolveUnsupportedToolSchemaKeywords,
+  shouldOmitEmptyArrayItems,
+} from "../plugins/provider-model-compat.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
@@ -75,6 +78,10 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 type FlattenableVariantKey = "anyOf" | "oneOf";
 type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
 
+function isSchemaRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function hasTopLevelArrayKeyword(
   schemaRecord: Record<string, unknown>,
   key: TopLevelConditionalKey,
@@ -107,7 +114,11 @@ function hasTopLevelObjectSchema(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  return "type" in schemaRecord && "properties" in schemaRecord && conditionalKey === null;
+  return (
+    schemaRecord.type === "object" &&
+    isSchemaRecord(schemaRecord.properties) &&
+    conditionalKey === null
+  );
 }
 
 function isObjectLikeSchemaMissingType(
@@ -116,20 +127,186 @@ function isObjectLikeSchemaMissingType(
 ): boolean {
   return (
     !("type" in schemaRecord) &&
-    (typeof schemaRecord.properties === "object" || Array.isArray(schemaRecord.required)) &&
+    (isSchemaRecord(schemaRecord.properties) || Array.isArray(schemaRecord.required)) &&
     conditionalKey === null
   );
 }
 
-function isTypedSchemaMissingProperties(
+function isTypedObjectSchemaMissingValidProperties(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  return "type" in schemaRecord && !("properties" in schemaRecord) && conditionalKey === null;
+  return (
+    schemaRecord.type === "object" &&
+    !isSchemaRecord(schemaRecord.properties) &&
+    conditionalKey === null
+  );
 }
 
 function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
   return Object.keys(schemaRecord).length === 0;
+}
+
+function normalizeArraySchemasMissingItems(schema: unknown): unknown {
+  if (!isSchemaRecord(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const nextSchema: Record<string, unknown> = { ...schema };
+  if (nextSchema.type === "array" && nextSchema.items === undefined) {
+    nextSchema.items = {};
+    changed = true;
+  }
+
+  const normalizeSchemaValue = (key: string): void => {
+    if (!(key in nextSchema)) {
+      return;
+    }
+    const value = nextSchema[key];
+    if (Array.isArray(value)) {
+      const normalized = value.map(normalizeArraySchemasMissingItems);
+      if (normalized.some((entry, index) => entry !== value[index])) {
+        nextSchema[key] = normalized;
+        changed = true;
+      }
+      return;
+    }
+
+    const normalized = normalizeArraySchemasMissingItems(value);
+    if (normalized !== value) {
+      nextSchema[key] = normalized;
+      changed = true;
+    }
+  };
+
+  for (const key of [
+    "items",
+    "contains",
+    "additionalProperties",
+    "propertyNames",
+    "not",
+    "if",
+    "then",
+    "else",
+  ]) {
+    normalizeSchemaValue(key);
+  }
+
+  for (const key of ["anyOf", "oneOf", "allOf", "prefixItems"]) {
+    normalizeSchemaValue(key);
+  }
+
+  for (const key of [
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "$defs",
+    "definitions",
+  ]) {
+    const value = nextSchema[key];
+    if (!isSchemaRecord(value)) {
+      continue;
+    }
+    let entriesChanged = false;
+    const normalizedEntries: Array<[string, unknown]> = Object.entries(value).map(
+      ([entryKey, entryValue]) => {
+        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue);
+        if (normalizedEntryValue !== entryValue) {
+          entriesChanged = true;
+        }
+        return [entryKey, normalizedEntryValue];
+      },
+    );
+    if (entriesChanged) {
+      nextSchema[key] = Object.fromEntries(normalizedEntries);
+      changed = true;
+    }
+  }
+
+  return changed ? nextSchema : schema;
+}
+
+function schemaAllowsArrayType(schema: Record<string, unknown>): boolean {
+  const type = schema.type;
+  return type === "array" || (Array.isArray(type) && type.includes("array"));
+}
+
+const ARRAY_ITEMS_SCHEMA_OBJECT_KEYS = new Set([
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+]);
+
+const ARRAY_ITEMS_SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+
+const ARRAY_ITEMS_SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+function stripEmptyArrayItemsFromArraySchemas(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const entries = schema.map((entry) => {
+      const next = stripEmptyArrayItemsFromArraySchemas(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? entries : schema;
+  }
+  if (!isSchemaRecord(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const entries = Object.entries(schema).flatMap(([key, value]) => {
+    if (
+      key === "items" &&
+      schemaAllowsArrayType(schema) &&
+      isSchemaRecord(value) &&
+      isTrulyEmptySchema(value)
+    ) {
+      changed = true;
+      return [];
+    }
+
+    if (ARRAY_ITEMS_SCHEMA_OBJECT_KEYS.has(key)) {
+      const next = stripEmptyArrayItemsFromArraySchemas(value);
+      changed ||= next !== value;
+      return [[key, next] as const];
+    }
+
+    if (ARRAY_ITEMS_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+      const next = stripEmptyArrayItemsFromArraySchemas(value);
+      changed ||= next !== value;
+      return [[key, next] as const];
+    }
+
+    if (ARRAY_ITEMS_SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+      let mapChanged = false;
+      const next = Object.fromEntries(
+        Object.entries(value).map(([entryKey, entryValue]) => {
+          const entryNext = stripEmptyArrayItemsFromArraySchemas(entryValue);
+          mapChanged ||= entryNext !== entryValue;
+          return [entryKey, entryNext] as const;
+        }),
+      );
+      changed ||= mapChanged;
+      return [[key, mapChanged ? next : value] as const];
+    }
+
+    return [[key, value] as const];
+  });
+  return changed ? Object.fromEntries(entries) : schema;
 }
 
 export function normalizeToolParameterSchema(
@@ -155,15 +332,23 @@ export function normalizeToolParameterSchema(
     normalizedProvider.includes("google") || normalizedProvider.includes("gemini");
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
+  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): TSchema {
+    const normalizedSchema = normalizeArraySchemasMissingItems(s);
+    const arrayItemsCompatibleSchema = omitEmptyArrayItems
+      ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
+      : normalizedSchema;
     if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(s);
+      return cleanSchemaForGemini(arrayItemsCompatibleSchema);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords) as TSchema;
+      return stripUnsupportedSchemaKeywords(
+        arrayItemsCompatibleSchema,
+        unsupportedToolSchemaKeywords,
+      ) as TSchema;
     }
-    return s as TSchema;
+    return arrayItemsCompatibleSchema as TSchema;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);
@@ -174,10 +359,14 @@ export function normalizeToolParameterSchema(
   }
 
   if (isObjectLikeSchemaMissingType(schemaRecord, conditionalKey)) {
-    return applyProviderCleaning({ ...schemaRecord, type: "object" });
+    return applyProviderCleaning({
+      ...schemaRecord,
+      type: "object",
+      properties: isSchemaRecord(schemaRecord.properties) ? schemaRecord.properties : {},
+    });
   }
 
-  if (isTypedSchemaMissingProperties(schemaRecord, conditionalKey)) {
+  if (isTypedObjectSchemaMissingValidProperties(schemaRecord, conditionalKey)) {
     return applyProviderCleaning({ ...schemaRecord, properties: {} });
   }
 

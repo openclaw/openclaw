@@ -1,29 +1,41 @@
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
-import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "../../agents/model-auth-env-vars.js";
+import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
+  modelKey,
   normalizeProviderId,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -34,9 +46,10 @@ import type { ProviderSyntheticAuthResult } from "../../plugins/provider-externa
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
+import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import { type AuthProbeSummary } from "./list.probe.js";
@@ -50,13 +63,26 @@ import {
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
 type ProgressRuntime = typeof import("../../cli/progress.js");
+
+function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  return override ? resolveUserPath(override, env) : undefined;
+}
 type TerminalTableRuntime = typeof import("../../terminal/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
-let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
-let progressRuntimePromise: Promise<ProgressRuntime> | undefined;
-let terminalTableRuntimePromise: Promise<TerminalTableRuntime> | undefined;
-let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
+const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
+  () => import("../../infra/provider-usage.js"),
+);
+const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
+  () => import("../../cli/progress.js"),
+);
+const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
+  () => import("../../terminal/table.js"),
+);
+const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
+  () => import("./list.probe.js"),
+);
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -69,23 +95,19 @@ type StatusSyntheticAuth = {
 };
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
-  providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
-  return providerUsageRuntimePromise;
+  return providerUsageRuntimeLoader.load();
 }
 
 function loadProgressRuntime(): Promise<ProgressRuntime> {
-  progressRuntimePromise ??= import("../../cli/progress.js");
-  return progressRuntimePromise;
+  return progressRuntimeLoader.load();
 }
 
 function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
-  terminalTableRuntimePromise ??= import("../../terminal/table.js");
-  return terminalTableRuntimePromise;
+  return terminalTableRuntimeLoader.load();
 }
 
 function loadListProbeRuntime(): Promise<ListProbeRuntime> {
-  listProbeRuntimePromise ??= import("./list.probe.js");
-  return listProbeRuntimePromise;
+  return listProbeRuntimeLoader.load();
 }
 
 function resolveProviderConfigForStatus(
@@ -160,7 +182,12 @@ export async function modelsStatusCommand(
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
+  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = agentId
+    ? resolveAgentDir(cfg, agentId)
+    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
@@ -192,7 +219,7 @@ export async function modelsStatusCommand(
 
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
-  const resolvedLabel = `${resolved.provider}/${resolved.model}`;
+  const resolvedLabel = modelKey(resolved.provider, resolved.model);
   const defaultLabel = rawModel || resolvedLabel;
   const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
@@ -223,26 +250,66 @@ export async function modelsStatusCommand(
       .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
       .filter(Boolean),
   );
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+  });
+  const resolveStatusModelRef = (raw: string | undefined) => {
+    const modelRef = raw?.trim();
+    if (!modelRef) {
+      return undefined;
+    }
+    return resolveModelRefFromString({
+      cfg,
+      raw: modelRef,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    })?.ref;
+  };
   const providersFromModels = new Set<string>();
-  const providersInUse = new Set<string>();
+  const providerUses: Array<{ provider: string; allowCodexRuntimeFallback: boolean }> = [];
+  const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+    const ref = resolveStatusModelRef(raw);
+    if (ref?.provider) {
+      providerUses.push({
+        provider: normalizeProviderId(ref.provider),
+        allowCodexRuntimeFallback,
+      });
+    }
+  };
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    if (parsed?.provider) {
-      providersFromModels.add(normalizeProviderId(parsed.provider));
+    const ref = resolveStatusModelRef(raw);
+    if (ref?.provider) {
+      providersFromModels.add(normalizeProviderId(ref.provider));
     }
   }
-  for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    if (parsed?.provider) {
-      providersInUse.add(normalizeProviderId(parsed.provider));
-    }
+  for (const raw of [defaultLabel, ...fallbacks]) {
+    addProviderUse(raw, true);
+  }
+  for (const raw of [imageModel, ...imageFallbacks]) {
+    addProviderUse(raw, false);
   }
 
   const providersFromEnv = new Set<string>();
   // Use the shared provider-env registry so `models status` stays aligned with
   // env-backed providers beyond the text-model defaults (for example image-gen).
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
-    if (resolveEnvApiKey(provider)) {
+  const envLookupParams = {
+    config: cfg,
+    workspaceDir,
+  };
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (
+      resolveEnvApiKey(provider, process.env, {
+        config: cfg,
+        workspaceDir,
+        candidateMap: envCandidateMap,
+        authEvidenceMap,
+      })
+    ) {
       providersFromEnv.add(provider);
     }
   }
@@ -258,12 +325,15 @@ export async function modelsStatusCommand(
         providerConfig: resolveProviderConfigForStatus(cfg, normalized),
       },
     });
+    if (!resolved) {
+      continue;
+    }
     syntheticAuthByProvider.set(normalized, {
       value: "plugin-owned",
-      source: resolved?.source ?? "plugin synthetic auth",
-      credential: resolved?.apiKey,
-      mode: resolved?.mode,
-      expiresAt: resolved?.expiresAt,
+      source: resolved.source,
+      credential: resolved.apiKey,
+      mode: resolved.mode,
+      expiresAt: resolved.expiresAt,
     });
   }
   const runtimeCredentialsByProvider = new Map(
@@ -295,6 +365,8 @@ export async function modelsStatusCommand(
         cfg,
         store,
         modelsPath,
+        agentDir,
+        workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
       }),
     )
@@ -307,9 +379,64 @@ export async function modelsStatusCommand(
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
-  const missingProvidersInUse = Array.from(providersInUse)
-    .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !syntheticAuthByProvider.has(provider))
+  const resolveProviderAuthHealthId = (provider: string): string =>
+    resolveProviderIdForAuth(provider, { config: cfg, workspaceDir });
+  const hasUsableNonProfileAuth = (provider: string): boolean => {
+    const authProvider = resolveProviderAuthHealthId(provider);
+    for (const candidate of new Set([provider, authProvider])) {
+      const auth = providerAuthMap.get(candidate);
+      if (
+        auth?.env ||
+        auth?.syntheticAuth ||
+        syntheticAuthByProvider.has(candidate) ||
+        resolveUsableCustomProviderApiKey({ cfg, provider: candidate })
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hasUsableProviderAuth = (provider: string): boolean => {
+    const authProvider = resolveProviderAuthHealthId(provider);
+    for (const candidate of new Set([provider, authProvider])) {
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: candidate,
+      });
+      if (orderedProfiles.length > 0 || hasUsableNonProfileAuth(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hasUsableAuthForProviderInUse = (
+    provider: string,
+    options: { allowCodexRuntimeFallback: boolean },
+  ): boolean => {
+    if (hasUsableProviderAuth(provider)) {
+      return true;
+    }
+    if (!options.allowCodexRuntimeFallback) {
+      return false;
+    }
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
+      hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
+  const missingProvidersInUse = Array.from(
+    new Set(
+      providerUses
+        .filter(
+          (usage) =>
+            !hasUsableAuthForProviderInUse(usage.provider, {
+              allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
+            }),
+        )
+        .map((usage) => usage.provider),
+    ),
+  )
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
@@ -336,11 +463,6 @@ export async function modelsStatusCommand(
     throw new Error("--probe-max-tokens must be > 0.");
   }
 
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    ...DISPLAY_MODEL_PARSE_OPTIONS,
-  });
   const rawCandidates = [
     rawModel || resolvedLabel,
     ...fallbacks,
@@ -372,6 +494,9 @@ export async function modelsStatusCommand(
       async (update) => {
         return await runAuthProbes({
           cfg,
+          agentId: workspaceAgentId,
+          agentDir,
+          workspaceDir,
           providers,
           modelCandidates,
           options: {
@@ -441,10 +566,31 @@ export async function modelsStatusCommand(
   })();
 
   const checkStatus = (() => {
+    const providersInUse = new Set<string>();
+    for (const usage of providerUses) {
+      providersInUse.add(usage.provider);
+      providersInUse.add(resolveProviderAuthHealthId(usage.provider));
+      if (
+        usage.allowCodexRuntimeFallback &&
+        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }) &&
+        hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
+      ) {
+        providersInUse.add(OPENAI_CODEX_PROVIDER_ID);
+      }
+    }
     const hasExpiredOrMissing =
-      oauthProfiles.some((profile) => ["expired", "missing"].includes(profile.status)) ||
-      missingProvidersInUse.length > 0;
-    const hasExpiring = oauthProfiles.some((profile) => profile.status === "expiring");
+      authHealth.providers.some(
+        (provider) =>
+          providersInUse.has(provider.provider) &&
+          ["expired", "missing"].includes(provider.status) &&
+          !hasUsableNonProfileAuth(provider.provider),
+      ) || missingProvidersInUse.length > 0;
+    const hasExpiring = authHealth.providers.some(
+      (provider) =>
+        providersInUse.has(provider.provider) &&
+        provider.status === "expiring" &&
+        !hasUsableNonProfileAuth(provider.provider),
+    );
     if (hasExpiredOrMissing) {
       return 1;
     }

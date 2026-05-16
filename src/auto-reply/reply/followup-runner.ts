@@ -1,13 +1,9 @@
 import crypto from "node:crypto";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -16,11 +12,10 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
@@ -31,7 +26,12 @@ import {
 } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  refreshQueuedFollowupSession,
+  type FollowupRun,
+} from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -201,28 +201,38 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    if (isFollowupRunAborted(queued)) {
+      completeFollowupRunLifecycle(queued);
+      typing.markRunComplete();
+      typing.markDispatchIdle();
+      return;
+    }
+    const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
+      .map((correlation) => correlation.begin())
+      .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
-    queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
-      originatingChannel: queued.originatingChannel,
-      messageProvider: queued.run.messageProvider,
-      originatingAccountId: queued.originatingAccountId,
-      agentAccountId: queued.run.agentAccountId,
-    });
-    const replySessionKey = queued.run.sessionKey ?? sessionKey;
-    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
-    const effectiveQueued =
-      runtimeConfig === queued.run.config
-        ? queued
-        : { ...queued, run: { ...queued.run, config: runtimeConfig } };
-    const run = effectiveQueued.run;
-    const replyOperation = createReplyOperation({
-      sessionId: run.sessionId,
-      sessionKey: replySessionKey ?? "",
-      resetTriggered: false,
-      upstreamAbortSignal: opts?.abortSignal,
-    });
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     try {
+      queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
+        originatingChannel: queued.originatingChannel,
+        messageProvider: queued.run.messageProvider,
+        originatingAccountId: queued.originatingAccountId,
+        agentAccountId: queued.run.agentAccountId,
+      });
+      const replySessionKey = queued.run.sessionKey ?? sessionKey;
+      const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
+      const effectiveQueued =
+        runtimeConfig === queued.run.config
+          ? queued
+          : { ...queued, run: { ...queued.run, config: runtimeConfig } };
+      const run = effectiveQueued.run;
+      replyOperation = createReplyOperation({
+        sessionId: run.sessionId,
+        sessionKey: replySessionKey ?? "",
+        resetTriggered: false,
+        upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
+      });
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -304,9 +314,15 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                currentTurnKind: queued.currentTurnKind,
+                currentTurnContext: queued.currentTurnContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
+                suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+                suppressTranscriptOnlyAssistantPersistence:
+                  run.suppressTranscriptOnlyAssistantPersistence,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -321,6 +337,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
+                abortSignal: queued.abortSignal ?? opts?.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -331,13 +348,6 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
-                  if (evt.stream.startsWith("codex_app_server.")) {
-                    emitAgentEvent({
-                      runId,
-                      stream: evt.stream,
-                      data: evt.data,
-                    });
-                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }
@@ -395,12 +405,12 @@ export function createFollowupRunner(params: {
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
+          isHeartbeat: opts?.isHeartbeat === true,
           modelUsed,
           providerUsed,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),
           logLabel: "followup",
         });
       }
@@ -409,21 +419,9 @@ export function createFollowupRunner(params: {
       if (payloadArray.length === 0) {
         return;
       }
-      const sanitizedPayloads = payloadArray.flatMap((payload) => {
-        const text = payload.text;
-        if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [payload];
-        }
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-        if (stripped.shouldSkip && !hasMedia) {
-          return [];
-        }
-        return [{ ...payload, text: stripped.text }];
-      });
       const finalPayloads = resolveFollowupDeliveryPayloads({
         cfg: runtimeConfig,
-        payloads: sanitizedPayloads,
+        payloads: payloadArray,
         messageProvider: run.messageProvider,
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
@@ -438,6 +436,7 @@ export function createFollowupRunner(params: {
         return;
       }
 
+      let deliveryPayloads = finalPayloads;
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -468,9 +467,12 @@ export function createFollowupRunner(params: {
         }
         if (run.verboseLevel && run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
+          deliveryPayloads = [
+            {
+              text: `🧹 Auto-compaction complete${suffix}.`,
+            },
+            ...finalPayloads,
+          ];
         }
       }
 
@@ -481,12 +483,22 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendFollowupPayloads(finalPayloads, effectiveQueued, {
+      await sendFollowupPayloads(deliveryPayloads, effectiveQueued, {
         provider: providerUsed,
         modelId: modelUsed,
       });
     } finally {
-      replyOperation.complete();
+      for (const end of endDeliveryCorrelations.toReversed()) {
+        try {
+          end();
+        } catch (err) {
+          defaultRuntime.error?.(
+            `followup queue: delivery correlation cleanup failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }
+      completeFollowupRunLifecycle(queued);
+      replyOperation?.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the

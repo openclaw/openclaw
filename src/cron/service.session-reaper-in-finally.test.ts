@@ -70,7 +70,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       // This will throw, simulating a failure during job execution.
       runIsolatedAgentJob: vi.fn().mockRejectedValue(new Error("gateway down")),
       sessionStorePath,
@@ -84,7 +84,9 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect(state.running).toBe(false);
 
       // The timer must be re-armed.
-      expect(state.timer).not.toBeNull();
+      if (state.timer === null) {
+        throw new Error("expected timer to be re-armed");
+      }
     });
   });
 
@@ -109,7 +111,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
       resolveSessionStorePath: (agentId) => {
         const p = path.join(path.dirname(store.storePath), `${agentId}-sessions`, "sessions.json");
@@ -156,7 +158,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       sessionStorePath,
     });
@@ -167,7 +169,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       const updatedSessionStore = JSON.parse(
         await fs.readFile(sessionStorePath, "utf-8"),
       ) as Record<string, unknown>;
-      expect(updatedSessionStore).toEqual({});
+      expect(updatedSessionStore).toStrictEqual({});
       expect(state.running).toBe(false);
     });
   });

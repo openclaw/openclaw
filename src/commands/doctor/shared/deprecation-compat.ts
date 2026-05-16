@@ -56,7 +56,7 @@ function deprecatedCompatRecord<Code extends string>(
 // path they repair. Release removals must check this inventory before deleting
 // doctor fixes, and replacement notes should be revalidated against the current
 // architecture because ownership and config footprint can shift during rollout.
-export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
+const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
     code: "doctor-agent-llm-timeout",
     owner: "agent-runtime",
@@ -67,7 +67,7 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/gateway/config-agents",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "The old agent-level idle timeout knob was collapsed into provider request timeout handling.",
+      "The old agent-level idle timeout knob was collapsed into provider request timeout handling, bounded by the agent/run timeout ceiling.",
   }),
   deprecatedCompatRecord({
     code: "doctor-agent-runtime-embedded-harness",
@@ -154,6 +154,16 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-message-queue-steering-modes",
+    owner: "config",
+    introduced: "2026-05-04",
+    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
+    replacement: "steer, followup, collect, or interrupt queue modes",
+    docsPath: "/concepts/queue",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-channel-dm-aliases",
     owner: "channel",
     introduced: "2026-04-26",
@@ -182,6 +192,18 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "messages.tts.providers.<provider> and microsoft instead of edge",
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-tts-enabled-auto-mode",
+    owner: "tts",
+    introduced: "2026-04-29",
+    source:
+      "messages.tts.enabled, agents.*.tts.enabled, channels.*.tts.enabled, and voice-call plugin tts.enabled",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
+    replacement:
+      'messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
+    docsPath: "/tools/tts",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
   deprecatedCompatRecord({
     code: "doctor-plugin-install-config-ledger",

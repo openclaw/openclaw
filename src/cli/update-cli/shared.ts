@@ -39,6 +39,14 @@ export type UpdateStatusOptions = {
   timeout?: string;
 };
 
+export type UpdateFinalizeOptions = {
+  json?: boolean;
+  channel?: string;
+  timeout?: string;
+  yes?: boolean;
+  restart?: boolean;
+};
+
 export type UpdateWizardOptions = {
   timeout?: string;
 };
@@ -65,7 +73,7 @@ export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
 }
 
-export function normalizeVersionTag(tag: string): string | null {
+function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
   if (!trimmed) {
     return null;
@@ -100,7 +108,7 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-export async function isCorePackage(root: string): Promise<boolean> {
+async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
