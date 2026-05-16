@@ -1199,6 +1199,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceTool: "music_generate",
       internalEvents: [
         {
           type: "task_completion",
@@ -1219,14 +1220,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
+      error: "completion agent did not deliver through the message tool",
     });
     expectGatewayAgentParams(callGateway, {
-      deliver: true,
+      deliver: false,
       channel: "discord",
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1243,6 +1245,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceTool: "music_generate",
       internalEvents: [
         {
           type: "task_completion",
@@ -1265,14 +1268,27 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("delivers generated media completions through the announce agent in automatic DMs", async () => {
+  it("requires generated media completion DMs to use the message tool", async () => {
     const callGateway = createGatewayMock({
       result: {
-        payloads: [
+        payloads: [],
+        messagingToolSentTargets: [
           {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
             text: "The track is ready.",
             mediaUrls: ["/tmp/generated-night-drive.mp3"],
           },
@@ -1307,11 +1323,63 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expectGatewayAgentParams(callGateway, {
-      deliver: true,
+      deliver: false,
       channel: "discord",
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts failed generated media completion notices through the message tool", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "Music generation failed: provider failed.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "error",
+          statusLabel: "failed",
+          result: "provider failed",
+          replyInstruction: "Deliver the failure through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1358,7 +1426,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not deliver generated media",
+      error: "completion agent did not deliver through the message tool",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
