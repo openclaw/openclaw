@@ -25,6 +25,7 @@ export type PreparedSlackMessage = {
     };
   };
   replyToMode: "off" | "first" | "all" | "batched";
+  forcedReplyThreadTs?: string;
   requireMention: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
