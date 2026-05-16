@@ -884,30 +884,21 @@ describe("buildCodexMigrationProvider", () => {
     const loadedTargetPlugin = pluginList([
       pluginSummary("google-calendar", { installed: true, enabled: true }),
     ]);
-    const script = scriptAppServerRequests([
-      {
-        target: "source",
-        method: "plugin/list",
-        response: pluginList([
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]),
-      },
-      { target: "source", method: "plugin/read", response: pluginRead("google-calendar") },
-      { target: "target", method: "plugin/list", response: loadedTargetPlugin },
-      {
-        target: "target",
-        method: "plugin/install",
-        response: {
-          authPolicy: "ON_USE",
-          appsNeedingAuth: [],
-        } satisfies v2.PluginInstallResponse,
-      },
-      { target: "target", method: "plugin/list", response: loadedTargetPlugin },
-      { target: "target", method: "skills/list", response: { data: [] } },
-      { target: "target", method: "hooks/list", response: { data: [] } },
-      { target: "target", method: "config/mcpServer/reload", response: {} },
-      { target: "target", method: "app/list", response: appsList([]) },
-    ]);
+    appServerRequest
+      .mockResolvedValueOnce(
+        pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]),
+      )
+      .mockResolvedValueOnce(pluginRead("google-calendar"))
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({
+        authPolicy: "ON_USE",
+        appsNeedingAuth: [],
+      } satisfies v2.PluginInstallResponse)
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.SkillsListResponse)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.HooksListResponse)
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce(appsList([]));
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -922,10 +913,8 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    script.expectComplete();
-    const installCall = script.calls.find(
-      ({ target, method }) => target === "target" && method === "plugin/install",
-    );
+    expect(appServerRequest).toHaveBeenCalledTimes(9);
+    const installCall = mockCallArg(appServerRequest, 3) as Record<string, unknown>;
     expectRecordFields(installCall, {
       method: "plugin/install",
       requestParams: {
@@ -976,31 +965,22 @@ describe("buildCodexMigrationProvider", () => {
         enabled: true,
       }),
     ]);
-    const script = scriptAppServerRequests([
-      {
-        target: "source",
-        method: "plugin/list",
-        response: pluginList([
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]),
-      },
-      { target: "source", method: "plugin/read", response: pluginRead("google-calendar") },
-      { target: "target", method: "plugin/list", response: pluginList([]) },
-      { target: "target", method: "plugin/list", response: loadedTargetPlugin },
-      {
-        target: "target",
-        method: "plugin/install",
-        response: {
-          authPolicy: "ON_USE",
-          appsNeedingAuth: [],
-        } satisfies v2.PluginInstallResponse,
-      },
-      { target: "target", method: "plugin/list", response: loadedTargetPlugin },
-      { target: "target", method: "skills/list", response: { data: [] } },
-      { target: "target", method: "hooks/list", response: { data: [] } },
-      { target: "target", method: "config/mcpServer/reload", response: {} },
-      { target: "target", method: "app/list", response: appsList([]) },
-    ]);
+    appServerRequest
+      .mockResolvedValueOnce(
+        pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]),
+      )
+      .mockResolvedValueOnce(pluginRead("google-calendar"))
+      .mockResolvedValueOnce(pluginList([]))
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({
+        authPolicy: "ON_USE",
+        appsNeedingAuth: [],
+      } satisfies v2.PluginInstallResponse)
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.SkillsListResponse)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.HooksListResponse)
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce(appsList([]));
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -1014,11 +994,12 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    script.expectComplete();
-    const targetPluginCalls = script.calls
-      .filter(({ target, method }) => target === "target" && method.startsWith("plugin/"))
-      .map(({ method }) => method);
-    expect(targetPluginCalls.slice(0, 3)).toEqual(["plugin/list", "plugin/list", "plugin/install"]);
+    expect(appServerRequest).toHaveBeenCalledTimes(10);
+    expect(
+      appServerRequest.mock.calls
+        .slice(2, 5)
+        .map(([request]) => (request as { method?: string }).method),
+    ).toEqual(["plugin/list", "plugin/list", "plugin/install"]);
     expectRecordFields(findItem(result.items, "plugin:google-calendar"), {
       status: "migrated",
       reason: "already active",
@@ -1701,52 +1682,6 @@ function createConfigRuntime(
       },
     },
   } as unknown as MigrationProviderContext["runtime"];
-}
-
-type AppServerRequestTarget = "source" | "target";
-
-type AppServerRequestStep = {
-  target: AppServerRequestTarget;
-  method: string;
-  response: unknown;
-};
-
-function scriptAppServerRequests(steps: AppServerRequestStep[]) {
-  const pending = [...steps];
-  const calls: Array<{
-    target: AppServerRequestTarget;
-    method: string;
-    requestParams?: unknown;
-  }> = [];
-  appServerRequest.mockImplementation(
-    async ({
-      method,
-      agentDir,
-      requestParams,
-    }: {
-      method: string;
-      agentDir?: string;
-      requestParams?: unknown;
-    }) => {
-      const actual = {
-        target: typeof agentDir === "string" ? "target" : "source",
-        method,
-      } satisfies Pick<AppServerRequestStep, "target" | "method">;
-      calls.push({ ...actual, ...(requestParams !== undefined ? { requestParams } : {}) });
-      const expected = pending.shift();
-      if (!expected) {
-        throw new Error(`unexpected request ${actual.target}:${actual.method}`);
-      }
-      expect(actual).toEqual({ target: expected.target, method: expected.method });
-      return expected.response;
-    },
-  );
-  return {
-    calls,
-    expectComplete() {
-      expect(pending).toEqual([]);
-    },
-  };
 }
 
 function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
