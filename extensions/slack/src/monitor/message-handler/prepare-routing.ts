@@ -215,13 +215,15 @@ export function resolveSlackRoutingContext(params: {
         : autoThreadId;
   const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
-  const boundThreadRoute = routedThreadId
+  const runtimeBindingThreadId =
+    routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
+  const boundThreadRoute = runtimeBindingThreadId
     ? resolveRuntimeConversationBindingRoute({
         route,
         conversation: {
           channel: "slack",
           accountId: account.accountId,
-          conversationId: routedThreadId,
+          conversationId: runtimeBindingThreadId,
           parentConversationId: baseConversationId,
         },
       })
