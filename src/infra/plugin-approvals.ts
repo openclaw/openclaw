@@ -1448,19 +1448,18 @@ const GIT_GLOBAL_FLAGS = new Set([
 ]);
 
 const GIT_GLOBAL_VALUE_OPTIONS = new Set([
-  "--config-env",
   "--exec-path",
   "--git-dir",
   "--namespace",
   "--super-prefix",
   "--work-tree",
   "-C",
-  "-c",
 ]);
 
 function parseGitSubcommand(args: readonly string[]): {
   ambiguous: boolean;
   remainingArgs: string[];
+  runtimeConfigOverride: boolean;
   subcommand: string;
 } {
   for (let index = 0; index < args.length; index += 1) {
@@ -1469,32 +1468,65 @@ function parseGitSubcommand(args: readonly string[]): {
       continue;
     }
     if (arg === "--") {
-      return { ambiguous: false, remainingArgs: args.slice(index + 1), subcommand: "" };
+      return {
+        ambiguous: false,
+        remainingArgs: args.slice(index + 1),
+        runtimeConfigOverride: false,
+        subcommand: "",
+      };
     }
     if (!arg.startsWith("-")) {
-      return { ambiguous: false, remainingArgs: args.slice(index + 1), subcommand: arg };
+      return {
+        ambiguous: false,
+        remainingArgs: args.slice(index + 1),
+        runtimeConfigOverride: false,
+        subcommand: arg,
+      };
     }
 
     const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (optionName === "--config-env" || arg === "-c" || /^-c.+/.test(arg)) {
+      return {
+        ambiguous: false,
+        remainingArgs: [],
+        runtimeConfigOverride: true,
+        subcommand: "",
+      };
+    }
     if (GIT_GLOBAL_FLAGS.has(arg) || GIT_GLOBAL_FLAGS.has(optionName)) {
       continue;
     }
-    if ((arg.startsWith("-C") && arg.length > 2) || (arg.startsWith("-c") && arg.length > 2)) {
+    if (arg.startsWith("-C") && arg.length > 2) {
       continue;
     }
     if (GIT_GLOBAL_VALUE_OPTIONS.has(optionName)) {
       if (!arg.includes("=")) {
         index += 1;
         if (index >= args.length) {
-          return { ambiguous: true, remainingArgs: [], subcommand: "" };
+          return {
+            ambiguous: true,
+            remainingArgs: [],
+            runtimeConfigOverride: false,
+            subcommand: "",
+          };
         }
       }
       continue;
     }
 
-    return { ambiguous: true, remainingArgs: [], subcommand: "" };
+    return {
+      ambiguous: true,
+      remainingArgs: [],
+      runtimeConfigOverride: false,
+      subcommand: "",
+    };
   }
-  return { ambiguous: false, remainingArgs: [], subcommand: "" };
+  return {
+    ambiguous: false,
+    remainingArgs: [],
+    runtimeConfigOverride: false,
+    subcommand: "",
+  };
 }
 
 function hasGitDiscardOption(args: readonly string[]): boolean {
@@ -1522,7 +1554,17 @@ function isGitPathCheckoutDiscard(args: readonly string[]): boolean {
 }
 
 function summarizeGitCommand(args: readonly string[]): CommandActionSummary {
-  const { ambiguous, remainingArgs, subcommand } = parseGitSubcommand(args);
+  const { ambiguous, remainingArgs, runtimeConfigOverride, subcommand } = parseGitSubcommand(args);
+  if (runtimeConfigOverride) {
+    return {
+      text: "run a git command with runtime config overrides",
+      risk: "high",
+      kind: "source-control",
+      reason:
+        "Git runtime config can define aliases or change command behavior, including shell-backed aliases.",
+      showCommandPreview: true,
+    };
+  }
   if (ambiguous) {
     return {
       text: "run a git command with global options",

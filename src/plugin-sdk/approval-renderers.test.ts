@@ -655,6 +655,40 @@ describe("plugin-sdk/approval-renderers", () => {
 
   it.each([
     {
+      command: "git -c alias.pwn='!printf alias-ran' pwn",
+      id: "plugin-command-git-shell-alias-config",
+    },
+    {
+      command: "git --config-env=alias.pwn=GIT_ALIAS pwn",
+      id: "plugin-command-git-config-env-alias",
+    },
+  ])("fails closed on git runtime config overrides: $command", ({ command, id }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run a git command with runtime config overrides");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "Git runtime config can define aliases or change command behavior, including shell-backed aliases.",
+    );
+    expect(payload.text).toContain(`Command preview\n${command}`);
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
+  it.each([
+    {
       command: "git restore .",
       id: "plugin-command-git-restore",
       subcommand: "restore",
