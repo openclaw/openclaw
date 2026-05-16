@@ -19,7 +19,10 @@ import {
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
-import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import {
+  resolvePluginControlPlaneFingerprint,
+  resolvePluginDiscoveryContext,
+} from "./plugin-control-plane-context.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -410,16 +413,26 @@ function mergePersistedRegistryMemoStates(params: {
   derived: PersistedRegistryMemoState;
   lookup: PersistedRegistryMemoState;
 }): PersistedRegistryMemoState {
-  const watchedFiles = [
-    ...new Set([...params.lookup.watchedFiles, ...params.derived.watchedFiles]),
-  ].toSorted();
+  const merged = mergePersistedRegistryMemoStateWatchedFiles(
+    params.derived,
+    params.lookup.watchedFiles,
+  );
   return {
-    contextHash: params.derived.contextHash,
-    fastHash: params.derived.fastHash,
+    ...merged,
     fingerprint: {
       derived: params.derived.fingerprint,
       lookup: params.lookup.fingerprint,
     },
+  };
+}
+
+function mergePersistedRegistryMemoStateWatchedFiles(
+  state: PersistedRegistryMemoState,
+  watchedFilesToAdd: readonly string[],
+): PersistedRegistryMemoState {
+  const watchedFiles = [...new Set([...state.watchedFiles, ...watchedFilesToAdd])].toSorted();
+  return {
+    ...state,
     watchedFiles,
     watchedFilesHash: hashWatchedFiles(watchedFiles),
   };
@@ -566,6 +579,27 @@ function resolvePersistedRegistryMemoStateForLookup(params: {
     return registryState;
   }
   return resolvePersistedRegistryMemoState(params);
+}
+
+function isPersistedRegistryMemoStateFreshForLookup(
+  params: {
+    env: NodeJS.ProcessEnv;
+    preferPersisted?: boolean;
+    stateDir?: string;
+  },
+  registryState: PersistedRegistryMemoState,
+): boolean {
+  const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
+  const fastHash = hashJson(fastFingerprint);
+  const contextHash = resolvePersistedRegistryMemoContextHash({
+    ...params,
+    fastFingerprint,
+  });
+  return (
+    registryState.contextHash === contextHash &&
+    registryState.fastHash === fastHash &&
+    hashWatchedFiles(registryState.watchedFiles) === registryState.watchedFilesHash
+  );
 }
 
 function computePluginMetadataSnapshotMemoKey(params: {
@@ -751,18 +785,26 @@ export function loadPluginMetadataSnapshot(
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   const env = params.env ?? process.env;
-  const registryState = resolvePersistedRegistryMemoStateForLookup({
+  const registryStateLookupParams = {
     env,
     ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+  };
+  const registryState = resolvePersistedRegistryMemoStateForLookup(registryStateLookupParams);
+  const memoLookup = resolvePluginMetadataSnapshotMemoLookup({
+    params,
+    registryState,
+    registryStateLookupParams,
   });
-  const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
-  const memo = pluginMetadataSnapshotMemo.get(memoKey);
-  if (memo) {
-    setCappedMemoEntry({ memo: pluginMetadataSnapshotMemo, key: memoKey, value: memo });
+  if (memoLookup) {
+    setCappedMemoEntry({
+      memo: pluginMetadataSnapshotMemo,
+      key: memoLookup.memoKey,
+      value: memoLookup.memo,
+    });
     return measureDiagnosticsTimelineSpanSync(
       "plugins.metadata.scan",
-      () => clonePluginMetadataSnapshot(memo.snapshot),
+      () => clonePluginMetadataSnapshot(memoLookup.memo.snapshot),
       {
         phase: activeTimelineSpan?.phase ?? "startup",
         config: params.config,
@@ -817,6 +859,46 @@ export function loadPluginMetadataSnapshot(
   return result.snapshot;
 }
 
+function resolvePluginMetadataSnapshotMemoLookup(params: {
+  params: LoadPluginMetadataSnapshotParams;
+  registryState: PersistedRegistryMemoState;
+  registryStateLookupParams: {
+    env: NodeJS.ProcessEnv;
+    preferPersisted?: boolean;
+    stateDir?: string;
+  };
+}): { memoKey: string; memo: PluginMetadataSnapshotMemo } | undefined {
+  const memoKey = computePluginMetadataSnapshotMemoKey({
+    params: params.params,
+    registryState: params.registryState,
+  });
+  const memo = pluginMetadataSnapshotMemo.get(memoKey);
+  if (memo) {
+    return { memoKey, memo };
+  }
+  for (const [candidateKey, candidate] of pluginMetadataSnapshotMemo) {
+    if (!candidate.registryState) {
+      continue;
+    }
+    if (
+      !isPersistedRegistryMemoStateFreshForLookup(
+        params.registryStateLookupParams,
+        candidate.registryState,
+      )
+    ) {
+      continue;
+    }
+    const candidateMemoKey = computePluginMetadataSnapshotMemoKey({
+      params: params.params,
+      registryState: candidate.registryState,
+    });
+    if (candidateMemoKey === candidateKey) {
+      return { memoKey: candidateKey, memo: candidate };
+    }
+  }
+  return undefined;
+}
+
 const CACHEABLE_DERIVED_REGISTRY_DIAGNOSTIC_CODES = new Set([
   "persisted-registry-stale-policy",
   "persisted-registry-stale-source",
@@ -855,10 +937,33 @@ function resolveCachedRegistryStateForResult(params: {
   });
   return hasRegistryDiagnosticCode(params.result, "persisted-registry-stale-source")
     ? mergePersistedRegistryMemoStates({
-        derived: derivedRegistryState,
+        derived: mergePersistedRegistryMemoStateWatchedFiles(
+          derivedRegistryState,
+          resolvePluginDiscoveryWatchPaths({
+            env: params.env,
+            params: params.params,
+          }),
+        ),
         lookup: params.registryState,
       })
     : derivedRegistryState;
+}
+
+function resolvePluginDiscoveryWatchPaths(params: {
+  env: NodeJS.ProcessEnv;
+  params: LoadPluginMetadataSnapshotParams;
+}): readonly string[] {
+  const discovery = resolvePluginDiscoveryContext({
+    config: params.params.config,
+    env: params.env,
+    workspaceDir: params.params.workspaceDir,
+  });
+  return [
+    discovery.roots.stock,
+    discovery.roots.global,
+    discovery.roots.workspace,
+    ...discovery.loadPaths,
+  ].filter((filePath): filePath is string => typeof filePath === "string" && filePath.length > 0);
 }
 
 function canMemoizePluginMetadataSnapshotResult(result: {

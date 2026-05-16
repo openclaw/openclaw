@@ -299,24 +299,40 @@ describe("loadPluginMetadataSnapshot process memo", () => {
   it("keeps separate memo entries for workspace-scoped and unscoped callers", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: makeIndex(),
-      diagnostics: [
-        {
-          level: "warn",
-          code: "persisted-registry-stale-policy",
-          message: "policy changed",
-        },
-      ],
-    });
+    loadPluginRegistrySnapshotWithMetadata.mockImplementation(
+      (params: { workspaceDir?: string }) => ({
+        source: "derived",
+        snapshot: makeIndex(params.workspaceDir ? "workspace" : "unscoped"),
+        diagnostics: [
+          {
+            level: "warn",
+            code: "persisted-registry-stale-policy",
+            message: "policy changed",
+          },
+        ],
+      }),
+    );
 
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace" });
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace" });
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    const workspaceInitial = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      stateDir,
+      workspaceDir: "/workspace",
+    });
+    const unscopedInitial = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    const workspaceAgain = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      stateDir,
+      workspaceDir: "/workspace",
+    });
+    const unscopedAgain = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(workspaceInitial.index.plugins[0]?.pluginId).toBe("workspace");
+    expect(unscopedInitial.index.plugins[0]?.pluginId).toBe("unscoped");
+    expect(workspaceAgain.index.plugins[0]?.pluginId).toBe("workspace");
+    expect(unscopedAgain.index.plugins[0]?.pluginId).toBe("unscoped");
   });
 
   it("keeps separate source-stale memo entries reachable across registry contexts", () => {
@@ -336,12 +352,28 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       ],
     }));
 
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: firstStateDir });
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: secondStateDir });
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: firstStateDir });
-    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: secondStateDir });
+    const firstInitial = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      stateDir: firstStateDir,
+    });
+    const secondInitial = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      stateDir: secondStateDir,
+    });
+    const firstAgain = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: firstStateDir });
+    const secondAgain = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      stateDir: secondStateDir,
+    });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(firstInitial.index.plugins[0]?.pluginId).toBe("first");
+    expect(secondInitial.index.plugins[0]?.pluginId).toBe("second");
+    expect(firstAgain.index.plugins[0]?.pluginId).toBe("first");
+    expect(secondAgain.index.plugins[0]?.pluginId).toBe("second");
   });
 
   it("invalidates source-stale memo entries when stale persisted plugin files appear", () => {
@@ -363,6 +395,30 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
     writeJson(staleSourcePath, "restored");
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates source-stale memo entries when discovery roots gain plugins", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    writeJson(path.join(loadPath, "new-plugin", "openclaw.plugin.json"), { id: "new-plugin" });
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
