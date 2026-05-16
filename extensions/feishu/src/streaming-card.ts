@@ -333,7 +333,7 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
     try {
-      const { release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithSsrFGuard({
         url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
         init: {
           method: "PUT",
@@ -352,6 +352,10 @@ export class FeishuStreamingSession {
         auditContext: "feishu.streaming-card.update",
       });
       await release();
+      if (!response.ok) {
+        onError?.(new Error(`Update card content failed with HTTP ${response.status}`));
+        return false;
+      }
       return true;
     } catch (error) {
       onError?.(error);
@@ -369,7 +373,7 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
     try {
-      const { release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithSsrFGuard({
         url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content`,
         init: {
           method: "PUT",
@@ -388,6 +392,10 @@ export class FeishuStreamingSession {
         auditContext: "feishu.streaming-card.replace",
       });
       await release();
+      if (!response.ok) {
+        onError?.(new Error(`Replace card content failed with HTTP ${response.status}`));
+        return false;
+      }
       return true;
     } catch (error) {
       onError?.(error);
@@ -506,8 +514,13 @@ export class FeishuStreamingSession {
     // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
-        ? await this.updateCardContent(resolveStreamingCardAppendContent(this.state.sentText, text))
-        : await this.replaceCardContent(text);
+        ? await this.updateCardContent(
+            resolveStreamingCardAppendContent(this.state.sentText, text),
+            (e) => this.log?.(`Final update failed: ${String(e)}`),
+          )
+        : await this.replaceCardContent(text, (e) =>
+            this.log?.(`Final replace failed: ${String(e)}`),
+          );
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;

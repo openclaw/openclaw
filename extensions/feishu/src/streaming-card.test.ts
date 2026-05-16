@@ -57,10 +57,14 @@ describe("FeishuStreamingSession", () => {
     updateBodies: string[],
     failedContentUpdateIndexes: ReadonlySet<number> = new Set<number>(),
     replaceBodies: string[] = [],
+    failedContentUpdateStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
+    failedReplaceStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
   ): void {
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         const release = vi.fn(async () => {});
+        let ok = true;
+        let status = 200;
         if (url.includes("/auth/")) {
           return {
             response: {
@@ -81,12 +85,24 @@ describe("FeishuStreamingSession", () => {
           if (failedContentUpdateIndexes.has(updateIndex)) {
             throw new Error(`content update ${updateIndex} failed`);
           }
+          const failedStatus = failedContentUpdateStatuses.get(updateIndex);
+          if (failedStatus !== undefined) {
+            ok = false;
+            status = failedStatus;
+          }
         } else if (url.includes("/elements/content")) {
+          const replaceIndex = replaceBodies.length;
           replaceBodies.push(init?.body ?? "");
+          const failedStatus = failedReplaceStatuses.get(replaceIndex);
+          if (failedStatus !== undefined) {
+            ok = false;
+            status = failedStatus;
+          }
         }
         return {
           response: {
-            ok: true,
+            ok,
+            status,
             json: async () => ({ code: 0, msg: "ok" }),
           },
           release,
@@ -200,6 +216,44 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
+  it("retries unsent suffix content after a non-OK delta update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_500);
+    const updateBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), [], new Map([[0, 429]]));
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_non_ok_delta_retry",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_5",
+        messageId: "om_5",
+        sequence: 1,
+        currentText: "hello",
+        sentText: "hello",
+        hasNote: false,
+      },
+      lastUpdateTime: 2_000,
+    });
+
+    await session.update("hello world");
+    await session.update("hello world!");
+
+    expect(updateBodies).toHaveLength(2);
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
+      content: " world",
+      sequence: 2,
+      uuid: "s_card_5_2",
+    });
+    expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
+      content: " world!",
+      sequence: 3,
+      uuid: "s_card_5_3",
+    });
+  });
+
   it("replaces content when final text removes transient streamed status", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
@@ -244,6 +298,49 @@ describe("FeishuStreamingSession", () => {
       sequence: 2,
       uuid: "r_card_4_2",
     });
+  });
+
+  it("logs a final replacement failure when CardKit returns non-OK", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_500);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(
+      updateBodies,
+      new Set<number>(),
+      replaceBodies,
+      new Map<number, number>(),
+      new Map([[0, 500]]),
+    );
+    const log = vi.fn();
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_final_rewrite_non_ok",
+        appSecret: "secret",
+      },
+      log,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_6",
+        messageId: "om_6",
+        sequence: 1,
+        currentText: "working\n\nfinal answer",
+        sentText: "working\n\nfinal answer",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await session.close("final answer");
+
+    expect(updateBodies).toHaveLength(0);
+    expect(replaceBodies).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(
+      "Final replace failed: Error: Replace card content failed with HTTP 500",
+    );
   });
 });
 
