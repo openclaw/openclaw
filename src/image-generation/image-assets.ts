@@ -20,8 +20,19 @@ export type OpenAiCompatibleImageResponseEntry = {
 };
 
 export type OpenAiCompatibleImageResponsePayload = {
-  data?: OpenAiCompatibleImageResponseEntry[];
+  data?: unknown;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function throwMalformedImageResponse(message: string | undefined): never | undefined {
+  if (message) {
+    throw new Error(message);
+  }
+  return undefined;
+}
 
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
@@ -175,16 +186,41 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
 }
 
 export function parseOpenAiCompatibleImageResponse(
-  payload: OpenAiCompatibleImageResponsePayload,
+  payload: OpenAiCompatibleImageResponsePayload | unknown,
   options: {
     defaultMimeType?: string;
     fileNamePrefix?: string;
+    malformedResponseError?: string;
     sniffMimeType?: boolean;
   } = {},
 ): GeneratedImageAsset[] {
-  return (payload.data ?? [])
-    .map((entry, index) => generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options))
-    .filter((entry): entry is GeneratedImageAsset => entry !== undefined);
+  if (!isRecord(payload)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+  const data = payload.data;
+  if (data === undefined || data === null) {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+
+  const images: GeneratedImageAsset[] = [];
+  for (const [index, entry] of data.entries()) {
+    if (!isRecord(entry)) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
+    if (!image) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return images;
 }
 
 export function imageSourceUploadFileName(params: {

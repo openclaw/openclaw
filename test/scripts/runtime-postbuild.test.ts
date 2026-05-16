@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -40,6 +41,56 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
+  });
+
+  it("discovers repo static asset metadata without scanning extension directories", () => {
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import fs from "node:fs";
+          import { syncBuiltinESMExports } from "node:module";
+          const counts = { existsSync: 0, readdirSync: 0 };
+          const originalExistsSync = fs.existsSync;
+          const originalReaddirSync = fs.readdirSync;
+          fs.existsSync = (...args) => {
+            counts.existsSync += 1;
+            return originalExistsSync(...args);
+          };
+          fs.readdirSync = (...args) => {
+            counts.readdirSync += 1;
+            return originalReaddirSync(...args);
+          };
+          syncBuiltinESMExports();
+          const assets = await import("./scripts/lib/static-extension-assets.mjs");
+          console.log(JSON.stringify({
+            counts,
+            outputs: assets.listStaticExtensionAssetOutputs(),
+            sources: assets.listStaticExtensionAssetSources(),
+          }));
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+    const payload = JSON.parse(output) as {
+      counts: { existsSync: number; readdirSync: number };
+      outputs: string[];
+      sources: string[];
+    };
+
+    expect(payload.outputs).toEqual([
+      "dist/extensions/acpx/error-format.mjs",
+      "dist/extensions/acpx/mcp-command-line.mjs",
+      "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    ]);
+    expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
+    expect(payload.counts).toEqual({ existsSync: 0, readdirSync: 0 });
   });
 
   it("discovers static assets from plugin package metadata", async () => {
