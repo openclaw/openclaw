@@ -10,6 +10,9 @@ import {
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
+import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
+import { pathForTab } from "../navigation.ts";
+import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
 import {
@@ -43,6 +46,7 @@ export function renderChatSessionSelect(
   const agentSelect = renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const modelSelect = renderChatModelSelect(state);
   const thinkingSelect = renderChatThinkingSelect(state);
+  const quotaPill = renderChatQuotaPill(state);
   const selectedSessionLabel =
     sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
       ?.label ?? state.sessionKey;
@@ -50,6 +54,7 @@ export function renderChatSessionSelect(
   const rowClass = [
     "chat-controls__session-row",
     hasAgentSelect ? "" : "chat-controls__session-row--single-agent",
+    quotaPill ? "chat-controls__session-row--has-quota" : "",
     flashSession ? "chat-controls__session-row--flash" : "",
   ]
     .filter(Boolean)
@@ -93,11 +98,61 @@ export function renderChatSessionSelect(
           )}
         </select>
       </label>
-      ${modelSelect} ${thinkingSelect}
+      ${modelSelect} ${thinkingSelect} ${quotaPill}
     </div>
     <div class="chat-controls__session-notice" role="status" aria-live="polite">
       ${state.sessionSwitchNotice?.text ?? ""}
     </div>
+  `;
+}
+
+function renderChatQuotaPill(state: AppViewState) {
+  const windows = collectQuotaWindowsFromAuthStatus(
+    state.modelAuthStatusResult,
+    isMonitoredAuthProvider,
+  );
+  const primary = windows[0];
+  if (!primary) {
+    return "";
+  }
+  const secondary = windows.find(
+    (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
+  );
+  const reset = formatQuotaReset(primary.resetAt);
+  const detail = [primary.displayName, primary.label, reset ? `resets ${reset}` : null]
+    .filter(Boolean)
+    .join(" · ");
+  const secondaryDetail = secondary
+    ? `${secondary.displayName}${secondary.label ? ` ${secondary.label}` : ""} ${secondary.remaining}% left`
+    : null;
+  const title = [detail, secondaryDetail].filter(Boolean).join(" · ");
+  const severity = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "ok";
+
+  return html`
+    <a
+      class="chat-controls__quota chat-controls__quota--${severity}"
+      href=${pathForTab("usage", state.basePath)}
+      title=${title}
+      aria-label=${`Provider usage: ${title}`}
+      data-chat-provider-usage="true"
+      @click=${(event: MouseEvent) => {
+        if (
+          event.defaultPrevented ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+        event.preventDefault();
+        state.setTab("usage");
+      }}
+    >
+      <span class="chat-controls__quota-label">Usage</span>
+      <span class="chat-controls__quota-value">${primary.remaining}%</span>
+    </a>
   `;
 }
 

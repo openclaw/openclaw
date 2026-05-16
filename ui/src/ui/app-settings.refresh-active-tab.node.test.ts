@@ -402,6 +402,39 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
   });
 
+  it("refreshes model auth status on the chat tab for the quota pill", async () => {
+    const host = createHost();
+    host.tab = "chat";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves chat refresh failures while loading quota status", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    mocks.refreshChatMock.mockRejectedValueOnce(new Error("chat refresh failed"));
+
+    await expect(refreshActiveTab(host as never)).rejects.toThrow("chat refresh failed");
+
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
+    expect(mocks.scheduleChatScrollMock).not.toHaveBeenCalled();
+  });
+
+  it("contains quota status failures on the chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    mocks.loadModelAuthStatusStateMock.mockRejectedValueOnce(new Error("quota failed"));
+
+    await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
+
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+  });
+
   it("records failed cron runs status from the controller outcome", async () => {
     const host = createHost();
     host.tab = "cron";

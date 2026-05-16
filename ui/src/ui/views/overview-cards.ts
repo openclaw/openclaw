@@ -4,6 +4,11 @@ import { t } from "../../i18n/index.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
+import {
+  collectQuotaWindows,
+  formatQuotaReset,
+  type QuotaWindowSummary,
+} from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
 import type {
   SessionsUsageResult,
@@ -41,13 +46,6 @@ type StatCard = {
   hint: string | TemplateResult;
 };
 
-type QuotaWindowSummary = {
-  displayName: string;
-  label: string;
-  remaining: number;
-  resetAt?: number;
-};
-
 function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
   return html`
     <button class="ov-card" data-kind=${card.kind} @click=${() => onNavigate(card.tab)}>
@@ -58,51 +56,13 @@ function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
   `;
 }
 
-function formatQuotaReset(resetAt?: number): string | null {
-  if (!resetAt || !Number.isFinite(resetAt)) {
-    return null;
-  }
-  const diffMs = resetAt - Date.now();
-  if (diffMs <= 0) {
-    return "now";
-  }
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  if (hours < 24) {
-    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  if (days < 7) {
-    const remainingHours = hours % 24;
-    return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
-  }
-  return new Date(resetAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function collectQuotaWindows(providers: ModelAuthStatusResult["providers"]): QuotaWindowSummary[] {
-  return providers
-    .flatMap((provider) =>
-      (provider.usage?.windows ?? []).map((window) => ({
-        displayName: provider.displayName,
-        label: (window.label || "").trim(),
-        remaining: Math.max(0, Math.min(100, Math.round(100 - window.usedPercent))),
-        resetAt: window.resetAt,
-      })),
-    )
-    .sort((a, b) => a.remaining - b.remaining || a.displayName.localeCompare(b.displayName));
-}
-
 function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null {
   const primary = windows[0];
   if (!primary) {
     return null;
   }
   const reset = formatQuotaReset(primary.resetAt);
-  const primaryHint = [primary.displayName, primary.label, reset ? `⏱${reset}` : null].filter(
+  const primaryHint = [primary.displayName, primary.label, reset ? `reset ${reset}` : null].filter(
     Boolean,
   );
   const secondary = windows.find(
