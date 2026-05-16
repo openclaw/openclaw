@@ -396,12 +396,14 @@ function collectResponseFailedIdentifierHashes(
   opts: {
     path?: string;
     depth?: number;
+    identifierKey?: string;
     out?: string[];
     seen?: WeakSet<object>;
   } = {},
 ): string[] {
   const path = opts.path ?? "";
   const depth = opts.depth ?? 0;
+  const identifierKey = opts.identifierKey ?? "";
   const out = opts.out ?? [];
   const seen = opts.seen ?? new WeakSet<object>();
   if (out.length >= 12 || depth > 4 || !value || typeof value !== "object") {
@@ -416,9 +418,16 @@ function collectResponseFailedIdentifierHashes(
       if (index >= 8 || out.length >= 12) {
         break;
       }
+      const itemString =
+        typeof item === "string" || typeof item === "number" ? String(item).trim() : "";
+      if (identifierKey && isResponseFailedIdentifierKey(identifierKey) && itemString) {
+        out.push(`${path}[${index}]=${redactIdentifier(itemString, { len: 12 })}`);
+        continue;
+      }
       collectResponseFailedIdentifierHashes(item, {
         path: `${path}[${index}]`,
         depth: depth + 1,
+        identifierKey,
         out,
         seen,
       });
@@ -439,6 +448,7 @@ function collectResponseFailedIdentifierHashes(
     collectResponseFailedIdentifierHashes(child, {
       path: childPath,
       depth: depth + 1,
+      identifierKey: isResponseFailedIdentifierKey(key) ? key : undefined,
       out,
       seen,
     });
@@ -472,6 +482,7 @@ function redactResponseFailedIdentifierFields(
   if (Array.isArray(value)) {
     return value.slice(0, 16).map((item) =>
       redactResponseFailedIdentifierFields(item, {
+        key,
         depth: depth + 1,
         seen,
       }),

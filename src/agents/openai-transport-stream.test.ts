@@ -158,6 +158,9 @@ describe("openai transport stream", () => {
         },
         provider_error: {
           request_id: "provider_error_req_nested_012",
+          headers: {
+            "x-request-id": ["header_req_plaintext_345", "header_req_plaintext_678"],
+          },
         },
       },
     };
@@ -169,7 +172,7 @@ describe("openai transport stream", () => {
     expect(observation.responseId).toBe("resp_failed_123");
     expect(observation.responseStatus).toBe("failed");
     expect(observation.responseModel).toBe("gpt-5.4-pro");
-    expect(observation.requestIdHashes).toHaveLength(4);
+    expect(observation.requestIdHashes).toHaveLength(6);
     expect(observation.requestIdHashes.join(",")).toContain("sha256:");
     expect(summary).toContain("responseId=resp_failed_123");
     expect(summary).toContain("requestIds=");
@@ -177,6 +180,8 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(observation)).not.toContain("provider_req_plaintext_456");
     expect(JSON.stringify(observation)).not.toContain("provider_req_nested_789");
     expect(JSON.stringify(observation)).not.toContain("provider_error_req_nested_012");
+    expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_345");
+    expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_678");
     expect(JSON.stringify(observation)).not.toContain("sk-observation-secret");
   });
 
