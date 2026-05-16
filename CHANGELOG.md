@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Providers/xAI: keep retired Grok 3, Grok 4 Fast, Grok 4.1 Fast, and Grok Code slugs out of model pickers while preserving compatibility resolution for existing configs.
 - Providers/xAI: replace the retired `grok-imagine-image-pro` image model with `grok-imagine-image-quality` in the bundled image-generation provider and docs. (#81399) Thanks @KateWilkins.
 - Providers/OAuth: let browser-hosted identity provider pages read successful localhost callback responses, preventing xAI Grok OAuth from showing a false connection failure after OpenClaw completes login.
+- Gateway/security: reject malformed HTTP and WebSocket request targets with the existing auth failure response instead of letting invalid URL parsing crash the Gateway. Fixes GHSA-6hc3-f4rg-377m.
 - Gateway/diagnostics: redact credential-bearing gateway target URLs and client diagnostics while preserving raw connection URLs for programmatic use, so connect-failure logs no longer surface embedded tokens.
 - Gateway/auth: honor `OPENCLAW_GATEWAY_TOKEN` as the remote interactive fallback when no remote token is configured, keeping remote TUI setup aligned with documented auth precedence.
 - Providers/xAI: continue polling video generations while xAI reports in-flight jobs as `pending`, so Grok video requests no longer fail before the final `done` response. (#82610) Thanks @Manzojunior.
