@@ -523,6 +523,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
+            if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+              return;
+            }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
               startAccountTask = startAccount({

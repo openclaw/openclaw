@@ -782,6 +782,27 @@ describe("server-channels auto restart", () => {
     await flushMicrotasks();
   });
 
+  it("does not start traced channel accounts after stop wins the handoff", async () => {
+    const startupTrace = {
+      measure: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
+    };
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    await stopTask;
+    await flushMicrotasks();
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running,
+    ).toBe(false);
+  });
+
   it("limits whole-channel account startup fanout to four", async () => {
     const accountIds = ["one", "two", "three", "four", "five", "six"];
     const releases: Array<() => void> = [];
