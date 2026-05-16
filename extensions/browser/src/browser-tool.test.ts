@@ -1298,6 +1298,19 @@ describe("browser tool url alias support", () => {
     expect(opts.profile).toBeUndefined();
   });
 
+  it("rejects embedded credentials before opening a tab", async () => {
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "open",
+        url: "https://user:secret@example.com/path",
+      }),
+    ).rejects.toThrow("embedded credentials");
+
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("tracks opened tabs when session context is available", async () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "tab-123",
@@ -1352,6 +1365,20 @@ describe("browser tool url alias support", () => {
     expect(request.url).toBe("https://example.com");
     expect(request.targetId).toBe("tab-1");
     expect(request.profile).toBeUndefined();
+  });
+
+  it("rejects embedded credentials before navigating a tab", async () => {
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "navigate",
+        url: "https://user:secret@example.com/path",
+        targetId: "tab-1",
+      }),
+    ).rejects.toThrow("embedded credentials");
+
+    expect(browserActionsMocks.browserNavigate).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("keeps targetUrl required error label when both params are missing", async () => {

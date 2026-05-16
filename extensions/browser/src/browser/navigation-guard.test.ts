@@ -251,6 +251,36 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
+  it("blocks network URLs with embedded credentials before lookup", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://user:secret@example.com/private",
+        lookupFn,
+      }),
+    ).rejects.toThrow("embedded credentials");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://user:secret@example.com/private",
+        lookupFn,
+      }),
+    ).rejects.not.toThrow("secret");
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("redacts URL credentials from invalid URL diagnostics", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://user:secret@",
+      }),
+    ).rejects.toThrow("https://[redacted]@");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://user:secret@",
+      }),
+    ).rejects.not.toThrow("secret");
+  });
+
   it("validates final network URLs after navigation", async () => {
     const lookupFn = createLookupFn("127.0.0.1");
     await expect(
