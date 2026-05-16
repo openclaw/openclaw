@@ -6,10 +6,13 @@ import { readServiceStatusSummary } from "./status.service-summary.js";
 type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
+  loaded: boolean;
   managedByOpenClaw: boolean;
   externallyManaged: boolean;
   loadedText: string;
+  runtime: Awaited<ReturnType<typeof readServiceStatusSummary>>["runtime"];
   runtimeShort: string | null;
+  layout: Awaited<ReturnType<typeof readServiceStatusSummary>>["layout"];
 };
 
 async function buildDaemonStatusSummary(
@@ -21,10 +24,13 @@ async function buildDaemonStatusSummary(
   return {
     label: summary.label,
     installed: summary.installed,
+    loaded: summary.loaded,
     managedByOpenClaw: summary.managedByOpenClaw,
     externallyManaged: summary.externallyManaged,
     loadedText: summary.loadedText,
+    runtime: summary.runtime,
     runtimeShort: formatDaemonRuntimeShort(summary.runtime),
+    layout: summary.layout,
   };
 }
 

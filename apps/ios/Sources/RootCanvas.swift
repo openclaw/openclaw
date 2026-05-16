@@ -1,6 +1,7 @@
+import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 import UIKit
-import OpenClawProtocol
 
 struct RootCanvas: View {
     @Environment(NodeAppModel.self) private var appModel
@@ -98,6 +99,9 @@ struct RootCanvas: View {
                 },
                 openSettings: {
                     self.presentedSheet = .settings
+                },
+                retryGatewayConnection: {
+                    Task { await self.gatewayController.connectLastKnown() }
                 })
                 .preferredColorScheme(.dark)
 
@@ -107,6 +111,7 @@ struct RootCanvas: View {
         }
         .gatewayTrustPromptAlert()
         .deepLinkAgentPromptAlert()
+        .execApprovalPromptDialog()
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
             case .settings:
@@ -228,7 +233,7 @@ struct RootCanvas: View {
     private func updateCanvasDebugStatus() {
         self.appModel.screen.setDebugStatusEnabled(self.canvasDebugStatusEnabled)
         guard self.canvasDebugStatusEnabled else { return }
-        let title = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = self.appModel.gatewayServerName ?? self.appModel.gatewayRemoteAddress
         self.appModel.screen.updateDebugStatus(title: title, subtitle: subtitle)
     }
@@ -258,7 +263,7 @@ struct RootCanvas: View {
                 eyebrow: "Connected to \(gatewayLabel)",
                 title: "Your agents are ready",
                 subtitle:
-                    "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+                "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
                 activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
@@ -272,7 +277,7 @@ struct RootCanvas: View {
                 eyebrow: "Reconnecting",
                 title: "OpenClaw is syncing back up",
                 subtitle:
-                    "The gateway session is coming back online. "
+                "The gateway session is coming back online. "
                     + "Agent shortcuts should settle automatically in a moment.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
@@ -287,7 +292,7 @@ struct RootCanvas: View {
                 eyebrow: "Welcome to OpenClaw",
                 title: "Your phone stays quiet until it is needed",
                 subtitle:
-                    "Pair this device to your gateway to wake it only for real work, "
+                "Pair this device to your gateway to wake it only for real work, "
                     + "keep a live agent overview handy, and avoid battery-draining background loops.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: "Main",
@@ -296,7 +301,7 @@ struct RootCanvas: View {
                 agentCount: agents.count,
                 agents: Array(agents.prefix(4)),
                 footer:
-                    "When connected, the gateway can wake the phone with a silent push "
+                "When connected, the gateway can wake the phone with a silent push "
                     + "instead of holding an always-on session.")
         }
     }
@@ -348,7 +353,7 @@ struct RootCanvas: View {
         let words = self.homeCanvasName(for: agent)
             .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
             .prefix(2)
-        let initials = words.compactMap { $0.first }.map(String.init).joined()
+        let initials = words.compactMap(\.first).map(String.init).joined()
         if !initials.isEmpty {
             return initials.uppercased()
         }
@@ -450,9 +455,11 @@ private struct HomeCanvasAgentCard: Codable {
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -461,9 +468,15 @@ private struct CanvasContent: View {
     var cameraHUDKind: NodeAppModel.CameraHUDKind?
     var openChat: () -> Void
     var openSettings: () -> Void
+    var retryGatewayConnection: () -> Void
 
-    private var brightenButtons: Bool { self.systemColorScheme == .light }
-    private var talkActive: Bool { self.appModel.talkMode.isEnabled || self.talkEnabled }
+    private var brightenButtons: Bool {
+        self.systemColorScheme == .light
+    }
+
+    private var talkActive: Bool {
+        self.appModel.talkMode.isEnabled || self.talkEnabled
+    }
 
     var body: some View {
         ZStack {
@@ -487,6 +500,8 @@ private struct CanvasContent: View {
                 onStatusTap: {
                     if self.gatewayStatus == .connected {
                         self.showGatewayActions = true
+                    } else if self.appModel.lastGatewayProblem != nil {
+                        self.showGatewayProblemDetails = true
                     } else {
                         self.openSettings()
                     }
@@ -503,13 +518,31 @@ private struct CanvasContent: View {
                     self.openSettings()
                 })
         }
+        .overlay(alignment: .top) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem,
+               self.gatewayStatus != .connected
+            {
+                GatewayProblemBanner(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
+                    },
+                    onShowDetails: {
+                        self.showGatewayProblemDetails = true
+                    })
+                    .padding(.horizontal, 12)
+                    .safeAreaPadding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                 VoiceWakeToast(
                     command: voiceWakeToastText,
                     brighten: self.brightenButtons)
                     .padding(.leading, 10)
-                    .safeAreaPadding(.top, 58)
+                    .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 58 : 132)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -517,6 +550,16 @@ private struct CanvasContent: View {
             isPresented: self.$showGatewayActions,
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.openSettings() })
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
+                    })
+            }
+        }
         .onAppear {
             // Keep the runtime talk state aligned with persisted toggle state on cold launch.
             if self.talkEnabled != self.appModel.talkMode.isEnabled {
@@ -531,6 +574,21 @@ private struct CanvasContent: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.cameraHUDText,
             cameraHUDKind: self.cameraHUDKind)
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        if problem.canTrustRotatedCertificate { return "Trust certificate" }
+        return problem.retryable ? "Retry" : "Open Settings"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+        if problem.canTrustRotatedCertificate {
+            Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else if problem.retryable {
+            self.retryGatewayConnection()
+        } else {
+            self.openSettings()
+        }
     }
 }
 

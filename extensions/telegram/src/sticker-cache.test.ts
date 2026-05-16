@@ -1,44 +1,36 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  cacheSticker,
-  getAllCachedStickers,
-  getCachedSticker,
-  getCacheStats,
-  searchStickers,
-} from "./sticker-cache.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as stickerCache from "./sticker-cache-store.js";
 
-// Mock the state directory to use a temp location
-vi.mock("../../../src/config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/paths.js")>();
+const jsonStoreMocks = vi.hoisted(() => {
+  const store: { value: unknown } = { value: null };
   return {
-    ...actual,
-    STATE_DIR: "/tmp/openclaw-test-sticker-cache",
+    store,
+    loadJsonFile: vi.fn(() => store.value),
+    saveJsonFile: vi.fn((_file: string, value: unknown) => {
+      store.value = structuredClone(value);
+    }),
   };
 });
 
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
-const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
+vi.mock("openclaw/plugin-sdk/json-store", () => ({
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
+}));
+
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
+}));
 
 describe("sticker-cache", () => {
   beforeEach(() => {
-    // Clean up before each test
-    if (fs.existsSync(TEST_CACHE_FILE)) {
-      fs.unlinkSync(TEST_CACHE_FILE);
-    }
-  });
-
-  afterEach(() => {
-    // Clean up after each test
-    if (fs.existsSync(TEST_CACHE_FILE)) {
-      fs.unlinkSync(TEST_CACHE_FILE);
-    }
+    jsonStoreMocks.store.value = null;
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
   });
 
   describe("getCachedSticker", () => {
     it("returns null for unknown ID", () => {
-      const result = getCachedSticker("unknown-id");
+      const result = stickerCache.getCachedSticker("unknown-id");
       expect(result).toBeNull();
     });
 
@@ -52,13 +44,13 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T12:00:00.000Z",
       };
 
-      cacheSticker(sticker);
-      const result = getCachedSticker("unique123");
+      stickerCache.cacheSticker(sticker);
+      const result = stickerCache.getCachedSticker("unique123");
 
       expect(result).toEqual(sticker);
     });
 
-    it("returns null after cache is cleared", () => {
+    it("returns null after backing store is cleared", () => {
       const sticker = {
         fileId: "file123",
         fileUniqueId: "unique123",
@@ -66,13 +58,16 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T12:00:00.000Z",
       };
 
-      cacheSticker(sticker);
-      expect(getCachedSticker("unique123")).not.toBeNull();
+      stickerCache.cacheSticker(sticker);
+      const cachedSticker = stickerCache.getCachedSticker("unique123");
+      if (!cachedSticker) {
+        throw new Error("expected cached Telegram sticker");
+      }
+      expect(cachedSticker.fileUniqueId).toBe("unique123");
 
-      // Manually clear the cache file
-      fs.unlinkSync(TEST_CACHE_FILE);
+      jsonStoreMocks.store.value = null;
 
-      expect(getCachedSticker("unique123")).toBeNull();
+      expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });
   });
 
@@ -85,9 +80,9 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T12:00:00.000Z",
       };
 
-      cacheSticker(sticker);
+      stickerCache.cacheSticker(sticker);
 
-      const all = getAllCachedStickers();
+      const all = stickerCache.getAllCachedStickers();
       expect(all).toHaveLength(1);
       expect(all[0]).toEqual(sticker);
     });
@@ -106,10 +101,10 @@ describe("sticker-cache", () => {
         cachedAt: "2026-01-26T13:00:00.000Z",
       };
 
-      cacheSticker(original);
-      cacheSticker(updated);
+      stickerCache.cacheSticker(original);
+      stickerCache.cacheSticker(updated);
 
-      const result = getCachedSticker("unique789");
+      const result = stickerCache.getCachedSticker("unique789");
       expect(result?.description).toBe("Updated description");
       expect(result?.fileId).toBe("file789-new");
     });
@@ -118,7 +113,7 @@ describe("sticker-cache", () => {
   describe("searchStickers", () => {
     beforeEach(() => {
       // Seed cache with test stickers
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "fox1",
         fileUniqueId: "fox-unique-1",
         emoji: "🦊",
@@ -126,7 +121,7 @@ describe("sticker-cache", () => {
         description: "A cute orange fox waving hello",
         cachedAt: "2026-01-26T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "fox2",
         fileUniqueId: "fox-unique-2",
         emoji: "🦊",
@@ -134,7 +129,7 @@ describe("sticker-cache", () => {
         description: "A fox sleeping peacefully",
         cachedAt: "2026-01-26T11:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "cat1",
         fileUniqueId: "cat-unique-1",
         emoji: "🐱",
@@ -142,7 +137,7 @@ describe("sticker-cache", () => {
         description: "A cat sitting on a keyboard",
         cachedAt: "2026-01-26T12:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "dog1",
         fileUniqueId: "dog-unique-1",
         emoji: "🐶",
@@ -153,47 +148,56 @@ describe("sticker-cache", () => {
     });
 
     it("finds stickers by description substring", () => {
-      const results = searchStickers("fox");
+      const results = stickerCache.searchStickers("fox");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.description.toLowerCase().includes("fox"))).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("finds stickers by emoji", () => {
-      const results = searchStickers("🦊");
+      const results = stickerCache.searchStickers("🦊");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.emoji === "🦊")).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("finds stickers by set name", () => {
-      const results = searchStickers("CuteFoxes");
+      const results = stickerCache.searchStickers("CuteFoxes");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.setName === "CuteFoxes")).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("respects limit parameter", () => {
-      const results = searchStickers("fox", 1);
+      const results = stickerCache.searchStickers("fox", 1);
       expect(results).toHaveLength(1);
     });
 
     it("ranks exact matches higher", () => {
       // "waving" appears in "fox waving hello" - should be ranked first
-      const results = searchStickers("waving");
+      const results = stickerCache.searchStickers("waving");
       expect(results).toHaveLength(1);
       expect(results[0]?.fileUniqueId).toBe("fox-unique-1");
     });
 
     it("returns empty array for no matches", () => {
-      const results = searchStickers("elephant");
+      const results = stickerCache.searchStickers("elephant");
       expect(results).toHaveLength(0);
     });
 
     it("is case insensitive", () => {
-      const results = searchStickers("FOX");
+      const results = stickerCache.searchStickers("FOX");
       expect(results).toHaveLength(2);
     });
 
     it("matches multiple words", () => {
-      const results = searchStickers("cat keyboard");
+      const results = stickerCache.searchStickers("cat keyboard");
       expect(results).toHaveLength(1);
       expect(results[0]?.fileUniqueId).toBe("cat-unique-1");
     });
@@ -201,58 +205,58 @@ describe("sticker-cache", () => {
 
   describe("getAllCachedStickers", () => {
     it("returns empty array when cache is empty", () => {
-      const result = getAllCachedStickers();
-      expect(result).toEqual([]);
+      const result = stickerCache.getAllCachedStickers();
+      expect(result).toStrictEqual([]);
     });
 
     it("returns all cached stickers", () => {
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "a",
         fileUniqueId: "a-unique",
         description: "Sticker A",
         cachedAt: "2026-01-26T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "b",
         fileUniqueId: "b-unique",
         description: "Sticker B",
         cachedAt: "2026-01-26T11:00:00.000Z",
       });
 
-      const result = getAllCachedStickers();
+      const result = stickerCache.getAllCachedStickers();
       expect(result).toHaveLength(2);
     });
   });
 
   describe("getCacheStats", () => {
     it("returns count 0 when cache is empty", () => {
-      const stats = getCacheStats();
+      const stats = stickerCache.getCacheStats();
       expect(stats.count).toBe(0);
       expect(stats.oldestAt).toBeUndefined();
       expect(stats.newestAt).toBeUndefined();
     });
 
     it("returns correct stats with cached stickers", () => {
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "old",
         fileUniqueId: "old-unique",
         description: "Old sticker",
         cachedAt: "2026-01-20T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "new",
         fileUniqueId: "new-unique",
         description: "New sticker",
         cachedAt: "2026-01-26T10:00:00.000Z",
       });
-      cacheSticker({
+      stickerCache.cacheSticker({
         fileId: "mid",
         fileUniqueId: "mid-unique",
         description: "Middle sticker",
         cachedAt: "2026-01-23T10:00:00.000Z",
       });
 
-      const stats = getCacheStats();
+      const stats = stickerCache.getCacheStats();
       expect(stats.count).toBe(3);
       expect(stats.oldestAt).toBe("2026-01-20T10:00:00.000Z");
       expect(stats.newestAt).toBe("2026-01-26T10:00:00.000Z");

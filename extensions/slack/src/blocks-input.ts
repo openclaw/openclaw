@@ -1,6 +1,6 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 
-const SLACK_MAX_BLOCKS = 50;
+export const SLACK_MAX_BLOCKS = 50;
 
 function parseBlocksJson(raw: string) {
   try {

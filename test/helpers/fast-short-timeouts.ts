@@ -1,7 +1,7 @@
+import { setTimeout as nativeSetTimeout } from "node:timers";
 import { vi } from "vitest";
 
 export function useFastShortTimeouts(maxDelayMs = 2000): () => void {
-  const realSetTimeout = setTimeout;
   const spy = vi.spyOn(global, "setTimeout").mockImplementation(((
     handler: TimerHandler,
     timeout?: number,
@@ -9,9 +9,9 @@ export function useFastShortTimeouts(maxDelayMs = 2000): () => void {
   ) => {
     const delay = typeof timeout === "number" ? timeout : 0;
     if (delay > 0 && delay <= maxDelayMs) {
-      return realSetTimeout(handler, 0, ...args);
+      return nativeSetTimeout(handler, 0, ...args);
     }
-    return realSetTimeout(handler, delay, ...args);
+    return nativeSetTimeout(handler, delay, ...args);
   }) as typeof setTimeout);
   return () => spy.mockRestore();
 }

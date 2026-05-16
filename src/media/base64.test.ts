@@ -2,17 +2,32 @@ import { describe, expect, it } from "vitest";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
 
 describe("base64 helpers", () => {
-  it("normalizes whitespace and keeps valid base64", () => {
-    const input = " SGV s bG8= \n";
-    expect(canonicalizeBase64(input)).toBe("SGVsbG8=");
-  });
+  function expectBase64HelperCase<T>(actual: T, expected: T) {
+    expect(actual).toBe(expected);
+  }
 
-  it("rejects invalid base64 characters", () => {
-    const input = 'SGVsbG8=" onerror="alert(1)';
-    expect(canonicalizeBase64(input)).toBeUndefined();
-  });
-
-  it("estimates decoded bytes with whitespace", () => {
-    expect(estimateBase64DecodedBytes("SGV s bG8= \n")).toBe(5);
+  it.each([
+    {
+      name: "canonicalizeBase64 normalizes whitespace and keeps valid base64",
+      actual: canonicalizeBase64(" SGV s bG8= \n"),
+      expected: "SGVsbG8=",
+    },
+    {
+      name: "canonicalizeBase64 rejects invalid base64 characters",
+      actual: canonicalizeBase64('SGVsbG8=" onerror="alert(1)'),
+      expected: undefined,
+    },
+    {
+      name: "estimateBase64DecodedBytes handles whitespace",
+      actual: estimateBase64DecodedBytes("SGV s bG8= \n"),
+      expected: 5,
+    },
+    {
+      name: "estimateBase64DecodedBytes handles empty input",
+      actual: estimateBase64DecodedBytes(""),
+      expected: 0,
+    },
+  ] as const)("$name", ({ actual, expected }) => {
+    expectBase64HelperCase(actual, expected);
   });
 });

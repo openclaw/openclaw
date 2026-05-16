@@ -1,7 +1,8 @@
-import { formatReasoningMessage } from "../../../src/agents/pi-embedded-utils.js";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import { findCodeRegions, isInsideCode } from "../../../src/shared/text/code-regions.js";
-import { stripReasoningTagsFromText } from "../../../src/shared/text/reasoning-tags.js";
+import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 
 const REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 const REASONING_TAG_PREFIXES = [
@@ -44,7 +45,7 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {
-  const trimmed = text.trimStart().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text.trimStart());
   if (!trimmed.startsWith("<")) {
     return false;
   }
@@ -54,12 +55,15 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
 }
 
-export type TelegramReasoningSplit = {
+type TelegramReasoningSplit = {
   reasoningText?: string;
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -78,6 +82,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
+  if (isReasoning === true) {
+    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
+  }
+
   if (!taggedReasoning && strippedAnswer === text) {
     return { answerText: text };
   }
@@ -87,9 +95,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   return { reasoningText, answerText };
 }
 
-export type BufferedFinalAnswer = {
+type BufferedFinalAnswer = {
   payload: ReplyPayload;
   text: string;
+  bufferedGeneration?: number;
 };
 
 export function createTelegramReasoningStepState() {
@@ -114,7 +123,14 @@ export function createTelegramReasoningStepState() {
     bufferedFinalAnswer = value;
   };
 
-  const takeBufferedFinalAnswer = (): BufferedFinalAnswer | undefined => {
+  const takeBufferedFinalAnswer = (currentGeneration?: number): BufferedFinalAnswer | undefined => {
+    if (
+      currentGeneration !== undefined &&
+      bufferedFinalAnswer?.bufferedGeneration !== undefined &&
+      bufferedFinalAnswer.bufferedGeneration !== currentGeneration
+    ) {
+      return undefined;
+    }
     const value = bufferedFinalAnswer;
     bufferedFinalAnswer = undefined;
     return value;

@@ -1,5 +1,5 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { MatrixClient } from "../sdk.js";
 import { listMatrixReactions, removeMatrixReactions } from "./reactions.js";
 
 function createReactionsClient(params: {
@@ -10,7 +10,7 @@ function createReactionsClient(params: {
   }>;
   userId?: string | null;
 }) {
-  const doRequest = vi.fn(async (_method: string, _path: string, _query: any) => ({
+  const doRequest = vi.fn(async (_method: string, _path: string, _query: unknown) => ({
     chunk: params.chunk.map((item) => ({
       event_id: item.event_id ?? "",
       sender: item.sender ?? "",
@@ -56,23 +56,21 @@ describe("matrix reaction actions", () => {
 
     expect(doRequest).toHaveBeenCalledWith(
       "GET",
-      expect.stringContaining("/rooms/!room%3Aexample.org/relations/%24msg/"),
-      expect.objectContaining({ limit: 2 }),
+      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction",
+      { dir: "b", limit: 2 },
     );
-    expect(result).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "👍",
-          count: 2,
-          users: expect.arrayContaining(["@alice:example.org", "@bob:example.org"]),
-        }),
-        expect.objectContaining({
-          key: "👎",
-          count: 1,
-          users: ["@alice:example.org"],
-        }),
-      ]),
-    );
+    expect(result).toStrictEqual([
+      {
+        key: "👍",
+        count: 2,
+        users: ["@alice:example.org", "@bob:example.org"],
+      },
+      {
+        key: "👎",
+        count: 1,
+        users: ["@alice:example.org"],
+      },
+    ]);
   });
 
   it("removes only current-user reactions matching emoji filter", async () => {
@@ -105,5 +103,31 @@ describe("matrix reaction actions", () => {
 
     expect(result).toEqual({ removed: 0 });
     expect(redactEvent).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty list when the relations response is malformed", async () => {
+    const doRequest = vi.fn(async () => ({ chunk: null }));
+    const client = {
+      doRequest,
+      getUserId: vi.fn(async () => "@me:example.org"),
+      redactEvent: vi.fn(async () => undefined),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await listMatrixReactions("!room:example.org", "$msg", { client });
+
+    expect(result).toStrictEqual([]);
+  });
+
+  it("rejects blank message ids before querying Matrix relations", async () => {
+    const { client, doRequest } = createReactionsClient({
+      chunk: [],
+      userId: "@me:example.org",
+    });
+
+    await expect(listMatrixReactions("!room:example.org", "   ", { client })).rejects.toThrow(
+      "messageId",
+    );
+    expect(doRequest).not.toHaveBeenCalled();
   });
 });

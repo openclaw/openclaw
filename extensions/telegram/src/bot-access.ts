@@ -2,9 +2,14 @@ import {
   firstDefined,
   isSenderIdAllowed,
   mergeDmAllowFromSources,
-} from "../../../src/channels/allow-from.js";
-import type { AllowlistMatch } from "../../../src/channels/allowlist-match.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
+} from "openclaw/plugin-sdk/allow-from";
+import type {
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -12,8 +17,6 @@ export type NormalizedAllowFrom = {
   hasEntries: boolean;
   invalidEntries: string[];
 };
-
-export type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
 
 const warnedInvalidEntries = new Set<string>();
 const log = createSubsystemLogger("telegram/bot-access");
@@ -33,14 +36,16 @@ function warnInvalidAllowFromEntries(entries: string[]) {
         JSON.stringify(entry),
         "- allowFrom/groupAllowFrom authorization expects numeric Telegram sender user IDs only.",
         'To allow a Telegram group or supergroup, add its negative chat ID under "channels.telegram.groups" instead.',
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+        'If you had "@username" entries, re-run setup (it resolves @username to IDs) or replace them manually.',
       ].join(" "),
     );
   }
 }
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
-  const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
+  const entries = (list ?? [])
+    .map((value) => normalizeOptionalString(String(value)) ?? "")
+    .filter(Boolean);
   const hasWildcard = entries.includes("*");
   const normalized = entries
     .filter((value) => value !== "*")
@@ -64,6 +69,17 @@ export const normalizeDmAllowFromWithStore = (params: {
   dmPolicy?: string;
 }): NormalizedAllowFrom => normalizeAllowFrom(mergeDmAllowFromSources(params));
 
+export function resolveTelegramEffectiveDmPolicy(params: {
+  isGroup: boolean;
+  groupConfig?: TelegramDirectConfig | TelegramGroupConfig;
+  dmPolicy?: DmPolicy;
+}): DmPolicy {
+  if (!params.isGroup && params.groupConfig && "dmPolicy" in params.groupConfig) {
+    return params.groupConfig.dmPolicy ?? params.dmPolicy ?? "pairing";
+  }
+  return params.dmPolicy ?? "pairing";
+}
+
 export const isSenderAllowed = (params: {
   allow: NormalizedAllowFrom;
   senderId?: string;
@@ -74,21 +90,3 @@ export const isSenderAllowed = (params: {
 };
 
 export { firstDefined };
-
-export const resolveSenderAllowMatch = (params: {
-  allow: NormalizedAllowFrom;
-  senderId?: string;
-  senderUsername?: string;
-}): AllowFromMatch => {
-  const { allow, senderId } = params;
-  if (allow.hasWildcard) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
-  if (!allow.hasEntries) {
-    return { allowed: false };
-  }
-  if (senderId && allow.entries.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-  return { allowed: false };
-};

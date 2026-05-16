@@ -1,25 +1,31 @@
 import fs from "node:fs";
-import { loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
+  SessionCostSummary,
   SessionDailyModelUsage,
   SessionMessageCounts,
   SessionModelUsage,
 } from "../../infra/session-cost-usage.js";
 import {
-  loadCostUsageSummary,
-  loadSessionCostSummary,
+  loadCostUsageSummaryFromCache,
+  loadSessionLogs,
+  loadSessionCostSummaryFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
+  resolveExistingUsageSessionFile,
   type DiscoveredSession,
+  type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -44,6 +50,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const COST_USAGE_CACHE_MAX = 256;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -59,17 +66,38 @@ type CostUsageCacheEntry = {
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 
+function findCostUsageCacheEvictionKey(): string | undefined {
+  for (const [key, entry] of costUsageCache) {
+    if (!entry.inFlight) {
+      return key;
+    }
+  }
+  return costUsageCache.keys().next().value;
+}
+
+// Keep the cache bounded while preserving in-flight request coalescing when a
+// settled entry is available to evict.
+function setCostUsageCache(cacheKey: string, entry: CostUsageCacheEntry): void {
+  if (!costUsageCache.has(cacheKey) && costUsageCache.size >= COST_USAGE_CACHE_MAX) {
+    const evictKey = findCostUsageCacheEvictionKey();
+    if (evictKey !== undefined) {
+      costUsageCache.delete(evictKey);
+    }
+  }
+  costUsageCache.set(cacheKey, entry);
+}
+
 function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
+  config: OpenClawConfig,
 ): {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
   sessionFile: string;
 } | null {
-  const config = loadConfig();
   const { entry, storePath } = loadSessionEntry(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
@@ -210,6 +238,25 @@ const parseDays = (raw: unknown): number | undefined => {
   return undefined;
 };
 
+const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
+  if (raw === "all") {
+    return "all";
+  }
+  if (raw === "7d") {
+    return 7;
+  }
+  if (raw === "30d") {
+    return 30;
+  }
+  if (raw === "90d") {
+    return 90;
+  }
+  if (raw === "1y") {
+    return 365;
+  }
+  return undefined;
+};
+
 /**
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
@@ -218,6 +265,7 @@ const parseDateRange = (params: {
   startDate?: unknown;
   endDate?: unknown;
   days?: unknown;
+  range?: unknown;
   mode?: unknown;
   utcOffset?: unknown;
 }): DateRange => {
@@ -234,6 +282,15 @@ const parseDateRange = (params: {
     return { startMs, endMs: endMs + DAY_MS - 1 };
   }
 
+  const rangeDays = resolveRangeDays(params.range);
+  if (rangeDays === "all") {
+    return { startMs: 0, endMs: todayEndMs };
+  }
+  if (rangeDays !== undefined) {
+    const start = todayStartMs - (rangeDays - 1) * DAY_MS;
+    return { startMs: start, endMs: todayEndMs };
+  }
+
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
@@ -247,21 +304,51 @@ const parseDateRange = (params: {
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
+type UsageGroupingMode = "instance" | "family";
+
+type MergedEntry = {
+  key: string;
+  sessionId: string;
+  sessionFile: string;
+  label?: string;
+  updatedAt: number;
+  storeEntry?: SessionEntry;
+  firstUserMessage?: string;
+  scope?: "instance" | "family";
+  sessionFamilyKey?: string;
+  currentSessionId?: string;
+  includedSessionIds?: string[];
+};
 
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
-  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
   for (const [key, entry] of Object.entries(store)) {
-    if (entry?.sessionId) {
-      storeBySessionId.set(entry.sessionId, { key, entry });
+    if (!entry?.sessionId) {
+      continue;
+    }
+    const matches = matchesBySessionId.get(entry.sessionId) ?? [];
+    matches.push([key, entry]);
+    matchesBySessionId.set(entry.sessionId, matches);
+  }
+
+  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  for (const [sessionId, matches] of matchesBySessionId) {
+    const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
+    if (!preferredKey) {
+      continue;
+    }
+    const preferredEntry = store[preferredKey];
+    if (preferredEntry) {
+      storeBySessionId.set(sessionId, { key: preferredKey, entry: preferredEntry });
     }
   }
   return storeBySessionId;
 }
 
 async function discoverAllSessionsForUsage(params: {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
@@ -272,22 +359,345 @@ async function discoverAllSessionsForUsage(params: {
         agentId: agent.id,
         startMs: params.startMs,
         endMs: params.endMs,
+        includeFirstUserMessage: false,
       });
-      return sessions.map((session) => ({ ...session, agentId: agent.id }));
+      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
+function addUniqueSessionIds(target: string[], ids: Array<string | undefined>): string[] {
+  const seen = new Set(target);
+  for (const id of ids) {
+    const normalized = normalizeOptionalString(id);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      target.push(normalized);
+    }
+  }
+  return target;
+}
+
+function resolveUsageFamilySessionIds(entry: SessionEntry | undefined, currentSessionId: string) {
+  return addUniqueSessionIds([], [currentSessionId, ...(entry?.usageFamilySessionIds ?? [])]);
+}
+
+function resolveUsageFamilyKey(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+  sessionId: string;
+}): string {
+  return params.entry?.usageFamilyKey ?? params.key ?? params.sessionId;
+}
+
+function maybeMergeFamilyEntry(params: {
+  mergedEntries: MergedEntry[];
+  base: MergedEntry;
+  groupingMode: UsageGroupingMode;
+}) {
+  if (params.groupingMode !== "family") {
+    params.mergedEntries.push(params.base);
+    return;
+  }
+
+  const includedSessionIds = resolveUsageFamilySessionIds(
+    params.base.storeEntry,
+    params.base.sessionId,
+  );
+  const sessionFamilyKey = resolveUsageFamilyKey({
+    key: params.base.key,
+    entry: params.base.storeEntry,
+    sessionId: params.base.sessionId,
+  });
+  params.mergedEntries.push({
+    ...params.base,
+    scope: "family",
+    sessionFamilyKey,
+    currentSessionId: params.base.sessionId,
+    includedSessionIds,
+  });
+}
+
+function createEmptySessionCostSummary(): SessionCostSummary {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSummary): void {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+  target.inputCost += source.inputCost;
+  target.outputCost += source.outputCost;
+  target.cacheReadCost += source.cacheReadCost;
+  target.cacheWriteCost += source.cacheWriteCost;
+  target.missingCostEntries += source.missingCostEntries;
+  target.firstActivity =
+    target.firstActivity === undefined
+      ? source.firstActivity
+      : source.firstActivity === undefined
+        ? target.firstActivity
+        : Math.min(target.firstActivity, source.firstActivity);
+  target.lastActivity =
+    target.lastActivity === undefined
+      ? source.lastActivity
+      : source.lastActivity === undefined
+        ? target.lastActivity
+        : Math.max(target.lastActivity, source.lastActivity);
+  if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
+    target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
+  }
+
+  const activityDates = new Set([...(target.activityDates ?? []), ...(source.activityDates ?? [])]);
+  if (activityDates.size > 0) {
+    target.activityDates = Array.from(activityDates).toSorted();
+  }
+
+  target.dailyBreakdown = mergeDailyRows(target.dailyBreakdown, source.dailyBreakdown, [
+    "tokens",
+    "cost",
+  ]);
+  target.dailyMessageCounts = mergeDailyRows(target.dailyMessageCounts, source.dailyMessageCounts, [
+    "total",
+    "user",
+    "assistant",
+    "toolCalls",
+    "toolResults",
+    "errors",
+  ]);
+  target.utcQuarterHourMessageCounts = mergeQuarterRows(
+    target.utcQuarterHourMessageCounts,
+    source.utcQuarterHourMessageCounts,
+    ["total", "user", "assistant", "toolCalls", "toolResults", "errors"],
+  );
+  target.utcQuarterHourTokenUsage = mergeQuarterRows(
+    target.utcQuarterHourTokenUsage,
+    source.utcQuarterHourTokenUsage,
+    ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "totalCost"],
+  );
+  target.dailyLatency = mergeDailyLatencyRows(target.dailyLatency, source.dailyLatency);
+  target.dailyModelUsage = mergeDailyModelRows(target.dailyModelUsage, source.dailyModelUsage);
+  target.messageCounts = mergeMessageCounts(target.messageCounts, source.messageCounts);
+  target.toolUsage = mergeToolUsage(target.toolUsage, source.toolUsage);
+  target.modelUsage = mergeModelUsage(target.modelUsage, source.modelUsage);
+  target.latency = mergeLatency(target.latency, source.latency);
+}
+
+function mergeDailyRows<T extends { date: string }>(
+  left: T[] | undefined,
+  right: T[] | undefined,
+  fields: Array<keyof T>,
+): T[] | undefined {
+  const map = new Map<string, T>();
+  for (const row of [...(left ?? []), ...(right ?? [])]) {
+    const existing = map.get(row.date);
+    if (!existing) {
+      map.set(row.date, { ...row });
+      continue;
+    }
+    for (const field of fields) {
+      existing[field] = (((existing[field] as number | undefined) ?? 0) +
+        ((row[field] as number | undefined) ?? 0)) as T[keyof T];
+    }
+  }
+  return map.size > 0
+    ? Array.from(map.values()).toSorted((a, b) => a.date.localeCompare(b.date))
+    : undefined;
+}
+
+function mergeQuarterRows<T extends { date: string; quarterIndex: number }>(
+  left: T[] | undefined,
+  right: T[] | undefined,
+  fields: Array<keyof T>,
+): T[] | undefined {
+  const map = new Map<string, T>();
+  for (const row of [...(left ?? []), ...(right ?? [])]) {
+    const key = `${row.date}:${row.quarterIndex}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...row });
+      continue;
+    }
+    for (const field of fields) {
+      existing[field] = (((existing[field] as number | undefined) ?? 0) +
+        ((row[field] as number | undefined) ?? 0)) as T[keyof T];
+    }
+  }
+  return map.size > 0
+    ? Array.from(map.values()).toSorted(
+        (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
+      )
+    : undefined;
+}
+
+function mergeMessageCounts(
+  left: SessionMessageCounts | undefined,
+  right: SessionMessageCounts | undefined,
+): SessionMessageCounts | undefined {
+  if (!left && !right) {
+    return undefined;
+  }
+  return {
+    total: (left?.total ?? 0) + (right?.total ?? 0),
+    user: (left?.user ?? 0) + (right?.user ?? 0),
+    assistant: (left?.assistant ?? 0) + (right?.assistant ?? 0),
+    toolCalls: (left?.toolCalls ?? 0) + (right?.toolCalls ?? 0),
+    toolResults: (left?.toolResults ?? 0) + (right?.toolResults ?? 0),
+    errors: (left?.errors ?? 0) + (right?.errors ?? 0),
+  };
+}
+
+function mergeToolUsage(
+  left: SessionCostSummary["toolUsage"],
+  right: SessionCostSummary["toolUsage"],
+): SessionCostSummary["toolUsage"] {
+  const map = new Map<string, number>();
+  for (const tool of [...(left?.tools ?? []), ...(right?.tools ?? [])]) {
+    map.set(tool.name, (map.get(tool.name) ?? 0) + tool.count);
+  }
+  return map.size > 0
+    ? {
+        totalCalls: Array.from(map.values()).reduce((sum, count) => sum + count, 0),
+        uniqueTools: map.size,
+        tools: Array.from(map.entries())
+          .map(([name, count]) => ({ name, count }))
+          .toSorted((a, b) => b.count - a.count),
+      }
+    : undefined;
+}
+
+function mergeModelUsage(
+  left: SessionCostSummary["modelUsage"],
+  right: SessionCostSummary["modelUsage"],
+): SessionCostSummary["modelUsage"] {
+  const map = new Map<string, SessionModelUsage>();
+  const mergeTotals = (target: CostUsageSummary["totals"], source: CostUsageSummary["totals"]) => {
+    target.input += source.input;
+    target.output += source.output;
+    target.cacheRead += source.cacheRead;
+    target.cacheWrite += source.cacheWrite;
+    target.totalTokens += source.totalTokens;
+    target.totalCost += source.totalCost;
+    target.inputCost += source.inputCost;
+    target.outputCost += source.outputCost;
+    target.cacheReadCost += source.cacheReadCost;
+    target.cacheWriteCost += source.cacheWriteCost;
+    target.missingCostEntries += source.missingCostEntries;
+  };
+  for (const entry of [...(left ?? []), ...(right ?? [])]) {
+    const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+    const existing =
+      map.get(key) ??
+      ({
+        provider: entry.provider,
+        model: entry.model,
+        count: 0,
+        totals: createEmptySessionCostSummary(),
+      } as SessionModelUsage);
+    existing.count += entry.count;
+    mergeTotals(existing.totals, entry.totals);
+    map.set(key, existing);
+  }
+  return map.size > 0 ? Array.from(map.values()) : undefined;
+}
+
+function mergeLatency(
+  left: SessionCostSummary["latency"],
+  right: SessionCostSummary["latency"],
+): SessionCostSummary["latency"] {
+  if (!left && !right) {
+    return undefined;
+  }
+  const leftCount = left?.count ?? 0;
+  const rightCount = right?.count ?? 0;
+  const count = leftCount + rightCount;
+  return {
+    count,
+    avgMs:
+      count > 0 ? ((left?.avgMs ?? 0) * leftCount + (right?.avgMs ?? 0) * rightCount) / count : 0,
+    p95Ms: Math.max(left?.p95Ms ?? 0, right?.p95Ms ?? 0),
+    minMs: Math.min(
+      left?.minMs ?? Number.POSITIVE_INFINITY,
+      right?.minMs ?? Number.POSITIVE_INFINITY,
+    ),
+    maxMs: Math.max(left?.maxMs ?? 0, right?.maxMs ?? 0),
+  };
+}
+
+function mergeDailyLatencyRows(
+  left: SessionCostSummary["dailyLatency"],
+  right: SessionCostSummary["dailyLatency"],
+): SessionCostSummary["dailyLatency"] {
+  const map = new Map<string, NonNullable<SessionCostSummary["dailyLatency"]>[number]>();
+  for (const row of [...(left ?? []), ...(right ?? [])]) {
+    const existing = map.get(row.date);
+    if (!existing) {
+      map.set(row.date, { ...row });
+      continue;
+    }
+    const count = existing.count + row.count;
+    existing.avgMs =
+      count > 0 ? (existing.avgMs * existing.count + row.avgMs * row.count) / count : 0;
+    existing.count = count;
+    existing.p95Ms = Math.max(existing.p95Ms, row.p95Ms);
+    existing.minMs = Math.min(existing.minMs, row.minMs);
+    existing.maxMs = Math.max(existing.maxMs, row.maxMs);
+  }
+  return map.size > 0
+    ? Array.from(map.values()).toSorted((a, b) => a.date.localeCompare(b.date))
+    : undefined;
+}
+
+function mergeDailyModelRows(
+  left: SessionCostSummary["dailyModelUsage"],
+  right: SessionCostSummary["dailyModelUsage"],
+): SessionCostSummary["dailyModelUsage"] {
+  const map = new Map<string, NonNullable<SessionCostSummary["dailyModelUsage"]>[number]>();
+  for (const row of [...(left ?? []), ...(right ?? [])]) {
+    const key = `${row.date}:${row.provider ?? "unknown"}:${row.model ?? "unknown"}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...row });
+      continue;
+    }
+    existing.tokens += row.tokens;
+    existing.cost += row.cost;
+    existing.count += row.count;
+  }
+  return map.size > 0
+    ? Array.from(map.values()).toSorted((a, b) => a.date.localeCompare(b.date))
+    : undefined;
+}
+
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
   const cacheKey = `${params.startMs}-${params.endMs}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
+  if (
+    cached?.summary &&
+    cached.updatedAt &&
+    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
+    cached.summary.cacheStatus?.status !== "refreshing"
+  ) {
     return cached.summary;
   }
 
@@ -299,13 +709,18 @@ async function loadCostUsageSummaryCached(params: {
   }
 
   const entry: CostUsageCacheEntry = cached ?? {};
-  const inFlight = loadCostUsageSummary({
+  const inFlight = loadCostUsageSummaryFromCache({
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
+    requestRefresh: true,
+    refreshMode: "sync-when-empty",
   })
     .then((summary) => {
-      costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      setCostUsageCache(cacheKey, {
+        summary,
+        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
+      });
       return summary;
     })
     .catch((err) => {
@@ -318,17 +733,39 @@ async function loadCostUsageSummaryCached(params: {
       const current = costUsageCache.get(cacheKey);
       if (current?.inFlight === inFlight) {
         current.inFlight = undefined;
-        costUsageCache.set(cacheKey, current);
+        setCostUsageCache(cacheKey, current);
       }
     });
 
   entry.inFlight = inFlight;
-  costUsageCache.set(cacheKey, entry);
+  setCostUsageCache(cacheKey, entry);
 
   if (entry.summary) {
     return entry.summary;
   }
   return await inFlight;
+}
+
+function mergeUsageCacheStatus(
+  target: UsageCacheStatus | undefined,
+  source: UsageCacheStatus,
+): UsageCacheStatus {
+  if (!target) {
+    return { ...source };
+  }
+  const statusRank = { fresh: 0, partial: 1, stale: 2, refreshing: 3 } as const;
+  return {
+    status: statusRank[source.status] > statusRank[target.status] ? source.status : target.status,
+    cachedFiles: target.cachedFiles + source.cachedFiles,
+    pendingFiles: target.pendingFiles + source.pendingFiles,
+    staleFiles: target.staleFiles + source.staleFiles,
+    refreshedAt:
+      target.refreshedAt === undefined
+        ? source.refreshedAt
+        : source.refreshedAt === undefined
+          ? target.refreshedAt
+          : Math.max(target.refreshedAt, source.refreshedAt),
+  };
 }
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
@@ -352,19 +789,20 @@ export const usageHandlers: GatewayRequestHandlers = {
     const summary = await loadProviderUsageSummary();
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params }) => {
-    const config = loadConfig();
+  "usage.cost": async ({ respond, params, context }) => {
+    const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
       days: params?.days,
+      range: params?.range,
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
     const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params }) => {
+  "sessions.usage": async ({ respond, params, context }) => {
     if (!validateSessionsUsageParams(params)) {
       respond(
         false,
@@ -378,31 +816,23 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
-    const config = loadConfig();
+    const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
+      range: p.range,
       mode: p.mode,
       utcOffset: p.utcOffset,
     });
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
-    const specificKey = typeof p.key === "string" ? p.key.trim() : null;
+    const specificKey = normalizeOptionalString(p.key) ?? null;
+    const groupingMode: UsageGroupingMode =
+      p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
     // Load session store for named sessions
     const { storePath, store } = loadCombinedSessionStoreForGateway(config);
     const now = Date.now();
-
-    // Merge discovered sessions with store entries
-    type MergedEntry = {
-      key: string;
-      sessionId: string;
-      sessionFile: string;
-      label?: string;
-      updatedAt: number;
-      storeEntry?: SessionEntry;
-      firstUserMessage?: string;
-    };
 
     const mergedEntries: MergedEntry[] = [];
 
@@ -425,13 +855,18 @@ export const usageHandlers: GatewayRequestHandlers = {
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
       // Resolve the session file path
-      let sessionFile: string;
+      let sessionFile: string | undefined;
       try {
         const pathOpts = resolveSessionFilePathOptions({
           storePath: storePath !== "(multiple)" ? storePath : undefined,
           agentId: agentIdFromKey,
         });
-        sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
+        sessionFile = resolveExistingUsageSessionFile({
+          sessionId,
+          sessionEntry: storeEntry,
+          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
+          agentId: agentIdFromKey,
+        });
       } catch {
         respond(
           false,
@@ -441,20 +876,26 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      try {
-        const stats = fs.statSync(sessionFile);
-        if (stats.isFile()) {
-          mergedEntries.push({
-            key: resolvedStoreKey,
-            sessionId,
-            sessionFile,
-            label: storeEntry?.label,
-            updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-            storeEntry,
-          });
+      if (sessionFile) {
+        try {
+          const stats = fs.statSync(sessionFile);
+          if (stats.isFile()) {
+            maybeMergeFamilyEntry({
+              mergedEntries,
+              groupingMode,
+              base: {
+                key: resolvedStoreKey,
+                sessionId,
+                sessionFile,
+                label: storeEntry?.label,
+                updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
+                storeEntry,
+              },
+            });
+          }
+        } catch {
+          // File doesn't exist - no results for this key
         }
-      } catch {
-        // File doesn't exist - no results for this key
       }
     } else {
       // Full discovery for list view
@@ -466,20 +907,35 @@ export const usageHandlers: GatewayRequestHandlers = {
 
       // Build a map of sessionId -> store entry for quick lookup
       const storeBySessionId = buildStoreBySessionId(store);
+      const storeFamilySessionIds = new Set<string>();
+      if (groupingMode === "family") {
+        for (const entry of Object.values(store)) {
+          for (const sessionId of entry?.usageFamilySessionIds ?? []) {
+            storeFamilySessionIds.add(sessionId);
+          }
+        }
+      }
 
       for (const discovered of discoveredSessions) {
         const storeMatch = storeBySessionId.get(discovered.sessionId);
         if (storeMatch) {
           // Named session from store
-          mergedEntries.push({
-            key: storeMatch.key,
-            sessionId: discovered.sessionId,
-            sessionFile: discovered.sessionFile,
-            label: storeMatch.entry.label,
-            updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
-            storeEntry: storeMatch.entry,
+          maybeMergeFamilyEntry({
+            mergedEntries,
+            groupingMode,
+            base: {
+              key: storeMatch.key,
+              sessionId: discovered.sessionId,
+              sessionFile: discovered.sessionFile,
+              label: storeMatch.entry.label,
+              updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
+              storeEntry: storeMatch.entry,
+            },
           });
         } else {
+          if (groupingMode === "family" && storeFamilySessionIds.has(discovered.sessionId)) {
+            continue;
+          }
           // Unnamed session - use session ID as key, no label
           mergedEntries.push({
             // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
@@ -488,6 +944,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             sessionFile: discovered.sessionFile,
             label: undefined, // No label for unnamed sessions
             updatedAt: discovered.mtime,
+            scope: "instance",
           });
         }
       }
@@ -550,6 +1007,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
     >();
     const modelDailyMap = new Map<string, SessionDailyModelUsage>();
+    let cacheStatus: UsageCacheStatus | undefined;
 
     const emptyTotals = (): CostUsageSummary["totals"] => ({
       input: 0,
@@ -583,15 +1041,41 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     for (const merged of limitedEntries) {
       const agentId = parseAgentSessionKey(merged.key)?.agentId;
-      const usage = await loadSessionCostSummary({
-        sessionId: merged.sessionId,
-        sessionEntry: merged.storeEntry,
-        sessionFile: merged.sessionFile,
-        config,
-        agentId,
-        startMs,
-        endMs,
-      });
+      let usage: SessionCostSummary | null = null;
+      const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
+      for (const includedSessionId of includedSessionIds) {
+        const isCurrentSession = includedSessionId === merged.sessionId;
+        const includedSessionFile = isCurrentSession
+          ? merged.sessionFile
+          : resolveExistingUsageSessionFile({
+              sessionId: includedSessionId,
+              agentId,
+            });
+        if (!includedSessionFile) {
+          continue;
+        }
+        const cachedUsage = await loadSessionCostSummaryFromCache({
+          sessionId: includedSessionId,
+          sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
+          sessionFile: includedSessionFile,
+          config,
+          agentId,
+          startMs,
+          endMs,
+          refreshMode: "sync-when-empty",
+        });
+        cacheStatus = mergeUsageCacheStatus(cacheStatus, cachedUsage.cacheStatus);
+        const includedUsage = cachedUsage.summary;
+        if (!includedUsage) {
+          continue;
+        }
+        if (!usage) {
+          usage = createEmptySessionCostSummary();
+          usage.sessionId = merged.sessionId;
+          usage.sessionFile = merged.sessionFile;
+        }
+        mergeSessionUsageInto(usage, includedUsage);
+      }
 
       if (usage) {
         aggregateTotals.input += usage.input;
@@ -729,6 +1213,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         key: merged.key,
         label: merged.label,
         sessionId: merged.sessionId,
+        scope: merged.scope ?? "instance",
+        sessionFamilyKey: merged.sessionFamilyKey,
+        currentSessionId: merged.currentSessionId,
+        includedSessionIds: merged.includedSessionIds,
+        historicalInstanceCount: merged.includedSessionIds?.length,
         updatedAt: merged.updatedAt,
         agentId,
         channel,
@@ -769,22 +1258,22 @@ export const usageHandlers: GatewayRequestHandlers = {
           .toSorted((a, b) => b.count - a.count),
       },
       byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byAgent: Array.from(byAgentMap.entries())
         .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+        .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
       ...tail,
     };
 
@@ -795,12 +1284,13 @@ export const usageHandlers: GatewayRequestHandlers = {
       sessions,
       totals: aggregateTotals,
       aggregates,
+      cacheStatus,
     };
 
     respond(true, result, undefined);
   },
-  "sessions.usage.timeseries": async ({ respond, params }) => {
-    const key = typeof params?.key === "string" ? params.key.trim() : null;
+  "sessions.usage.timeseries": async ({ respond, params, context }) => {
+    const key = normalizeOptionalString(params?.key) ?? null;
     if (!key) {
       respond(
         false,
@@ -810,7 +1300,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveSessionUsageFileOrRespond(key, respond);
+    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -836,8 +1326,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     respond(true, timeseries, undefined);
   },
-  "sessions.usage.logs": async ({ respond, params }) => {
-    const key = typeof params?.key === "string" ? params.key.trim() : null;
+  "sessions.usage.logs": async ({ respond, params, context }) => {
+    const key = normalizeOptionalString(params?.key) ?? null;
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key is required for logs"));
       return;
@@ -848,13 +1338,12 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(key, respond);
+    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
     const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
-    const { loadSessionLogs } = await import("../../infra/session-cost-usage.js");
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,

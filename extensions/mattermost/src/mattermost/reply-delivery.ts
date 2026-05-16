@@ -1,5 +1,11 @@
-import type { OpenClawConfig, PluginRuntime, ReplyPayload } from "openclaw/plugin-sdk/mattermost";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import {
+  deliverTextOrMediaReply,
+  isReasoningReplyPayload,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -7,12 +13,21 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
+    cfg: OpenClawConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
     replyToId?: string;
   },
 ) => Promise<unknown>;
+
+/**
+ * Result of `deliverMattermostReplyPayload`. Callers in `monitor.ts` use this
+ * to distinguish a successful visible send from an intentionally suppressed
+ * reasoning payload from a substantive payload that ended up sending nothing
+ * (the silent-completion symptom in #80501).
+ */
+export type MattermostReplyDeliveryOutcome = "reasoning_skipped" | "empty" | "text" | "media";
 
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
@@ -25,47 +40,42 @@ export async function deliverMattermostReplyPayload(params: {
   textLimit: number;
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
-}): Promise<void> {
-  const mediaUrls =
-    params.payload.mediaUrls ?? (params.payload.mediaUrl ? [params.payload.mediaUrl] : []);
-  const text = params.core.channel.text.convertMarkdownTables(
-    params.payload.text ?? "",
-    params.tableMode,
+}): Promise<MattermostReplyDeliveryOutcome> {
+  if (isReasoningReplyPayload(params.payload)) {
+    return "reasoning_skipped";
+  }
+  const reply = resolveSendableOutboundReplyParts(params.payload, {
+    text: params.core.channel.text.convertMarkdownTables(
+      params.payload.text ?? "",
+      params.tableMode,
+    ),
+  });
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const chunkMode = params.core.channel.text.resolveChunkMode(
+    params.cfg,
+    "mattermost",
+    params.accountId,
   );
-
-  if (mediaUrls.length === 0) {
-    const chunkMode = params.core.channel.text.resolveChunkMode(
-      params.cfg,
-      "mattermost",
-      params.accountId,
-    );
-    const chunks = params.core.channel.text.chunkMarkdownTextWithMode(
-      text,
-      params.textLimit,
-      chunkMode,
-    );
-    for (const chunk of chunks.length > 0 ? chunks : [text]) {
-      if (!chunk) {
-        continue;
-      }
+  return await deliverTextOrMediaReply({
+    payload: params.payload,
+    text: reply.text,
+    chunkText: (value) =>
+      params.core.channel.text.chunkMarkdownTextWithMode(value, params.textLimit, chunkMode),
+    sendText: async (chunk) => {
       await params.sendMessage(params.to, chunk, {
+        cfg: params.cfg,
         accountId: params.accountId,
         replyToId: params.replyToId,
       });
-    }
-    return;
-  }
-
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
-  let first = true;
-  for (const mediaUrl of mediaUrls) {
-    const caption = first ? text : "";
-    first = false;
-    await params.sendMessage(params.to, caption, {
-      accountId: params.accountId,
-      mediaUrl,
-      mediaLocalRoots,
-      replyToId: params.replyToId,
-    });
-  }
+    },
+    sendMedia: async ({ mediaUrl, caption }) => {
+      await params.sendMessage(params.to, caption ?? "", {
+        cfg: params.cfg,
+        accountId: params.accountId,
+        mediaUrl,
+        mediaLocalRoots,
+        replyToId: params.replyToId,
+      });
+    },
+  });
 }

@@ -1,5 +1,5 @@
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
-import type { AuthProfileCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential, OAuthCredentialRef } from "./types.js";
 
 export type AuthCredentialReasonCode =
   | "ok"
@@ -8,9 +8,17 @@ export type AuthCredentialReasonCode =
   | "expired"
   | "unresolved_ref";
 
-export type TokenExpiryState = "missing" | "valid" | "expired" | "invalid_expires";
+export const DEFAULT_OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
-export function resolveTokenExpiryState(expires: unknown, now = Date.now()): TokenExpiryState {
+export type TokenExpiryState = "missing" | "valid" | "expiring" | "expired" | "invalid_expires";
+
+export function resolveTokenExpiryState(
+  expires: unknown,
+  now = Date.now(),
+  opts?: {
+    expiringWithinMs?: number;
+  },
+): TokenExpiryState {
   if (expires === undefined) {
     return "missing";
   }
@@ -20,7 +28,37 @@ export function resolveTokenExpiryState(expires: unknown, now = Date.now()): Tok
   if (!Number.isFinite(expires) || expires <= 0) {
     return "invalid_expires";
   }
-  return now >= expires ? "expired" : "valid";
+  const remainingMs = expires - now;
+  if (remainingMs <= 0) {
+    return "expired";
+  }
+  const expiringWithinMs = Math.max(0, opts?.expiringWithinMs ?? 0);
+  if (expiringWithinMs > 0 && remainingMs <= expiringWithinMs) {
+    return "expiring";
+  }
+  return "valid";
+}
+
+export function hasUsableOAuthCredential(
+  credential: OAuthCredential | undefined,
+  opts?: {
+    now?: number;
+    refreshMarginMs?: number;
+  },
+): boolean {
+  if (!credential || credential.type !== "oauth") {
+    return false;
+  }
+  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
+    return false;
+  }
+  const now = opts?.now ?? Date.now();
+  const refreshMarginMs = Math.max(0, opts?.refreshMarginMs ?? DEFAULT_OAUTH_REFRESH_MARGIN_MS);
+  return (
+    resolveTokenExpiryState(credential.expires, now, {
+      expiringWithinMs: refreshMarginMs,
+    }) === "valid"
+  );
 }
 
 function hasConfiguredSecretRef(value: unknown): boolean {
@@ -29,6 +67,15 @@ function hasConfiguredSecretRef(value: unknown): boolean {
 
 function hasConfiguredSecretString(value: unknown): boolean {
   return normalizeSecretInputString(value) !== undefined;
+}
+
+function hasConfiguredOAuthRef(value: OAuthCredentialRef | undefined): boolean {
+  return (
+    value?.source === "openclaw-credentials" &&
+    value.provider === "openai-codex" &&
+    typeof value.id === "string" &&
+    /^[a-f0-9]{32}$/.test(value.id)
+  );
 }
 
 export function evaluateStoredCredentialEligibility(params: {
@@ -66,7 +113,8 @@ export function evaluateStoredCredentialEligibility(params: {
 
   if (
     normalizeSecretInputString(credential.access) === undefined &&
-    normalizeSecretInputString(credential.refresh) === undefined
+    normalizeSecretInputString(credential.refresh) === undefined &&
+    !hasConfiguredOAuthRef(credential.oauthRef)
   ) {
     return { eligible: false, reasonCode: "missing_credential" };
   }

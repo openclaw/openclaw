@@ -1,0 +1,78 @@
+{
+  "id": "qianfan",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["qianfan"],
+  "setup": {
+    "providers": [
+      {
+        "id": "qianfan",
+        "authMethods": ["api-key"],
+        "envVars": ["QIANFAN_API_KEY"]
+      }
+    ]
+  },
+  "modelCatalog": {
+    "providers": {
+      "qianfan": {
+        "baseUrl": "https://qianfan.baidubce.com/v2",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-v3.2",
+            "name": "DEEPSEEK V3.2",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 98304,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "ernie-5.0-thinking-preview",
+            "name": "ERNIE-5.0-Thinking-Preview",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 119000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "qianfan": "static"
+    }
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "qianfan",
+      "method": "api-key",
+      "choiceId": "qianfan-api-key",
+      "choiceLabel": "Qianfan API key",
+      "groupId": "qianfan",
+      "groupLabel": "Qianfan",
+      "groupHint": "API key",
+      "optionKey": "qianfanApiKey",
+      "cliFlag": "--qianfan-api-key",
+      "cliOption": "--qianfan-api-key <key>",
+      "cliDescription": "QIANFAN API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
