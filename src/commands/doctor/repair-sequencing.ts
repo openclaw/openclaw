@@ -4,6 +4,7 @@ import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
+import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
@@ -66,7 +67,6 @@ export async function runDoctorRepairSequence(params: {
   })) {
     applyMutation(mutation);
   }
-  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
   maybeRepairStaleManagedNpmBundledPlugins({
     config: state.candidate,
@@ -99,13 +99,20 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
   }
-  const missingConfiguredPluginInstallFailed =
-    missingConfiguredPluginInstallRepair.warnings.length > 0;
-  if (!isUpdatePackageSwapInProgress(env) && !missingConfiguredPluginInstallFailed) {
-    applyMutation(maybeRepairStalePluginConfig(state.candidate, env));
+  const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
+  const hasUnscopedInstallRepairWarnings =
+    missingConfiguredPluginInstallRepair.warnings.length > 0 && failedPluginIds.length === 0;
+  if (!isUpdatePackageSwapInProgress(env) && !hasUnscopedInstallRepairWarnings) {
+    applyMutation(
+      maybeRepairStalePluginConfig(state.candidate, env, {
+        preservePluginIds: failedPluginIds,
+      }),
+    );
   }
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
+  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
+  applyMutation(maybeRepairGroupAllowFromFallback(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,

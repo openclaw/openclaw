@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthStorePath } from "./paths.js";
-import { promoteAuthProfileInOrder } from "./profiles.js";
+import { promoteAuthProfileInOrder, upsertAuthProfileWithLock } from "./profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   findPersistedAuthProfileCredential,
@@ -138,6 +138,54 @@ function expectOpenClawCredentialsOAuthRef(
 }
 
 describe("promoteAuthProfileInOrder", () => {
+  it("normalizes copied secrets when using the locked upsert path", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profile-upsert-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      await upsertAuthProfileWithLock({
+        profileId: "openai:manual",
+        credential: {
+          type: "token",
+          provider: "openai",
+          token: "  bearer\r\n-token\u2502  ",
+        },
+        agentDir,
+      });
+      await upsertAuthProfileWithLock({
+        profileId: "anthropic:key",
+        credential: {
+          type: "api_key",
+          provider: "anthropic",
+          key: "  sk-\r\nant\u2502  ",
+        },
+        agentDir,
+      });
+
+      const profiles = loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles;
+      expect(profiles["openai:manual"]).toMatchObject({
+        type: "token",
+        provider: "openai",
+        token: "bearer-token",
+      });
+      expect(profiles["anthropic:key"]).toMatchObject({
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-ant",
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("omits inline openai-codex oauth secrets from persisted auth profile files", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profile-metadata-"));
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -610,10 +658,18 @@ describe("promoteAuthProfileInOrder", () => {
         { filterExternalAuthProfiles: false },
       );
 
+      const expectedKeyPath =
+        process.platform === "darwin"
+          ? path.join(
+              homeDir,
+              "Library",
+              "Application Support",
+              "OpenClaw",
+              "auth-profile-secret-key",
+            )
+          : path.join(homeDir, ".openclaw-auth-profile-secrets", "auth-profile-secret-key");
       const keyPaths = findFilesNamed(rootDir, "auth-profile-secret-key");
-      expect(keyPaths).toEqual([
-        path.join(homeDir, ".openclaw-auth-profile-secrets", "auth-profile-secret-key"),
-      ]);
+      expect(keyPaths).toEqual([expectedKeyPath]);
       expect(keyPaths.every((keyPath) => !isPathInsideOrEqual(stateDir, keyPath))).toBe(true);
       const keyValues = keyPaths.map((keyPath) => fs.readFileSync(keyPath, "utf8").trim());
       const persistedStateTree = readPersistedTree(stateDir);

@@ -736,6 +736,14 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
+  it("reads the initial update config without plugin schema validation", async () => {
+    await updateCommand({ yes: true, restart: false });
+
+    expect(vi.mocked(readConfigFileSnapshot).mock.calls[0]?.[0]).toEqual({
+      skipPluginValidation: true,
+    });
+  });
+
   it("bounds completion cache refresh during update follow-up", async () => {
     const root = createCaseDir("openclaw-completion-timeout");
     pathExists.mockResolvedValue(true);
@@ -1053,6 +1061,11 @@ describe("update-cli", () => {
       vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<[string[], unknown]>
     ).find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
     expect(installCall).toBeUndefined();
+    expect(
+      vi
+        .mocked(readConfigFileSnapshot)
+        .mock.calls.some(([options]) => options?.skipPluginValidation === true),
+    ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
@@ -1153,6 +1166,11 @@ describe("update-cli", () => {
       },
       baseHash: "stable-hash",
     });
+    expect(mutateConfigFileWithRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: { skipPluginValidation: true },
+      }),
+    );
     expect(syncPluginCall()?.channel).toBe("dev");
     expect(syncPluginCall()?.config?.update?.channel).toBe("dev");
   });
@@ -3829,6 +3847,11 @@ describe("update-cli", () => {
         });
         expect(syncPluginCall()?.channel).toBe("stable");
         expect(lastNpmPluginUpdateCall()?.timeoutMs).toBe(9_000);
+        expect(
+          vi
+            .mocked(readConfigFileSnapshot)
+            .mock.calls.some(([options]) => options?.skipPluginValidation === true),
+        ).toBe(true);
         const output = lastWriteJsonCall() as
           | {
               status?: string;

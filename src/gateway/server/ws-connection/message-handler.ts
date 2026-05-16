@@ -99,6 +99,9 @@ import {
 } from "../../protocol/index.js";
 import {
   gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -213,11 +216,16 @@ function resolvePinnedClientMetadata(params: {
   const platformMismatch =
     hasPinnedPlatform && claimedPlatform !== pairedPlatform && !isLegacyNodeHostPlatformPin;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
+  const pinnedPlatform =
+    claimedPlatform === pairedPlatform
+      ? params.pairedPlatform
+      : isLegacyNodeHostPlatformPin
+        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
+        : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,
-    pinnedPlatform:
-      hasPinnedPlatform && claimedPlatform === pairedPlatform ? params.pairedPlatform : undefined,
+    pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
 }
@@ -509,7 +517,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         };
 
         if (isStartupPending?.()) {
-          markHandshakeFailure("startup-sidecars-pending");
+          markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
           await sendFrame({
             type: "res",
             id: frame.id,
@@ -520,7 +528,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               details: gatewayStartupUnavailableDetails(),
             }),
           }).catch(() => {});
-          queueMicrotask(() => close(1013, "gateway starting"));
+          queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
           return;
         }
 
@@ -1717,3 +1725,7 @@ function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
     receiver._maxPayload = maxPayload;
   }
 }
+
+export const __testing = {
+  resolvePinnedClientMetadata,
+};

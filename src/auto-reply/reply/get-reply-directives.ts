@@ -171,6 +171,7 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  hasOneTurnModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
@@ -200,6 +201,7 @@ export async function resolveReplyDirectives(params: {
     primaryModel,
     provider: initialProvider,
     model: initialModel,
+    hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -535,6 +537,7 @@ export async function resolveReplyDirectives(params: {
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
+        hasOneTurnModelOverride,
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
       });

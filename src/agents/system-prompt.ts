@@ -484,6 +484,7 @@ function buildMessagingSection(params: {
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
   if (params.isMinimal) {
     return [];
@@ -493,7 +494,8 @@ function buildMessagingSection(params: {
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
-  const completionEventGuidance = messageToolOnly
+  const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
+  const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to a silent placeholder)."
     : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
@@ -525,7 +527,9 @@ function buildMessagingSection(params: {
             : "- Pass `channel` only when sending outside the current/default source channel.",
           messageToolOnly
             ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
-            : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+            : suppressSilentTokenGuidance
+              ? "- Do not use `message(action=send)` to deliver the current source-channel reply; reply normally so OpenClaw can route it once."
+              : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
               ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
@@ -1247,6 +1251,7 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      silentReplyPromptMode,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );

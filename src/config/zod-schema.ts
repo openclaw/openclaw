@@ -9,10 +9,7 @@ import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
 } from "./control-ui-css.js";
-import {
-  SilentReplyPolicyConfigSchema,
-  SilentReplyRewriteConfigSchema,
-} from "./zod-schema.agent-defaults.js";
+import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -1158,7 +1155,6 @@ export const OpenClawSchema = z
         z
           .object({
             silentReply: SilentReplyPolicyConfigSchema.optional(),
-            silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
           })
           .strict(),
       )

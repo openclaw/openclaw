@@ -1,3 +1,4 @@
+import type { InboundTurnKind } from "../channels/turn/kind.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -40,6 +41,7 @@ type UntrustedStructuredContextEntry = {
 
 export type MsgContext = {
   Body?: string;
+  InboundTurnKind?: InboundTurnKind;
   /**
    * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
    * Should use real newlines (`\n`), not escaped `\\n`.
