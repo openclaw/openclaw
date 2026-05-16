@@ -23,8 +23,6 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
-const NODE_LIST_WAIT_MS = 2_000;
-const NODE_LIST_POLL_MS = 25;
 
 function createDeviceIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
@@ -66,40 +64,29 @@ function requireRecord(
   return value;
 }
 
-async function getConnectedNodeId(
-  ws: WebSocket,
-  command = "system.run",
-  opts?: { requireCommand?: boolean },
-): Promise<string> {
-  const requireCommand = opts?.requireCommand ?? true;
-  const deadline = Date.now() + NODE_LIST_WAIT_MS;
-  let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
-  while (Date.now() <= deadline) {
-    const nodes = await rpcReq<{
-      nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-    }>(ws, "node.list", {});
-    expect(nodes.ok).toBe(true);
-    lastNodes = nodes.payload?.nodes ?? [];
-    const matchingNode = lastNodes.find(
-      (n) => n.connected && (!requireCommand || n.commands?.includes(command)),
-    );
-    if (matchingNode?.nodeId) {
-      return matchingNode.nodeId;
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, NODE_LIST_POLL_MS));
-  }
-  const label = requireCommand ? `connected ${command} node id` : "connected node id";
-  throw new Error(`expected ${label}; last nodes: ${JSON.stringify(lastNodes)}`);
+async function getConnectedNodeId(ws: WebSocket): Promise<string> {
+  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
+    ws,
+    "node.list",
+    {},
+  );
+  expect(nodes.ok).toBe(true);
+  return requireNonEmptyString(
+    nodes.payload?.nodes?.find((n) => n.connected)?.nodeId,
+    "connected node id",
+  );
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
-  const nodes = await rpcReq<{
-    nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-  }>(ws, "node.list", {});
+  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
+    ws,
+    "node.list",
+    {},
+  );
   expect(nodes.ok).toBe(true);
   const nodeIds: string[] = [];
   for (const node of nodes.payload?.nodes ?? []) {
-    if (node.connected && node.commands?.includes("system.run")) {
+    if (node.connected) {
       nodeIds.push(node.nodeId);
     }
   }
@@ -476,7 +463,7 @@ describe("node.invoke approval bypass", () => {
       }
     } finally {
       ws.close();
-      await node.stopAndWait();
+      node.stop();
     }
   });
 
@@ -491,7 +478,7 @@ describe("node.invoke approval bypass", () => {
     );
     const ws = await connectOperator(["operator.write"]);
     try {
-      const nodeId = await getConnectedNodeId(ws, "browser.proxy", { requireCommand: false });
+      const nodeId = await getConnectedNodeId(ws);
       const res = await rpcReq(ws, "node.invoke", {
         nodeId,
         command: "browser.proxy",
@@ -509,7 +496,7 @@ describe("node.invoke approval bypass", () => {
       await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();
-      await node.stopAndWait();
+      node.stop();
     }
   });
 
@@ -587,7 +574,7 @@ describe("node.invoke approval bypass", () => {
       wsApprover.close();
       wsCaller.close();
       wsOtherDevice.close();
-      await node.stopAndWait();
+      node.stop();
     }
   });
 
@@ -687,7 +674,7 @@ describe("node.invoke approval bypass", () => {
     } finally {
       wsRequest.close();
       wsReplay.close();
-      await node.stopAndWait();
+      node.stop();
     }
   });
 
@@ -746,7 +733,8 @@ describe("node.invoke approval bypass", () => {
     } finally {
       wsApprover.close();
       wsCaller.close();
-      await Promise.all([nodeA.stopAndWait(), nodeB.stopAndWait()]);
+      nodeA.stop();
+      nodeB.stop();
     }
   });
 });
