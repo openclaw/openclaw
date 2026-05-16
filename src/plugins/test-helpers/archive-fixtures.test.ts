@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listFlatRootArchiveEntries } from "./archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./fs-fixtures.js";
 
@@ -19,13 +20,9 @@ describe("archive fixture helpers", () => {
       fs.mkdirSync(path.join(pkgDir, "dist"));
       fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {}\n");
 
-      const readDir = vi.spyOn(fs, "readdirSync");
-      try {
+      expectNoReaddirSyncDuring(() => {
         expect(listFlatRootArchiveEntries(pkgDir)).toEqual(["dist", "package.json"]);
-        expect(readDir).not.toHaveBeenCalled();
-      } finally {
-        readDir.mockRestore();
-      }
+      });
     },
   );
 });

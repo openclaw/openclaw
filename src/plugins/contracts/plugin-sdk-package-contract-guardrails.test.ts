@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -13,6 +13,7 @@ import {
   reservedBundledPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../../plugin-sdk/entrypoints.js";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
@@ -452,10 +453,9 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
 }
 
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
-  const source = fs.readFileSync(
-    resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"),
-    "utf8",
-  ).trim();
+  const source = fs
+    .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
+    .trim();
   return source === 'export * from "../../../src/plugin-sdk/testing.js";'
     ? []
     : ["packages/plugin-sdk/src/testing.ts"];
@@ -665,8 +665,7 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 
 describe("plugin-sdk package contract guardrails", () => {
   it("lists package guardrail scan inputs from git without walking roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const pluginIds = collectBundledPluginIds();
       const extensionFiles = collectExtensionFiles(resolve(REPO_ROOT, "extensions"));
       const workspaceFiles = collectWorkspaceCodeFiles();
@@ -674,10 +673,7 @@ describe("plugin-sdk package contract guardrails", () => {
       expect(pluginIds.length).toBeGreaterThan(0);
       expect(extensionFiles.length).toBeGreaterThan(0);
       expect(workspaceFiles.length).toBeGreaterThan(extensionFiles.length);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps plugin-sdk entrypoint metadata unique", () => {

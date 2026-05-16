@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { normalizeBundledPluginStringList } from "./bundled-plugin-scan.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
@@ -69,16 +70,12 @@ function readManifestRecords(): PluginManifest[] {
 describe("bundled capability metadata", () => {
   it("lists bundled extension packages from git without scanning extension dirs", () => {
     const extensionsDir = path.join(repoRoot, "extensions");
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const packagePaths = listExtensionPackagePaths(extensionsDir);
 
       expect(packagePaths.length).toBeGreaterThan(0);
       expect(packagePaths.every((file) => file.endsWith("package.json"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps contract snapshots aligned with bundled plugin manifests", () => {

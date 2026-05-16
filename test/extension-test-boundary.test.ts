@@ -2,8 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
+import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
@@ -197,8 +198,7 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 
 describe("non-extension test boundaries", () => {
   it("lists boundary scan files from git without walking repo roots", () => {
-    const readdirSync = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const srcTests = walk(path.join(repoRoot, "src"));
       const srcCode = walkCode(path.join(repoRoot, "src"));
       const pluginIds = collectBundledPluginIds();
@@ -206,10 +206,7 @@ describe("non-extension test boundaries", () => {
       expect(srcTests.length).toBeGreaterThan(0);
       expect(srcCode.length).toBeGreaterThan(0);
       expect(pluginIds.size).toBeGreaterThan(0);
-      expect(readdirSync).not.toHaveBeenCalled();
-    } finally {
-      readdirSync.mockRestore();
-    }
+    });
   });
 
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {

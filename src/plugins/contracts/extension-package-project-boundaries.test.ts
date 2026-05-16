@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { relative, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   collectExtensionsWithTsconfig,
   collectOptInExtensionPackageBoundaries,
@@ -13,6 +13,7 @@ import {
   readExtensionPackageBoundaryPackageJson,
   readExtensionPackageBoundaryTsconfig,
 } from "../../../scripts/lib/extension-package-boundary.ts";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
@@ -136,17 +137,13 @@ function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] 
 
 describe("opt-in extension package boundaries", () => {
   it("lists package boundary code files from git without walking package roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const memoryHostFiles = collectCodeFiles("packages/memory-host-sdk/src");
       const packageContractFiles = collectCodeFiles("packages/plugin-package-contract/src");
 
       expect(memoryHostFiles.length).toBeGreaterThan(0);
       expect(packageContractFiles.length).toBeGreaterThan(0);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps path aliases in a dedicated shared config", () => {

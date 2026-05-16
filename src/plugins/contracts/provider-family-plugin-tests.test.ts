@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 
 type SharedFamilyHookKind = "replay" | "stream" | "tool-compat";
@@ -217,16 +218,12 @@ function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContr
 describe("provider family plugin-boundary inventory", () => {
   it("lists bundled plugin files from git without walking plugin roots", () => {
     const bundledRoots = listBundledPluginRoots();
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = bundledRoots.flatMap((plugin) => listFiles(plugin.rootDir));
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => toRepoRelative(file).startsWith("extensions/"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps shared-family provider hooks covered by at least one plugin-boundary test", () => {

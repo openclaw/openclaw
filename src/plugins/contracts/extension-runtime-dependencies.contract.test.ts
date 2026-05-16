@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const EXTENSION_ROOT = "extensions";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -276,17 +277,13 @@ describe("Discord dependency ownership", () => {
 
 describe("extension runtime dependency manifests", () => {
   it("lists extension dependency inputs from git without walking extension dirs", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const manifests = listPackageManifests(EXTENSION_ROOT);
       const runtimeFiles = listRuntimeFiles("extensions/discord");
 
       expect(manifests.length).toBeGreaterThan(0);
       expect(runtimeFiles.length).toBeGreaterThan(0);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {

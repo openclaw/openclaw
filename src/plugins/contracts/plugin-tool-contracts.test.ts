@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 type PluginManifestFile = {
   id?: unknown;
@@ -275,8 +276,7 @@ function normalizeManifestTools(value: unknown): string[] {
 describe("bundled plugin tool manifest contracts", () => {
   it("lists plugin tool contract inputs from git without walking extension roots", () => {
     const extensionsDir = path.join(process.cwd(), "extensions");
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const manifestPaths = listPluginManifestPaths(extensionsDir);
       const sourceFiles = manifestPaths.flatMap((manifestPath) =>
         walkFiles(path.dirname(manifestPath)).filter(isProductionSource),
@@ -284,10 +284,7 @@ describe("bundled plugin tool manifest contracts", () => {
 
       expect(manifestPaths.length).toBeGreaterThan(0);
       expect(sourceFiles.length).toBeGreaterThan(0);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("declares every production registerTool owner in contracts.tools", () => {

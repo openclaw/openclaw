@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
@@ -140,16 +141,12 @@ function collectViolations(files: string[]): string[] {
 
 describe("legacy config write ownership", () => {
   it("lists ownership scan files without scanning source directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = collectSourceFiles(SRC_ROOT);
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every(isOwnedSourceFile)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps legacy config repair flags and migration modules under doctor", () => {

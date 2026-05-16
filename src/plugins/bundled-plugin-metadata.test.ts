@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -132,11 +133,10 @@ function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
 
 function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
-  return listRepoBundledPluginManifestDirs()
-    .flatMap((dirName) => {
-      const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
-      return result.ok ? [{ dirName, manifest: result.manifest }] : [];
-    });
+  return listRepoBundledPluginManifestDirs().flatMap((dirName) => {
+    const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
+    return result.ok ? [{ dirName, manifest: result.manifest }] : [];
+  });
 }
 
 function listRepoBundledPluginManifestDirs(): string[] {
@@ -335,16 +335,12 @@ function createInstalledPluginIndexForManifests(
 
 describe("bundled plugin metadata", () => {
   it("lists bundled plugin manifests without scanning extension directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const manifests = listRepoBundledPluginManifestsUncached();
 
       expect(manifests.length).toBeGreaterThan(0);
       expect(manifests.every((entry) => entry.dirName.length > 0)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it(
