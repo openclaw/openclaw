@@ -97,7 +97,7 @@ function hasToolCallId(value: Record<string, unknown>): boolean {
 }
 
 function isToolCallPayload(value: unknown): boolean {
-  return isRecord(value) || typeof value === "string";
+  return value === null || isRecord(value) || typeof value === "string";
 }
 
 function isToolCallContent(value: unknown): boolean {

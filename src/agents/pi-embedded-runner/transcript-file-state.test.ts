@@ -222,6 +222,7 @@ describe("readTranscriptFileState", () => {
                 name: "search",
                 arguments: '{"query":"docs"}',
               },
+              { type: "toolCall", id: "call-null-args", name: "noop", arguments: null },
             ],
           },
         }),
