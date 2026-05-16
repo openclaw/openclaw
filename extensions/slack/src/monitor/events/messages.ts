@@ -109,7 +109,7 @@ function resolveAssistantMessageChangedInbound(params: {
   if (!senderId) {
     if (shouldLogVerbose()) {
       logVerbose(
-        `slack: assistant_app_thread message_changed in DM channel=${changed.channel} dropped — no sender resolved from metadata`,
+        `slack: assistant_app_thread message_changed in DM channel=${changed.channel} dropped: no sender resolved from metadata`,
       );
     }
     return undefined;

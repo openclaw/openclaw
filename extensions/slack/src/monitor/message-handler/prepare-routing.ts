@@ -203,8 +203,8 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  // DM threads are a UI affordance, not a session boundary.  Route all DM
-  // messages — including thread replies — to the user's main DM session so
+  // DM threads are a UI affordance, not a session boundary. Route all DM
+  // messages, including thread replies, to the user's main DM session so
   // the agent sees them as part of the existing conversation.
   const canonicalThreadId = isDirectMessage
     ? undefined
