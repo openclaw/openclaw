@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
 
 const readCodexAppServerBindingMock = vi.fn();
@@ -115,6 +116,55 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return call;
 }
 
+function extractRelayIdFromThreadConfig(config: unknown): string {
+  const record = config as Record<string, unknown> | undefined;
+  let command: string | undefined;
+  for (const key of [
+    "hooks.PreToolUse",
+    "hooks.PostToolUse",
+    "hooks.PermissionRequest",
+    "hooks.Stop",
+  ]) {
+    const entries = record?.[key];
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    for (const entry of entries as Array<{ hooks?: Array<{ command?: string }> }>) {
+      command = entry.hooks?.find((hook) => typeof hook.command === "string")?.command;
+      if (command) {
+        break;
+      }
+    }
+    if (command) {
+      break;
+    }
+  }
+  const match = command?.match(/--relay-id ([^ ]+)/);
+  if (!match?.[1]) {
+    throw new Error(`relay id missing from command: ${command}`);
+  }
+  return match[1];
+}
+
+function codexHookCommand(config: unknown, key: string) {
+  const entries = (config as Record<string, unknown> | undefined)?.[key];
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  return (
+    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+  )
+    .at(0)
+    ?.hooks?.at(0);
+}
+
+function codexHookStateForEvent(
+  hookState: Record<string, { enabled?: unknown; trusted_hash?: unknown }> | undefined,
+  event: string,
+) {
+  return Object.entries(hookState ?? {}).find(([key]) => key.endsWith(`:${event}:0:0`))?.[1];
+}
+
 function threadResult(threadId: string) {
   return {
     thread: {
@@ -213,6 +263,7 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
 
 describe("runCodexAppServerSideQuestion", () => {
   beforeEach(() => {
+    nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
     getSharedCodexAppServerClientMock.mockReset();
@@ -251,6 +302,10 @@ describe("runCodexAppServerSideQuestion", () => {
       chatgptAccountId: "account-1",
       chatgptPlanType: "plus",
     });
+  });
+
+  afterEach(() => {
+    nativeHookRelayTesting.clearNativeHookRelaysForTests();
   });
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
@@ -350,6 +405,238 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("modelProvider", "openai");
     expect(toolOptions).toHaveProperty("modelId", "gpt-5.5");
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("installs native hook relay config for opted-in side threads", async () => {
+    const client = createFakeClient();
+    let relayIdDuringFork: string | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const config = (requestParams as { config?: Record<string, unknown> }).config;
+        relayIdDuringFork = extractRelayIdFromThreadConfig(config);
+        expect(
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork),
+        ).toMatchObject({
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          runId: "run-side-1",
+          allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+        });
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          opts: { runId: "run-side-1" },
+        }),
+        { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config?.["features.hooks"]).toBe(true);
+    expect(config?.["features.code_mode"]).toBe(true);
+    expect(config?.["features.code_mode_only"]).toBe(true);
+    expect(config).not.toHaveProperty("hooks.PermissionRequest");
+    const preToolUseHooks = config?.["hooks.PreToolUse"] as
+      | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+      | undefined;
+    const preToolUseCommand = preToolUseHooks?.[0]?.hooks?.[0];
+    expect(preToolUseCommand?.type).toBe("command");
+    expect(preToolUseCommand?.timeout).toBe(9);
+    expect(preToolUseCommand?.command).toContain("--event pre_tool_use");
+    const hookState = config?.["hooks.state"] as
+      | Record<string, { enabled?: unknown; trusted_hash?: unknown }>
+      | undefined;
+    const preToolUseState = codexHookStateForEvent(hookState, "pre_tool_use");
+    expect(preToolUseState?.enabled).toBe(true);
+    expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(relayIdDuringFork).toBeDefined();
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
+    ).toBeUndefined();
+  });
+
+  it("unregisters the native hook relay when side thread fork fails", async () => {
+    const client = createFakeClient();
+    let relayIdDuringFork: string | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        relayIdDuringFork = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        expect(
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork),
+        ).toBeDefined();
+        throw new Error("fork failed");
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: true } }),
+    ).rejects.toThrow("fork failed");
+
+    expect(relayIdDuringFork).toBeDefined();
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
+    ).toBeUndefined();
+  });
+
+  it("includes permission request native hooks for side threads with yolo approval policy", async () => {
+    readCodexAppServerBindingMock.mockResolvedValue({
+      schemaVersion: 1,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/tmp/workspace",
+      authProfileId: "openai-codex:work",
+      model: "gpt-5.5",
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: true } }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(forkParams?.approvalPolicy).toBe("never");
+    expect(codexHookCommand(config, "hooks.PermissionRequest")?.command).toContain(
+      "--event permission_request",
+    );
+    expect(codexHookCommand(config, "hooks.PreToolUse")?.command).toContain("--event pre_tool_use");
+  });
+
+  it("preserves explicitly configured side-thread native hook events", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        nativeHookRelay: { enabled: true, events: ["permission_request"] },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(codexHookCommand(config, "hooks.PermissionRequest")?.command).toContain(
+      "--event permission_request",
+    );
+    expect(config).not.toHaveProperty("hooks.PreToolUse");
+    expect(config).not.toHaveProperty("hooks.PostToolUse");
+    expect(config).not.toHaveProperty("hooks.Stop");
+  });
+
+  it("sends clearing native hook config when side-thread relay is disabled", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: false } }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config).toMatchObject({
+      "features.hooks": false,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
+    });
+    expect(config).not.toHaveProperty("hooks.state");
+  });
+
+  it("keeps native hook relays alive across side-thread startup and completion timeouts", async () => {
+    const client = createFakeClient();
+    const requestTimeoutMs = 400_000;
+    const completionTimeoutMs = 700_000;
+    const expectedRelayTtlMs = requestTimeoutMs * 3 + completionTimeoutMs + 5 * 60_000;
+    let relayIdDuringFork: string | undefined;
+    let startedAtMs = 0;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        relayIdDuringFork = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        const registration =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork);
+        if (!registration) {
+          throw new Error("Expected native hook relay registration");
+        }
+        expect(registration.expiresAtMs - startedAtMs).toBeGreaterThanOrEqual(expectedRelayTtlMs);
+        expect(registration.expiresAtMs - startedAtMs).toBeLessThan(expectedRelayTtlMs + 10_000);
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    startedAtMs = Date.now();
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: {
+          appServer: {
+            requestTimeoutMs,
+            turnCompletionIdleTimeoutMs: completionTimeoutMs,
+          },
+        },
+        nativeHookRelay: { enabled: true },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(relayIdDuringFork).toBeDefined();
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+      relayIdDuringFork!,
+    );
+    expect(registration).toBeUndefined();
+    const forkCall = mockCall(client.request);
+    const forkOptions = forkCall[2] as { timeoutMs?: number } | undefined;
+    expect(forkOptions?.timeoutMs).toBe(requestTimeoutMs);
+    const config = (forkCall[1] as { config?: Record<string, unknown> }).config;
+    const relayId = extractRelayIdFromThreadConfig(config);
+    expect(relayId).toBe(relayIdDuringFork);
   });
 
   it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
