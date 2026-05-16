@@ -1,4 +1,5 @@
 import { listHealthChecks } from "./health-check-registry.js";
+import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
@@ -49,7 +50,7 @@ export async function runDoctorLintChecks(
       findings.push({
         checkId: check.id,
         severity: "error",
-        message: `health check threw: ${scrubErrorMessage(err)}`,
+        message: `health check threw: ${scrubDoctorErrorMessage(err)}`,
       });
     }
   }
@@ -74,22 +75,6 @@ function compareFindings(a: HealthFinding, b: HealthFinding): number {
     return idDelta;
   }
   return (a.path ?? "").localeCompare(b.path ?? "");
-}
-
-const ERR_MESSAGE_MAX_LEN = 256;
-
-function scrubErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  const stripped = [...raw]
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return code > 0x1f && code !== 0x7f;
-    })
-    .join("");
-  if (stripped.length <= ERR_MESSAGE_MAX_LEN) {
-    return stripped;
-  }
-  return `${stripped.slice(0, ERR_MESSAGE_MAX_LEN - 3)}...`;
 }
 
 export function exitCodeFromFindings(

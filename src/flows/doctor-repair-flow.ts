@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding, HealthRepairContext } from "./health-checks.js";
 
@@ -36,7 +37,7 @@ export async function runDoctorHealthRepairs(
     try {
       checkFindings = await check.detect(detectCtx);
     } catch (err) {
-      warnings.push(`${check.id} detect failed: ${scrubErrorMessage(err)}`);
+      warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
       continue;
     }
     findings.push(...checkFindings);
@@ -68,10 +69,10 @@ export async function runDoctorHealthRepairs(
           warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
         }
       } catch (err) {
-        warnings.push(`${check.id} validation failed: ${scrubErrorMessage(err)}`);
+        warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
       }
     } catch (err) {
-      warnings.push(`${check.id} repair failed: ${scrubErrorMessage(err)}`);
+      warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
     }
   }
 
@@ -97,20 +98,4 @@ function createValidationScope(findings: readonly HealthFinding[]) {
 
 function uniqueDefined(values: readonly (string | undefined)[]): readonly string[] {
   return [...new Set(values.filter((value): value is string => value !== undefined))];
-}
-
-const ERR_MESSAGE_MAX_LEN = 256;
-
-function scrubErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  const stripped = [...raw]
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return code > 0x1f && code !== 0x7f;
-    })
-    .join("");
-  if (stripped.length <= ERR_MESSAGE_MAX_LEN) {
-    return stripped;
-  }
-  return `${stripped.slice(0, ERR_MESSAGE_MAX_LEN - 3)}...`;
 }
