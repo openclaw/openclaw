@@ -1944,6 +1944,16 @@ export async function loadSessionUsageTimeSeries(params: {
   return { sessionId: params.sessionId, points: sortedPoints };
 }
 
+function normalizeSessionResultLimit(limit: number | undefined, fallback: number): number {
+  if (limit === undefined) {
+    return fallback;
+  }
+  if (!Number.isFinite(limit)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(limit));
+}
+
 export async function loadSessionLogs(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -1958,7 +1968,10 @@ export async function loadSessionLogs(params: {
   }
 
   const logs: SessionLogEntry[] = [];
-  const limit = params.limit ?? 50;
+  const limit = normalizeSessionResultLimit(params.limit, 50);
+  if (limit === 0) {
+    return [];
+  }
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
     try {

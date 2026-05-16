@@ -1692,6 +1692,39 @@ example
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it("returns no session usage logs for zero or invalid limits", async () => {
+    const root = await makeSessionCostRoot("logs-zero-limit");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-zero-limit.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "user", content: "first" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:48:00.000Z",
+          message: { role: "user", content: "second" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await expect(loadSessionLogs({ sessionFile, limit: 0 })).resolves.toEqual([]);
+      await expect(loadSessionLogs({ sessionFile, limit: -1 })).resolves.toEqual([]);
+      await expect(loadSessionLogs({ sessionFile, limit: Number.NaN })).resolves.toEqual([]);
+      await expect(loadSessionLogs({ sessionFile, limit: 1 })).resolves.toMatchObject([
+        { content: "second" },
+      ]);
+    });
+  });
+
   it("buckets hourly message counts into UTC quarter-hour slots", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-quarter-"));
     const sessionFile = path.join(root, "session.jsonl");
