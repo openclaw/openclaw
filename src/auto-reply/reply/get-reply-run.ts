@@ -4,6 +4,7 @@ import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/se
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -348,6 +349,8 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  hasAppliedImageModelOverride?: boolean;
+  imageModelFallbacksOverride?: string[];
 };
 
 export async function runPreparedReply(
@@ -378,6 +381,7 @@ export async function runPreparedReply(
     perMessageQueueOptions,
     typing,
     opts,
+    defaultProvider,
     defaultModel,
     timeoutMs,
     isNewSession,
@@ -388,6 +392,8 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    hasAppliedImageModelOverride,
+    imageModelFallbacksOverride,
   } = params;
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
     cfg,
@@ -873,21 +879,53 @@ export async function runPreparedReply(
           harnessRuntime: agentHarnessPolicy.runtime,
         })
       : [provider];
-  let authProfileId = useFastReplyRuntime
-    ? preparedSessionState.sessionEntry?.authProfileOverride
-    : await traceRunPhase("reply.resolve_auth_profile", () =>
-        resolveSessionAuthProfileOverride({
-          cfg,
-          provider,
-          acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
-          agentDir,
-          sessionEntry: preparedSessionState.sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          isNewSession,
-        }),
-      );
+  const shouldResolveEphemeralAuthProfileForImageOverride = (): boolean =>
+    hasAppliedImageModelOverride === true &&
+    normalizeProviderId(provider) !== normalizeProviderId(defaultProvider);
+  const resolveRuntimeAuthProfile = async (): Promise<{
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+  }> => {
+    if (useFastReplyRuntime) {
+      return {
+        authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
+        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+      };
+    }
+    const shouldUseEphemeralSession = shouldResolveEphemeralAuthProfileForImageOverride();
+    const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
+    const authSessionEntry =
+      shouldUseEphemeralSession && preparedSessionState.sessionEntry
+        ? { ...preparedSessionState.sessionEntry }
+        : preparedSessionState.sessionEntry;
+    const authSessionStore =
+      shouldUseEphemeralSession && authSessionEntry
+        ? { [authSessionKey]: authSessionEntry }
+        : sessionStore;
+    const resolvedAuthProfileId = await resolveSessionAuthProfileOverride({
+      cfg,
+      provider,
+      acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+      agentDir,
+      sessionEntry: authSessionEntry,
+      sessionStore: authSessionStore,
+      sessionKey: authSessionKey,
+      storePath: shouldUseEphemeralSession ? undefined : storePath,
+      isNewSession,
+    });
+    return {
+      authProfileId: resolvedAuthProfileId,
+      authProfileIdSource:
+        resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
+          ? authSessionEntry.authProfileOverrideSource
+          : undefined,
+    };
+  };
+  let authProfileId: string | undefined;
+  let authProfileIdSource: "auto" | "user" | undefined;
+  ({ authProfileId, authProfileIdSource } = await traceRunPhase("reply.resolve_auth_profile", () =>
+    resolveRuntimeAuthProfile(),
+  ));
   const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
     loadAgentRunnerRuntime(),
   );
@@ -936,19 +974,7 @@ export async function runPreparedReply(
         piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        authProfileId = useFastReplyRuntime
-          ? preparedSessionState.sessionEntry?.authProfileOverride
-          : await resolveSessionAuthProfileOverride({
-              cfg,
-              provider,
-              acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
-              agentDir,
-              sessionEntry: preparedSessionState.sessionEntry,
-              sessionStore,
-              sessionKey,
-              storePath,
-              isNewSession,
-            });
+        ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
         ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
           await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
@@ -961,7 +987,6 @@ export async function runPreparedReply(
     }
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
-  const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const runHasSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
     normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
@@ -1027,6 +1052,7 @@ export async function runPreparedReply(
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
+      imageModelFallbacksOverride,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,

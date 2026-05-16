@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/WebChat: route image attachments through a configured vision-capable `imageModel` plan before inlining images, and carry that image-model fallback chain through runtime retries. (#82524) Thanks @frankekn.
 - Codex app-server: limit canonical OpenAI Codex app-server attribution rewrites to local transcript and trajectory records, leaving runtime/tool routing on the selected OpenAI model metadata so OpenAI API-key backup profiles keep their billing path.
 - Android/chat: make bare and markdown URLs in chat messages tappable by preserving Compose URL annotations in rendered markdown. Fixes #82187. (#82392) Thanks @neeravmakwana.
 - Codex app-server: release raw assistant completions when `turn/completed` is missing while keeping commentary/status items as progress, preventing completed Codex runs from hanging until timeout. Fixes #82343. (#82403) Thanks @IWhatsskill.

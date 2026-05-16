@@ -88,6 +88,7 @@ export type FollowupRun = {
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
+    imageModelFallbacksOverride?: string[];
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
