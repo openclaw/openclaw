@@ -685,6 +685,22 @@ describe("voice-call plugin", () => {
     }
   });
 
+  it("CLI latency rejects non-numeric --last instead of running with NaN (#82653)", async () => {
+    const program = new Command();
+    const tmpFile = path.join(os.tmpdir(), `voicecall-nan-${Date.now()}.jsonl`);
+    fs.writeFileSync(tmpFile, JSON.stringify({ metadata: {} }) + "\n", "utf8");
+    try {
+      await registerVoiceCallCli(program);
+      await expect(
+        program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "nope"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Invalid value for --last/);
+    } finally {
+      fs.unlinkSync(tmpFile);
+    }
+  });
+
   it("CLI start prints JSON", async () => {
     const program = new Command();
     const stdout = captureStdout();

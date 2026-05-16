@@ -23,6 +23,33 @@ type Logger = {
   error: (message: string) => void;
 };
 
+/**
+ * Parse a finite non-negative integer CLI flag. Returns the clamped integer
+ * on success, or throws with a clear error message naming the offending flag
+ * and value. Replaces ad-hoc `Math.max(min, Number(value))` patterns that
+ * silently propagate `NaN` into timers / URLs / slices. See #82653.
+ */
+function parseFiniteIntCliOption(params: {
+  flag: string;
+  rawValue: string | undefined;
+  defaultValue: number;
+  min: number;
+}): number {
+  const raw = params.rawValue ?? String(params.defaultValue);
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(
+      `Invalid value for ${params.flag}: ${JSON.stringify(raw)} is not a finite number.`,
+    );
+  }
+  const integral = Math.trunc(parsed);
+  if (integral < params.min) {
+    return params.min;
+  }
+  return integral;
+}
+
 type SetupCheck = {
   id: string;
   ok: boolean;
@@ -708,8 +735,18 @@ export function registerVoiceCallCli(params: {
     .option("--poll <ms>", "Poll interval in ms", "250")
     .action(async (options: { file: string; since?: string; poll?: string }) => {
       const file = options.file;
-      const since = Math.max(0, Number(options.since ?? 0));
-      const pollMs = Math.max(50, Number(options.poll ?? 250));
+      const since = parseFiniteIntCliOption({
+        flag: "--since",
+        rawValue: options.since,
+        defaultValue: 25,
+        min: 0,
+      });
+      const pollMs = parseFiniteIntCliOption({
+        flag: "--poll",
+        rawValue: options.poll,
+        defaultValue: 250,
+        min: 50,
+      });
 
       if (!fs.existsSync(file)) {
         logger.error(`No log file at ${file}`);
@@ -758,7 +795,12 @@ export function registerVoiceCallCli(params: {
     .option("--last <n>", "Analyze last N records", "200")
     .action(async (options: { file: string; last?: string }) => {
       const file = options.file;
-      const last = Math.max(1, Number(options.last ?? 200));
+      const last = parseFiniteIntCliOption({
+        flag: "--last",
+        rawValue: options.last,
+        defaultValue: 200,
+        min: 1,
+      });
 
       if (!fs.existsSync(file)) {
         throw new Error("No log file at " + file);
@@ -805,7 +847,12 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = Number(options.port ?? config.serve.port ?? 3334);
+        const servePort = parseFiniteIntCliOption({
+          flag: "--port",
+          rawValue: options.port ?? String(config.serve.port ?? 3334),
+          defaultValue: 3334,
+          min: 1,
+        });
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
