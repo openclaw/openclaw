@@ -32,7 +32,6 @@ import {
 } from "./plugin-registry.js";
 
 type PluginMetadataSnapshotMemo = {
-  key: string;
   registryState?: PersistedRegistryMemoState;
   snapshot: PluginMetadataSnapshot;
 };
@@ -45,10 +44,15 @@ type PersistedRegistryMemoState = {
   watchedFiles: readonly string[];
 };
 
-let pluginMetadataSnapshotMemo: PluginMetadataSnapshotMemo | undefined;
+const PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES = 8;
+const pluginMetadataSnapshotMemo = new Map<string, PluginMetadataSnapshotMemo>();
+let pluginMetadataSnapshotRegistryStateMemo:
+  | Pick<PluginMetadataSnapshotMemo, "registryState">
+  | undefined;
 
 export function clearLoadPluginMetadataSnapshotMemo(): void {
-  pluginMetadataSnapshotMemo = undefined;
+  pluginMetadataSnapshotMemo.clear();
+  pluginMetadataSnapshotRegistryStateMemo = undefined;
 }
 
 const MEMO_RELEVANT_ENV_KEYS = [
@@ -500,7 +504,7 @@ function resolvePersistedRegistryMemoStateForLookup(
     preferPersisted?: boolean;
     stateDir?: string;
   },
-  memo: PluginMetadataSnapshotMemo | undefined,
+  memo: Pick<PluginMetadataSnapshotMemo, "registryState"> | undefined,
 ): PersistedRegistryMemoState {
   const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
   const fastHash = hashJson(fastFingerprint);
@@ -702,7 +706,6 @@ export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
-  const memo = pluginMetadataSnapshotMemo;
   const env = params.env ?? process.env;
   const registryState = resolvePersistedRegistryMemoStateForLookup(
     {
@@ -710,10 +713,13 @@ export function loadPluginMetadataSnapshot(
       ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
       ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
     },
-    memo,
+    pluginMetadataSnapshotRegistryStateMemo,
   );
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
-  if (memo?.key === memoKey) {
+  const memo = pluginMetadataSnapshotMemo.get(memoKey);
+  if (memo) {
+    pluginMetadataSnapshotMemo.delete(memoKey);
+    pluginMetadataSnapshotMemo.set(memoKey, memo);
     return measureDiagnosticsTimelineSpanSync(
       "plugins.metadata.scan",
       () => clonePluginMetadataSnapshot(memo.snapshot),
@@ -755,14 +761,29 @@ export function loadPluginMetadataSnapshot(
               : {}),
           })
         : registryState;
-    pluginMetadataSnapshotMemo = {
-      key: computePluginMetadataSnapshotMemoKey({ params, registryState: cachedRegistryState }),
+    const cachedMemoKey = computePluginMetadataSnapshotMemoKey({
+      params,
+      registryState: cachedRegistryState,
+    });
+    pluginMetadataSnapshotRegistryStateMemo = { registryState: cachedRegistryState };
+    pluginMetadataSnapshotMemo.set(cachedMemoKey, {
       registryState: cachedRegistryState,
       snapshot: clonePluginMetadataSnapshot(result.snapshot),
-    };
+    });
+    if (pluginMetadataSnapshotMemo.size > PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES) {
+      const oldestKey = pluginMetadataSnapshotMemo.keys().next().value;
+      if (oldestKey !== undefined) {
+        pluginMetadataSnapshotMemo.delete(oldestKey);
+      }
+    }
   }
   return result.snapshot;
 }
+
+const CACHEABLE_DERIVED_REGISTRY_DIAGNOSTIC_CODES = new Set([
+  "persisted-registry-stale-policy",
+  "persisted-registry-stale-source",
+]);
 
 function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;
@@ -776,8 +797,8 @@ function canMemoizePluginMetadataSnapshotResult(result: {
   }
   return (
     result.snapshot.registryDiagnostics.length > 0 &&
-    result.snapshot.registryDiagnostics.every(
-      (diagnostic) => diagnostic.code === "persisted-registry-stale-policy",
+    result.snapshot.registryDiagnostics.every((diagnostic) =>
+      CACHEABLE_DERIVED_REGISTRY_DIAGNOSTIC_CODES.has(diagnostic.code),
     )
   );
 }

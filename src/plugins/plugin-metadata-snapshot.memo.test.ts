@@ -275,6 +275,50 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
+  it("memoizes source-stale derived snapshots after persisted registry freshness checks", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex(),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+  });
+
+  it("keeps separate memo entries for workspace-scoped and unscoped callers", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex(),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-policy",
+          message: "policy changed",
+        },
+      ],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace" });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace" });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes policy-stale derived snapshots when derived plugin files change", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
@@ -304,7 +348,6 @@ describe("loadPluginMetadataSnapshot process memo", () => {
 
   it.each([
     ["persisted-registry-missing", undefined],
-    ["persisted-registry-stale-source", undefined],
     ["persisted-registry-disabled", undefined],
     [undefined, { preferPersisted: false }],
   ])("does not memoize derived snapshots for %s diagnostics", (code, options) => {
