@@ -36,5 +36,6 @@ describe("channel-inbound public compatibility helpers", () => {
     const ctx = buildChannelTurnContext(createLegacyTurnParams());
 
     expect(ctx.InboundEventKind).toBe("room_event");
+    expect(ctx.InboundTurnKind).toBe("room_event");
   });
 });

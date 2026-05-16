@@ -74,19 +74,25 @@ export type BuildChannelTurnContextParams = Omit<
     inboundTurnKind?: InboundEventKind;
   };
 };
-export type BuiltChannelTurnContext = BuiltChannelInboundEventContext;
+export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
+  InboundTurnKind: InboundEventKind;
+};
 
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): BuiltChannelTurnContext {
   const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
-  return buildChannelInboundEventContext({
+  const ctx = buildChannelInboundEventContext({
     ...params,
     message: {
       ...params.message,
       ...(inboundEventKind ? { inboundEventKind } : {}),
     },
   });
+  return {
+    ...ctx,
+    InboundTurnKind: ctx.InboundEventKind,
+  };
 }
 
 export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
