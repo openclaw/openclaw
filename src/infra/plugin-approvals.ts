@@ -1843,6 +1843,12 @@ function resolveCommandWords(segment: string): {
     }
     if (first === "command") {
       words.shift();
+      while (words[0] === "-p") {
+        words.shift();
+      }
+      if (words[0] === "--") {
+        words.shift();
+      }
       continue;
     }
     if (first === "!") {

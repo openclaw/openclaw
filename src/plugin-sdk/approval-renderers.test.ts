@@ -524,6 +524,29 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Medium");
   });
 
+  it("parses command builtin options before summarizing", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-builtin-option",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: command -p rm -rf /tmp/x",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nDelete files or folders");
+    expect(payload.text).toContain("- delete files or folders: /tmp/x");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Delete commands can permanently remove data.");
+    expect(payload.text).not.toContain("- run -p");
+  });
+
   it("summarizes stdin-upload pipeline stages before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
