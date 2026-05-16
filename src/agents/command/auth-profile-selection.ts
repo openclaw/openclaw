@@ -3,8 +3,10 @@ import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../openai-codex-routing.js";
+import { findNormalizedProviderValue } from "../provider-id.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 
 export type HarnessAuthProfileSelection = {
@@ -16,6 +18,20 @@ export type HarnessAuthProfileSelection = {
 
 export function profileIdProvider(profileId: string): string {
   return profileId.split(":", 1)[0] ?? "";
+}
+
+function resolveExplicitOpenAIAuthOrder(params: {
+  config: OpenClawConfig;
+  storeOrder?: Record<string, string[]>;
+}): string[] | undefined {
+  return (
+    findNormalizedProviderValue(params.storeOrder, OPENAI_PROVIDER_ID) ??
+    findNormalizedProviderValue(params.config.auth?.order, OPENAI_PROVIDER_ID)
+  );
+}
+
+function resolveFirstExistingProfile(profileIds: string[], storeProfiles: Record<string, unknown>) {
+  return profileIds.find((profileId) => storeProfiles[profileId]);
 }
 
 export function resolveOrderedOpenAIPiAuthProfileSelection(params: {
@@ -39,6 +55,37 @@ export function resolveOrderedOpenAIPiAuthProfileSelection(params: {
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
+  const explicitOpenAIOrder = resolveExplicitOpenAIAuthOrder({
+    config: params.config,
+    storeOrder: store.order,
+  });
+  if (explicitOpenAIOrder) {
+    const firstProfileId = resolveFirstExistingProfile(explicitOpenAIOrder, store.profiles);
+    if (!firstProfileId || profileIdProvider(firstProfileId) !== OPENAI_CODEX_PROVIDER_ID) {
+      return undefined;
+    }
+    const credential = store.profiles[firstProfileId];
+    const candidateAuthPlan = buildAgentRuntimeAuthPlan({
+      provider: params.provider,
+      authProfileProvider: credential?.provider ?? profileIdProvider(firstProfileId),
+      authProfileMode: credential?.type,
+      sessionAuthProfileId: firstProfileId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      harnessId: params.harnessId,
+      harnessRuntime: params.harnessRuntime,
+      allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
+    });
+    if (candidateAuthPlan.forwardedAuthProfileId === firstProfileId) {
+      return {
+        authProfileId: firstProfileId,
+        authProfileIdSource: "auto",
+        authProfileProvider: credential?.provider ?? profileIdProvider(firstProfileId),
+      };
+    }
+    return undefined;
+  }
+
   const orderedCompatibleProfiles = resolveAuthProfileOrder({
     cfg: params.config,
     store,

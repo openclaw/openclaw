@@ -97,6 +97,44 @@ describe("resolveOrderedOpenAIPiAuthProfileSelection", () => {
     ).toBeUndefined();
   });
 
+  it("does not use a stored Codex profile when OpenAI auth order names only OpenAI", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-openai",
+        },
+        "openai-codex:work": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "codex-access",
+          refresh: "codex-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    saveAuthProfileStore(store, tmpDir);
+
+    expect(
+      resolveOrderedOpenAIPiAuthProfileSelection({
+        config: {
+          auth: {
+            order: {
+              openai: ["openai:default"],
+            },
+          },
+        },
+        agentDir: tmpDir,
+        workspaceDir: tmpDir,
+        provider: "openai",
+        harnessRuntime: "pi",
+        allowHarnessAuthProfileForwarding: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not select Codex OAuth profiles for non-Pi OpenAI runs", () => {
     const store: AuthProfileStore = {
       version: 1,

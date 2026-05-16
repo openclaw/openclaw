@@ -489,6 +489,48 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     expect(params.authProfileId).toBeUndefined();
   });
 
+  it("does not bypass an explicit OpenAI-only auth order with a stored Codex OAuth profile", async () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId]: {
+          type: "api_key",
+          provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+          key: "sk-openai",
+        },
+        [AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId]: {
+          type: "oauth",
+          provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+          access: "codex-access",
+          refresh: "codex-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    saveAuthProfileStore(authStore, tmpDir);
+
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      cfg: {
+        ...providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "pi"),
+        auth: {
+          order: {
+            [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider]: [
+              AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+            ],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const params = capturedEmbeddedRunParams();
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(params.authProfileId).toBeUndefined();
+  });
+
   it("forwards an OpenAI Codex auth profile through the default OpenAI Codex harness path", async () => {
     await runAuthContractAttempt({
       tmpDir,
