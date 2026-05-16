@@ -668,6 +668,39 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+  it("forwards gateway client scopes into Telegram send target resolution", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello from CLI",
+      },
+      telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
+    );
+    const call = mockCall(sendMessageTelegram, 0, "gateway-scoped send");
+    expect(requireRecord(call[2], "gateway-scoped send options").gatewayClientScopes).toEqual([
+      "operator.write",
+    ]);
+  });
+
+  it("forwards gateway client scopes into Telegram poll target resolution", async () => {
+    await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+      },
+      telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
+    );
+    const call = mockCall(sendPollTelegram, 0, "gateway-scoped poll");
+    expect(requireRecord(call[2], "gateway-scoped poll options").gatewayClientScopes).toEqual([
+      "operator.write",
+    ]);
+  });
+
   it.each([
     {
       name: "react",

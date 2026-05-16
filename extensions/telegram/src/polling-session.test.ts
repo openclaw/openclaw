@@ -585,9 +585,10 @@ describe("TelegramPollingSession", () => {
           token: "tok",
         }),
       );
-      expect(
-        mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset,
-      ).toBeUndefined();
+      expect(mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset).toEqual({
+        lastUpdateId: null,
+        onUpdateId: expect.any(Function),
+      });
       expect(init).toHaveBeenCalledBefore(handleUpdate);
       expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } });
     } finally {

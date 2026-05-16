@@ -241,6 +241,7 @@ export async function handleTelegramAction(
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
     inboundEventKind?: string;
+    gatewayClientScopes?: readonly string[];
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -404,6 +405,7 @@ export async function handleTelegramAction(
       mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
       mediaReadFile: options?.mediaReadFile,
+      gatewayClientScopes: options?.gatewayClientScopes,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
@@ -491,6 +493,7 @@ export async function handleTelegramAction(
         messageThreadId: messageThreadId ?? undefined,
         isAnonymous: isAnonymous ?? undefined,
         silent: silent ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
     notifyVisibleOutboundSuccess(to, messageThreadId);
