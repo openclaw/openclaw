@@ -2145,10 +2145,8 @@ async function processOpenAICompletionsStream(
     }
   };
   const finishAllToolCallBlocks = () => {
-    for (const block of output.content) {
-      if (block.type === "toolCall") {
-        block.arguments = parseStreamingJson(block.partialArgs);
-      }
+    for (const block of toolCallBlocksByIndex.values()) {
+      block.arguments = parseStreamingJson(block.partialArgs);
     }
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {

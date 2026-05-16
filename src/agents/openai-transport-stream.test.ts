@@ -5147,7 +5147,7 @@ describe("openai transport stream", () => {
       },
     ] as const;
 
-    await __testing.processOpenAICompletionsStream(streamChunks(mockChunks), output, model, {
+    await testing.processOpenAICompletionsStream(streamChunks(mockChunks), output, model, {
       push() {},
     });
 
