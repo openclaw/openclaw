@@ -426,6 +426,24 @@ export function isCommandMessage(message: unknown): boolean {
   return (message as Record<string, unknown>).command === true;
 }
 
+export function resolveSessionFooterTokenTotal(session: {
+  totalTokens?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  contextTokens?: number | null;
+}): number | null {
+  if (typeof session.totalTokens === "number") {
+    return session.totalTokens;
+  }
+  if (session.inputTokens != null || session.outputTokens != null) {
+    return (session.inputTokens ?? 0) + (session.outputTokens ?? 0);
+  }
+  if (typeof session.contextTokens === "number") {
+    return 0;
+  }
+  return null;
+}
+
 export function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) {
     return "tokens ?";
