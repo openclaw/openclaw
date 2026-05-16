@@ -294,7 +294,10 @@ async function readFileProviderPayload(params: {
         filePath,
         label: `secrets.providers.${params.providerName}.path`,
         io: { maxBytes, timeoutMs },
-        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
+        permissions: {
+          allowInsecure: params.providerConfig.allowInsecurePath,
+          allowReadableByOthers: true,
+        },
       });
       const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {

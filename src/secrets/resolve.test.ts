@@ -199,6 +199,34 @@ describe("secret ref resolver", () => {
     expect(value).toBe("sk-file-value");
   });
 
+  // Regression test for #81547: file provider must accept group/world-readable files
+  // (e.g. /etc/openclaw/secrets.json) so CLI/TUI can resolve the same SecretRef as a
+  // daemon that runs under a different uid. The fix passes allowReadableByOthers: true
+  // to readSecureFile, matching the existing exec-provider behavior.
+  itPosix("resolves file refs when the file is group-readable (regression #81547)", async () => {
+    const root = await createCaseDir("file-group-readable");
+    const filePath = path.join(root, "secrets.json");
+    await writeSecureFile(
+      filePath,
+      JSON.stringify({ OPENCLAW_GATEWAY_TOKEN: "gw-token-xyz" }),
+      0o644,
+    ); // pragma: allowlist secret
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "default", id: "/OPENCLAW_GATEWAY_TOKEN" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              default: createFileProviderConfig(filePath),
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("gw-token-xyz");
+  });
+
   itPosix("resolves exec refs with protocolVersion 1 response", async () => {
     const value = await resolveExecSecret(execProtocolV1ScriptPath);
     expect(value).toBe("value:openai/api-key");

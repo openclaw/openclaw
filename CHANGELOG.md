@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Secrets/file provider: resolve SecretRef from group-readable paths (e.g. `/etc/openclaw/secrets.json`) without requiring `allowInsecurePath`, and surface the underlying failure cause in the "SecretRef is unresolved" error message. Fixes #81547.
+
 ## 2026.5.17
 
 ### Changes

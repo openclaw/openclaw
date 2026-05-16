@@ -73,14 +73,11 @@ export async function resolveConfiguredSecretInputString(params: {
       };
     }
     return { value: trimmed };
-  } catch {
+  } catch (err) {
+    const base = buildUnresolvedReason({ path: params.path, style, kind: "unresolved", refLabel });
+    const cause = err instanceof Error && err.message ? err.message.replace(/\.$/, "") : undefined;
     return {
-      unresolvedRefReason: buildUnresolvedReason({
-        path: params.path,
-        style,
-        kind: "unresolved",
-        refLabel,
-      }),
+      unresolvedRefReason: cause ? `${base.slice(0, -1)}: ${cause}.` : base,
     };
   }
 }
