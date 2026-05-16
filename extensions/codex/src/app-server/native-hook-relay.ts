@@ -127,7 +127,7 @@ function sortJsonValue(value: JsonValue): JsonValue {
     return value.map(sortJsonValue);
   }
   const sorted: JsonObject = {};
-  for (const key of Object.keys(value).sort()) {
+  for (const key of Object.keys(value).toSorted()) {
     sorted[key] = sortJsonValue(value[key]);
   }
   return sorted;
