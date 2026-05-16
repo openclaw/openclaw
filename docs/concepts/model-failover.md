@@ -65,7 +65,24 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 - **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
 - **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
 
-The auto fallback primary-probe interval is five minutes. Older auto fallback entries without a probe timestamp are probed on their next normal turn, then use the same interval after fallback records a fresh timestamp. OpenClaw sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
+The auto fallback primary-probe interval is five minutes and is not configurable. Older auto fallback entries without a probe timestamp are probed on their next normal turn, then use the same interval after fallback records a fresh timestamp. OpenClaw sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
+
+## User-visible fallback notices
+
+When a session moves onto an auto-selected fallback, OpenClaw sends a status notice in the same reply surface:
+
+```text
+↪️ Model Fallback: <fallback> (selected <primary>; <reason>)
+```
+
+When a later probe succeeds and the session returns to the selected primary, OpenClaw sends:
+
+```text
+↪️ Model Fallback cleared: <primary> (was <fallback>)
+```
+
+These notices are operational messages, not assistant content. They are delivered once per state change, including side-effect-only turns when feasible, but sticky fallback turns do not repeat them. Delivery bypasses normal source-reply suppression, the notice does not consume the first assistant reply slot for threaded channels, and it is excluded from text-to-speech and commitment extraction.
+
 ## Auth storage (keys + OAuth)
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
