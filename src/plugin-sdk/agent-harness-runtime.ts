@@ -199,6 +199,7 @@ export {
 } from "../agents/harness/lifecycle-hook-helpers.js";
 export {
   buildNativeHookRelayCommand,
+  hasNativeHookRelayInvocation,
   __testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";

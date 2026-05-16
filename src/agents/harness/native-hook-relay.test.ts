@@ -16,6 +16,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   __testing,
   buildNativeHookRelayCommand,
+  hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
@@ -451,6 +452,50 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("reports whether a relay already observed a tool use invocation", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use", "post_tool_use"],
+    });
+
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        toolUseId: "call-1",
+      }),
+    ).toBe(false);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_use_id: "call-1",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        toolUseId: "call-1",
+      }),
+    ).toBe(true);
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        toolUseId: "call-1",
+      }),
+    ).toBe(false);
+  });
+
   it("retains bounded payload snapshots in invocation history", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -745,6 +790,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -782,6 +828,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
       toolName: "exec",
       toolCallId: "native-call-1",
     });

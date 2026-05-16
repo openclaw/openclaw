@@ -78,6 +78,7 @@ export type NativeHookRelayRegistration = {
   sessionKey?: string;
   config?: OpenClawConfig;
   runId: string;
+  channelId?: string;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
@@ -98,6 +99,7 @@ export type RegisterNativeHookRelayParams = {
   sessionKey?: string;
   config?: OpenClawConfig;
   runId: string;
+  channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
@@ -313,6 +315,7 @@ export function registerNativeHookRelay(
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
     expiresAtMs: Date.now() + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
     ...(params.signal ? { signal: params.signal } : {}),
@@ -446,6 +449,23 @@ export async function invokeNativeHookRelay(
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+}
+
+export function hasNativeHookRelayInvocation(params: {
+  relayId: string;
+  event: NativeHookRelayEvent;
+  toolUseId?: string;
+}): boolean {
+  const toolUseId = params.toolUseId?.trim();
+  if (!toolUseId) {
+    return false;
+  }
+  return invocations.some(
+    (invocation) =>
+      invocation.relayId === params.relayId &&
+      invocation.event === params.event &&
+      invocation.toolUseId === toolUseId,
+  );
 }
 
 export async function invokeNativeHookRelayBridge(
@@ -925,6 +945,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
+      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
     },
   });

@@ -857,6 +857,7 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
+      channelId: params.messageChannel ?? params.messageProvider,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
@@ -2570,6 +2571,7 @@ function createCodexNativeHookRelay(params: {
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
+  channelId?: string;
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
@@ -2590,6 +2592,7 @@ function createCodexNativeHookRelay(params: {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,

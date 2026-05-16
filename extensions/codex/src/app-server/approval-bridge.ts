@@ -2,6 +2,7 @@ import {
   type AgentApprovalEventData,
   callGatewayTool,
   formatApprovalDisplayPath,
+  hasNativeHookRelayInvocation,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
@@ -389,6 +390,15 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   if (!payload) {
     return undefined;
   }
+  if (
+    hasNativeHookRelayInvocation({
+      relayId: params.nativeHookRelay.relayId,
+      event: "pre_tool_use",
+      toolUseId: params.context.itemId,
+    })
+  ) {
+    return { handled: true };
+  }
   try {
     const response = await callGatewayTool<NativeHookRelayProcessResponse>(
       "nativeHook.invoke",
@@ -441,6 +451,7 @@ function buildNativeRelayPreToolUsePayload(params: {
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(turnId ? { turn_id: turnId } : {}),
     tool_input: {
+      ...params.policyRequest.params,
       command,
       cmd: command,
     },
@@ -477,7 +488,9 @@ function readNativeRelayPreToolUseDecision(
   // contract is deny-or-silent. Any other structured decision fails closed.
   return {
     blocked: true,
-    reason: "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",
+    reason: output
+      ? "OpenClaw native hook relay returned a non-deny Codex app-server approval decision."
+      : "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",
   };
 }
 

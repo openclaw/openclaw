@@ -1,5 +1,6 @@
 import {
   callGatewayTool,
+  hasNativeHookRelayInvocation,
   runBeforeToolCallHook,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -9,6 +10,7 @@ import { buildApprovalResponse, handleCodexAppServerApprovalRequest } from "./ap
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: vi.fn(),
+  hasNativeHookRelayInvocation: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -16,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+const mockHasNativeHookRelayInvocation = vi.mocked(hasNativeHookRelayInvocation);
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -94,6 +97,8 @@ function createParams(): EmbeddedRunAttemptParams {
 describe("Codex app-server approval bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
+    mockHasNativeHookRelayInvocation.mockReset();
+    mockHasNativeHookRelayInvocation.mockReturnValue(false);
     mockRunBeforeToolCallHook.mockReset();
     mockRunBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,
@@ -235,6 +240,14 @@ describe("Codex app-server approval bridge", () => {
         turn_id: "turn-1",
         tool_input: {
           command: "cat /tmp/private_key",
+          cwd: "/workspace",
+          approval: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "cmd-native-relay",
+            command: "cat /tmp/private_key",
+            cwd: "/workspace",
+          },
           cmd: "cat /tmp/private_key",
         },
       },
@@ -289,6 +302,44 @@ describe("Codex app-server approval bridge", () => {
       status: "approved",
       approvalId: "plugin:approval-native-noop",
     });
+  });
+
+  it("does not invoke the app-server relay when native PreToolUse already ran", async () => {
+    const params = createParams();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-native-observed", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-native-observed", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-observed",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockHasNativeHookRelayInvocation).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      event: "pre_tool_use",
+      toolUseId: "cmd-native-relay-observed",
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
   });
 
   it("fails closed when the native hook relay returns unreadable approval output", async () => {
@@ -364,8 +415,42 @@ describe("Codex app-server approval bridge", () => {
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual(["nativeHook.invoke"]);
     findApprovalEvent(params, {
       status: "denied",
-      message:
-        "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",
+      message: "OpenClaw native hook relay returned a non-deny Codex app-server approval decision.",
+    });
+  });
+
+  it("fails closed when the native hook relay exits non-zero", async () => {
+    const params = createParams();
+    mockCallGatewayTool.mockResolvedValueOnce({
+      stdout: "ignored stdout",
+      stderr: "blocked from stderr",
+      exitCode: 1,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-exit",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual(["nativeHook.invoke"]);
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "blocked from stderr",
     });
   });
 
