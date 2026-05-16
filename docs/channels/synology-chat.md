@@ -69,6 +69,8 @@ Minimal config:
       allowedUserIds: ["123456"],
       rateLimitPerMinute: 30,
       allowInsecureSsl: false,
+      // optional: strip this prefix from the start of incoming messages before delivery
+      // triggerWord: "!bot",
     },
   },
 }
