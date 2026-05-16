@@ -456,7 +456,14 @@ function countOmittedImages(content: unknown): number {
   }
   let count = 0;
   for (const item of content) {
-    if (item && typeof item === "object" && item.type === "image" && item.omitted === true) {
+    if (
+      item &&
+      typeof item === "object" &&
+      "type" in item &&
+      item.type === "image" &&
+      "omitted" in item &&
+      item.omitted === true
+    ) {
       count += 1;
     }
   }
@@ -530,17 +537,17 @@ function convertResponsesMessages(
         });
       } else {
         const omittedImages = countOmittedImages(msg.content);
-        const content = msg.content
-          .flatMap((item) => {
-            if (item.type === "text") {
-              return [{ type: "input_text", text: sanitizeTransportPayloadText(item.text) }];
-            }
-            const imagePart = toReplayableInputImagePart(item);
-            return imagePart ? [imagePart] : [];
-          })
-          .filter(
-            (item) => model.input.includes("image") || item.type !== "input_image",
-          ) as ResponseInputMessageContentList;
+        const content: ResponseInputMessageContentList = [];
+        for (const item of msg.content) {
+          if (item.type === "text") {
+            content.push({ type: "input_text", text: sanitizeTransportPayloadText(item.text) });
+            continue;
+          }
+          const imagePart = toReplayableInputImagePart(item);
+          if (imagePart && (model.input.includes("image") || imagePart.type !== "input_image")) {
+            content.push(imagePart);
+          }
+        }
         if (omittedImages > 0) {
           content.push({
             type: "input_text",
@@ -618,10 +625,13 @@ function convertResponsesMessages(
         .filter((item) => item.type === "text")
         .map((item) => item.text)
         .join("\n");
-      const imageOutput = msg.content.flatMap((item) => {
+      const imageOutput: ResponseFunctionCallOutputItemList = [];
+      for (const item of msg.content) {
         const imagePart = toReplayableInputImagePart(item);
-        return imagePart ? [imagePart] : [];
-      });
+        if (imagePart) {
+          imageOutput.push(imagePart);
+        }
+      }
       const omittedImages = countOmittedImages(msg.content);
       const omittedNotice =
         omittedImages > 0
