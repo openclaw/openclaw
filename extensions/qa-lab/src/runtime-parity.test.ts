@@ -1,0 +1,390 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  captureRuntimeParityCell,
+  runRuntimeParityScenario,
+  type RuntimeId,
+  type RuntimeParityCell,
+  type RuntimeParityToolCall,
+} from "./runtime-parity.js";
+
+const tempRoots: string[] = [];
+
+function makeToolCall(overrides: Partial<RuntimeParityToolCall> = {}): RuntimeParityToolCall {
+  return {
+    tool: "read_file",
+    argsHash: "args-a",
+    resultHash: "result-a",
+    ...overrides,
+  };
+}
+
+function makeCell(
+  runtime: RuntimeId,
+  overrides: Partial<RuntimeParityCell> = {},
+): RuntimeParityCell {
+  return {
+    runtime,
+    transcriptBytes: '{"role":"assistant"}\n',
+    toolCalls: [],
+    finalText: "same reply",
+    usage: {
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    },
+    wallClockMs: 25,
+    bootStateLines: [],
+    ...overrides,
+  };
+}
+
+function normalizeForStableHashForTest(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeForStableHashForTest(entry));
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted((left, right) => left.localeCompare(right))
+        .map((key) => [key, normalizeForStableHashForTest(record[key])]),
+    );
+  }
+  return value;
+}
+
+function stableHashForTest(value: unknown) {
+  return createHash("sha256")
+    .update(JSON.stringify(normalizeForStableHashForTest(value)) ?? "null")
+    .digest("hex");
+}
+
+type RuntimeParityGatewaySessionFixture = {
+  sessionId: string;
+  sessionFile?: string;
+  updatedAt: number;
+  transcriptBytes: string;
+  spawnedBy?: string;
+  parentSessionKey?: string;
+  spawnDepth?: number;
+  subagentRole?: string;
+};
+
+async function createRuntimeParityGatewayTempRoot(
+  fixture: string | RuntimeParityGatewaySessionFixture[],
+) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-parity-"));
+  tempRoots.push(tempRoot);
+  const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const fixtures =
+    typeof fixture === "string"
+      ? [
+          {
+            sessionId: "session-1",
+            sessionFile: "session-1.jsonl",
+            updatedAt: 1,
+            transcriptBytes: fixture,
+          },
+        ]
+      : fixture;
+  const store = Object.fromEntries(
+    fixtures.map(({ transcriptBytes: _transcriptBytes, ...entry }) => [
+      entry.sessionId,
+      {
+        ...entry,
+        sessionFile: entry.sessionFile ?? `${entry.sessionId}.jsonl`,
+      },
+    ]),
+  );
+  await fs.writeFile(
+    path.join(sessionsDir, "sessions.json"),
+    JSON.stringify(store),
+    "utf8",
+  );
+  await Promise.all(
+    fixtures.map((entry) =>
+      fs.writeFile(
+        path.join(sessionsDir, entry.sessionFile ?? `${entry.sessionId}.jsonl`),
+        entry.transcriptBytes,
+        "utf8",
+      ),
+    ),
+  );
+  return tempRoot;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
+  );
+  vi.unstubAllGlobals();
+});
+
+describe("runtime parity", () => {
+  it("classifies identical cells as none", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "same",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
+  it("classifies final-text-only differences as text-only", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "text-only",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          finalText: runtime === "pi" ? "hello from pi" : "hello from codex",
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("text-only");
+  });
+
+  it("classifies tool call shape drift", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "tool-call-shape",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          toolCalls: [makeToolCall(runtime === "pi" ? {} : { argsHash: "args-b" })],
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("tool-call-shape");
+  });
+
+  it("classifies tool result shape drift", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "tool-result-shape",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          toolCalls: [makeToolCall(runtime === "pi" ? {} : { resultHash: "result-b" })],
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("tool-result-shape");
+  });
+
+  it("classifies transcript-structure drift", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "structural",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          transcriptBytes:
+            runtime === "pi" ? '{"role":"assistant"}\n' : '{"role":"assistant"}\n{"role":"tool"}\n',
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("structural");
+  });
+
+  it("classifies runtime failures before other drift types", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "failure-mode",
+      runCell: async (runtime) => ({
+        scenarioStatus: runtime === "pi" ? "fail" : "pass",
+        cell: makeCell(runtime, runtime === "pi" ? { runtimeErrorClass: "timeout" } : {}),
+      }),
+    });
+
+    expect(result.drift).toBe("failure-mode");
+  });
+
+  it("surfaces tool-call-shape when one runtime fails because the tool path drifted", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "tool-call-failure",
+      runCell: async (runtime) => ({
+        scenarioStatus: runtime === "pi" ? "pass" : "fail",
+        cell: makeCell(runtime, {
+          toolCalls: runtime === "pi" ? [makeToolCall()] : [],
+          ...(runtime === "codex" ? { runtimeErrorClass: "tool-error" } : {}),
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("tool-call-shape");
+  });
+
+  it("surfaces tool-result-shape when a downstream timeout follows divergent tool output", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "tool-result-timeout",
+      runCell: async (runtime) => ({
+        scenarioStatus: runtime === "pi" ? "pass" : "fail",
+        cell: makeCell(runtime, {
+          toolCalls: [makeToolCall(runtime === "pi" ? {} : { resultHash: "result-b" })],
+          ...(runtime === "codex" ? { runtimeErrorClass: "timeout" } : {}),
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("tool-result-shape");
+  });
+
+  it("prefers provider-side mock request snapshots for tool call rows", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot('{"message":{"role":"assistant"}}\n');
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          {
+            plannedToolName: "read",
+            plannedToolArgs: { path: "QA_KICKOFF_TASK.md" },
+            toolOutput: "",
+          },
+          {
+            toolOutput: JSON.stringify({
+              status: "ok",
+              text: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+            }),
+          },
+        ],
+      }),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+      mockBaseUrl: "http://127.0.0.1:9999",
+    });
+
+    expect(cell.toolCalls).toEqual([
+      {
+        tool: "read",
+        argsHash: stableHashForTest({ path: "QA_KICKOFF_TASK.md" }),
+        resultHash: stableHashForTest({
+          status: "ok",
+          text: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        }),
+      },
+    ]);
+  });
+
+  it("captures chained provider-side tool plans and error outputs in request order", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot('{"message":{"role":"assistant"}}\n');
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          {
+            plannedToolName: "read",
+            plannedToolArgs: { path: "audit-fixture/README.md" },
+            toolOutput: "",
+          },
+          {
+            toolOutput: JSON.stringify({
+              status: "ok",
+              text: "Release readiness task",
+            }),
+            plannedToolName: "write",
+            plannedToolArgs: { path: "release-audit.json", content: "{}" },
+          },
+          {
+            toolOutput: JSON.stringify({
+              status: "failed",
+              error: "permission denied",
+            }),
+          },
+        ],
+      }),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "pi",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+      mockBaseUrl: "http://127.0.0.1:9999",
+    });
+
+    expect(cell.toolCalls).toEqual([
+      {
+        tool: "read",
+        argsHash: stableHashForTest({ path: "audit-fixture/README.md" }),
+        resultHash: stableHashForTest({
+          status: "ok",
+          text: "Release readiness task",
+        }),
+      },
+      {
+        tool: "write",
+        argsHash: stableHashForTest({ content: "{}", path: "release-audit.json" }),
+        resultHash: stableHashForTest({
+          status: "failed",
+          error: "permission denied",
+        }),
+        errorClass: "tool-result-error",
+      },
+    ]);
+  });
+
+  it("ignores newer spawned-session transcripts when selecting the final scenario reply", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot([
+      {
+        sessionId: "parent",
+        updatedAt: 10,
+        transcriptBytes: JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "parent scenario final",
+          },
+        }),
+      },
+      {
+        sessionId: "child",
+        updatedAt: 20,
+        spawnedBy: "agent:main:qa",
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        transcriptBytes: JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "child worker final",
+          },
+        }),
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.finalText).toBe("parent scenario final");
+    expect(cell.transcriptBytes).not.toContain("child worker final");
+  });
+});
