@@ -39,7 +39,14 @@ export function getCurrentDiagnosticPhase(): string | undefined {
 }
 
 export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] {
-  return recentPhases.slice(-Math.max(0, limit)).map((phase) => Object.assign({}, phase));
+  // `slice(-0)` is identical to `slice(0)`, which returns the entire buffer
+  // — the exact opposite of what a zero limit should mean. Reject zero,
+  // negative, and non-finite limits explicitly. See #82646.
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return [];
+  }
+  const clamped = Math.floor(limit);
+  return recentPhases.slice(-clamped).map((phase) => Object.assign({}, phase));
 }
 
 export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
