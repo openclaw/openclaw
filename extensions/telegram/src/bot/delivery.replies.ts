@@ -759,6 +759,7 @@ export async function deliverReplies(params: {
       resolveTelegramInteractiveTextFallback({
         text: reply?.text,
         interactive: reply?.interactive,
+        presentation: (reply as { presentation?: unknown } | undefined)?.presentation,
       }) ??
       reply?.text ??
       "";

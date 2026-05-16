@@ -120,6 +120,7 @@ export async function sendTelegramPayloadMessages(params: {
     resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
+      presentation: params.payload.presentation,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
   const buttons = resolveTelegramInlineButtons({
