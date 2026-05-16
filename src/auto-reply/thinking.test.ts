@@ -192,6 +192,58 @@ describe("listThinkingLevels", () => {
     ).toBe("off");
   });
 
+  it("lets a provider-owned xhigh allowlist override a stale catalog reasoning=false (#82744)", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+      defaultLevel: "high",
+    });
+    providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
+      provider === "openai-codex" && context.modelId === "gpt-5.5" ? true : undefined,
+    );
+    const catalog = [
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        // Stale catalog says reasoning is off, but the provider policy
+        // explicitly allowlists xhigh for this model.
+        reasoning: false,
+      },
+    ];
+
+    expect(listThinkingLevels("openai-codex", "gpt-5.5", catalog)).toContain("xhigh");
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves catalog reasoning=false opt-out when the provider does NOT allowlist xhigh", () => {
+    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
+    const catalog = [
+      {
+        provider: "google",
+        id: "gemma-4-26b-a4b-it",
+        name: "Gemma 4 26B",
+        reasoning: false,
+      },
+    ];
+
+    expect(listThinkingLevels("google", "gemma-4-26b-a4b-it", catalog)).toEqual(["off"]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "google",
+        model: "gemma-4-26b-a4b-it",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(false);
+  });
+
   it("passes catalog reasoning into provider thinking profiles for support checks", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
       levels:

@@ -167,7 +167,23 @@ export function resolveThinkingProfile(params: {
     reasoning: context.reasoning,
   };
   if (context.reasoning === false) {
-    return buildOffOnlyThinkingProfile();
+    // Catalog-level `reasoning: false` should not override a provider-owned
+    // policy that explicitly allowlists xhigh for this (provider, model).
+    // Issue #82744: stale catalog entries on canonical openai/openai-codex
+    // GPT-5 models were forcing `/think xhigh` to be rejected with
+    // `Use one of: off.`, even though the OpenAI Codex provider policy lists
+    // those models as full-reasoning targets. When the provider plugin
+    // explicitly opts the model in, treat the catalog as stale and consult
+    // the provider profile; otherwise keep the original off-only opt-out so
+    // intentional `reasoning: false` configs (e.g. custom OpenAI-compatible
+    // base URLs) keep their behaviour.
+    const providerXHighOverride = resolveProviderXHighThinking({
+      provider: context.normalizedProvider,
+      context: { provider: context.normalizedProvider, modelId: context.modelId },
+    });
+    if (providerXHighOverride !== true) {
+      return buildOffOnlyThinkingProfile();
+    }
   }
   const pluginProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
