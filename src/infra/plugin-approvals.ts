@@ -1371,6 +1371,16 @@ function summarizePackageManagerCommand(
       reason: "Package installs can run dependency scripts and change project files.",
     };
   }
+  if (PACKAGE_MANAGER_EXEC_SUBCOMMANDS.has(subcommand)) {
+    return {
+      text: `run a package-provided command with ${command}`,
+      risk: "high",
+      kind: "package",
+      reason:
+        "Package-manager exec commands can run arbitrary package code from the project or network.",
+      showCommandPreview: true,
+    };
+  }
   if (PACKAGE_MANAGER_SCRIPT_SUBCOMMANDS.has(subcommand)) {
     return {
       text: `run a project/package script with ${command}`,
@@ -1389,7 +1399,9 @@ function summarizePackageManagerCommand(
 
 const PACKAGE_MANAGER_INSTALL_SUBCOMMANDS = new Set(["install", "i", "add", "update", "upgrade"]);
 
-const PACKAGE_MANAGER_SCRIPT_SUBCOMMANDS = new Set(["run", "exec", "dlx"]);
+const PACKAGE_MANAGER_EXEC_SUBCOMMANDS = new Set(["exec", "dlx"]);
+
+const PACKAGE_MANAGER_SCRIPT_SUBCOMMANDS = new Set(["run"]);
 
 const PACKAGE_MANAGER_GLOBAL_FLAGS = new Set([
   "--all",

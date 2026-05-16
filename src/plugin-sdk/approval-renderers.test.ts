@@ -2050,6 +2050,47 @@ describe("plugin-sdk/approval-renderers", () => {
     },
   );
 
+  it.each([
+    {
+      command: "pnpm exec tsx scripts/publish.ts",
+      id: "plugin-command-pnpm-exec",
+      manager: "pnpm",
+    },
+    {
+      command: "npm exec -- eslint .",
+      id: "plugin-command-npm-exec",
+      manager: "npm",
+    },
+    {
+      command: "pnpm dlx create-vite@latest app",
+      id: "plugin-command-pnpm-dlx",
+      manager: "pnpm",
+    },
+  ])("fails closed on package-manager exec commands: $command", ({ command, id, manager }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nRun package/project tooling");
+    expect(payload.text).toContain(`- run a package-provided command with ${manager}`);
+    expect(payload.text).toContain(`Command preview\n${command}`);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "Package-manager exec commands can run arbitrary package code from the project or network.",
+    );
+  });
+
   it("treats interpreter command execution as high risk", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
