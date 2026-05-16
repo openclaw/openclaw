@@ -335,6 +335,11 @@ describe("Integration: saveSessionStore with pruning", () => {
             sessionFile: "missing.jsonl",
             updatedAt: now,
           },
+          "agent:main:metadata": {
+            sessionId: "agent:main:metadata",
+            updatedAt: now,
+            groupActivation: "always",
+          },
           "valid-present": { sessionId: "valid-present", updatedAt: now },
         } satisfies Record<string, SessionEntry>,
         null,
@@ -351,11 +356,12 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
     const preview = dryRun.previewResults[0];
     expect(preview?.summary.missing).toBe(3);
-    expect(preview?.summary.beforeCount).toBe(4);
-    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.summary.beforeCount).toBe(5);
+    expect(preview?.summary.afterCount).toBe(2);
     expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
     expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
     expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
+    expect(preview?.missingKeys.has("agent:main:metadata")).toBe(false);
     const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       unknown
@@ -369,9 +375,11 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(applied.appliedSummaries[0]?.missing).toBe(3);
-    expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(2);
     const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(Object.keys(persisted)).toEqual(["valid-present"]);
+    expect(Object.keys(persisted)).toEqual(["agent:main:metadata", "valid-present"]);
+    expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
+    expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
     await expectPathExists(validTranscript);
   });
 
