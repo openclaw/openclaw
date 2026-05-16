@@ -16,7 +16,8 @@ const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
-const GATEWAY_LIFECYCLE_HOOK_TIMEOUT_MS = 1_000;
+const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
+const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
 
 vi.mock("../channels/plugins/index.js", async () => ({
   ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
@@ -65,11 +66,18 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
+const {
+  finishGatewayRestartTrace,
+  recordGatewayRestartTraceSpan,
+  resetGatewayRestartTraceForTest,
+  startGatewayRestartTrace,
+} = await import("./restart-trace.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
 type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseHandlerParams["drainActiveSessionsForShutdown"]
 >;
+const originalRestartTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
 
 function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
   return mock.mock.calls[0];
@@ -131,6 +139,12 @@ describe("createGatewayCloseHandler", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetGatewayRestartTraceForTest();
+    if (originalRestartTraceEnv === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+    } else {
+      process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalRestartTraceEnv;
+    }
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
@@ -167,6 +181,97 @@ describe("createGatewayCloseHandler", () => {
     expect(preRestartEvent?.context?.restartExpectedMs).toBe(123);
   });
 
+  it("emits parseable restart close trace spans when enabled", async () => {
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
+      emittedSessionIds: [],
+      timedOut: false,
+    }));
+    const pluginServices = {
+      stop: vi.fn(async () => undefined),
+    };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram"],
+        drainActiveSessionsForShutdown,
+        pluginServices: pluginServices as never,
+      }),
+    );
+
+    startGatewayRestartTrace("restart.signal.received", [["reason", "test restart"]]);
+    await close({ reason: "gateway restarting", restartExpectedMs: 123 });
+
+    const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^restart trace: restart\.close\.gateway-shutdown-hook [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.gateway-pre-restart-hook [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.session-end-drain [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.channels [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.bundle-runtimes [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.plugin-services [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.gmail-watcher [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.websocket-server [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+        expect.stringMatching(
+          /^restart trace: restart\.close\.http-server [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+        ),
+      ]),
+    );
+    expect(
+      messages.some(
+        (message) =>
+          /^restart trace: restart\.close\.total [0-9.]+ms total=[0-9.]+ms /u.test(message) &&
+          message.includes("restartExpectedMs=123.0") &&
+          message.includes("rssMb="),
+      ),
+    ).toBe(true);
+  });
+
+  it("emits restart ready child spans without shortening the parent ready span", async () => {
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+
+    startGatewayRestartTrace("restart.signal.received", [["reason", "test restart"]]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    recordGatewayRestartTraceSpan("restart.ready.runtime.post-attach", 12, 40, [
+      ["eventLoopMax", "1.0ms"],
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    finishGatewayRestartTrace("restart.ready");
+
+    const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^restart trace: restart\.ready\.runtime\.post-attach 12\.0ms total=40\.0ms eventLoopMax=1\.0ms$/u,
+        ),
+      ]),
+    );
+    const parentReadyLine = messages.find((message) =>
+      /^restart trace: restart\.ready [0-9.]+ms total=[0-9.]+ms$/u.test(message),
+    );
+    expect(parentReadyLine).toBeDefined();
+    const parentDuration = Number(
+      /^restart trace: restart\.ready ([0-9.]+)ms/u.exec(parentReadyLine ?? "")?.[1],
+    );
+    expect(parentDuration).toBeGreaterThan(30);
+  });
+
   it("continues shutdown and records a warning when gateway shutdown hook stalls", async () => {
     vi.useFakeTimers();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {
@@ -181,14 +286,14 @@ describe("createGatewayCloseHandler", () => {
     );
 
     const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(GATEWAY_LIFECYCLE_HOOK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:shutdown");
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("gateway:shutdown hook timed out after 1000ms"),
+        String(message).includes("gateway:shutdown hook timed out after 5000ms"),
       ),
     ).toBe(true);
   });
@@ -265,11 +370,16 @@ describe("createGatewayCloseHandler", () => {
       reason: "test restart",
       restartExpectedMs: 123,
     });
-    await vi.advanceTimersByTimeAsync(GATEWAY_LIFECYCLE_HOOK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:pre-restart");
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("gateway:pre-restart hook timed out after 10000ms"),
+      ),
+    ).toBe(true);
   });
 
   it("records subsystem shutdown warnings without aborting later cleanup", async () => {

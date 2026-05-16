@@ -22,7 +22,6 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
-  hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
   resolveAgentDir,
   resolveSessionAgentIds,
@@ -62,7 +61,11 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
+import {
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveContextConfigProviderForRuntime,
+  resolveSelectedOpenAIPiRuntimeProvider,
+} from "../openai-codex-routing.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -120,6 +123,7 @@ import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-poli
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
+import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
@@ -375,8 +379,18 @@ export async function runEmbeddedPiAgent(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  let laneTaskProgressAtMs = Date.now();
+  const noteLaneTaskProgress = () => {
+    laneTaskProgressAtMs = Date.now();
+  };
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(opts, laneTaskTimeoutMs);
+    withEmbeddedRunLaneTimeout(
+      {
+        ...opts,
+        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+      },
+      laneTaskTimeoutMs,
+    );
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
     params.enqueue
       ? params.enqueue(task, withLaneTimeout(opts))
@@ -425,7 +439,14 @@ export async function runEmbeddedPiAgent(
           "phase"
         >,
       ) => {
+        noteLaneTaskProgress();
         params.onExecutionPhase?.({ phase, ...extra });
+      };
+      const notifyRunProgress = (
+        info: Parameters<NonNullable<RunEmbeddedPiAgentParams["onRunProgress"]>>[0],
+      ) => {
+        noteLaneTaskProgress();
+        params.onRunProgress?.(info);
       };
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
@@ -479,10 +500,11 @@ export async function runEmbeddedPiAgent(
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
-      const fallbackConfigured = hasConfiguredModelFallbacks({
+      const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
         cfg: params.config,
         agentId: params.agentId,
         sessionKey: normalizedSessionKey,
+        modelFallbacksOverride: params.modelFallbacksOverride,
       });
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
@@ -538,6 +560,7 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         workspaceDir: resolvedWorkspace,
       });
       const agentHarness = selectAgentHarness({
@@ -547,8 +570,19 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentHarnessId: params.agentHarnessId,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
+      const modelConfigProvider = provider;
+      const selectedPiRuntimeProvider = resolveSelectedOpenAIPiRuntimeProvider({
+        provider,
+        harnessRuntime: agentHarness.id,
+        agentHarnessId: agentHarness.id,
+        authProfileProvider: params.authProfileId?.split(":", 1)[0],
+        authProfileId: params.authProfileId,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+      });
       const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
@@ -562,7 +596,7 @@ export async function runEmbeddedPiAgent(
           workspaceDir: resolvedWorkspace,
         },
       );
-      const modelResolution =
+      let modelResolution =
         dynamicModelResolution.model || pluginHarnessOwnsTransport
           ? dynamicModelResolution
           : await (async () => {
@@ -573,6 +607,22 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
               });
             })();
+      if (selectedPiRuntimeProvider !== provider && modelResolution.model) {
+        const runtimeModelResolution = await resolveModelAsync(
+          selectedPiRuntimeProvider,
+          modelId,
+          agentDir,
+          params.config,
+          {
+            skipPiDiscovery: true,
+            workspaceDir: resolvedWorkspace,
+          },
+        );
+        if (runtimeModelResolution.model) {
+          provider = selectedPiRuntimeProvider;
+          modelResolution = runtimeModelResolution;
+        }
+      }
       const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
@@ -589,7 +639,7 @@ export async function runEmbeddedPiAgent(
         cfg: params.config,
         provider,
         contextConfigProvider: resolveContextConfigProviderForRuntime({
-          provider,
+          provider: modelConfigProvider,
           runtimeId: agentHarness.id,
         }),
         modelId,
@@ -716,12 +766,23 @@ export async function runEmbeddedPiAgent(
       }
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
-        : resolveAuthProfileOrder({
-            cfg: params.config,
-            store: authStore,
-            provider,
-            preferredProfile: preferredProfileId,
-          });
+        : [
+            ...new Set(
+              listOpenAIAuthProfileProvidersForAgentRuntime({
+                provider,
+                harnessRuntime: agentHarness.id,
+                agentHarnessId: agentHarness.id,
+                config: params.config,
+              }).flatMap((authProvider) =>
+                resolveAuthProfileOrder({
+                  cfg: params.config,
+                  store: authStore,
+                  provider: authProvider,
+                  preferredProfile: preferredProfileId,
+                }),
+              ),
+            ),
+          ];
       const providerPreferredProfileId = lockedProfileId
         ? undefined
         : resolveProviderAuthProfileId({
@@ -1169,6 +1230,7 @@ export async function runEmbeddedPiAgent(
               durationMs: Date.now() - started,
               agentMeta: buildErrorAgentMeta({
                 sessionId: activeSessionId,
+                sessionFile: activeSessionFile,
                 provider,
                 model: model.id,
                 contextTokens: ctxInfo.tokens,
@@ -1292,6 +1354,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
+            currentTurnKind: params.currentTurnKind,
             currentTurnContext: params.currentTurnContext,
             images: params.images,
             imageOrder: params.imageOrder,
@@ -1324,6 +1387,7 @@ export async function runEmbeddedPiAgent(
             legacyBeforeAgentStartResult,
             thinkLevel,
             onToolOutcome: observePostCompactionToolOutcome,
+            onRunProgress: notifyRunProgress,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -1373,6 +1437,8 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
+            suppressTranscriptOnlyAssistantPersistence:
+              params.suppressTranscriptOnlyAssistantPersistence,
             onUserMessagePersisted,
           })
             .catch((err: unknown): never => {
@@ -1465,6 +1531,7 @@ export async function runEmbeddedPiAgent(
               durationMs: Date.now() - started,
               agentMeta: buildErrorAgentMeta({
                 sessionId: activeSessionId,
+                sessionFile: activeSessionFile,
                 provider,
                 model: model.id,
                 contextTokens: ctxInfo.tokens,
@@ -1967,6 +2034,7 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
                   sessionId: sessionIdUsed,
+                  sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
                   contextTokens: ctxInfo.tokens,
@@ -1997,6 +2065,7 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
                   sessionId: sessionIdUsed,
+                  sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
                   contextTokens: ctxInfo.tokens,
@@ -2068,6 +2137,7 @@ export async function runEmbeddedPiAgent(
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
+                    sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
                     contextTokens: ctxInfo.tokens,
@@ -2108,6 +2178,7 @@ export async function runEmbeddedPiAgent(
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
+                    sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
                     contextTokens: ctxInfo.tokens,
@@ -2504,6 +2575,7 @@ export async function runEmbeddedPiAgent(
             payloads,
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
+            toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
@@ -2531,7 +2603,8 @@ export async function runEmbeddedPiAgent(
           if (timedOutDuringPrompt && !hasMessagingToolDeliveryEvidence(attempt)) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
-                "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers."
+                "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
+                "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole agent run."
               : "Request timed out before a response was generated. " +
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             const replayInvalid = resolveReplayInvalidForAttempt(null);

@@ -1,16 +1,19 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { createChannelContractTestShards } from "../../scripts/lib/channel-contract-test-plan.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 function listContractTests(rootDir = "src/channels/plugins/contracts"): string[] {
-  if (!existsSync(rootDir)) {
-    return [];
-  }
-
-  return readdirSync(rootDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
-    .map((entry) => join(rootDir, entry.name).replaceAll("\\", "/"))
+  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  expect(result.status).toBe(0);
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.endsWith(".test.ts"))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -40,6 +43,22 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
 
     expect(actual).toEqual(listContractTests());
     expect(new Set(actual).size).toBe(actual.length);
+  });
+
+  it("uses git-tracked files without walking contract directories", () => {
+    const payload = expectNoNodeFsScans<{
+      files: number;
+      shards: number;
+    }>(`
+      const { createChannelContractTestShards } = await import("./scripts/lib/channel-contract-test-plan.mjs");
+      const shards = createChannelContractTestShards();
+      return {
+        files: shards.reduce((total, shard) => total + shard.includePatterns.length, 0),
+        shards: shards.length,
+      };
+    `);
+    expect(payload.shards).toBe(3);
+    expect(payload.files).toBeGreaterThan(0);
   });
 
   it("keeps registry-backed surface shards spread across checks", () => {

@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 
@@ -34,6 +36,20 @@ const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
 ]);
 
 function listTestFiles(rootDir: string): string[] {
+  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  expect(result.status).toBe(0);
+  if (result.status === 0) {
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim().replaceAll("\\", "/"))
+      .filter((line) => line.endsWith(".test.ts"))
+      .toSorted((a, b) => a.localeCompare(b));
+  }
+
   if (!existsSync(rootDir)) {
     return [];
   }
@@ -78,6 +94,25 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("creates split shards without walking test roots", () => {
+    const payload = expectNoNodeFsScans<{
+      includePatterns: number;
+      shards: number;
+    }>(`
+      const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+      const shards = createNodeTestShards();
+      return {
+        includePatterns: shards.reduce(
+          (total, shard) => total + (shard.includePatterns?.length ?? 0),
+          0,
+        ),
+        shards: shards.length,
+      };
+    `);
+    expect(payload.shards).toBeGreaterThan(0);
+    expect(payload.includePatterns).toBeGreaterThan(0);
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))

@@ -348,6 +348,12 @@ export const id: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -1038,10 +1044,10 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "Mode gulir otomatis",
+    autoScrollAlways: "Selalu",
+    autoScrollNearBottom: "Dekat bagian bawah",
+    autoScrollOff: "Nonaktif",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",
     hideCronSessions: "Sembunyikan sesi cron",
     showCronSessions: "Tampilkan sesi cron",
