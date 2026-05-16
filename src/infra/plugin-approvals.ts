@@ -1240,8 +1240,8 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
 function hasUnsupportedShellCompoundSyntax(segment: string): boolean {
   const trimmed = stripShellCompoundPrefixes(segment.trim());
   return (
-    /^\(/.test(trimmed) ||
-    /^\{/.test(trimmed) ||
+    trimmed.startsWith("(") ||
+    trimmed.startsWith("{") ||
     /^case\b/i.test(trimmed) ||
     /^(?:for|select)\b/i.test(trimmed) ||
     /^function\b/i.test(trimmed) ||
