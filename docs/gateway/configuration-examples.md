@@ -52,6 +52,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     visibleReplies: "automatic",
     groupChat: {
       visibleReplies: "message_tool", // default; visible output requires message(action=send)
+      unmentionedInbound: "room_event",
     },
   },
 }
@@ -111,6 +112,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     groupChat: {
       historyLimit: 50,
       visibleReplies: "message_tool", // prefer message tool; final text falls back for normal requests
+      unmentionedInbound: "room_event",
     },
     queue: {
       mode: "followup",

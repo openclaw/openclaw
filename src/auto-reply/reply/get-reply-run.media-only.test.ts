@@ -678,7 +678,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.currentTurnContext?.text).toContain(
+    expect(call.followupRun.currentInboundContext?.text).toContain(
       "Thread starter (untrusted, for context):",
     );
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
@@ -782,8 +782,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.prompt).toBe("");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("Chat history since last reply");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("what changed?");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
+      "Chat history since last reply",
+    );
+    expect(call?.followupRun.currentInboundContext?.text).toContain("what changed?");
     expect(call?.followupRun.prompt).not.toContain("[User sent media without caption]");
   });
 
@@ -864,7 +866,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.currentTurnContext?.text).toContain("webchat:local");
+    expect(call?.followupRun.currentInboundContext?.text).toContain("webchat:local");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
@@ -1456,12 +1458,12 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
     expect(call?.followupRun.prompt).toContain("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
-    expect(call?.followupRun.currentTurnContext?.promptJoiner).toBe(" ");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("Current message:");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.promptJoiner).toBe(" ");
+    expect(call?.followupRun.currentInboundContext?.text).toContain("Current message:");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       '[Replying to: "quoted status body"]',
     );
-    expect(call?.followupRun.currentTurnContext?.text).not.toContain(
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
       "Reply target of current user message",
     );
   });
@@ -1471,7 +1473,7 @@ describe("runPreparedReply media-only handling", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        JSON.stringify({ message_id: "35676", turn_kind: "room_event" }, null, 2),
+        JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
         "```",
         "",
         "Conversation context (untrusted, chronological, selected for current message):",
@@ -1498,7 +1500,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "35676",
           SenderName: "Keśava",
         },
@@ -1510,17 +1512,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("");
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
     expect(call?.followupRun.transcriptPrompt).toBe("");
-    expect(call?.followupRun.currentTurnKind).toBe("room_event");
+    expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",
     );
-    expect(call?.followupRun.currentTurnContext?.text).toContain("[OpenClaw turn]");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "Current event:\n#35676 Keśava: No wtf",
     );
   });
@@ -1559,7 +1561,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "992",
           SenderName: "Alice",
         },
@@ -1572,8 +1574,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("steer");
     expect(call.followupRun.prompt).toBe("[OpenClaw room event]");
-    expect(call.followupRun.currentTurnKind).toBe("room_event");
-    expect(call.followupRun.currentTurnContext?.text).toContain("Current event:");
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {
@@ -1608,7 +1610,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "993",
           SenderName: "Alice",
         },
@@ -1644,7 +1646,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "991",
           SenderName: "Alice",
         },
@@ -1653,7 +1655,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
   });
