@@ -12,6 +12,7 @@ export async function startGmailWatcherWithLogs(params: {
   cfg: OpenClawConfig;
   log: GMailWatcherLog;
   onSkipped?: () => void;
+  isCancelled?: () => boolean;
 }) {
   if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
     params.onSkipped?.();
@@ -19,7 +20,7 @@ export async function startGmailWatcherWithLogs(params: {
   }
 
   try {
-    const gmailResult = await startGmailWatcher(params.cfg);
+    const gmailResult = await startGmailWatcher(params.cfg, { isCancelled: params.isCancelled });
     if (gmailResult.started) {
       params.log.info("gmail watcher started");
       return;

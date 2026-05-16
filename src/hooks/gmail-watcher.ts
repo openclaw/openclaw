@@ -75,10 +75,14 @@ function isGogAvailable(): boolean {
  */
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
+  options: { signal?: AbortSignal } = {},
 ): Promise<boolean> {
   const args = [(gogBin ??= resolveExecutable("gog")), ...buildGogWatchStartArgs(cfg)];
   try {
-    const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
+    const result = await runCommandWithTimeout(args, {
+      timeoutMs: 120_000,
+      signal: options.signal,
+    });
     if (result.code !== 0) {
       const message = result.stderr || result.stdout || "gog watch start failed";
       log.error(`watch start failed: ${message}`);
@@ -160,11 +164,23 @@ export type GmailWatcherStartResult = {
   reason?: string;
 };
 
+function cancelledGmailWatcherStart(
+  expectedConfig: GmailHookRuntimeConfig,
+): GmailWatcherStartResult {
+  if (currentConfig === expectedConfig) {
+    currentConfig = null;
+  }
+  return { started: false, reason: "startup cancelled" };
+}
+
 /**
  * Start the Gmail watcher service.
  * Called automatically by the gateway if hooks.gmail is configured.
  */
-export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatcherStartResult> {
+export async function startGmailWatcher(
+  cfg: OpenClawConfig,
+  options: { isCancelled?: () => boolean } = {},
+): Promise<GmailWatcherStartResult> {
   // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {
     return { started: false, reason: "hooks not enabled" };
@@ -187,6 +203,9 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
   }
 
   const runtimeConfig = resolved.value;
+  if (options.isCancelled?.()) {
+    return cancelledGmailWatcherStart(runtimeConfig);
+  }
   currentConfig = runtimeConfig;
 
   // Set up Tailscale endpoint if needed
@@ -201,6 +220,9 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
       log.info(
         `tailscale ${runtimeConfig.tailscale.mode} configured for port ${runtimeConfig.serve.port}`,
       );
+      if (options.isCancelled?.()) {
+        return cancelledGmailWatcherStart(runtimeConfig);
+      }
     } catch (err) {
       log.error(`tailscale setup failed: ${String(err)}`);
       return {
@@ -211,12 +233,26 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
   }
 
   // Start the Gmail watch (register with Gmail API)
-  const watchStarted = await startGmailWatch(runtimeConfig);
+  const abortController = new AbortController();
+  const cancelPoll = setInterval(() => {
+    if (options.isCancelled?.()) {
+      abortController.abort();
+    }
+  }, 100);
+  cancelPoll.unref?.();
+  const watchStarted = await startGmailWatch(runtimeConfig, { signal: abortController.signal });
+  clearInterval(cancelPoll);
+  if (options.isCancelled?.()) {
+    return cancelledGmailWatcherStart(runtimeConfig);
+  }
   if (!watchStarted) {
     log.warn("gmail watch start failed, but continuing with serve");
   }
 
   // Spawn the gog serve process
+  if (options.isCancelled?.()) {
+    return cancelledGmailWatcherStart(runtimeConfig);
+  }
   shuttingDown = false;
   watcherProcess = spawnGogServe(runtimeConfig);
 

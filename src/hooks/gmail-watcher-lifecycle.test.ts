@@ -29,6 +29,19 @@ describe("startGmailWatcherWithLogs", () => {
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   });
 
+  it("passes cancellation state to watcher startup", async () => {
+    const isCancelled = vi.fn(() => true);
+    startGmailWatcherMock.mockResolvedValue({ started: false, reason: "startup cancelled" });
+
+    await startGmailWatcherWithLogs({
+      cfg: {},
+      log,
+      isCancelled,
+    });
+
+    expect(startGmailWatcherMock).toHaveBeenCalledWith({}, { isCancelled });
+  });
+
   it("logs startup success", async () => {
     startGmailWatcherMock.mockResolvedValue({ started: true, reason: undefined });
 

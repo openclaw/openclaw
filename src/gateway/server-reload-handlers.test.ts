@@ -4,6 +4,8 @@ import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 
 const hoisted = vi.hoisted(() => ({
+  startGmailWatcherWithLogs: vi.fn(async () => {}),
+  stopGmailWatcher: vi.fn(async () => {}),
   activeTaskCount: { value: 0 },
   activeTaskBlockers: [] as Array<{
     taskId: string;
@@ -13,6 +15,14 @@ const hoisted = vi.hoisted(() => ({
     label?: string;
     title?: string;
   }>,
+}));
+
+vi.mock("../hooks/gmail-watcher.js", () => ({
+  stopGmailWatcher: hoisted.stopGmailWatcher,
+}));
+
+vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
+  startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", async () => {
@@ -65,6 +75,7 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
     setState: vi.fn(),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
+    stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn(
       async (): Promise<GatewayPluginReloadResult> => ({
         restartChannels: new Set(),
@@ -80,6 +91,8 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
 }
 
 afterEach(() => {
+  hoisted.startGmailWatcherWithLogs.mockClear();
+  hoisted.stopGmailWatcher.mockClear();
   hoisted.activeTaskCount.value = 0;
   hoisted.activeTaskBlockers.length = 0;
 });
@@ -155,6 +168,69 @@ describe("gateway restart deferral preflight", () => {
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
     }
+  });
+});
+
+describe("gateway Gmail hot reload handlers", () => {
+  it("stops queued post-ready sidecars before restarting Gmail watcher", async () => {
+    const stopPostReadySidecars = vi.fn();
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      stopPostReadySidecars,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+    const nextConfig = {
+      hooks: { enabled: true, gmail: { account: "next@example.com" } },
+    } as never;
+
+    await applyHotReload(
+      {
+        changedPaths: ["hooks.gmail.account"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["hooks.gmail.account"],
+        reloadHooks: false,
+        restartGmailWatcher: true,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    expect(stopPostReadySidecars).toHaveBeenCalledBefore(hoisted.stopGmailWatcher);
+    expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: nextConfig }),
+    );
   });
 });
 
