@@ -63,11 +63,13 @@ describe("safeEqualSecret", () => {
     ["secret-token", "secret-token", true],
     ["secret-token", "secret-tokEn", false],
     ["short", "much-longer", false],
-    ["", "", true],
+    ["", "", false],
     ["", "secret", false],
+    ["secret", "", false],
     [undefined, "secret", false],
     ["secret", undefined, false],
     [null, "secret", false],
+    [null, null, false],
   ] as const)("compares %o and %o", (left, right, expected) => {
     expect(safeEqualSecret(left, right)).toBe(expected);
   });

@@ -16,6 +16,7 @@ type ExecApprovalsModule = typeof import("./exec-approvals.js");
 let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
 let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
+let loadExecApprovals: ExecApprovalsModule["loadExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
@@ -35,6 +36,7 @@ beforeAll(async () => {
     addAllowlistEntry,
     addDurableCommandApproval,
     ensureExecApprovals,
+    loadExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
     persistAllowAlwaysPatterns,
@@ -173,6 +175,40 @@ describe("exec approvals store helpers", () => {
     expect(invalid.exists).toBe(true);
     expect(invalid.raw).toBe("{invalid");
     expect(invalid.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
+  });
+
+  it("treats read-time ENOENT as a missing approvals snapshot", () => {
+    const dir = createHomeDir();
+    fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
+    fs.writeFileSync(approvalsFilePath(dir), '{"version":1,"agents":{}}\n', "utf8");
+    const actualReadFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if (String(file) === approvalsFilePath(dir)) {
+        throw Object.assign(new Error("swapped away before read"), { code: "ENOENT" });
+      }
+      return actualReadFileSync(file, options as never);
+    });
+
+    const snapshot = readExecApprovalsSnapshot();
+
+    expect(snapshot.exists).toBe(false);
+    expect(snapshot.raw).toBeNull();
+    expect(snapshot.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
+  });
+
+  it("does not silently ignore non-missing approvals read errors", () => {
+    const dir = createHomeDir();
+    fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
+    fs.writeFileSync(approvalsFilePath(dir), '{"version":1,"agents":{}}\n', "utf8");
+    const actualReadFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if (String(file) === approvalsFilePath(dir)) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return actualReadFileSync(file, options as never);
+    });
+
+    expect(() => loadExecApprovals()).toThrow(/permission denied/);
   });
 
   it("ensures approvals file with default socket path and generated token", () => {

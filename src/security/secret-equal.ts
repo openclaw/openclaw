@@ -20,7 +20,7 @@ export function safeEqualSecret(
   const expectedBytes = Buffer.from(expected, "utf8");
   const byteLength = Math.max(providedBytes.length, expectedBytes.length);
   if (byteLength === 0) {
-    return true;
+    return false;
   }
   return (
     timingSafeEqual(

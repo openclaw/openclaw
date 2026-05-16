@@ -651,7 +651,13 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  if (!fs.existsSync(filePath)) {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
     const file = normalizeExecApprovals({ version: 1, agents: {} });
     return {
       path: filePath,
@@ -661,7 +667,6 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  const raw = fs.readFileSync(filePath, "utf8");
   let parsed: ExecApprovalsFile | null = null;
   try {
     parsed = JSON.parse(raw) as ExecApprovalsFile;
@@ -683,11 +688,16 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
 
 export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
+  let raw: string;
   try {
-    if (!fs.existsSync(filePath)) {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return normalizeExecApprovals({ version: 1, agents: {} });
     }
-    const raw = fs.readFileSync(filePath, "utf8");
+    throw err;
+  }
+  try {
     const parsed = JSON.parse(raw) as ExecApprovalsFile;
     if (parsed?.version !== 1) {
       return normalizeExecApprovals({ version: 1, agents: {} });

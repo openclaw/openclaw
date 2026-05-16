@@ -38,6 +38,7 @@ jobs:
           OPENGREP_VERSION: v1.19.0
           OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
         run: |
+          set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
             | bash -s -- -v "$OPENGREP_VERSION"
           echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
