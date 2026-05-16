@@ -295,6 +295,90 @@ describe("telegramPlugin gateway startup", () => {
     expect(latestMonitorOptions().botInfo).toEqual(startupBotInfo);
   });
 
+  it("deletes cached startup botInfo when the account token changes", async () => {
+    await useTempStateDir();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {
+    await useTempStateDir();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: startupBotInfo });
+  });
+
+  it("deletes cached startup botInfo when the account is removed", async () => {
+    await useTempStateDir();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountRemoved?.({ accountId: "ops" });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("deletes cached startup botInfo when logout clears the account token", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.gateway?.logoutAccount?.({
+      accountId: "ops",
+      cfg: createTelegramConfig("ops"),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("honors higher per-account timeoutSeconds for startup probe", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
