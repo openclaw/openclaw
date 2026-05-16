@@ -806,6 +806,13 @@ describe("runCodexAppServerAttempt", () => {
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
     }
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("tool_search_code"),
+      createRuntimeDynamicTool("tool_search"),
+      createRuntimeDynamicTool("tool_describe"),
+      createRuntimeDynamicTool("tool_call"),
+    ]);
 
     const tools = await __testing.buildDynamicTools({
       params,
@@ -828,6 +835,7 @@ describe("runCodexAppServerAttempt", () => {
     for (const toolName of ["tool_search_code", "tool_search", "tool_describe", "tool_call"]) {
       expect(dynamicToolNames).not.toContain(toolName);
     }
+    expect(dynamicToolNames).toContain("message");
   });
 
   it("passes auth profiles into Codex dynamic tool construction", async () => {
