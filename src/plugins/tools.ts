@@ -19,7 +19,10 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
-import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
+import {
+  ensureStandaloneRuntimePluginRegistryLoaded,
+  installStandaloneRuntimePluginRegistry,
+} from "./runtime/standalone-runtime-registry-loader.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
@@ -791,14 +794,24 @@ function resolvePluginToolRegistry(params: {
   }
 
   const forceStandaloneLoad = Boolean(channelRegistry || activeRegistry);
+  const shouldRetainColdLoadedToolRegistry =
+    forceStandaloneLoad &&
+    params.loadOptions.activate === false &&
+    params.loadOptions.toolDiscovery === true;
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
     forceLoad: forceStandaloneLoad,
-    installRegistry: !forceStandaloneLoad,
+    installRegistry: shouldRetainColdLoadedToolRegistry ? false : !forceStandaloneLoad,
     requiredPluginIds: params.onlyPluginIds,
     loadOptions: params.loadOptions,
   });
   if (registryHasScopedPluginTools(standaloneRegistry, params.onlyPluginIds)) {
+    if (shouldRetainColdLoadedToolRegistry) {
+      installStandaloneRuntimePluginRegistry(standaloneRegistry, {
+        loadOptions: params.loadOptions,
+        surface: "active",
+      });
+    }
     return standaloneRegistry;
   }
   return standaloneRegistry ?? channelRegistry ?? activeRegistry;
