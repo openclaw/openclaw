@@ -3,15 +3,26 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const restartTraceLog = createSubsystemLogger("gateway");
+const RESTART_TRACE_HANDOFF_STARTED_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS";
+const RESTART_TRACE_HANDOFF_LAST_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS";
+const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 
 type RestartTraceMetricValue = boolean | number | string | null | undefined;
 type RestartTraceMetrics =
   | Readonly<Record<string, RestartTraceMetricValue>>
   | ReadonlyArray<readonly [string, RestartTraceMetricValue]>;
+export type GatewayRestartTraceHandoff = {
+  startedAt: number;
+  lastAt: number;
+};
 
 let startedAt = 0;
 let lastAt = 0;
 let active = false;
+
+function nowMs(): number {
+  return performance.timeOrigin + performance.now();
+}
 
 function isRestartTraceEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE);
@@ -91,7 +102,7 @@ export function startGatewayRestartTrace(name: string, metrics?: RestartTraceMet
     active = false;
     return;
   }
-  const now = performance.now();
+  const now = nowMs();
   startedAt = now;
   lastAt = now;
   active = true;
@@ -106,7 +117,7 @@ export function markGatewayRestartTrace(name: string, metrics?: RestartTraceMetr
   if (!isGatewayRestartTraceActive()) {
     return;
   }
-  const now = performance.now();
+  const now = nowMs();
   emitRestartTrace(name, now - lastAt, now - startedAt, metrics);
   lastAt = now;
 }
@@ -124,11 +135,11 @@ export async function measureGatewayRestartTrace<T>(
   if (!isGatewayRestartTraceActive()) {
     return await run();
   }
-  const before = performance.now();
+  const before = nowMs();
   try {
     return await run();
   } finally {
-    const now = performance.now();
+    const now = nowMs();
     emitRestartTrace(
       name,
       now - before,
@@ -147,7 +158,7 @@ export function recordGatewayRestartTrace(
   if (!isGatewayRestartTraceActive() || !Number.isFinite(durationMs)) {
     return;
   }
-  const now = performance.now();
+  const now = nowMs();
   emitRestartTrace(name, Math.max(0, durationMs), now - startedAt, metrics);
   lastAt = now;
 }
@@ -181,6 +192,87 @@ export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [st
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
   ];
+}
+
+function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as { startedAt?: unknown; lastAt?: unknown };
+  if (
+    typeof record.startedAt !== "number" ||
+    !Number.isFinite(record.startedAt) ||
+    typeof record.lastAt !== "number" ||
+    !Number.isFinite(record.lastAt) ||
+    record.startedAt <= 0 ||
+    record.lastAt < record.startedAt ||
+    record.lastAt - record.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS
+  ) {
+    return null;
+  }
+  const now = nowMs();
+  if (record.startedAt > now || now - record.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS) {
+    return null;
+  }
+  return {
+    startedAt: record.startedAt,
+    lastAt: record.lastAt,
+  };
+}
+
+export function captureGatewayRestartTraceHandoff(): GatewayRestartTraceHandoff | undefined {
+  if (!isGatewayRestartTraceActive()) {
+    return undefined;
+  }
+  return { startedAt, lastAt };
+}
+
+export function createGatewayRestartTraceHandoffEnv(
+  handoff: GatewayRestartTraceHandoff | undefined = captureGatewayRestartTraceHandoff(),
+): NodeJS.ProcessEnv | undefined {
+  const normalized = normalizeRestartTraceHandoff(handoff);
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    [RESTART_TRACE_HANDOFF_STARTED_AT_ENV]: String(normalized.startedAt),
+    [RESTART_TRACE_HANDOFF_LAST_AT_ENV]: String(normalized.lastAt),
+  };
+}
+
+export function resumeGatewayRestartTraceFromHandoff(
+  handoff: unknown,
+  metrics?: RestartTraceMetrics,
+): boolean {
+  if (!isRestartTraceEnabled() || active) {
+    return false;
+  }
+  const normalized = normalizeRestartTraceHandoff(handoff);
+  if (!normalized) {
+    return false;
+  }
+  startedAt = normalized.startedAt;
+  lastAt = normalized.lastAt;
+  active = true;
+  markGatewayRestartTrace("restart.process-resume", metrics);
+  return true;
+}
+
+export function resumeGatewayRestartTraceFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  metrics?: RestartTraceMetrics,
+): boolean {
+  const startedRaw = env[RESTART_TRACE_HANDOFF_STARTED_AT_ENV];
+  const lastRaw = env[RESTART_TRACE_HANDOFF_LAST_AT_ENV];
+  delete env[RESTART_TRACE_HANDOFF_STARTED_AT_ENV];
+  delete env[RESTART_TRACE_HANDOFF_LAST_AT_ENV];
+  return resumeGatewayRestartTraceFromHandoff(
+    {
+      startedAt: Number(startedRaw),
+      lastAt: Number(lastRaw),
+    },
+    metrics,
+  );
 }
 
 export function resetGatewayRestartTraceForTest(): void {
