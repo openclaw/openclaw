@@ -86,6 +86,24 @@ describe("tailscale helpers", () => {
     expect(host).toBe("noisy.tailnet.ts.net");
   });
 
+  it("retries tailscale status --json on transient failure", async () => {
+    vi.useFakeTimers();
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Command failed: tailscale status --json"))
+      .mockResolvedValue({
+        stdout: JSON.stringify({
+          Self: { DNSName: "host.tailnet.ts.net.", TailscaleIPs: ["100.1.1.1"] },
+        }),
+      });
+    const hostPromise = getTailnetHostname(exec);
+    await vi.advanceTimersByTimeAsync(500);
+    const host = await hostPromise;
+    expect(host).toBe("host.tailnet.ts.net");
+    expect(exec).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("allows the test binary override in explicit test environments", () => {
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/test-tailscale";
     process.env.NODE_ENV = "test";

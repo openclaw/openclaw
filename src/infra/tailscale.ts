@@ -11,6 +11,13 @@ import {
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
+const TAILSCALE_STATUS_RETRY_ATTEMPTS = 3;
+const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
@@ -107,6 +114,28 @@ export async function findTailscaleBinary(): Promise<string | null> {
   return null;
 }
 
+async function readTailscaleStatusJson(
+  exec: typeof runExec,
+  candidate: string,
+): Promise<Record<string, unknown>> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < TAILSCALE_STATUS_RETRY_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await sleepMs(TAILSCALE_STATUS_RETRY_DELAY_MS);
+    }
+    try {
+      const { stdout } = await exec(candidate, ["status", "--json"], {
+        timeoutMs: 5000,
+        maxBuffer: 400_000,
+      });
+      return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError ?? new Error("tailscale status --json failed");
+}
+
 export async function getTailnetHostname(exec: typeof runExec = runExec, detectedBinary?: string) {
   // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
   const candidates = detectedBinary
@@ -119,11 +148,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       continue;
     }
     try {
-      const { stdout } = await exec(candidate, ["status", "--json"], {
-        timeoutMs: 5000,
-        maxBuffer: 400_000,
-      });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+      const parsed = await readTailscaleStatusJson(exec, candidate);
       const self =
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)
