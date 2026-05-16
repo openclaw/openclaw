@@ -52,6 +52,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
 
   try {
     await params.typing?.startTypingLoop();
+    const currentChannelId = params.ctx.OriginatingTo?.trim() || params.command.to;
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
       agentDir,
@@ -74,7 +75,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
         ? { messageChannel: params.command.channelId ?? params.command.channel }
         : {}),
       ...(params.command.channel ? { messageProvider: params.command.channel } : {}),
-      ...(params.command.to ? { currentChannelId: params.command.to } : {}),
+      ...(currentChannelId ? { currentChannelId } : {}),
     });
     return {
       shouldContinue: false,

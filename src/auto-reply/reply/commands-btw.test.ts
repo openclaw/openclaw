@@ -165,6 +165,24 @@ describe("handleBtwCommand", () => {
     });
   });
 
+  it("uses the originating target before the command transport target", async () => {
+    const params = buildParams("/btw what changed?");
+    params.ctx.OriginatingTo = "channel:source";
+    params.command.to = "slash:transport";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "source target" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      currentChannelId: "channel:source",
+    });
+  });
+
   it("accepts /side as a /btw alias", async () => {
     const params = buildParams("/side what changed?");
     params.agentDir = "/tmp/agent";
