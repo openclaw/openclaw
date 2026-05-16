@@ -59,6 +59,11 @@ type GatewayReloadLog = {
   warn: (msg: string) => void;
 };
 
+type GatewayGmailRestartAbortController = {
+  abort: () => void;
+  signal: AbortSignal;
+};
+
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
@@ -113,6 +118,8 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
+  clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
   onCronRestart?: () => void;
 };
 
@@ -338,19 +345,31 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.restartGmailWatcher) {
       params.stopPostReadySidecars?.();
+      const restartAbortController =
+        params.createGmailRestartAbortController?.() ?? new AbortController();
       const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
         import("../hooks/gmail-watcher.js"),
         import("../hooks/gmail-watcher-lifecycle.js"),
       ]);
-      await stopGmailWatcher().catch((err) => {
-        params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
-      });
-      await startGmailWatcherWithLogs({
-        cfg: nextConfig,
-        log: params.logHooks,
-        onSkipped: () =>
-          params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
-      });
+      try {
+        await stopGmailWatcher().catch((err) => {
+          params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
+        });
+        if (!restartAbortController.signal.aborted) {
+          await startGmailWatcherWithLogs({
+            cfg: nextConfig,
+            log: params.logHooks,
+            isCancelled: () => restartAbortController.signal.aborted,
+            signal: restartAbortController.signal,
+            onSkipped: () =>
+              params.logHooks.info(
+                "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",
+              ),
+          });
+        }
+      } finally {
+        params.clearGmailRestartAbortController?.(restartAbortController);
+      }
     }
 
     if (channelsToRestart.size > 0) {
@@ -478,6 +497,11 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     return { stop: async () => {} };
   }
 
+  let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
+  const abortActiveGmailRestart = () => {
+    activeGmailRestartAbortController?.abort();
+    activeGmailRestartAbortController = null;
+  };
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps: params.deps,
     broadcast: params.broadcast,
@@ -491,6 +515,17 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    createGmailRestartAbortController: () => {
+      abortActiveGmailRestart();
+      const abortController = new AbortController();
+      activeGmailRestartAbortController = abortController;
+      return abortController;
+    },
+    clearGmailRestartAbortController: (abortController) => {
+      if (activeGmailRestartAbortController === abortController) {
+        activeGmailRestartAbortController = null;
+      }
+    },
     ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
@@ -499,7 +534,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       }),
   });
 
-  return startGatewayConfigReloader({
+  const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
@@ -599,4 +634,10 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     },
     watchPath: params.watchPath,
   });
+  return {
+    stop: async () => {
+      abortActiveGmailRestart();
+      await configReloader.stop();
+    },
+  };
 }

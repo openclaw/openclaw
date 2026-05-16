@@ -312,6 +312,7 @@ export function createGatewayCloseHandler(params: {
         await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings);
       }
       await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
+      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       await shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings);
       params.cron.stop();
       params.heartbeatRunner.stop();
@@ -361,7 +362,6 @@ export function createGatewayCloseHandler(params: {
         recordShutdownWarning(warnings, "ws-clients");
       }
       params.clients.clear();
-      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       const wsClients = params.wss.clients ?? new Set();
       const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const websocketGraceTimeout = createTimeoutRace(
