@@ -788,9 +788,12 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("runs Gmail watcher after sidecars are ready", async () => {
     let resolveWatcher: (() => void) | undefined;
+    let watcherSignal: AbortSignal | undefined;
     hoisted.startGmailWatcherWithLogs.mockImplementationOnce(
-      async () =>
+      async (...args: unknown[]) =>
         await new Promise<void>((resolve) => {
+          const [params] = args as [{ signal?: AbortSignal }];
+          watcherSignal = params.signal;
           resolveWatcher = resolve;
         }),
     );
@@ -825,11 +828,14 @@ describe("startGatewayPostAttachRuntime", () => {
     await vi.waitFor(() => {
       expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledTimes(1);
     });
+    expect(watcherSignal?.aborted).toBe(false);
     expect(log.warn).not.toHaveBeenCalled();
 
     if (!resolveWatcher) {
       throw new Error("Expected gmail watcher resolver to be initialized");
     }
+    result.postReadySidecars[0]?.stop();
+    expect(watcherSignal?.aborted).toBe(true);
     resolveWatcher();
   });
 

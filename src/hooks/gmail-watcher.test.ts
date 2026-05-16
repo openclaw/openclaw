@@ -146,4 +146,52 @@ describe("startGmailWatcher", () => {
     });
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
+
+  it("aborts tailscale setup and does not spawn gog serve when cancelled in flight", async () => {
+    let cancelled = false;
+    let tailscaleSignal: AbortSignal | undefined;
+    mocks.runCommandWithTimeout.mockImplementation(
+      async (_args, options: { signal?: AbortSignal }) =>
+        await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+          tailscaleSignal = options.signal;
+          options.signal?.addEventListener(
+            "abort",
+            () => resolve({ code: null, stdout: "", stderr: "aborted" }),
+            { once: true },
+          );
+        }),
+    );
+    const startPromise = startGmailWatcher(
+      {
+        hooks: {
+          enabled: true,
+          token: "hook-token",
+          gmail: {
+            account: "me@example.com",
+            topic: "projects/demo/topics/gmail",
+            pushToken: "push-token",
+            tailscale: { mode: "serve" },
+          },
+        },
+      } as never,
+      {
+        isCancelled: () => cancelled,
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(tailscaleSignal).toBeDefined();
+    });
+    cancelled = true;
+
+    await vi.waitFor(() => {
+      expect(tailscaleSignal?.aborted).toBe(true);
+    });
+
+    await expect(startPromise).resolves.toEqual({
+      started: false,
+      reason: "startup cancelled",
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
 });

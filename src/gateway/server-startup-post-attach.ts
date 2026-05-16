@@ -150,24 +150,26 @@ function schedulePostReadySidecarTask(params: {
   startupTrace?: GatewayStartupTrace;
   name: string;
   log: { warn: (msg: string) => void };
-  run: (isStopped: () => boolean) => Awaitable<void>;
+  run: (isStopped: () => boolean, signal: AbortSignal) => Awaitable<void>;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
+  const abortController = new AbortController();
   const isStopped = () => stopped;
   const handle = setImmediate(() => {
     if (isStopped()) {
       return;
     }
-    void measureStartup(params.startupTrace, params.name, () => params.run(isStopped)).catch(
-      (err) => {
-        params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
-      },
-    );
+    void measureStartup(params.startupTrace, params.name, () =>
+      params.run(isStopped, abortController.signal),
+    ).catch((err) => {
+      params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
+    });
   });
   handle.unref?.();
   return {
     stop: () => {
       stopped = true;
+      abortController.abort();
       clearImmediate(handle);
     },
   };
@@ -620,7 +622,7 @@ export async function startGatewaySidecars(params: {
         startupTrace: params.startupTrace,
         name: "sidecars.gmail-watch",
         log: params.log,
-        run: async (isStopped) => {
+        run: async (isStopped, signal) => {
           const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
           if (isStopped()) {
             return;
@@ -629,6 +631,7 @@ export async function startGatewaySidecars(params: {
             cfg: params.cfg,
             log: params.logHooks,
             isCancelled: isStopped,
+            signal,
           });
         },
       }),
