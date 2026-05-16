@@ -63,6 +63,34 @@ const readPackageVersion = () => {
   }
   return "unknown";
 };
+const isWithinCompileCacheRoot = (currentDirectory, desiredDirectory) => {
+  const resolvedCurrent = path.resolve(currentDirectory);
+  const resolvedDesired = path.resolve(desiredDirectory);
+  if (resolvedCurrent === resolvedDesired) {
+    return true;
+  }
+  const relative = path.relative(resolvedDesired, resolvedCurrent);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+};
+
+const resolveCompileCacheBaseDirectory = () => {
+  if (isNodeCompileCacheRequested()) {
+    return path.resolve(process.env.NODE_COMPILE_CACHE);
+  }
+  return path.resolve(path.join(os.tmpdir(), "node-compile-cache"));
+};
+
+const isCompatiblePackagedCompileCacheDirectory = (currentDirectory, desiredDirectory) => {
+  if (isWithinCompileCacheRoot(currentDirectory, desiredDirectory)) {
+    return true;
+  }
+  const baseDirectory = resolveCompileCacheBaseDirectory();
+  return (
+    isWithinCompileCacheRoot(currentDirectory, baseDirectory) &&
+    isWithinCompileCacheRoot(desiredDirectory, baseDirectory)
+  );
+};
+
 const resolvePackagedCompileCacheDirectory = () => {
   const packageJsonUrl = new URL("./package.json", import.meta.url);
   const version = sanitizeCompileCachePathSegment(readPackageVersion());
@@ -215,7 +243,7 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
     return false;
   }
   const desiredDirectory = resolvePackagedCompileCacheDirectory();
-  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+  if (isCompatiblePackagedCompileCacheDirectory(currentDirectory, desiredDirectory)) {
     return false;
   }
   const env = {

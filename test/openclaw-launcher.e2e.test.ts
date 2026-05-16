@@ -37,6 +37,19 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
   );
 }
 
+async function addPackagedCompileCacheProbe(fixtureRoot: string): Promise<void> {
+  await fs.writeFile(
+    path.join(fixtureRoot, "dist", "entry.js"),
+    [
+      'import module from "node:module";',
+      "process.stdout.write(",
+      '  `${module.getCompileCacheDir?.() ? "cache:enabled" : "cache:disabled"};respawn:${process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED ?? "0"}`',
+      ");",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -335,6 +348,33 @@ describe("openclaw launcher", () => {
       expect(result.stdout).toBe("cache:disabled;respawn:1");
     },
   );
+
+  it("does not respawn on every packaged launcher invoke when compile cache is already scoped", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addPackagedCompileCacheProbe(fixtureRoot);
+    const cacheRoot = path.join(fixtureRoot, ".node-compile-cache");
+    const launcher = path.join(fixtureRoot, "openclaw.mjs");
+
+    const first = spawnSync(process.execPath, [launcher], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: cacheRoot,
+      }),
+      encoding: "utf8",
+    });
+    expect(first.status).toBe(0);
+
+    const second = spawnSync(process.execPath, [launcher], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: cacheRoot,
+      }),
+      encoding: "utf8",
+    });
+
+    expect(second.status).toBe(0);
+    expect(second.stdout).toBe("cache:enabled;respawn:0");
+  });
 
   it("keeps compile cache enabled for packaged launchers when NODE_COMPILE_CACHE is configured", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
