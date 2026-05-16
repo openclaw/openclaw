@@ -29,6 +29,7 @@ describe("loadExtraBootstrapFiles", () => {
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
+    await fs.writeFile(path.join(packageDir, "VESSEL.md"), "vessel", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
@@ -38,6 +39,12 @@ describe("loadExtraBootstrapFiles", () => {
         name: "TOOLS.md",
         path: path.join(packageDir, "TOOLS.md"),
         content: "tools",
+        missing: false,
+      },
+      {
+        name: "VESSEL.md",
+        path: path.join(packageDir, "VESSEL.md"),
+        content: "vessel",
         missing: false,
       },
     ]);

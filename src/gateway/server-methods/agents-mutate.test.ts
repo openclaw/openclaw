@@ -1203,6 +1203,11 @@ describe("agents.files.list", () => {
     expect(names).toContain("BOOTSTRAP.md");
   });
 
+  it("includes VESSEL.md as a standard workspace file", async () => {
+    const names = await listAgentFileNames();
+    expect(names).toContain("VESSEL.md");
+  });
+
   it("hides BOOTSTRAP.md when workspace setup is complete", async () => {
     mockWorkspaceStateRead({ setupCompletedAt: "2026-02-15T14:00:00.000Z" });
 
@@ -1401,6 +1406,54 @@ describe("agents.files.get/set symlink safety", () => {
     expectRecordFields(payload.file, {
       name: "AGENTS.md",
       content: "hello",
+    });
+  });
+
+  it("allows agents.files.get for VESSEL.md", async () => {
+    const rootRead = vi.fn(async () => ({
+      buffer: Buffer.from("AGENT_ID: ada-cloud\n"),
+      realPath: "/workspace/test-agent/VESSEL.md",
+      stat: makeFileStat({ size: 20 }),
+    }));
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "VESSEL.md",
+    });
+    await promise;
+
+    expectRecordFields(mockCallArg(rootRead), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "VESSEL.md",
+      hardlinks: "reject",
+      nonBlockingRead: true,
+    });
+    const payload = expectRespondOk(respond, {});
+    expectRecordFields(payload.file, {
+      name: "VESSEL.md",
+      content: "AGENT_ID: ada-cloud\n",
+    });
+  });
+
+  it("allows agents.files.set for VESSEL.md", async () => {
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "VESSEL.md",
+      content: "AGENT_ID: ada-cloud\n",
+    });
+    await promise;
+
+    expectRecordFields(mockCallArg(mocks.rootWrite), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "VESSEL.md",
+      data: "AGENT_ID: ada-cloud\n",
+      encoding: "utf8",
+    });
+    const payload = expectRespondOk(respond, {});
+    expectRecordFields(payload.file, {
+      name: "VESSEL.md",
+      content: "AGENT_ID: ada-cloud\n",
     });
   });
 });

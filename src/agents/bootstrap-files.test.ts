@@ -123,12 +123,27 @@ describe("resolveBootstrapFilesForRun", () => {
       "SOUL.md",
       "TOOLS.md",
       "IDENTITY.md",
+      "VESSEL.md",
       "USER.md",
       "HEARTBEAT.md",
       "BOOTSTRAP.md",
     ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("loads VESSEL.md as a default bootstrap file when present", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "VESSEL.md"), "AGENT_ID: ada-cloud\n", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const vessel = files.find((file) => file.name === "VESSEL.md");
+
+    expect(vessel).toMatchObject({
+      path: path.join(workspaceDir, "VESSEL.md"),
+      content: "AGENT_ID: ada-cloud\n",
+      missing: false,
+    });
   });
 
   it("dedupes hook-injected bootstrap paths relative to the workspace", async () => {
