@@ -196,4 +196,8 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Capability-checked one-turn model override for inline image input. */
+  modelOverride?: string;
+  /** Capability-checked runtime fallbacks for the one-turn image model override. */
+  modelOverrideFallbacks?: string[];
 };
