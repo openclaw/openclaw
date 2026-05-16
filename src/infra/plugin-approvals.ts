@@ -1691,6 +1691,7 @@ function summarizeGitCommand(args: readonly string[]): CommandActionSummary {
       risk: "high",
       kind: "source-control",
       reason: "This git operation can discard local work or publish changes.",
+      showCommandPreview: true,
     };
   }
   return {

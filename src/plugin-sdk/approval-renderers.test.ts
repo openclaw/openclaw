@@ -701,11 +701,52 @@ describe("plugin-sdk/approval-renderers", () => {
     });
 
     expect(payload.text).toContain("- run a higher-risk git operation (reset)");
+    expect(payload.text).toContain("Command preview\ngit -C repo reset --hard");
     expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain("This git operation can discard local work or publish changes.");
     expect(payload.text).not.toContain("- run a git command");
     expect(payload.text).not.toContain("Risk: Medium");
   });
+
+  it.each([
+    {
+      command: "git clean -fdx",
+      id: "plugin-command-git-clean-preview",
+      subcommand: "clean",
+    },
+    {
+      command: "git push origin main",
+      id: "plugin-command-git-push-preview",
+      subcommand: "push",
+    },
+  ])(
+    "shows command previews for high-risk git operations: $command",
+    ({ command, id, subcommand }) => {
+      const payload = buildPluginApprovalPendingReplyPayload({
+        request: {
+          id,
+          request: {
+            title: "Codex app-server command approval",
+            description: `Command: ${command}`,
+            toolName: "codex_command_approval",
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 121_000,
+        },
+        nowMs: 1_000,
+        language: "simple",
+      });
+
+      expect(payload.text).toContain(`- run a higher-risk git operation (${subcommand})`);
+      expect(payload.text).toContain(`Command preview\n${command}`);
+      expect(payload.text).toContain("Risk: High");
+      expect(payload.text).toContain(
+        "This git operation can discard local work or publish changes.",
+      );
+      expect(payload.text).not.toContain("- run a git command");
+      expect(payload.text).not.toContain("Risk: Medium");
+    },
+  );
 
   it.each([
     {
