@@ -14,6 +14,7 @@ type CardState = {
   messageId: string;
   sequence: number;
   currentText: string;
+  sentText: string;
   hasNote: boolean;
 };
 
@@ -316,39 +317,46 @@ export class FeishuStreamingSession {
       messageId: sendRes.data.message_id,
       sequence: 1,
       currentText: "",
+      sentText: "",
       hasNote: !!options?.note,
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
-  private async updateCardContent(text: string, onError?: (error: unknown) => void): Promise<void> {
+  private async updateCardContent(
+    text: string,
+    onError?: (error: unknown) => void,
+  ): Promise<boolean> {
     if (!this.state) {
-      return;
+      return false;
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
-      init: {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-          "User-Agent": getFeishuUserAgent(),
+    try {
+      const { release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+        init: {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+            "User-Agent": getFeishuUserAgent(),
+          },
+          body: JSON.stringify({
+            content: text,
+            sequence: this.state.sequence,
+            uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+          }),
         },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.update",
-    })
-      .then(async ({ release }) => {
-        await release();
-      })
-      .catch((error) => onError?.(error));
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.update",
+      });
+      await release();
+      return true;
+    } catch (error) {
+      onError?.(error);
+      return false;
+    }
   }
 
   private clearFlushTimer(): void {
@@ -401,13 +409,18 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
-      const appendContent = resolveStreamingCardAppendContent(this.state.currentText, mergedText);
+      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, mergedText);
       if (!appendContent) {
         return;
       }
       this.pendingText = null;
       this.state.currentText = mergedText;
-      await this.updateCardContent(appendContent, (e) => this.log?.(`Update failed: ${String(e)}`));
+      const sent = await this.updateCardContent(appendContent, (e) =>
+        this.log?.(`Update failed: ${String(e)}`),
+      );
+      if (sent && this.state) {
+        this.state.sentText = mergedText;
+      }
     });
     await this.queue;
   }
@@ -455,9 +468,14 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
 
     // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.currentText) {
-      await this.updateCardContent(resolveStreamingCardAppendContent(this.state.currentText, text));
+    if (text && text !== this.state.sentText) {
+      const sent = await this.updateCardContent(
+        resolveStreamingCardAppendContent(this.state.sentText, text),
+      );
       this.state.currentText = text;
+      if (sent) {
+        this.state.sentText = text;
+      }
     }
 
     // Update note with final model/provider info

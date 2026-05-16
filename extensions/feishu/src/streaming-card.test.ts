@@ -17,6 +17,7 @@ type StreamingSessionState = {
   messageId: string;
   sequence: number;
   currentText: string;
+  sentText: string;
   hasNote: boolean;
 };
 
@@ -26,7 +27,7 @@ function setStreamingSessionInternals(
     state: StreamingSessionState;
     lastUpdateTime?: number;
   },
-) {
+): void {
   const internals = session as unknown as {
     state: StreamingSessionState;
     lastUpdateTime: number;
@@ -52,7 +53,10 @@ describe("FeishuStreamingSession", () => {
     vi.useRealTimers();
   });
 
-  function mockFetches(updateBodies: string[]) {
+  function mockFetches(
+    updateBodies: string[],
+    failedContentUpdateIndexes: ReadonlySet<number> = new Set<number>(),
+  ): void {
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         const release = vi.fn(async () => {});
@@ -71,7 +75,11 @@ describe("FeishuStreamingSession", () => {
           };
         }
         if (url.includes("/elements/content/content")) {
+          const updateIndex = updateBodies.length;
           updateBodies.push(init?.body ?? "");
+          if (failedContentUpdateIndexes.has(updateIndex)) {
+            throw new Error(`content update ${updateIndex} failed`);
+          }
         }
         return {
           response: {
@@ -100,6 +108,7 @@ describe("FeishuStreamingSession", () => {
         messageId: "om_1",
         sequence: 1,
         currentText: "hello",
+        sentText: "hello",
         hasNote: false,
       },
       lastUpdateTime: 1_000,
@@ -134,6 +143,7 @@ describe("FeishuStreamingSession", () => {
         messageId: "om_2",
         sequence: 1,
         currentText: "hello",
+        sentText: "hello",
         hasNote: false,
       },
       lastUpdateTime: 2_000,
@@ -146,6 +156,44 @@ describe("FeishuStreamingSession", () => {
       content: "!",
       sequence: 2,
       uuid: "s_card_2_2",
+    });
+  });
+
+  it("retries unsent suffix content after a failed delta update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_000);
+    const updateBodies: string[] = [];
+    mockFetches(updateBodies, new Set([0]));
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_failed_delta_retry",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_3",
+        messageId: "om_3",
+        sequence: 1,
+        currentText: "hello",
+        sentText: "hello",
+        hasNote: false,
+      },
+      lastUpdateTime: 2_000,
+    });
+
+    await session.update("hello world");
+    await session.update("hello world!");
+
+    expect(updateBodies).toHaveLength(2);
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
+      content: " world",
+      sequence: 2,
+      uuid: "s_card_3_2",
+    });
+    expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
+      content: " world!",
+      sequence: 3,
+      uuid: "s_card_3_3",
     });
   });
 });
