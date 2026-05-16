@@ -1353,6 +1353,12 @@ export async function runCodexAppServerAttempt(
       turnAttemptLastProgressReason = reason;
       turnAttemptLastProgressDetails = options.details;
       renewNativeHookRelayForTurnProgress();
+      params.onRunProgress?.({
+        reason,
+        provider: params.provider,
+        model: params.modelId,
+        backend: "codex-app-server",
+      });
     }
     emitTrustedDiagnosticEvent({
       type: "run.progress",
