@@ -1352,7 +1352,8 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
-  const isReplyRunActive = opts.deps?.isReplyRunActive ?? replyRunRegistry.isActive;
+  const isReplyRunActive =
+    opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
   if (isReplyRunActive(sessionKey)) {
     emitHeartbeatEvent({
       status: "skipped",
