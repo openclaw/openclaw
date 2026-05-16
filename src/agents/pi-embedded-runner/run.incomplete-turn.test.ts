@@ -1350,7 +1350,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("does not apply planning-only or ack fast paths to Ollama runs", () => {
+  it("applies planning-only retry guard to Ollama runs with planning prose", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
       modelId: "gemma4:31b",
@@ -1367,8 +1367,81 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       prompt: "go ahead",
     });
 
+    expect(retryInstruction).toContain("Do not restate the plan");
+    expect(ackInstruction).not.toBeNull();
+  });
+
+  it("triggers planning-only retry for Ollama when update_plan is called with no text", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "glm-5.1:cloud",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "update_plan", meta: "status=updated" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "glm-5.1:cloud",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+      }),
+    });
+
+    expect(retryInstruction).toContain("Act now");
+  });
+
+  it("triggers planning-only retry for Ollama when update_plan is called with planning prose", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "glm-5.1:cloud",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll capture the steps, then take the first tool action."],
+        toolMetas: [{ toolName: "update_plan", meta: "status=updated" }],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+      }),
+    });
+
+    expect(retryInstruction).toContain("Act now");
+  });
+
+  it("does not trigger planning-only retry for Ollama when update_plan plus an action tool are called", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "glm-5.1:cloud",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "update_plan", meta: "status=updated" },
+          { toolName: "read", meta: "path=/src/foo.ts" },
+        ],
+        itemLifecycle: {
+          startedCount: 2,
+          completedCount: 2,
+          activeCount: 0,
+        },
+      }),
+    });
+
     expect(retryInstruction).toBeNull();
-    expect(ackInstruction).toBeNull();
   });
 
   it("retries signed reasoning-only Ollama turns with a visible-answer continuation instruction", () => {

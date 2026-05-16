@@ -604,10 +604,17 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   if (params.executionContract === "strict-agentic") {
     return true;
   }
-  return isIncompleteTurnRecoverySupportedProviderModel({
-    provider: params.provider,
-    modelId: params.modelId,
-  });
+  if (
+    isIncompleteTurnRecoverySupportedProviderModel({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return true;
+  }
+  return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+    normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+  );
 }
 
 function shouldApplyNonVisibleTurnRetryGuard(params: {
@@ -853,14 +860,19 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   }
 
   const text = (params.attempt.assistantTexts ?? []).join("\n\n").trim();
-  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
+  // A model that calls only update_plan with no accompanying text (e.g. Ollama/GLM)
+  // is still a planning-only turn — skip text-matching checks for it.
+  const planOnlyTurnWithNoText =
+    !text && planOnlyToolMetaCount > 0 && !hasNonPlanToolActivity(params.attempt.toolMetas);
+  if ((!text && !planOnlyTurnWithNoText) || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
     return null;
   }
-  const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(text);
-  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat) {
+  const hasStructuredPlanningFormat = !planOnlyTurnWithNoText && hasStructuredPlanningOnlyFormat(text);
+  if (!planOnlyTurnWithNoText && !PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat) {
     return null;
   }
   if (
+    !planOnlyTurnWithNoText &&
     !hasStructuredPlanningFormat &&
     !singleActionNarrative &&
     !PLANNING_ONLY_ACTION_VERB_RE.test(text)
