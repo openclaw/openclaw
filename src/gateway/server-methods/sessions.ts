@@ -35,6 +35,7 @@ import {
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
+import { clearAgentRunContext, emitAgentEvent } from "../../infra/agent-events.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -236,6 +237,26 @@ function resolveOptionalInitialSessionMessage(params: {
     return params.message;
   }
   return undefined;
+}
+
+function emitManualSessionCompactionEvent(params: {
+  runId: string;
+  sessionKey: string;
+  phase: "start" | "end";
+  completed?: boolean;
+  reason?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    stream: "compaction",
+    data: {
+      phase: params.phase,
+      trigger: "manual",
+      ...(typeof params.completed === "boolean" ? { completed: params.completed } : {}),
+      ...(params.reason ? { reason: params.reason } : {}),
+    },
+  });
 }
 
 function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: boolean }): boolean {
@@ -2153,25 +2174,52 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const workspaceDir =
         normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
         resolveAgentWorkspaceDir(cfg, target.agentId);
-      const result = await compactEmbeddedPiSession({
-        sessionId,
+      const compactionRunId = `session-compact-${randomUUID()}`;
+      emitManualSessionCompactionEvent({
+        runId: compactionRunId,
         sessionKey: target.canonicalKey,
-        allowGatewaySubagentBinding: true,
-        sessionFile: filePath,
-        workspaceDir,
-        config: cfg,
-        provider: resolvedModel.provider,
-        model: resolvedModel.model,
-        agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
-        thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
-        reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        trigger: "manual",
+        phase: "start",
       });
+      let result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
+      try {
+        result = await compactEmbeddedPiSession({
+          sessionId,
+          sessionKey: target.canonicalKey,
+          allowGatewaySubagentBinding: true,
+          sessionFile: filePath,
+          workspaceDir,
+          config: cfg,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
+          thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+          reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          trigger: "manual",
+        });
+      } catch (err) {
+        emitManualSessionCompactionEvent({
+          runId: compactionRunId,
+          sessionKey: target.canonicalKey,
+          phase: "end",
+          completed: false,
+          reason: formatErrorMessage(err),
+        });
+        clearAgentRunContext(compactionRunId);
+        throw err;
+      }
+      emitManualSessionCompactionEvent({
+        runId: compactionRunId,
+        sessionKey: target.canonicalKey,
+        phase: "end",
+        completed: result.ok && result.compacted,
+        reason: result.reason,
+      });
+      clearAgentRunContext(compactionRunId);
 
       if (result.ok && result.compacted) {
         await updateSessionStore(storePath, (store) => {

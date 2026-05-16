@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -249,18 +250,69 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   });
 
   const { ws } = await openClient();
-  const compacted = await rpcReq<{
-    ok: true;
-    key: string;
-    compacted: boolean;
-    result?: { tokensAfter?: number };
-  }>(ws, "sessions.compact", {
-    key: "main",
+  const compactionEvents: AgentEventPayload[] = [];
+  const unsubscribe = onAgentEvent((event) => {
+    if (event.stream === "compaction") {
+      compactionEvents.push(event);
+    }
   });
+  let compacted: Awaited<
+    ReturnType<
+      typeof rpcReq<{
+        ok: true;
+        key: string;
+        compacted: boolean;
+        result?: { tokensAfter?: number };
+      }>
+    >
+  > | null = null;
+  try {
+    compacted = await rpcReq<{
+      ok: true;
+      key: string;
+      compacted: boolean;
+      result?: { tokensAfter?: number };
+    }>(ws, "sessions.compact", {
+      key: "main",
+    });
+  } finally {
+    unsubscribe();
+  }
 
+  if (!compacted) {
+    throw new Error("expected sessions.compact response");
+  }
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(true);
+  expect(compactionEvents).toHaveLength(2);
+  expect(compactionEvents[0]?.runId).toBe(compactionEvents[1]?.runId);
+  expect(compactionEvents[0]).toMatchObject({
+    sessionKey: "agent:main:main",
+    stream: "compaction",
+    data: { phase: "start", trigger: "manual" },
+  });
+  expect(compactionEvents[1]).toMatchObject({
+    sessionKey: "agent:main:main",
+    stream: "compaction",
+    data: { phase: "end", trigger: "manual", completed: true },
+  });
+  const postCleanupEvents: AgentEventPayload[] = [];
+  const unsubscribePostCleanup = onAgentEvent((event) => {
+    if (event.runId === compactionEvents[0]?.runId) {
+      postCleanupEvents.push(event);
+    }
+  });
+  try {
+    emitAgentEvent({
+      runId: compactionEvents[0]?.runId ?? "missing-manual-compaction-run",
+      stream: "compaction",
+      data: { phase: "start", trigger: "manual-cleanup-check" },
+    });
+  } finally {
+    unsubscribePostCleanup();
+  }
+  expect(postCleanupEvents[0]?.seq).toBe(1);
   expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
   const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
     | {

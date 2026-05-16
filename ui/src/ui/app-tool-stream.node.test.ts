@@ -325,6 +325,91 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
+  it("accepts manual session compaction events when no chat run is active", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      sessionKey: "main",
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "manual-compact-1",
+        1,
+        "compaction",
+        {
+          phase: "start",
+          trigger: "manual",
+        },
+        "agent:main:main",
+      ),
+    );
+
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "manual-compact-1",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: null,
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "manual-compact-1",
+        2,
+        "compaction",
+        {
+          phase: "end",
+          trigger: "manual",
+          completed: true,
+        },
+        "agent:main:main",
+      ),
+    );
+
+    expect(host.compactionStatus).toEqual({
+      phase: "complete",
+      runId: "manual-compact-1",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: TOOL_STREAM_TEST_NOW,
+    });
+
+    vi.useRealTimers();
+  });
+
+  it("ignores session-scoped compaction events for other sessions", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ sessionKey: "main" });
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "manual-compact-1",
+        1,
+        "compaction",
+        {
+          phase: "start",
+          trigger: "manual",
+        },
+        "agent:other:main",
+      ),
+    );
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
   it("auto-clears active compaction after the stale timeout", () => {
     useToolStreamFakeTimers();
     const host = createHost();
