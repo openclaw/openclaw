@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -71,6 +71,16 @@ type OAuthProfileSecretPayload = OAuthProfileSecretMaterial & {
 type LoadPersistedAuthProfileStoreOptions = {
   rewriteInlineOAuthSecrets?: boolean;
   repairOAuthSecretPayloads?: boolean;
+};
+
+type OAuthProfileSecretKeySeedOptions = { create?: boolean };
+
+type OAuthProfileSecretKeySeedDeps = {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  readMacKeychain: () => string | undefined;
+  readFile: () => string | undefined;
+  createFile: () => string | undefined;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -304,7 +314,7 @@ function readMacOAuthProfileSecretKey(): string | undefined {
     return undefined;
   }
   try {
-    return execFileSync(
+    return childProcess.execFileSync(
       "security",
       [
         "find-generic-password",
@@ -317,33 +327,6 @@ function readMacOAuthProfileSecretKey(): string | undefined {
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
     ).trim();
   } catch {
-    return undefined;
-  }
-}
-
-function createMacOAuthProfileSecretKey(): string | undefined {
-  if (process.platform !== "darwin") {
-    return undefined;
-  }
-  const generated = randomBytes(32).toString("base64url");
-  try {
-    execFileSync(
-      "security",
-      [
-        "add-generic-password",
-        "-U",
-        "-s",
-        OAUTH_PROFILE_SECRET_KEYCHAIN_SERVICE,
-        "-a",
-        OAUTH_PROFILE_SECRET_KEYCHAIN_ACCOUNT,
-        "-w",
-        generated,
-      ],
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-    return generated;
-  } catch (err) {
-    log.warn("failed to create oauth profile secret keychain entry", { err });
     return undefined;
   }
 }
@@ -459,37 +442,51 @@ function createFallbackOAuthProfileSecretKeyFile(): string | undefined {
   }
 }
 
-function shouldUseMacKeychainForOAuthProfileSecrets(): boolean {
+function shouldReadMacKeychainForOAuthProfileSecrets(params?: {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): boolean {
+  const env = params?.env ?? process.env;
+  const platform = params?.platform ?? process.platform;
   return (
-    process.platform === "darwin" &&
-    process.env.VITEST !== "true" &&
-    process.env.VITEST_WORKER_ID === undefined
+    platform === "darwin" && env.VITEST !== "true" && env.VITEST_WORKER_ID === undefined
   );
 }
 
-function resolveOAuthProfileSecretKeySeed(options?: { create?: boolean }): string | undefined {
-  const externalKey = process.env[OAUTH_PROFILE_SECRET_KEY_ENV]?.trim();
+function resolveOAuthProfileSecretKeySeedWithDeps(
+  options: OAuthProfileSecretKeySeedOptions | undefined,
+  deps: OAuthProfileSecretKeySeedDeps,
+): string | undefined {
+  const externalKey = deps.env[OAUTH_PROFILE_SECRET_KEY_ENV]?.trim();
   if (externalKey) {
     return externalKey;
   }
-  if (process.env.NODE_ENV === "test" && process.env.VITEST === "true") {
+  if (deps.env.NODE_ENV === "test" && deps.env.VITEST === "true") {
     return "openclaw-test-oauth-profile-secret-key";
   }
-  if (shouldUseMacKeychainForOAuthProfileSecrets()) {
-    const keychainKey =
-      readMacOAuthProfileSecretKey() ??
-      (options?.create === true ? createMacOAuthProfileSecretKey() : undefined);
+  if (shouldReadMacKeychainForOAuthProfileSecrets({ env: deps.env, platform: deps.platform })) {
+    const keychainKey = deps.readMacKeychain();
     if (keychainKey) {
       return keychainKey;
     }
   }
-  const fileKey =
-    readFallbackOAuthProfileSecretKeyFile() ??
-    (options?.create === true ? createFallbackOAuthProfileSecretKeyFile() : undefined);
+  const fileKey = deps.readFile() ?? (options?.create === true ? deps.createFile() : undefined);
   if (fileKey) {
     return fileKey;
   }
   return undefined;
+}
+
+function resolveOAuthProfileSecretKeySeed(
+  options?: OAuthProfileSecretKeySeedOptions,
+): string | undefined {
+  return resolveOAuthProfileSecretKeySeedWithDeps(options, {
+    env: process.env,
+    platform: process.platform,
+    readMacKeychain: readMacOAuthProfileSecretKey,
+    readFile: readFallbackOAuthProfileSecretKeyFile,
+    createFile: createFallbackOAuthProfileSecretKeyFile,
+  });
 }
 
 function buildOAuthProfileSecretKey(options?: { create?: boolean }): Buffer | null {
@@ -499,6 +496,11 @@ function buildOAuthProfileSecretKey(options?: { create?: boolean }): Buffer | nu
   }
   return createHash("sha256").update(`openclaw:auth-profile-oauth:${externalKey}`).digest();
 }
+
+export const __testing = {
+  resolveOAuthProfileSecretKeySeedWithDeps,
+  shouldReadMacKeychainForOAuthProfileSecrets,
+};
 
 function encryptOAuthProfileSecretMaterial(params: {
   ref: OAuthCredentialRef;

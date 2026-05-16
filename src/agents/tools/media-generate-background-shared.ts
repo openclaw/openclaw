@@ -323,7 +323,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     directIdempotencyKey: announceId,
   });
   if (!delivery.delivered && delivery.error) {
-    log.warn("Media generation completion wake failed", {
+    log.error("Media generation completion wake failed; generated media may not be delivered", {
       taskId: params.handle.taskId,
       runId: params.handle.runId,
       toolName: params.toolName,

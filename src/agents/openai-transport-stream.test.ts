@@ -172,6 +172,7 @@ describe("openai transport stream", () => {
     expect(observation.responseId).toBe("resp_failed_123");
     expect(observation.responseStatus).toBe("failed");
     expect(observation.responseModel).toBe("gpt-5.4-pro");
+    expect(observation.metadataKeys).toEqual(["api_key", "litellm_request_id"]);
     expect(observation.requestIdHashes).toHaveLength(6);
     expect(observation.requestIdHashes.join(",")).toContain("sha256:");
     expect(summary).toContain("responseId=resp_failed_123");
@@ -183,6 +184,45 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_345");
     expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_678");
     expect(JSON.stringify(observation)).not.toContain("sk-observation-secret");
+  });
+
+  it("normalizes Responses failed events before transport errors are thrown", () => {
+    const model = createAzureResponsesModel();
+
+    expect(
+      __testing.normalizeResponsesFailedEvent(
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed_rate_limit",
+            error: {
+              code: "rate_limit_exceeded",
+              message: "Too many requests",
+            },
+          },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      message: "rate_limit_exceeded: Too many requests",
+      responseId: "resp_failed_rate_limit",
+    });
+
+    expect(
+      __testing.normalizeResponsesFailedEvent(
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed_incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      message: "incomplete: max_output_tokens",
+      responseId: "resp_failed_incomplete",
+    });
   });
 
   it("preserves the failed response id before throwing detail-less Responses failures", async () => {
