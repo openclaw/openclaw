@@ -146,6 +146,8 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
+    compactionStatus: null,
+    compactionClearTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
@@ -1113,6 +1115,85 @@ describe("handleSendChat", () => {
     const feedback = requireRecord(host.chatMessages[0], "feedback message");
     expect(feedback.role).toBe("system");
     expect(feedback.content).toBe("Command `/think` failed unexpectedly.");
+  });
+
+  it("shows the compaction indicator while manual /compact is in flight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const compact = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockReturnValue(compact.promise);
+    const requestUpdate = vi.fn();
+    const host = makeHost({
+      client: { request: vi.fn() } as unknown as ChatHost["client"],
+      chatMessage: "/compact",
+      connected: true,
+      requestUpdate,
+    });
+
+    try {
+      const send = handleSendChat(host);
+      await Promise.resolve();
+
+      expect(host.compactionStatus).toEqual({
+        phase: "active",
+        runId: null,
+        startedAt: 10_000,
+        completedAt: null,
+      });
+      expect(requestUpdate).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(12_000);
+      compact.resolve({
+        content: "Context compacted successfully.",
+        manualCompactionOutcome: "compacted",
+      });
+      await send;
+
+      expect(host.compactionStatus).toEqual({
+        phase: "complete",
+        runId: null,
+        startedAt: 10_000,
+        completedAt: 12_000,
+      });
+      expect(requestUpdate).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(4_999);
+      expect(host.compactionStatus?.phase).toBe("complete");
+
+      vi.advanceTimersByTime(1);
+      expect(host.compactionStatus).toBeNull();
+      expect(host.compactionClearTimer).toBeNull();
+      expect(requestUpdate).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the manual compaction indicator when /compact is skipped", async () => {
+    const compact = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockReturnValue(compact.promise);
+    const requestUpdate = vi.fn();
+    const host = makeHost({
+      client: { request: vi.fn() } as unknown as ChatHost["client"],
+      chatMessage: "/compact",
+      connected: true,
+      requestUpdate,
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.compactionStatus?.phase).toBe("active");
+
+    compact.resolve({
+      content: "Compaction skipped: no transcript.",
+      manualCompactionOutcome: "skipped",
+    });
+    await send;
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+    expect(requestUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("sends /btw immediately while a main run is active without queueing it", async () => {

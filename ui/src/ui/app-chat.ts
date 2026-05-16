@@ -1,6 +1,6 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
-import { resetToolStream } from "./app-tool-stream.ts";
+import { resetToolStream, type CompactionStatus } from "./app-tool-stream.ts";
 import {
   cloneChatAttachmentsMetadata,
   discardChatAttachmentDataUrls,
@@ -65,6 +65,8 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  compactionStatus?: CompactionStatus | null;
+  compactionClearTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
@@ -86,6 +88,7 @@ export type ChatAbortOptions = {
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
+const MANUAL_COMPACTION_TOAST_DURATION_MS = 5000;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -93,6 +96,56 @@ export {
   resetChatInputHistoryNavigation,
 };
 export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
+
+function clearManualCompactionTimer(host: ChatHost) {
+  if (host.compactionClearTimer != null) {
+    globalThis.clearTimeout(host.compactionClearTimer);
+    host.compactionClearTimer = null;
+  }
+}
+
+function beginManualCompactionIndicator(host: ChatHost) {
+  clearManualCompactionTimer(host);
+  host.compactionStatus = {
+    phase: "active",
+    runId: null,
+    startedAt: Date.now(),
+    completedAt: null,
+  };
+  host.requestUpdate?.();
+}
+
+function finishManualCompactionIndicator(
+  host: ChatHost,
+  outcome: "compacted" | "skipped" | "failed" | undefined,
+) {
+  clearManualCompactionTimer(host);
+  if (outcome === "compacted") {
+    const completedAt = Date.now();
+    host.compactionStatus = {
+      phase: "complete",
+      runId: null,
+      startedAt: host.compactionStatus?.startedAt ?? null,
+      completedAt,
+    };
+    host.compactionClearTimer = globalThis.setTimeout(() => {
+      const current = host.compactionStatus;
+      if (
+        current?.phase !== "complete" ||
+        current.runId !== null ||
+        current.completedAt !== completedAt
+      ) {
+        return;
+      }
+      host.compactionStatus = null;
+      host.compactionClearTimer = null;
+      host.requestUpdate?.();
+    }, MANUAL_COMPACTION_TOAST_DURATION_MS);
+  } else {
+    host.compactionStatus = null;
+  }
+  host.requestUpdate?.();
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -687,16 +740,27 @@ async function dispatchSlashCommand(
 
   const targetSessionKey = host.sessionKey;
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
+  const showManualCompactionIndicator = name === "compact";
+  if (showManualCompactionIndicator) {
+    beginManualCompactionIndicator(host);
+  }
   try {
     result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
       chatModelCatalog: host.chatModelCatalog,
       sessionsResult: host.sessionsResult,
     });
   } catch (err) {
+    if (showManualCompactionIndicator) {
+      finishManualCompactionIndicator(host, "failed");
+    }
     host.lastError = String(err);
     injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
+  }
+
+  if (showManualCompactionIndicator) {
+    finishManualCompactionIndicator(host, result.manualCompactionOutcome);
   }
 
   if (result.content) {

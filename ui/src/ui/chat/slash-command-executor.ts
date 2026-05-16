@@ -56,6 +56,8 @@ export type SlashCommandResult = {
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
   pendingCurrentRun?: boolean;
+  /** Manual compaction outcome so the UI can reconcile its in-flight indicator. */
+  manualCompactionOutcome?: "compacted" | "skipped" | "failed";
 };
 
 export type SlashCommandContext = {
@@ -174,14 +176,26 @@ async function executeCompact(
         typeof before === "number" && typeof after === "number"
           ? ` (${before.toLocaleString()} -> ${after.toLocaleString()} tokens)`
           : "";
-      return { content: `Context compacted successfully${tokenSummary}.`, action: "refresh" };
+      return {
+        content: `Context compacted successfully${tokenSummary}.`,
+        action: "refresh",
+        manualCompactionOutcome: "compacted",
+      };
     }
     if (typeof result?.reason === "string" && result.reason.trim()) {
-      return { content: `Compaction skipped: ${result.reason}`, action: "refresh" };
+      return {
+        content: `Compaction skipped: ${result.reason}`,
+        action: "refresh",
+        manualCompactionOutcome: "skipped",
+      };
     }
-    return { content: "Compaction skipped.", action: "refresh" };
+    return {
+      content: "Compaction skipped.",
+      action: "refresh",
+      manualCompactionOutcome: "skipped",
+    };
   } catch (err) {
-    return { content: `Compaction failed: ${String(err)}` };
+    return { content: `Compaction failed: ${String(err)}`, manualCompactionOutcome: "failed" };
   }
 }
 

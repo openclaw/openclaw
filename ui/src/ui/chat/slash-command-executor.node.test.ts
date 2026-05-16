@@ -35,6 +35,77 @@ function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) 
   expect(request.mock.calls.some(([calledMethod]) => calledMethod === method)).toBe(false);
 }
 
+describe("executeSlashCommand /compact", () => {
+  it("reports compacted outcome for successful manual compaction", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.compact") {
+        return {
+          compacted: true,
+          result: { tokensBefore: 12_000, tokensAfter: 4_000 },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "compact",
+      "",
+    );
+
+    expect(result).toEqual({
+      content: "Context compacted successfully (12,000 -> 4,000 tokens).",
+      action: "refresh",
+      manualCompactionOutcome: "compacted",
+    });
+    expect(request).toHaveBeenCalledWith("sessions.compact", { key: "agent:main:main" });
+  });
+
+  it("reports skipped outcome when manual compaction is skipped", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.compact") {
+        return { compacted: false, reason: "below threshold" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "compact",
+      "",
+    );
+
+    expect(result).toEqual({
+      content: "Compaction skipped: below threshold",
+      action: "refresh",
+      manualCompactionOutcome: "skipped",
+    });
+  });
+
+  it("reports failed outcome when manual compaction fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.compact") {
+        throw new Error("boom");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "compact",
+      "",
+    );
+
+    expect(result).toEqual({
+      content: "Compaction failed: Error: boom",
+      manualCompactionOutcome: "failed",
+    });
+  });
+});
+
 describe("executeSlashCommand /kill", () => {
   it("aborts every sub-agent session for /kill all", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
