@@ -1,4 +1,4 @@
-import { listChatChannels } from "../channels/chat-meta.js";
+import { listAllChatChannels } from "../channels/chat-meta.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
@@ -36,7 +36,7 @@ function listConfiguredChannelRemovalChoices(
     return [];
   }
   const labelsById = new Map(
-    listChatChannels().map((meta) => [meta.id, formatChannelRemovalLabel(meta.label, meta.id)]),
+    listAllChatChannels().map((meta) => [meta.id, formatChannelRemovalLabel(meta.label, meta.id)]),
   );
   return Object.keys(channels)
     .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))

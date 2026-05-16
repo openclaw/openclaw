@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { listChatChannels } from "../../channels/chat-meta.js";
+import { listAllChatChannels } from "../../channels/chat-meta.js";
 import { type ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
 import { normalizeChannelMeta } from "../../channels/plugins/meta-normalization.js";
@@ -118,7 +118,7 @@ export function resolveChannelSetupEntries(params: {
     );
 
   const metaById = new Map<string, ChannelMeta>();
-  for (const meta of listChatChannels()) {
+  for (const meta of listAllChatChannels()) {
     metaById.set(
       meta.id,
       normalizeChannelMeta({
