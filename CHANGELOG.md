@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/media: prevent image filenames from overriding generic non-image byte sniffing, so zip/octet-stream payloads mislabeled as images are offloaded or rejected before they become inline image attachments.
+- Plugins/web search: downgrade stale optional provider installs to warnings so Gateway and doctor repair paths keep running after startup provider selection. Refs #82313. Thanks @crackmac.
 - MS Teams/media: sniff inline `data:image/*` attachment bytes before staging them, skipping payloads that are not actually images.
 - Update: let package-swap `doctor --fix` persist core config repairs while plugin schemas are still converging, preventing update failures on externalized channel configs.
 - Telegram: let authorized text `/stop` commands use the fast-abort path before queued agent work, so active turns stop immediately instead of processing the abort after the turn finishes. Fixes #82162. Thanks @civiltox.
