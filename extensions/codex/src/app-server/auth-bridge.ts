@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -16,6 +15,10 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  resolveCodexAppServerHomeDir as resolveCodexAppServerHomeDirFromLeaf,
+  resolveCodexAppServerNativeHomeDir as resolveCodexAppServerNativeHomeDirFromLeaf,
+} from "./codex-home-paths.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
@@ -29,8 +32,6 @@ const OPENAI_PROVIDER = "openai";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
-const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
-const CODEX_APP_SERVER_NATIVE_HOME_DIRNAME = "home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
@@ -244,13 +245,8 @@ function fingerprintTokenAuthProfileCacheKey(accessToken: string): string {
   return `token:sha256:${hash.digest("hex")}`;
 }
 
-export function resolveCodexAppServerHomeDir(agentDir: string): string {
-  return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
-}
-
-export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
-  return path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
-}
+export const resolveCodexAppServerHomeDir = resolveCodexAppServerHomeDirFromLeaf;
+export const resolveCodexAppServerNativeHomeDir = resolveCodexAppServerNativeHomeDirFromLeaf;
 
 async function withAgentCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,

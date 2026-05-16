@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
+import { resolveCodexAppServerHomeDir } from "./codex-home-paths.js";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
