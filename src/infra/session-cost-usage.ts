@@ -1895,7 +1895,15 @@ export async function loadSessionUsageTimeSeries(params: {
   const sortedPoints = points.toSorted((a, b) => a.timestamp - b.timestamp);
 
   // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
+  const maxPoints =
+    params.maxPoints === undefined
+      ? 100
+      : Number.isFinite(params.maxPoints)
+        ? Math.max(0, Math.floor(params.maxPoints))
+        : 0;
+  if (maxPoints === 0) {
+    return { sessionId: params.sessionId, points: [] };
+  }
   if (sortedPoints.length > maxPoints) {
     const step = Math.ceil(sortedPoints.length / maxPoints);
     const downsampled: SessionUsageTimePoint[] = [];

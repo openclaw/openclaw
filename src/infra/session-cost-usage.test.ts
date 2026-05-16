@@ -1966,4 +1966,53 @@ example
     expect(lastPoint?.cumulativeTokens).toBe(165);
     expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
   });
+
+  it("returns no timeseries points when maxPoints is zero or invalid", async () => {
+    const root = await makeSessionCostRoot("timeseries-zero-maxpoints");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-zero-maxpoints.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T10:01:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: { input: 1, output: 2, totalTokens: 3, cost: { total: 0.001 } },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T10:02:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: { input: 2, output: 3, totalTokens: 5, cost: { total: 0.002 } },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 })).resolves.toEqual({
+      sessionId: undefined,
+      points: [],
+    });
+    await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: -1 })).resolves.toEqual({
+      sessionId: undefined,
+      points: [],
+    });
+    await expect(
+      loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.NaN }),
+    ).resolves.toEqual({
+      sessionId: undefined,
+      points: [],
+    });
+  });
 });
