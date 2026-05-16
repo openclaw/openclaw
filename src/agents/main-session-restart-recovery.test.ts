@@ -90,7 +90,7 @@ describe("main-session-restart-recovery", () => {
       "agent:main:completed": {
         sessionId: "completed-session",
         updatedAt: Date.now() - 10_000,
-        status: "completed",
+        status: "done",
       },
       "agent:main:subagent:child": {
         sessionId: "child-session",
