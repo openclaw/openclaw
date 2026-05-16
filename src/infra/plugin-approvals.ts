@@ -553,6 +553,16 @@ function splitCommandSegments(command: string): string[] {
       current += char;
       continue;
     }
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      current += char;
+      escaped = true;
+      continue;
+    }
     if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
       pushCurrent();
       index += 1;

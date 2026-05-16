@@ -1244,6 +1244,12 @@ describe("plugin-sdk/approval-renderers", () => {
     },
     {
       contact: "https://example.test/path",
+      command: String.raw`curl https://example.test/path?x=1\&access_token=s3cr3t`,
+      id: "plugin-command-curl-escaped-query-token",
+      redactedUrl: String.raw`https://example.test/path?x=1\&access_token=[redacted]`,
+    },
+    {
+      contact: "https://example.test/path",
       command: "curl --url=https://user:s3cr3t@example.test/path",
       id: "plugin-command-curl-url-flag-credentials",
       redactedUrl: "--url=https://[redacted]@example.test/path",
