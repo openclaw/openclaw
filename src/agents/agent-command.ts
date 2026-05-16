@@ -47,6 +47,7 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -61,7 +62,7 @@ import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "./harness/selection.js";
+import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -867,6 +868,15 @@ async function agentCommandInternal(
     model = allowedInitialSelection.model;
     providerForAuthProfileValidation = provider;
 
+    await ensureSelectedAgentHarnessPlugin({
+      config: cfg,
+      provider,
+      modelId: model,
+      agentId: sessionAgentId,
+      sessionKey,
+      workspaceDir,
+    });
+
     let sessionEntryForAttempt = sessionEntry;
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
@@ -874,10 +884,7 @@ async function agentCommandInternal(
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        const profileAuthProvider = profile
-          ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
-          : undefined;
-        const validationHarnessPolicy = resolveAgentHarnessPolicy({
+        const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
           provider: providerForAuthProfileValidation,
           modelId: model,
           config: cfg,
@@ -890,7 +897,16 @@ async function agentCommandInternal(
         }).map((candidateProvider) =>
           resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
         );
-        if (!profile || !acceptedAuthProviders.includes(profileAuthProvider ?? "")) {
+        const profileMatchesRuntime =
+          profile &&
+          acceptedAuthProviders.some((candidateProvider) =>
+            isStoredCredentialCompatibleWithAuthProvider({
+              cfg,
+              provider: candidateProvider,
+              credential: profile,
+            }),
+          );
+        if (!profileMatchesRuntime) {
           if (hasExplicitRunOverride) {
             sessionEntryForAttempt = {
               ...entry,
@@ -966,14 +982,6 @@ async function agentCommandInternal(
         }
       }
     }
-    await ensureSelectedAgentHarnessPlugin({
-      config: cfg,
-      provider,
-      modelId: model,
-      agentId: sessionAgentId,
-      sessionKey,
-      workspaceDir,
-    });
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {

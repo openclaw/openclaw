@@ -51,10 +51,14 @@ const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true
 const resetAllLanes = vi.fn();
 const reloadTaskRegistryFromStore = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
+  (_opts?: { env?: NodeJS.ProcessEnv }) => {
+    mode: "spawned" | "supervised" | "disabled" | "failed";
+    pid?: number;
+    detail?: string;
+  }
 >(() => ({ mode: "disabled" }));
 const respawnGatewayProcessForUpdate = vi.fn<
-  () => {
+  (_opts?: { env?: NodeJS.ProcessEnv }) => {
     mode: "spawned" | "supervised" | "disabled" | "failed";
     pid?: number;
     detail?: string;
@@ -110,8 +114,10 @@ vi.mock("../../infra/restart.js", () => ({
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
-  respawnGatewayProcessForUpdate: () => respawnGatewayProcessForUpdate(),
-  restartGatewayProcessWithFreshPid: () => restartGatewayProcessWithFreshPid(),
+  respawnGatewayProcessForUpdate: (opts?: { env?: NodeJS.ProcessEnv }) =>
+    respawnGatewayProcessForUpdate(opts),
+  restartGatewayProcessWithFreshPid: (opts?: { env?: NodeJS.ProcessEnv }) =>
+    restartGatewayProcessWithFreshPid(opts),
 }));
 
 vi.mock("../../infra/restart-sentinel.js", () => ({
@@ -664,34 +670,47 @@ describe("runGatewayLoop", () => {
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    const originalTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const lockRelease = vi.fn(async () => {});
-      acquireGatewayLock.mockResolvedValueOnce({
-        release: lockRelease,
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const lockRelease = vi.fn(async () => {});
+        acquireGatewayLock.mockResolvedValueOnce({
+          release: lockRelease,
+        });
+
+        // Override process-respawn to return "spawned" mode
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+          mode: "spawned",
+          pid: 9999,
+        });
+
+        const exitCallOrder: string[] = [];
+        const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
+        const sigusr1 = captureSignal("SIGUSR1");
+        lockRelease.mockImplementation(async () => {
+          exitCallOrder.push("lockRelease");
+        });
+
+        sigusr1();
+
+        await exited;
+        expect(lockRelease).toHaveBeenCalledTimes(1);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+        const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
+        expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS).toMatch(/^\d/u);
+        expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS).toMatch(/^\d/u);
+        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
       });
-
-      // Override process-respawn to return "spawned" mode
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-        mode: "spawned",
-        pid: 9999,
-      });
-
-      const exitCallOrder: string[] = [];
-      const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
-      const sigusr1 = captureSignal("SIGUSR1");
-      lockRelease.mockImplementation(async () => {
-        exitCallOrder.push("lockRelease");
-      });
-
-      sigusr1();
-
-      await exited;
-      expect(lockRelease).toHaveBeenCalledTimes(1);
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-      expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
-      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
-    });
+    } finally {
+      if (originalTraceEnv === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+      } else {
+        process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalTraceEnv;
+      }
+    }
   });
 
   it("waits briefly before exiting on launchd supervised restart", async () => {

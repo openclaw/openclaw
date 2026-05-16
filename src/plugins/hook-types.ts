@@ -94,6 +94,7 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  /** @deprecated Use gateway_stop. */
   | "deactivate"
   | "gateway_start"
   | "gateway_stop"
@@ -1003,11 +1004,13 @@ export type PluginHookHandlerMap = {
     ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
   /**
-   * Compatibility alias for gateway_stop.
+   * Deprecated compatibility alias for gateway_stop.
    *
    * New plugins should register gateway_stop directly; the loader normalizes
    * deactivate registrations onto gateway_stop so cleanup handlers still run
    * during Gateway shutdown.
+   *
+   * @deprecated Use gateway_stop.
    */
   deactivate: (
     event: PluginHookGatewayStopEvent,

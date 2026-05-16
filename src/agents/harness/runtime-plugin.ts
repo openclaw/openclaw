@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { resolveAgentHarnessPolicy } from "./selection.js";
+import { resolveAgentHarnessPolicy } from "./policy.js";
 
 export async function ensureSelectedAgentHarnessPlugin(params: {
   provider: string;

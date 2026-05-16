@@ -7,11 +7,12 @@ export function mergeAttemptToolMediaPayloads(params: {
   payloads?: EmbeddedRunPayload[];
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
 }): EmbeddedRunPayload[] | undefined {
   const mediaUrls = Array.from(
     new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
   );
-  if (mediaUrls.length === 0 && !params.toolAudioAsVoice) {
+  if (mediaUrls.length === 0 && !params.toolAudioAsVoice && !params.toolTrustedLocalMedia) {
     return params.payloads;
   }
 
@@ -25,6 +26,7 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
       mediaUrl: payload.mediaUrl ?? mergedMediaUrls[0],
       audioAsVoice: payload.audioAsVoice || params.toolAudioAsVoice || undefined,
+      trustedLocalMedia: payload.trustedLocalMedia || params.toolTrustedLocalMedia || undefined,
     });
     return payloads;
   }
@@ -35,6 +37,7 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrls: mediaUrls.length ? mediaUrls : undefined,
       mediaUrl: mediaUrls[0],
       audioAsVoice: params.toolAudioAsVoice || undefined,
+      trustedLocalMedia: params.toolTrustedLocalMedia || undefined,
     },
   ];
 }

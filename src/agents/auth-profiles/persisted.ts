@@ -460,7 +460,11 @@ function createFallbackOAuthProfileSecretKeyFile(): string | undefined {
 }
 
 function shouldUseMacKeychainForOAuthProfileSecrets(): boolean {
-  return process.platform === "darwin" && process.env.VITEST !== "true";
+  return (
+    process.platform === "darwin" &&
+    process.env.VITEST !== "true" &&
+    process.env.VITEST_WORKER_ID === undefined
+  );
 }
 
 function resolveOAuthProfileSecretKeySeed(options?: { create?: boolean }): string | undefined {

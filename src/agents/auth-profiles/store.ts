@@ -456,6 +456,7 @@ function buildLocalAuthProfileStoreForSave(params: {
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  saveOptions?: SaveAuthProfileStoreOptions;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -469,7 +470,7 @@ export async function updateAuthProfileStoreWithLock(params: {
       const store = loadAuthProfileStoreForAgent(params.agentDir, { syncExternalCli: false });
       const shouldSave = params.updater(store);
       if (shouldSave) {
-        saveAuthProfileStore(store, params.agentDir);
+        saveAuthProfileStore(store, params.agentDir, params.saveOptions);
       }
       return store;
     });
