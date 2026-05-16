@@ -516,12 +516,10 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           return null;
         }
         if (stopped) {
-          await nativeRuntime.interactions?.unbindPending?.({
-            ...baseContext,
-            entry,
-            request,
-            approvalKind,
-          });
+          // onStopped 가 deliverPending 와 bindPending 사이에 fire. bindPending 시작 전
+          // 이라 wrapped 도 생성되지 않으므로 activeEntries leak 없음. entry 의 native
+          // cleanup 은 deliverPending 의 contract (timeout/expire) 에 위임. binding 없는
+          // 상태에서 unbindPending 을 호출하면 시그니처 위반이므로 생략.
           return null;
         }
         const binding = await nativeRuntime.interactions?.bindPending?.({
@@ -533,13 +531,15 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           pendingPayload: pendingContent.payload,
         });
         if (stopped) {
-          await nativeRuntime.interactions?.unbindPending?.({
-            ...baseContext,
-            entry,
-            ...(binding === undefined || binding === null ? {} : { binding }),
-            request,
-            approvalKind,
-          });
+          if (binding !== undefined && binding !== null) {
+            await nativeRuntime.interactions?.unbindPending?.({
+              ...baseContext,
+              entry,
+              binding,
+              request,
+              approvalKind,
+            });
+          }
           return null;
         }
         const wrapped: WrappedPendingEntry = {
