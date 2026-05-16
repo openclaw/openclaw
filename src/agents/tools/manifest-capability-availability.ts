@@ -68,7 +68,9 @@ export function getCurrentCapabilityMetadataSnapshot(params: {
 }): PluginMetadataSnapshot | undefined {
   return getCurrentPluginMetadataSnapshot({
     config: params.config,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.workspaceDir
+      ? { workspaceDir: params.workspaceDir }
+      : { allowWorkspaceScopedSnapshot: true }),
   });
 }
 
@@ -80,7 +82,9 @@ export function loadCapabilityMetadataSnapshot(params: {
   return (
     getCurrentPluginMetadataSnapshot({
       config: params.config,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.workspaceDir
+        ? { workspaceDir: params.workspaceDir }
+        : { allowWorkspaceScopedSnapshot: true }),
     }) ??
     loadManifestContractSnapshot({
       config: params.config,
