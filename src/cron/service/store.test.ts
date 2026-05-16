@@ -291,7 +291,7 @@ describe("cron service store seam coverage", () => {
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
   });
 
-  it("keeps a force-reloaded legacy string schedule for runtime repair handling", async () => {
+  it("keeps a force-reloaded malformed schedule for runtime repair handling", async () => {
     const { storePath } = await makeStorePath();
     const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
 
