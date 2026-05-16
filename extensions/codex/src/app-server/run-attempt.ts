@@ -2035,6 +2035,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
+    runAbortController.abort("client_closed");
     completed = true;
     clearTurnAttemptIdleTimer();
     clearTurnCompletionIdleTimer();
