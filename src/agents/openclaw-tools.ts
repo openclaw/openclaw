@@ -1,5 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
-import type { InboundTurnKind } from "../channels/turn/kind.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -121,7 +121,7 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    inboundTurnKind?: InboundTurnKind;
+    inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -303,7 +303,7 @@ export function createOpenClawTools(
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-        inboundTurnKind: options?.inboundTurnKind,
+        inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
       });

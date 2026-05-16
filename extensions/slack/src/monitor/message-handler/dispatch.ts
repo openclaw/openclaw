@@ -212,7 +212,7 @@ export function resolveSlackStreamingThreadHint(params: {
   });
 }
 
-type SlackTurnDeliveryAttempt = {
+type SlackEventDeliveryAttempt = {
   kind: ReplyDispatchKind;
   payload: ReplyPayload;
   threadTs?: string;
@@ -222,7 +222,7 @@ type SlackTurnDeliveryAttempt = {
 const SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX = 2000;
 const slackStreamRecipientTeamCache = new Map<string, string>();
 
-function buildSlackTurnDeliveryKey(params: SlackTurnDeliveryAttempt): string | null {
+function buildSlackEventDeliveryKey(params: SlackEventDeliveryAttempt): string | null {
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.textOverride,
   });
@@ -282,15 +282,15 @@ export function resetSlackStreamRecipientTeamCacheForTests(): void {
   slackStreamRecipientTeamCache.clear();
 }
 
-export function createSlackTurnDeliveryTracker() {
+export function createSlackEventDeliveryTracker() {
   const deliveredKeys = new Set<string>();
   return {
-    hasDelivered(params: SlackTurnDeliveryAttempt) {
-      const key = buildSlackTurnDeliveryKey(params);
+    hasDelivered(params: SlackEventDeliveryAttempt) {
+      const key = buildSlackEventDeliveryKey(params);
       return key ? deliveredKeys.has(key) : false;
     },
-    markDelivered(params: SlackTurnDeliveryAttempt) {
-      const key = buildSlackTurnDeliveryKey(params);
+    markDelivered(params: SlackEventDeliveryAttempt) {
+      const key = buildSlackEventDeliveryKey(params);
       if (key) {
         deliveredKeys.add(key);
       }
@@ -582,7 +582,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedReplyThreadTs: string | undefined;
   let usedBlockReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
-  const deliveryTracker = createSlackTurnDeliveryTracker();
+  const deliveryTracker = createSlackEventDeliveryTracker();
   const resolveDeliveryThreadTs = (params: {
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;

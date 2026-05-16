@@ -192,7 +192,16 @@ export async function processDiscordMessage(
     await loadReplyRuntime();
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
-    ctx: { ChatType: isGuildMessage ? "channel" : undefined },
+    ctx: {
+      ChatType: isDirectMessage
+        ? "direct"
+        : isGroupDm
+          ? "group"
+          : isGuildMessage
+            ? "channel"
+            : undefined,
+      InboundEventKind: ctx.inboundEventKind,
+    },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {

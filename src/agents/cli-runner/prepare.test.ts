@@ -92,7 +92,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-          "x-openclaw-inbound-turn-kind": "${OPENCLAW_MCP_INBOUND_TURN_KIND}",
+          "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
         },
       },
     },
@@ -393,7 +393,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
         prompt: "latest ask",
         transcriptPrompt: "latest ask",
-        currentTurnContext: {
+        currentInboundContext: {
           text: "Sender (untrusted metadata):\nsender_id=U123",
           promptJoiner: " ",
         },
@@ -1032,13 +1032,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
         config: createCliBackendConfig(),
-        currentTurnKind: "room_event",
+        currentInboundEventKind: "room_event",
         messageChannel: "telegram",
       });
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
-        OPENCLAW_MCP_INBOUND_TURN_KIND: "room_event",
+        OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

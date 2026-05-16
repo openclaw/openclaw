@@ -708,6 +708,77 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(await prepared.ackReactionPromise).toBe(true);
   });
 
+  it("keeps unmentioned room events quiet even when group replies are automatic", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+          ackReactionScope: "all",
+          groupChat: {
+            unmentionedInbound: "room_event",
+            visibleReplies: "automatic",
+          },
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "ambient note",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(prepared.ackReactionMessageTs).toBe("1.000");
+    expect(prepared.ackReactionPromise).toBeNull();
+  });
+
+  it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          groupChat: {
+            unmentionedInbound: "room_event",
+          },
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "please stop",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(prepared.ctxPayload.CommandBody).toBe("please stop");
+  });
+
   it("includes forwarded shared attachment text in raw body", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
