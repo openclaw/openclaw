@@ -6,6 +6,8 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 
+const TRUNCATION_MARKER = "\n…(truncated)…";
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -192,6 +194,29 @@ describe("sanitizeToolResult", () => {
     expect(sanitized).toContain("OPENROUTER_API_KEY=");
   });
 
+  it("bounds oversized exec-style nested result strings without dropping context", () => {
+    const long = "x".repeat(50000);
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "completed",
+        aggregated: long,
+        nested: { output: long },
+      },
+      content: [{ type: "text", text: long }],
+    }) as {
+      details: { status: string; aggregated: string; nested: { output: string } };
+      content: Array<{ text: string }>;
+    };
+
+    expect(sanitized.details.status).toBe("completed");
+    expect(sanitized.details.aggregated.length).toBeLessThan(long.length);
+    expect(sanitized.details.aggregated.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(sanitized.details.aggregated.startsWith("x")).toBe(true);
+    expect(sanitized.details.nested.output.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(sanitized.content[0]?.text.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(sanitized.content[0]?.text.startsWith("x")).toBe(true);
+  });
+
   it("preserves top-level arrays while redacting nested strings", () => {
     const sanitized = sanitizeToolResult([
       { output: "Authorization: Bearer abcdef0123456789QWERTY=" },
@@ -249,5 +274,25 @@ describe("sanitizeToolArgs", () => {
       count: 3,
       file_path: "/tmp/x.txt",
     });
+  });
+
+  it("bounds oversized apply-patch-style args while keeping the leading context visible", () => {
+    const long = "x".repeat(50000);
+    const sanitized = sanitizeToolArgs({
+      input: long,
+      nested: { diff: long },
+      flags: ["--explain", long],
+    }) as {
+      input: string;
+      nested: { diff: string };
+      flags: string[];
+    };
+
+    expect(sanitized.input.length).toBeLessThan(long.length);
+    expect(sanitized.input.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(sanitized.input.startsWith("x")).toBe(true);
+    expect(sanitized.nested.diff.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(sanitized.flags[0]).toBe("--explain");
+    expect(sanitized.flags[1]?.endsWith(TRUNCATION_MARKER)).toBe(true);
   });
 });
