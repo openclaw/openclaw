@@ -6,6 +6,7 @@ const SCENARIOS = new Set([
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
@@ -293,6 +294,15 @@ function assertConfigSurvived() {
         "whatsapp group policy changed",
       );
     }
+  }
+
+  if (getScenario() === "channel-post-core-restore") {
+    const whatsapp = config.channels?.whatsapp;
+    assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
+    assert(
+      whatsapp.groups?.["120363000000000000@g.us"]?.requireMention === true,
+      "post-core channel restore changed WhatsApp group config",
+    );
   }
 
   if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {

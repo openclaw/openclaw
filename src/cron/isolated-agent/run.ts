@@ -794,6 +794,7 @@ async function prepareCronRunContext(params: {
               agentId,
               sessionKey: agentSessionKey,
             }).runtime,
+            config: cfgWithAgentDefaults,
           }),
           agentDir,
           sessionEntry: cronSession.sessionEntry,

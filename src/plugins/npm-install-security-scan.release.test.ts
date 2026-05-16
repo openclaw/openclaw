@@ -3,8 +3,9 @@ import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 
 type NpmPackFile = {
   path?: unknown;
@@ -294,18 +295,16 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 
 describe("publishable plugin npm package install security scan", () => {
   it("lists publishable plugin packages without scanning extension directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const packages = collectPublishablePluginPackages();
 
       expect(packages.length).toBeGreaterThan(0);
       expect(
-        packages.every((plugin) => plugin.packageDir.split(sep).join("/").startsWith("extensions/")),
+        packages.every((plugin) =>
+          plugin.packageDir.split(sep).join("/").startsWith("extensions/"),
+        ),
       ).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps npm-published plugin files clear of unexpected critical hits", async () => {

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -107,16 +108,12 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 
 describe("production lint suppressions", () => {
   it("lists production files from git without walking source roots", () => {
-    const readdirSync = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-      expect(readdirSync).not.toHaveBeenCalled();
-    } finally {
-      readdirSync.mockRestore();
-    }
+    });
   });
 
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {

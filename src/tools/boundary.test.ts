@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 
 const toolsDir = new URL("./", import.meta.url);
 const toolsDirPath = fileURLToPath(toolsDir);
@@ -92,18 +93,12 @@ function listFindProductionToolModuleFiles(): string[] | null {
 
 describe("tool system boundary", () => {
   it("lists production tool modules without scanning the tools directory in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = listProductionToolModuleFiles();
 
       expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))).toBe(
-        true,
-      );
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+      expect(files.every((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))).toBe(true);
+    });
   });
 
   it("keeps production tool modules independent from OpenClaw subsystems", () => {

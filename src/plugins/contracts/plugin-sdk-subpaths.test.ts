@@ -23,7 +23,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
 import ts from "typescript";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
   BaseProbeResult,
@@ -50,6 +50,7 @@ import * as coreDirectSdk from "../../plugin-sdk/core.js";
 import { publicPluginSdkSubpaths as pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
 import * as globalSingletonDirectSdk from "../../plugin-sdk/global-singleton.js";
 import * as providerEntryDirectSdk from "../../plugin-sdk/provider-entry.js";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -327,7 +328,9 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
 }
 
 function listTrackedRepoTsFiles(dir: string): string[] | null {
-  const relativeDir = relative(REPO_ROOT, dir).split(/[\\/]+/u).join("/");
+  const relativeDir = relative(REPO_ROOT, dir)
+    .split(/[\\/]+/u)
+    .join("/");
   if (!relativeDir || relativeDir.startsWith("..")) {
     return null;
   }
@@ -344,9 +347,7 @@ function listTrackedRepoTsFiles(dir: string): string[] | null {
     .map((line) => line.trim().replaceAll("\\", "/"))
     .filter(
       (line) =>
-        line.endsWith(".ts") &&
-        !line.includes("/dist/") &&
-        !line.includes("/node_modules/"),
+        line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
     )
     .map((line) => resolve(REPO_ROOT, ...line.split("/")))
     .toSorted();
@@ -825,16 +826,15 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("lists repo source candidates from git without walking SDK boundary roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
     try {
-      repoTsFilesCache.clear();
-      const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
+      expectNoReaddirSyncDuring(() => {
+        repoTsFilesCache.clear();
+        const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
 
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
+        expect(files.length).toBeGreaterThan(0);
+        expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
+      });
     } finally {
-      readDir.mockRestore();
       repoTsFilesCache.clear();
     }
   });

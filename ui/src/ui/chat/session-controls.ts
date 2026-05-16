@@ -445,7 +445,6 @@ type SessionOptionEntry = {
   label: string;
   scopeLabel: string;
   title: string;
-  parentKey?: string;
 };
 
 export type SessionOptionGroup = {
@@ -478,22 +477,28 @@ function isAgentMainSessionKey(key: string): boolean {
 
 function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const currentParsed = parseAgentSessionKey(state.sessionKey);
-  if (normalizeAgentId(currentParsed?.agentId ?? defaultAgentId) === normalizedAgentId) {
+  if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
     return state.sessionKey;
   }
-  const rows = state.sessionsResult?.sessions ?? [];
-  let row: (typeof rows)[number] | undefined;
-  for (const entry of rows) {
-    if (!isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId)) {
-      continue;
-    }
-    if (!row || (entry.updatedAt ?? 0) > (row.updatedAt ?? 0)) {
-      row = entry;
-    }
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const eligible = (state.sessionsResult?.sessions ?? [])
+    .filter((row) => {
+      if (!isSessionKeyTiedToAgent(row.key, normalizedAgentId, defaultAgentId)) {
+        return false;
+      }
+      if (row.kind === "global" || row.kind === "unknown") {
+        return false;
+      }
+      if (isCronSessionKey(row.key)) {
+        return false;
+      }
+      return !isSubagentSessionKey(row.key) && !row.spawnedBy;
+    })
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (eligible[0]?.key) {
+    return eligible[0].key;
   }
-  return row?.key ?? buildAgentMainSessionKey({ agentId: normalizedAgentId });
+  return buildAgentMainSessionKey({ agentId: normalizedAgentId });
 }
 
 function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
@@ -556,7 +561,7 @@ export function resolveSessionOptionGroups(
     return created;
   };
 
-  const addOption = (key: string, parentKey?: string, isChild?: boolean) => {
+  const addOption = (key: string) => {
     if (!key || seenKeys.has(key)) {
       return;
     }
@@ -570,16 +575,11 @@ export function resolveSessionOptionGroups(
         )
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    let label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
-    if (isChild) {
-      label = `└─ ${label.replace(/^Subagent:\s*/i, "")}`;
-    }
     group.options.push({
       key,
-      label,
+      label: resolveSessionScopedOptionLabel(key, row, parsed?.rest),
       scopeLabel,
       title: key,
-      ...(parentKey ? { parentKey } : {}),
     });
   };
 
@@ -597,46 +597,15 @@ export function resolveSessionOptionGroups(
       continue;
     }
     const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
-    if (isSubagent && row.spawnedBy && byKey.has(row.spawnedBy)) {
-      addOption(row.key, row.spawnedBy, true);
-    } else {
-      addOption(row.key);
+    if (isSubagent && row.key !== sessionKey) {
+      continue;
     }
+    addOption(row.key);
   }
   if (byKey.has(sessionKey)) {
     addOption(sessionKey);
-  } else if (isAgentMainSessionKey(sessionKey)) {
+  } else if (isAgentMainSessionKey(sessionKey) || isSubagentSessionKey(sessionKey)) {
     addOption(sessionKey);
-  }
-
-  for (const group of groups.values()) {
-    const options = group.options;
-    const optionKeys = new Set(options.map((option) => option.key));
-    const childrenByParent = new Map<string, SessionOptionEntry[]>();
-    for (const option of options) {
-      if (option.parentKey && optionKeys.has(option.parentKey)) {
-        const siblings = childrenByParent.get(option.parentKey);
-        if (siblings) {
-          siblings.push(option);
-        } else {
-          childrenByParent.set(option.parentKey, [option]);
-        }
-      }
-    }
-    if (childrenByParent.size > 0) {
-      const reordered: SessionOptionEntry[] = [];
-      for (const option of options) {
-        if (option.parentKey && optionKeys.has(option.parentKey)) {
-          continue;
-        }
-        reordered.push(option);
-        const children = childrenByParent.get(option.key);
-        if (children) {
-          reordered.push(...children);
-        }
-      }
-      options.splice(0, options.length, ...reordered);
-    }
   }
 
   for (const group of groups.values()) {

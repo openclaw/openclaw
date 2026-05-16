@@ -3,7 +3,8 @@ import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -164,7 +165,9 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
 }
 
 function listExternalTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
-  return listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter);
+  return (
+    listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter)
+  );
 }
 
 function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
@@ -296,17 +299,16 @@ function collectTypedHookNames(source: string): string[] {
 
 describe("plugin contract boundary invariants", () => {
   it("lists boundary invariant source files without walking roots in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
     try {
-      tsFilesCache.clear();
-      const files = listTsFiles("src", { excludeTests: true });
+      expectNoReaddirSyncDuring(() => {
+        tsFilesCache.clear();
+        const files = listTsFiles("src", { excludeTests: true });
 
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.startsWith("src/") && file.endsWith(".ts"))).toBe(true);
-      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-      expect(readDir).not.toHaveBeenCalled();
+        expect(files.length).toBeGreaterThan(0);
+        expect(files.every((file) => file.startsWith("src/") && file.endsWith(".ts"))).toBe(true);
+        expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+      });
     } finally {
-      readDir.mockRestore();
       tsFilesCache.clear();
     }
   });

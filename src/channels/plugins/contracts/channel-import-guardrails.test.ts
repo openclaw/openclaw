@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
@@ -589,8 +590,7 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
 
 describe("channel import guardrails", () => {
   it("lists channel import guardrail sources from git without walking roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const extensionSources = collectExtensionSourceFiles();
       const coreSources = collectCoreSourceFiles();
       const telegramSources = collectExtensionFiles("telegram");
@@ -598,10 +598,7 @@ describe("channel import guardrails", () => {
       expect(extensionSources.length).toBeGreaterThan(0);
       expect(coreSources.length).toBeGreaterThan(0);
       expect(telegramSources.length).toBeGreaterThan(0);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps channel helper modules off their own SDK barrels", () => {

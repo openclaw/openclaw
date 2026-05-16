@@ -240,6 +240,8 @@ export type MsgContext = {
   ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
+  /** Provider-native thread target for reply delivery without making the session thread-scoped. */
+  TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */

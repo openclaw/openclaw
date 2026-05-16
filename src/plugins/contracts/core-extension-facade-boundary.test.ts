@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const srcRoot = path.join(repoRoot, "src");
@@ -74,16 +75,12 @@ function toRepoRelative(filePath: string): string {
 
 describe("core extension facade boundary", () => {
   it("lists core facade boundary sources from git without walking src", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = collectSourceFiles(srcRoot);
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => file.includes("/plugin-sdk/"))).toBe(false);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("does not expose Ollama plugin facades from core plugin-sdk", () => {

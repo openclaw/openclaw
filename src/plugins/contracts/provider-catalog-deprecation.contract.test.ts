@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const extensionsRoot = path.join(repoRoot, "extensions");
@@ -143,8 +144,7 @@ function lineNumberFor(source: string, offset: number): number {
 
 describe("bundled provider catalog deprecation guard", () => {
   it("lists production extension sources from git without walking extension roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = walkProductionSourceFiles(extensionsRoot);
 
       expect(files.length).toBeGreaterThan(0);
@@ -152,10 +152,7 @@ describe("bundled provider catalog deprecation guard", () => {
         true,
       );
       expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps bundled provider plugins off the deprecated discovery hook", () => {

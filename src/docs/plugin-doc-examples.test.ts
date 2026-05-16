@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 
 const PLUGIN_DOCS_DIR = path.join(process.cwd(), "docs", "plugins");
 
@@ -73,16 +74,12 @@ function walkMarkdownFiles(dir: string): string[] {
 
 describe("plugin docs examples", () => {
   it("lists plugin docs without scanning directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = listMarkdownFiles(PLUGIN_DOCS_DIR);
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every((filePath) => filePath.endsWith(".md"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps plugin docs JSON fences parseable", () => {

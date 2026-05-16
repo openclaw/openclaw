@@ -4,6 +4,7 @@ import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 
@@ -94,51 +95,22 @@ function isGatewayServerTestFile(file: string): boolean {
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
   it("creates split shards without walking test roots", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `
-          import fs from "node:fs";
-          import { syncBuiltinESMExports } from "node:module";
-          const counts = { existsSync: 0, readdirSync: 0 };
-          const originalExistsSync = fs.existsSync;
-          const originalReaddirSync = fs.readdirSync;
-          fs.existsSync = (...args) => {
-            counts.existsSync += 1;
-            return originalExistsSync(...args);
-          };
-          fs.readdirSync = (...args) => {
-            counts.readdirSync += 1;
-            return originalReaddirSync(...args);
-          };
-          syncBuiltinESMExports();
-          const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
-          const shards = createNodeTestShards();
-          console.log(JSON.stringify({
-            counts,
-            includePatterns: shards.reduce((total, shard) => total + (shard.includePatterns?.length ?? 0), 0),
-            shards: shards.length,
-          }));
-        `,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    const payload = JSON.parse(result.stdout) as {
-      counts: { existsSync: number; readdirSync: number };
+    const payload = expectNoNodeFsScans<{
       includePatterns: number;
       shards: number;
-    };
+    }>(`
+      const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+      const shards = createNodeTestShards();
+      return {
+        includePatterns: shards.reduce(
+          (total, shard) => total + (shard.includePatterns?.length ?? 0),
+          0,
+        ),
+        shards: shards.length,
+      };
+    `);
     expect(payload.shards).toBeGreaterThan(0);
     expect(payload.includePatterns).toBeGreaterThan(0);
-    expect(payload.counts).toEqual({ existsSync: 0, readdirSync: 0 });
   });
 
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {

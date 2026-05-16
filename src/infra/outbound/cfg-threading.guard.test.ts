@@ -3,7 +3,8 @@ import fs, { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 const thisFilePath = fileURLToPath(import.meta.url);
 const thisDir = path.dirname(thisFilePath);
@@ -262,22 +263,18 @@ function extractOutboundBlock(source: string, file: string): string {
 
 describe("outbound cfg-threading guard", () => {
   it("lists outbound entrypoints without scanning directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const coreAdapterFiles = listCoreOutboundEntryFiles();
       const extensionFiles = listExtensionFiles();
 
       expect(coreAdapterFiles.length).toBeGreaterThan(0);
       expect(extensionFiles.adapterEntrypoints.length).toBeGreaterThan(0);
       expect(
-        coreAdapterFiles.every((file) =>
-          file.startsWith("src/channels/plugins/outbound/") && file.endsWith(".ts"),
+        coreAdapterFiles.every(
+          (file) => file.startsWith("src/channels/plugins/outbound/") && file.endsWith(".ts"),
         ),
       ).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps outbound adapter entrypoints free of getRuntimeConfig calls", () => {

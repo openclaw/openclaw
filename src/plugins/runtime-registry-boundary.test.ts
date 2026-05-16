@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoFsSyncDuring } from "../test-utils/fs-scan-assertions.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const allowedRuntimeResolverRefs = new Set([
@@ -93,19 +94,12 @@ function toPosix(value: string): string {
 
 describe("runtime plugin registry boundary", () => {
   it("lists source files without scanning src in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    const stat = vi.spyOn(fs, "statSync");
-    try {
+    expectNoFsSyncDuring(() => {
       const files = listSourceFiles(resolve(repoRoot, "src"));
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every(isProductionTypeScriptFile)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-      expect(stat).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-      stat.mockRestore();
-    }
+    }, ["readdirSync", "statSync"]);
   });
 
   it("keeps runtime registry resolution behind the loader boundary", () => {

@@ -517,6 +517,35 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(routeParams.policySessionKey).toBe("agent:main:main");
   });
 
+  it("uses Slack DM TransportThreadId for routed ACP when ReplyToId is the current message", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:direct:u123",
+        AccountId: "default",
+        ChatType: "direct",
+        MessageSid: "101.000",
+        ReplyToId: "101.000",
+        TransportThreadId: "101.000",
+        MessageThreadId: undefined,
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "slack",
+      originatingTo: "user:U123",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ threadId?: string | number }]
+    >;
+    expect(routeParams.threadId).toBe("101.000");
+  });
+
   it("routes ACP replies when cfg.channels is missing", async () => {
     await expectVisibleChatBlockRoutesToAccount({} as OpenClawConfig, undefined);
   });

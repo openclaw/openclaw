@@ -14,6 +14,7 @@ import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
@@ -379,6 +380,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
+      const threadId = resolveRoutedDeliveryThreadId({
+        ctx: params.ctx,
+        sessionKey: deliverySessionKey,
+      });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -392,7 +397,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderName: params.ctx.SenderName,
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
-        threadId: params.ctx.MessageThreadId,
+        threadId,
         cfg: params.cfg,
         mirror: false,
       });
@@ -410,7 +415,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           channel: params.originatingChannel,
           accountId: resolvedAccountId,
           to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          ...(threadId != null ? { threadId } : {}),
           messageId: result.messageId,
         });
       }
