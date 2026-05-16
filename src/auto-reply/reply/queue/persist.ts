@@ -2,18 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import {
-  DEFAULT_QUEUE_CAP,
-  DEFAULT_QUEUE_DEBOUNCE_MS,
-  DEFAULT_QUEUE_DROP,
-  FOLLOWUP_QUEUES,
-} from "./state.js";
 import type { FollowupQueueState } from "./state.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode } from "./types.js";
 
 const FOLLOWUP_QUEUE_STATE_FILENAME = "live-chat-followup-queues.json";
+
+const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
+const DEFAULT_QUEUE_CAP = 20;
+const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
+
+const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(
+  Symbol.for("openclaw.followupQueues"),
+);
 
 /**
  * Keys of non-empty queues restored from disk on this process start.
@@ -32,7 +35,7 @@ export function clearRestoredPendingDrainKey(key: string): void {
 }
 
 /** For testing only — reset the pending-drain set between test cases. */
-export function _clearRestoredPendingDrainKeysForTest(): void {
+export function clearRestoredPendingDrainKeysForTest(): void {
   restoredPendingDrainKeys.clear();
 }
 
@@ -109,7 +112,9 @@ export function persistFollowupQueues(): void {
     const statePath = resolveFollowupQueueStatePath();
     const entries: Array<[string, PersistedQueueEntry]> = [];
     for (const [key, queue] of FOLLOWUP_QUEUES) {
-      if (!queue || (queue.items.length === 0 && queue.droppedCount === 0)) continue;
+      if (!queue || (queue.items.length === 0 && queue.droppedCount === 0)) {
+        continue;
+      }
       entries.push([
         key,
         {
@@ -150,7 +155,9 @@ export function persistFollowupQueues(): void {
 export function restoreFollowupQueues(): void {
   try {
     const statePath = resolveFollowupQueueStatePath();
-    if (!fs.existsSync(statePath)) return;
+    if (!fs.existsSync(statePath)) {
+      return;
+    }
     const raw = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
       version?: number;
       entries?: unknown;
@@ -159,7 +166,9 @@ export function restoreFollowupQueues(): void {
     for (const entry of entries) {
       const key = normalizeOptionalString(Array.isArray(entry) ? entry[0] : undefined);
       const data = Array.isArray(entry) ? (entry[1] as Partial<PersistedQueueEntry>) : undefined;
-      if (!key || !data || !Array.isArray(data.items)) continue;
+      if (!key || !data || !Array.isArray(data.items)) {
+        continue;
+      }
       const restored: FollowupQueueState = {
         items: data.items as FollowupRun[],
         draining: false,

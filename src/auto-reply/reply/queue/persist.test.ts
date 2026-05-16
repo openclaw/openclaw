@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  _clearRestoredPendingDrainKeysForTest,
   clearRestoredPendingDrainKey,
+  clearRestoredPendingDrainKeysForTest,
   peekRestoredPendingDrainKeys,
   persistFollowupQueues,
   resolveFollowupQueueStatePath,
@@ -68,7 +68,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     originalEnv = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     clearFollowupQueue(TEST_KEY);
-    _clearRestoredPendingDrainKeysForTest();
+    clearRestoredPendingDrainKeysForTest();
   });
 
   afterEach(() => {
