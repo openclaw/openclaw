@@ -92,24 +92,25 @@ function resolveSourceBundledPluginRoot(rootDir: string): {
   };
 }
 
-function resolveBuiltBundledPackageStateModule(params: {
+function listBuiltBundledPackageStateModules(params: {
   rootDir: string;
   specifier: string;
-}): ChannelPackageStateModuleLocation | null {
+}): ChannelPackageStateModuleLocation[] {
   const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
   if (!sourceRoot) {
-    return null;
+    return [];
   }
+  const locations: ChannelPackageStateModuleLocation[] = [];
   for (const rootDir of [
     path.join(sourceRoot.packageRoot, "dist", "extensions", sourceRoot.dirName),
     path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
   ]) {
     const modulePath = resolveExistingPluginModulePath(rootDir, params.specifier);
     if (fs.existsSync(modulePath) && !isSourceModulePath(modulePath)) {
-      return { modulePath, rootDir };
+      locations.push({ modulePath, rootDir });
     }
   }
-  return null;
+  return locations;
 }
 
 function resolveChannelPackageStateModuleLocation(params: {
@@ -127,14 +128,11 @@ function listChannelPackageStateModuleLocations(params: {
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
   const source = resolveChannelPackageStateModuleLocation(params);
-  const built = resolveBuiltBundledPackageStateModule({
+  const built = listBuiltBundledPackageStateModules({
     rootDir: params.entry.rootDir,
     specifier: params.specifier,
-  });
-  if (!built || built.modulePath === source.modulePath) {
-    return [source];
-  }
-  return [built, source];
+  }).filter((location) => location.modulePath !== source.modulePath);
+  return [...built, source];
 }
 
 function resolveChannelPackageStateMetadata(
