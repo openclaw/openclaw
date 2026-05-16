@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: include base `gpt-5.5` and `gpt-5.4` reasoning metadata in the bundled Codex catalog so `/think xhigh` remains available for those models. Fixes #82744.
 - Providers/MiniMax: declare CN endpoint auth aliases in the plugin manifest so `minimax-cn` and `minimax-portal-cn` reuse the correct base auth profiles instead of falling back to unrelated models after 401s. Fixes #63823. Thanks @kamusis.
 - Agents/model fallback: suppress fallback notices when the active OpenAI Codex runtime reports the same canonical OpenAI model.
+- Agents/music generation: remove model-controlled request timeouts while keeping configured timeouts at a 120-second floor.
 - Agents/edit tool: honor `file_path` and related path aliases when resolving edit-recovery targets, so post-write errors no longer surface false edit failures after the file actually changed. Fixes #81909. Thanks @giodl73-repo.
 - QQBot: treat only explicit truthy `QQBOT_DEBUG` values as enabling debug logs, so false-like values such as `0` no longer expose debug output. Fixes #82644. (#82697) Thanks @leno23.
 - Agents/session_status: resolve implicit no-arg status lookups against the live run session, so `/think` changes report the current thinking level instead of stale sandbox state. Fixes #82669. (#82696) Thanks @leno23.

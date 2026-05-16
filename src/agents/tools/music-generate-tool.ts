@@ -45,7 +45,6 @@ import {
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
-  readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -82,7 +81,7 @@ const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
 const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
-const MIN_MUSIC_GENERATION_TIMEOUT_MS = 10_000;
+const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -120,13 +119,6 @@ const MusicGenerateToolSchema = Type.Object({
   durationSeconds: Type.Optional(
     Type.Number({
       description: "Optional target duration in seconds when the provider supports duration hints.",
-      minimum: 1,
-    }),
-  ),
-  timeoutMs: Type.Optional(
-    Type.Number({
-      description:
-        "Optional provider request timeout in milliseconds. Values below 10000ms are raised to 10000ms.",
       minimum: 1,
     }),
   ),
@@ -653,12 +645,8 @@ export function createMusicGenerateTool(options?: {
       });
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
-      const requestedTimeoutMs = readGenerationTimeoutMs(args);
-      const requestedGenerationTimeoutMs =
-        requestedTimeoutMs ?? musicGenerationModelConfig.timeoutMs;
-      const timeout = normalizeMusicGenerationTimeoutMs(requestedGenerationTimeoutMs);
+      const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
       const timeoutMs = timeout.timeoutMs;
-      const referenceFetchTimeoutMs = requestedTimeoutMs === undefined ? undefined : timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);
       const selectedModelRef =
         parseMusicGenerationModelRef(model) ??
@@ -677,7 +665,6 @@ export function createMusicGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
-        timeoutMs: referenceFetchTimeoutMs,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,
