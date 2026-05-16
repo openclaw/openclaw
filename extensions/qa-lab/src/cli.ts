@@ -41,6 +41,7 @@ async function runQaSuite(opts: {
   enabledPluginIds?: string[];
   cliAuthMode?: string;
   parityPack?: string;
+  pack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
