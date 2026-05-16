@@ -7,7 +7,7 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -44,6 +44,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { sanitizeCommandInput } from "./tools/sanitize-command.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -224,6 +225,18 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+
+      // Strip leaked LLM special tokens (e.g. <|...|>, <|<|") that smaller models
+      // (Gemma 4, etc.) sometimes emit into the command arg, which makes bash fail
+      // with a syntax error and forces the model to hallucinate. No-op for clean
+      // commands. Mirrors sanitize-url.ts (commit 7cbc14d38).
+      const rawCommand = params.command;
+      params.command = sanitizeCommandInput(rawCommand);
+      if (params.command !== rawCommand) {
+        logWarn(
+          `bash.sanitize_special_tokens original_len=${rawCommand.length} sanitized_len=${params.command.length}`,
+        );
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
