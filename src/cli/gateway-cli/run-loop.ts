@@ -442,12 +442,49 @@ export async function runGatewayLoop(params: {
             async () => {
               const {
                 abortEmbeddedPiRun,
+                getRuntimeConfig,
                 getInspectableActiveTaskRestartBlockers,
                 getActiveEmbeddedRunCount,
                 getActiveTaskCount,
+                listActiveEmbeddedRunSessionIds,
+                listActiveEmbeddedRunSessionKeys,
+                markRestartAbortedMainSessions,
                 waitForActiveEmbeddedRuns,
                 waitForActiveTasks,
               } = await loadGatewayLifecycleRuntimeModule();
+              const collectActiveRestartSessionKeys = () => {
+                return new Set<string>(listActiveEmbeddedRunSessionKeys());
+              };
+              const collectActiveRestartSessionIds = () => {
+                return new Set<string>(listActiveEmbeddedRunSessionIds());
+              };
+              let activeRestartSessionKeysAtDrainStart = new Set<string>();
+              let activeRestartSessionIdsAtDrainStart = new Set<string>();
+              const markActiveMainSessionsForRestart = async (reason: string) => {
+                const sessionKeys = new Set<string>([
+                  ...activeRestartSessionKeysAtDrainStart,
+                  ...collectActiveRestartSessionKeys(),
+                ]);
+                const sessionIds = new Set<string>([
+                  ...activeRestartSessionIdsAtDrainStart,
+                  ...collectActiveRestartSessionIds(),
+                ]);
+                if (sessionKeys.size === 0 && sessionIds.size === 0) {
+                  return;
+                }
+                try {
+                  await markRestartAbortedMainSessions({
+                    cfg: getRuntimeConfig(),
+                    sessionKeys,
+                    sessionIds,
+                    reason,
+                  });
+                } catch (err) {
+                  gatewayLog.warn(
+                    `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
+                  );
+                }
+              };
               const formatTaskBlockers = () => {
                 const blockers = getInspectableActiveTaskRestartBlockers();
                 if (blockers.length === 0) {
@@ -484,6 +521,8 @@ export async function runGatewayLoop(params: {
               const activeRuns = getActiveEmbeddedRunCount();
               activeTasksAtDrainStart = activeTasks;
               activeRunsAtDrainStart = activeRuns;
+              activeRestartSessionKeysAtDrainStart = collectActiveRestartSessionKeys();
+              activeRestartSessionIdsAtDrainStart = collectActiveRestartSessionIds();
 
               // Best-effort abort for compacting runs so long compaction operations
               // don't hold session write locks across restart boundaries.
@@ -503,6 +542,7 @@ export async function runGatewayLoop(params: {
                 }
                 if (restartIntent?.force) {
                   gatewayLog.warn("forced restart requested; skipping active work drain");
+                  await markActiveMainSessionsForRestart("forced gateway restart");
                   abortEmbeddedPiRun(undefined, { mode: "all" });
                 } else {
                   const activeRunDrainWaitMs = resolveActiveRunDrainWaitMs(activeRuns);
@@ -535,6 +575,7 @@ export async function runGatewayLoop(params: {
                   } else {
                     drainTimedOut = true;
                     gatewayLog.warn("drain timeout reached; proceeding with restart");
+                    await markActiveMainSessionsForRestart("gateway restart drain timeout");
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
                     if (!abortedAfterRunGrace) {

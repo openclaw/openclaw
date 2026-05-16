@@ -622,7 +622,7 @@ export async function startGatewaySidecars(params: {
     run: async () => {
       const { scheduleRestartAbortedMainSessionRecovery } =
         await import("../agents/main-session-restart-recovery.js");
-      scheduleRestartAbortedMainSessionRecovery();
+      scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfg });
     },
   });
 
