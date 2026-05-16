@@ -361,21 +361,21 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("wraps rtl lines with directional isolation marks", () => {
-    const input = "????? ???????";
+    const input = "مرحبا بالعالم";
     const sanitized = sanitizeRenderableText(input);
 
-    expect(sanitized).toBe("\u2067????? ???????\u2069");
+    expect(sanitized).toBe("\u2067مرحبا بالعالم\u2069");
   });
 
   it("only wraps lines that contain rtl script", () => {
-    const input = "hello\n?????";
+    const input = "hello\nمرحبا";
     const sanitized = sanitizeRenderableText(input);
 
-    expect(sanitized).toBe("hello\n\u2067?????\u2069");
+    expect(sanitized).toBe("hello\n\u2067مرحبا\u2069");
   });
 
   it("does not double-wrap lines that already include bidi controls", () => {
-    const input = "\u2067?????\u2069";
+    const input = "\u2067مرحبا\u2069";
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
@@ -473,7 +473,7 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("does not chunk box-drawing horizontal rules used in tables", () => {
-    const input = "?".repeat(60);
+    const input = "─".repeat(60);
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
@@ -504,7 +504,8 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("redacts heavily corrupted lines even inside fenced code blocks", () => {
-    const input = `Header\n\`\`\`\n${"�".repeat(40)}\n\`\`\`\nFooter`;
+    const input = `Header\n\`\`\`\n${"\uFFFD".repeat(40)}\n\`\`\`\nFooter`;
+
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toContain("[binary data omitted]");
