@@ -399,9 +399,14 @@ function readInstalledPluginIndex() {
 function assertExternalPluginInstall(records, pluginId, packageName) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
+  const installedFromNpm = record.source === "npm";
+  const installedFromOfficialClawHubNpmPack =
+    record.source === "clawhub" &&
+    record.clawhubChannel === "official" &&
+    record.artifactKind === "npm-pack";
   assert(
-    record.source === "npm",
-    `configured external ${pluginId} plugin must be installed from npm, got: ${record.source}`,
+    installedFromNpm || installedFromOfficialClawHubNpmPack,
+    `configured external ${pluginId} plugin must be installed from npm or official ClawHub npm-pack, got: ${record.source}`,
   );
   const installPath = resolveHomePath(record.installPath);
   assert(
@@ -421,14 +426,26 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     packageJson.name === packageName,
     `configured external ${pluginId} package name changed: ${packageJson.name}`,
   );
-  const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+  if (installedFromNpm) {
+    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+    assert(
+      isPathInside(npmRoot, installPath),
+      `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+    );
+    assert(
+      String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+      `configured external ${pluginId} plugin npm spec changed`,
+    );
+    return;
+  }
   assert(
-    isPathInside(npmRoot, installPath),
-    `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+    record.clawhubPackage === packageName,
+    `configured external ${pluginId} ClawHub package changed: ${record.clawhubPackage}`,
   );
+  const extensionsRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "extensions");
   assert(
-    String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
-    `configured external ${pluginId} plugin npm spec changed`,
+    isPathInside(extensionsRoot, installPath),
+    `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
 }
 
