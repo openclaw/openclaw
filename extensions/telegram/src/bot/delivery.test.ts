@@ -328,6 +328,33 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",

@@ -304,6 +304,7 @@ function isExtensionTestOrSupportPath(repoRelativePath: string): boolean {
     /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
     /(?:^|\/)test-helpers\.[cm]?tsx?$/.test(repoRelativePath) ||
     /(?:^|\/)test-harness\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /(?:^|\/)test-runtime\.[cm]?tsx?$/.test(repoRelativePath) ||
     /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
     /\.test-helpers\.[cm]?tsx?$/.test(repoRelativePath) ||
     /\.test-harness\.[cm]?tsx?$/.test(repoRelativePath) ||

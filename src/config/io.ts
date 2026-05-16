@@ -2407,8 +2407,12 @@ export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
 
-export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
-  return await createConfigIO().readConfigFileSnapshotForWrite();
+export async function readConfigFileSnapshotForWrite(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<ReadConfigFileSnapshotForWriteResult> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readConfigFileSnapshotForWrite();
 }
 
 export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
