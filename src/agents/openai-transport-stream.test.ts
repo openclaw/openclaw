@@ -1034,6 +1034,85 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("yields to aborts during bursty OpenAI-compatible streams", async () => {
+    const model = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      provider: "opencode-go",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      for (let index = 0; index < 512; index += 1) {
+        yield {
+          id: "chatcmpl-bursty",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "x" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("yields to aborts during bursty Responses streams", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      yield { type: "response.output_item.added", item: { type: "message" } };
+      for (let index = 0; index < 512; index += 1) {
+        yield { type: "response.output_text.delta", delta: "x" };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      __testing.processResponsesStream(mockStream(), output, stream, model, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {
     const model = {
       id: "glm-5",
@@ -3728,6 +3807,54 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
   });
 
+  it("applies model compat empty array items omission after completions normalization", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5",
+        name: "MiMo V2.5",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          omitEmptyArrayItems: true,
+        } as never,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "collect",
+            description: "Collect hints",
+            parameters: {
+              type: "object",
+              properties: {
+                hints: { type: "array" },
+                typedHints: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.hints).toStrictEqual({
+      type: "array",
+    });
+    expect(params.tools?.[0]?.function?.parameters?.properties?.typedHints).toStrictEqual({
+      type: "array",
+      items: { type: "string" },
+    });
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
@@ -5646,6 +5773,14 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const kimiCodingProxyModel = {
+    ...customKimiProxyModel,
+    id: "kimi-for-coding",
+    name: "Kimi for Coding",
+    provider: "kimi",
+    baseUrl: "https://api.kimi.com/coding/v1",
+  } satisfies Model<"openai-completions">;
+
   function getAssistantMessage(params: { messages: unknown }) {
     expect(Array.isArray(params.messages)).toBe(true);
     const list = params.messages as Array<Record<string, unknown>>;
@@ -5837,12 +5972,37 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
+  it("preserves reasoning_content replay for Kimi Coding OpenAI-compatible routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(kimiCodingProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
   it("preserves reasoning_content replay for suffixed reasoning model ids", () => {
     const assistant = getAssistantMessage(
       buildReplayParams(
         {
           ...customMiMoProxyModel,
           id: "xiaomi/mimo-v2.5-pro:cloud",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it("preserves reasoning_content replay for prefixed reasoning model ids", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customKimiProxyModel,
+          id: "hf:moonshotai/kimi-k2-thinking",
         },
         "reasoning_content",
       ),

@@ -1,5 +1,7 @@
 export {
   createLaneTextDeliverer,
+  isPotentialTruncatedFinal,
+  selectLongerFinalText,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
