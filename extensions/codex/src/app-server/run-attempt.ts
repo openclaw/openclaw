@@ -3130,6 +3130,7 @@ function isRawAssistantCompletionNotification(notification: CodexServerNotificat
     item &&
     readString(item, "type") === "message" &&
     readString(item, "role") === "assistant" &&
+    readString(item, "phase") !== "commentary" &&
     readRawAssistantTextPreview(item),
   );
 }

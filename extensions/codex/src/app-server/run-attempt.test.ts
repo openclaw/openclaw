@@ -2613,6 +2613,82 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("does not release or return commentary raw assistant response items", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 5,
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+      { interval: 1 },
+    );
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-commentary-1",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I am checking the workspace." }],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: [],
+    });
+  });
+
   it("releases the session after a raw assistant response item without turn completion", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {

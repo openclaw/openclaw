@@ -709,8 +709,15 @@ export class CodexAppServerEventProjector {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const phase = readString(item, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(itemId, phase);
+    }
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
+    if (phase === "commentary") {
+      this.emitCommentaryProgress({ itemId, text });
+    }
   }
 
   private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
