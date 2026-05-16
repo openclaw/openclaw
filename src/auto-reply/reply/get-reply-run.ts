@@ -76,6 +76,7 @@ import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEventBlock } from "./session-system-events.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
+import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -879,9 +880,28 @@ export async function runPreparedReply(
           harnessRuntime: agentHarnessPolicy.runtime,
         })
       : [provider];
-  const shouldResolveEphemeralAuthProfileForImageOverride = (): boolean =>
-    hasAppliedImageModelOverride === true &&
-    normalizeProviderId(provider) !== normalizeProviderId(defaultProvider);
+  const resolveActiveSessionProviderForAuthProfile = (): string => {
+    const storedOverride = resolveStoredModelOverride({
+      sessionEntry: preparedSessionState.sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey:
+        preparedSessionState.sessionEntry?.parentSessionKey ??
+        sessionCtx.ModelParentSessionKey ??
+        sessionCtx.ParentSessionKey,
+      defaultProvider,
+    });
+    return storedOverride?.provider ?? defaultProvider;
+  };
+  const shouldResolveEphemeralAuthProfileForImageOverride = (): boolean => {
+    if (hasAppliedImageModelOverride !== true) {
+      return false;
+    }
+    return (
+      normalizeProviderId(provider) !==
+      normalizeProviderId(resolveActiveSessionProviderForAuthProfile())
+    );
+  };
   const resolveRuntimeAuthProfile = async (): Promise<{
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";

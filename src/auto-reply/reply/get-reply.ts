@@ -674,6 +674,7 @@ export async function getReplyFromConfig(
       aliasIndex,
       provider,
       model,
+      hasOneTurnModelOverride: hasAppliedImageModelOverride,
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: resolvedOpts,
