@@ -1482,6 +1482,32 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
+  it("does not append hook-pack fallback details when the plugin lacks compiled runtime output", async () => {
+    // Regression for #82454: third-party plugins declaring openclaw.extensions
+    // but shipping only TypeScript source produced a confusing dual error
+    // ("compiled runtime output" + "Also not a valid hook pack"). The first
+    // error already names the real problem, so the hook-pack fallback line is
+    // noise.
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    mockClawHubPackageNotFound("@sider-ai/chrome-openclaw-sider");
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error:
+        "package install requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "@sider-ai/chrome-openclaw-sider"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain("requires compiled runtime output");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("passes the install logger to the --link dry-run probe", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
     const cfg = {

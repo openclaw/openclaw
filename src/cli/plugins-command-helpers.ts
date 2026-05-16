@@ -187,7 +187,20 @@ export function formatPluginInstallWithHookFallbackError(
   ) {
     return formattedPluginError;
   }
+  if (isUnambiguousPluginPackagingError(pluginError)) {
+    return formattedPluginError;
+  }
   return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
+}
+
+// Errors that clearly identify the package as an OpenClaw plugin (e.g. it
+// declared openclaw.extensions) but failed plugin-specific validation. In
+// those cases, the hook-pack fallback can never succeed, so appending
+// "Also not a valid hook pack" only adds noise — see #82454 where a third-
+// party plugin shipping TypeScript source with no compiled output produced
+// two confusing errors instead of one actionable one.
+function isUnambiguousPluginPackagingError(pluginError: string): boolean {
+  return pluginError.includes("requires compiled runtime output for TypeScript entry");
 }
 
 const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
