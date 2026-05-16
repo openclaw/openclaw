@@ -1861,6 +1861,46 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).toContain("Interpreter commands can run arbitrary code or scripts.");
   });
 
+  it.each([
+    {
+      command: String.raw`perl -e 'unlink q(/tmp/x)'`,
+      id: "plugin-command-perl-eval",
+    },
+    {
+      command: String.raw`php -r 'unlink("/tmp/x");'`,
+      id: "plugin-command-php-eval",
+    },
+    {
+      command: String.raw`lua -e 'os.remove("/tmp/x")'`,
+      id: "plugin-command-lua-eval",
+    },
+    {
+      command: String.raw`osascript -e 'do shell script "rm -rf /tmp/x"'`,
+      id: "plugin-command-osascript-eval",
+    },
+  ])("treats documented interpreter eval commands as high risk: $command", ({ command, id }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- run code or a script");
+    expect(payload.text).toContain(`Command preview\n${command}`);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Interpreter commands can run arbitrary code or scripts.");
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("treats remote command execution and sensitive remote copies as high risk", () => {
     const sshPayload = buildPluginApprovalPendingReplyPayload({
       request: {

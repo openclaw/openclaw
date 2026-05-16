@@ -1178,7 +1178,11 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       return withSudo(summarizeDatabaseCommand(command, args, segment), sudoPrefix);
     case "bash":
     case "fish":
+    case "lua":
     case "node":
+    case "osascript":
+    case "perl":
+    case "php":
     case "python":
     case "python3":
     case "ruby":
