@@ -1068,6 +1068,7 @@ export async function runCodexAppServerAttempt(
   let activeAppServerTurnRequests = 0;
   const activeOpenClawDynamicToolCallIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
+  let turnCrossedToolHandoff = false;
 
   const clearTurnCompletionIdleTimer = () => {
     if (turnCompletionIdleTimer) {
@@ -1394,15 +1395,22 @@ export async function runCodexAppServerAttempt(
       activeOpenClawDynamicToolCallIds,
     );
     const rawToolOutputCompletion = isRawToolOutputCompletionNotification(notification);
-    const rawAssistantCompletionCanRelease =
-      isRawAssistantCompletionNotification(notification) &&
-      activeOpenClawDynamicToolCallIds.size === 0;
+    if (
+      isCurrentTurnNotification &&
+      (rawToolOutputCompletion || isNativeToolProgressNotification(notification))
+    ) {
+      turnCrossedToolHandoff = true;
+    }
+    const assistantCompletionCanRelease = isAssistantCompletionReleaseNotification(
+      notification,
+      turnCrossedToolHandoff,
+    );
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
       activeTurnItemIds.size === 0 &&
       !trackedDynamicToolCompletion &&
-      !isCompletedAssistantNotification(notification);
+      !assistantCompletionCanRelease;
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
@@ -1412,10 +1420,7 @@ export async function runCodexAppServerAttempt(
       disarmTurnAssistantCompletionIdleWatch();
     } else if (isTurnCompletion) {
       disarmTurnAssistantCompletionIdleWatch();
-    } else if (
-      isCurrentTurnNotification &&
-      (isCompletedAssistantNotification(notification) || rawAssistantCompletionCanRelease)
-    ) {
+    } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
@@ -1549,6 +1554,7 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       armCompletionWatchOnResponse = true;
+      turnCrossedToolHandoff = true;
       activeOpenClawDynamicToolCallIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
@@ -3033,6 +3039,16 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
   );
 }
 
+function isAssistantCompletionReleaseNotification(
+  notification: CodexServerNotification,
+  turnCrossedToolHandoff: boolean,
+): boolean {
+  if (isCompletedAssistantNotification(notification)) {
+    return true;
+  }
+  return !turnCrossedToolHandoff && isRawAssistantCompletionNotification(notification);
+}
+
 function shouldDisarmAssistantCompletionIdleWatch(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;
@@ -3080,6 +3096,29 @@ function isRawToolOutputCompletionNotification(notification: CodexServerNotifica
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
   return item ? readString(item, "type") === "custom_tool_call_output" : false;
+}
+
+function isNativeToolProgressNotification(notification: CodexServerNotification): boolean {
+  if (
+    notification.method !== "item/started" &&
+    notification.method !== "item/completed" &&
+    notification.method !== "item/updated"
+  ) {
+    return false;
+  }
+  if (!isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  switch (item ? readString(item, "type") : undefined) {
+    case "commandExecution":
+    case "fileChange":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function isRawAssistantCompletionNotification(notification: CodexServerNotification): boolean {
