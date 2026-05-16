@@ -4277,6 +4277,7 @@ export async function runEmbeddedAttempt(
         heartbeatToolResponse: getHeartbeatToolResponse(),
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
+        toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),

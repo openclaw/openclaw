@@ -5939,7 +5939,8 @@ module.exports = {
       registry.diagnostics.some(
         (diag) =>
           diag.pluginId === "legacy-deactivate-hook" &&
-          diag.message === 'typed hook "deactivate" is a compatibility alias for "gateway_stop"',
+          diag.message ===
+            'typed hook "deactivate" is deprecated (legacy-deactivate-hook-alias); use "gateway_stop". This compatibility alias will be removed after 2026-08-16.',
       ),
     ).toBe(true);
   });

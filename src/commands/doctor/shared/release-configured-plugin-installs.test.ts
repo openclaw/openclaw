@@ -401,6 +401,38 @@ describe("configured plugin install release step", () => {
     });
   });
 
+  it("repairs same-id externalized channel installs from channel config after prior update writes", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured channel plugin "whatsapp".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+      },
+      currentVersion: "2026.5.12",
+      touchedVersion: "2026.5.12",
+      env: {},
+    });
+
+    const repairCall = readOnlyMissingPluginInstallRepairCall();
+    expect(repairCall.pluginIds).toEqual([]);
+    expect(repairCall.channelIds).toEqual(["whatsapp"]);
+    expect(result).toEqual({
+      changes: ['Installed missing configured channel plugin "whatsapp".'],
+      warnings: [],
+      completed: true,
+      touchedConfig: false,
+    });
+  });
+
   it("does not touch config when install repair warns", async () => {
     mocks.detectPluginAutoEnableCandidates.mockReturnValue([
       { pluginId: "matrix", kind: "channel-configured", channelId: "matrix" },

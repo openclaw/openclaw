@@ -13,14 +13,33 @@ Docs: https://docs.openclaw.ai
 - Agents/skills: cache hydrated `resolvedSkills` across warm gateway turns while keying reuse by the redacted effective config, reducing redundant skill snapshot rebuilds without crossing config-gated skill boundaries. (#81451) Thanks @solodmd.
 - Telegram/group chat: add opt-in `messages.groupChat.ambientTurns: "room_event"` handling so always-on ambient chatter can run as quiet room context and speak visibly only via the message tool. (#81317) Thanks @obviyus.
 - Codex/context engines: bind thread-bootstrap projection epochs to Codex app-server threads, carry redacted tool-result context into fresh threads, and rotate backend threads when projection state changes. (#82351) Thanks @jalehman.
+- Gateway: add opt-in restart trace logs for restart signal, active-work drain, close, next-start, ready, and memory spans. (#82396) Thanks @samzong.
 
 ### Fixes
 
+- Gateway/WebChat: route image attachments through a configured vision-capable `imageModel` plan before inlining images, and carry that image-model fallback chain through runtime retries. (#82524) Thanks @frankekn.
+- WebChat: show progress while manual `/compact` is running by streaming a session operation event to subscribed Control UI clients. Fixes #82407. Thanks @Conan-Scott.
+- Codex app-server: limit canonical OpenAI Codex app-server attribution rewrites to local transcript and trajectory records, leaving runtime/tool routing on the selected OpenAI model metadata so OpenAI API-key backup profiles keep their billing path.
+- Android/chat: make bare and markdown URLs in chat messages tappable by preserving Compose URL annotations in rendered markdown. Fixes #82187. (#82392) Thanks @neeravmakwana.
+- Plugins/doctor: migrate legacy top-level plugin `tools` declarations into `contracts.tools`, so `openclaw doctor --fix` repairs local plugins for the manifest tool contract. (#81112) Thanks @100yenadmin.
+- Slack: guide agents to use stable `<@USER_ID>` mention tokens from context instead of plain `@name` text, so user mentions link and notify correctly. Fixes #82090. (#82152) Thanks @neeravmakwana.
+- Auth: serialize provider login writes through the auth-profile lock for OpenAI Codex, Anthropic, Cloudflare AI Gateway, GitHub Copilot, and z.ai, preserving upsert semantics so a live Gateway cannot overwrite freshly refreshed OAuth credentials with an expired in-memory snapshot.
+- Codex app-server: release raw assistant completions when `turn/completed` is missing while keeping commentary/status items as progress, preventing completed Codex runs from hanging until timeout. Fixes #82343. (#82403) Thanks @IWhatsskill.
+- Agents/sessions: remove the transient `*.bak-<pid>-<ts>` backup written by `repairSessionFileIfNeeded` once the atomic replace succeeds, so a stuck session with a persistently malformed JSONL line no longer accumulates one snapshot per repair invocation. Fixes #80960. (#80969) Thanks @100yenadmin. Co-authored by @tynamite.
+- CLI/status: show plain empty-state messages instead of empty Channels and Sessions tables when no channels or sessions exist.
+- CLI/dashboard: probe Gateway readiness before handing out the dashboard URL, prompting to start or install the managed service when the Gateway is stopped and printing recovery commands instead of opening a dead browser tab.
+- CLI: hide decorative startup and status emoji on terminals that are unlikely to render them correctly, keeping semantic message and identity emoji intact.
+- CLI/gateway: recover the Linux user systemd bus environment when `openclaw dashboard` starts the Gateway from stripped desktop shells such as VNC terminals.
+- Gateway/WebSocket: log expected startup `1013 gateway starting` retry closes at debug instead of warn while preserving WARN for unexpected pre-connect failures. Fixes #76361. (#82457) Thanks @IWhatsskill.
+- Providers/Xiaomi: strip synthetic empty array `items` from MiMo tool schemas while preserving typed array items, avoiding strict OpenAI-compatible schema rejection.
+- Telegram: send the transcript-backed full final answer after progress-mode tool drafts when the dispatcher final payload is an ellipsis-truncated snapshot. Fixes #82409. Thanks @PashaGanson.
 - CLI/context engines: bootstrap and finalize non-legacy context engines for CLI turns while preserving transcript snapshots and deferred maintenance ownership. (#81869) Thanks @sahilsatralkar.
 - Telegram: persist polling updates through restart replay so queued same-topic messages resume in order instead of losing context after a gateway restart. (#82256) Thanks @VACInc.
 - Gateway/Gmail: abort in-flight Gmail watcher startup and hot-reload restarts before shutdown so reloads cannot spawn `gog serve` after the Gateway is closing. Thanks @frankekn.
+- Agents/Codex: fall back to the embedded PI runner when OpenAI's implicit Codex harness preference cannot find a registered Codex plugin, preventing OpenAI-compatible gateway requests from failing with an unregistered harness error. Fixes #82437.
+- CLI/channels: install missing externalized same-id channel plugins during `channels add --channel <id>`, so recovery for WhatsApp and other externalized stock channels does not require a separate `plugins enable` step. Fixes #82533.
 - MCP plugin tools: forward host MCP `tools/call` `AbortSignal` through `createPluginToolsMcpHandlers().callTool` into plugin `tool.execute`, so host cancellation actually cancels in-flight plugin tool calls instead of letting them run to completion. Fixes #82424. (#82443) Thanks @joshavant.
-- Plugins: accept `api.on("deactivate")` as a compatibility alias for `gateway_stop`, so external plugin cleanup handlers run on Gateway shutdown instead of being ignored as unknown hooks.
+- Plugins: accept deprecated `api.on("deactivate")` registrations as a dated compatibility alias for `gateway_stop`, so external plugin cleanup handlers run on Gateway shutdown while authors get migration guidance.
 - Media: ignore image MIME and filename hints when bytes sniff as generic containers, so zip/octet-stream payloads mislabeled as images do not become local image media or keep image file extensions when staged.
 - Update/doctor: avoid materializing `groupAllowFrom` for channel schemas that reject it, so package-swap doctor repairs do not fail on externalized Slack configs.
 - Gateway/media: prevent image filenames from overriding generic non-image byte sniffing, so zip/octet-stream payloads mislabeled as images are offloaded or rejected before they become inline image attachments.
@@ -28,6 +47,8 @@ Docs: https://docs.openclaw.ai
 - Telegram/Gateway: route targeted Telegram `/stop@bot` messages onto the control lane without cached bot metadata and match gateway stop requests across raw/canonical session aliases. (#82298) Thanks @VACInc.
 - MS Teams/media: sniff inline `data:image/*` attachment bytes before staging them, skipping payloads that are not actually images.
 - WebChat/media: require trusted local-media provenance before preserving local audio reply paths for display, so untrusted audio-looking paths go through normal staging and read-policy checks.
+- Agents/tool media: preserve trusted local-media provenance when merging generated tool attachments into final reply payloads, so trusted audio/media survives outbound display normalization.
+- Anthropic/Claude CLI: write model-scoped `claude-cli` runtime policy when reusing local Claude CLI auth, so upgraded Telegram and Dashboard gateway turns keep using the CLI backend instead of falling through to Anthropic API billing. Fixes #82344. Thanks @amknight.
 - Update: let package-swap `doctor --fix` persist core config repairs while plugin schemas are still converging, preventing update failures on externalized channel configs.
 - Update: carry plugin-validation bypasses into config mutation pre-write reads, so package update doctor repairs can finish while externalized plugin schemas are converging.
 - Update/doctor: keep plugin-validation bypasses on the top-level `$include` config write path, so package repair can update included plugin config files without flattening them into the root config.
@@ -42,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Cron: keep legacy string schedules and blank system-event jobs available for runtime repair/skip handling instead of dropping them as malformed persisted rows.
 - Task persistence: drop malformed array/scalar requester-origin JSON from task and task-flow SQLite sidecars instead of restoring it as delivery metadata.
 - Agents/timeouts: clarify model idle-timeout errors and docs so provider `timeoutSeconds` is shown as bounded by the whole agent/run timeout ceiling.
+- Agents/OpenAI streams: yield cooperatively while processing bursty Completions and Responses chunks, keeping aborts, channel liveness timers, and startup heartbeats responsive under noisy model output. Refs #82462.
 - Release tooling: align the published launcher Node floor, `npm start`, package script checks, sharded lint locking, Vitest root project coverage, and plugin-SDK declaration build cache metadata so release/package validation does not silently skip or ship stale surfaces.
 - Cron/agents: honor configured subagent model fallbacks for isolated scheduled runs and forward that fallback policy into embedded agent timeout failover. Fixes #74985. Thanks @chrisgwynne.
 - Codex app-server/MCP: scope user MCP servers to specific OpenClaw agent ids through an optional `mcp.servers.<name>.codex.agents` list and accept `codex.defaultToolsApprovalMode` (`auto`/`prompt`/`approve`) for native Codex approval defaults; OpenClaw strips the `codex` block before handing `mcp_servers` config to Codex. (#82180) Thanks @sercada.
@@ -60,20 +82,27 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: ignore malformed compaction checkpoint rows during session projection so corrupted stores do not crash session list/describe responses or show bogus checkpoint counts.
 - Gateway/sessions: keep reachable transcript history when imported tree transcripts reference missing or legacy parent rows, preventing session history reads from going empty after a partial import.
 - Trajectory export: report incomplete transcript parent chains and stop cyclic branch walks so malformed imports cannot hang `/export-trajectory`.
+- Session replay: skip malformed user/assistant-shaped transcript rows during silent session resets instead of copying invalid entries into the fresh transcript.
+- Backup verify: report malformed archive manifests with a stable error instead of leaking raw JSON parser details.
+- Session export: report skipped malformed transcript JSONL rows instead of silently omitting them from exported HTML archives.
 - Providers: reject malformed successful Runway, BytePlus, and Ollama embedding responses with provider-owned errors instead of raw parser/type failures, silent bad vectors, or long bogus polling.
 - Providers/images: reject malformed successful OpenAI-compatible, OpenAI, Google, fal, and OpenRouter image responses with provider-owned errors instead of raw shape failures, silent invalid base64 skips, or empty image results.
 - Providers/videos: reject malformed successful xAI, OpenRouter, and fal video create, poll, and result responses with provider-owned errors instead of raw parser failures or long bogus polling.
+- Providers/videos: let selected-model capability overlays clear inherited `providerOptions`, so fallback skips models that explicitly accept no provider-specific options instead of forwarding unsupported knobs.
+- TTS/providers: honor preferred provider aliases when routing model override directives, so alias-selected speech providers receive unqualified `[[tts:*]]` overrides.
 - Providers/audio: reject malformed successful OpenAI-compatible, ElevenLabs, and Deepgram speech responses with provider-owned errors instead of raw parser failures, wrong-shaped transcripts, or JSON/text bodies treated as audio.
 - Providers/embeddings: reject malformed successful OpenAI-compatible, Google Gemini, and Amazon Bedrock embedding responses instead of silently returning empty or coerced vectors.
 - Providers/catalogs: reject malformed successful LM Studio, GitHub Copilot, DeepInfra, Vercel AI Gateway, and Kilocode model-list responses with provider-owned errors instead of raw parser/type failures or silent fallback catalogs.
 - Providers/polling: reject array, null, or scalar successful operation status responses with provider-owned malformed JSON errors instead of waiting until timeout.
 - ACPX/Codex: reap plugin-local Codex ACP adapter orphans on startup after wrapper crashes while keeping direct adapter commands out of launch-lease injection. Fixes #82364. (#82459) Thanks @joshavant.
 - Telegram: send presentation-only payloads by rendering fallback text and inline buttons instead of treating them as empty. Fixes #82404. (#82449) Thanks @joshavant.
+- Providers/Kimi: preserve Kimi Coding `reasoning_content` replay and backfill assistant tool-call placeholders when thinking is enabled, so `kimi-for-coding` follow-up tool turns no longer fail after prior tool use. Fixes #82161. Thanks @amknight.
 - Providers/search tools: reject malformed successful xAI, Gemini, and Kimi web/code search responses with provider-owned errors instead of silent `No response` payloads or ungrounded fallback state.
 - Trajectory export: skip and report malformed session/runtime JSONL rows in `manifest.json` instead of letting wrong-shaped session rows crash support bundle export.
 - Voice calls: persist rejected inbound-call replay keys so duplicate carrier webhook retries stay ignored after a Gateway restart.
 - Config/doctor: copy fallback-enabled channel `allowFrom` entries into explicit `groupAllowFrom` allowlists during `openclaw doctor --fix`, preserving current group access without adding runtime fallback-transition flags.
 - Config/doctor: replace source-only official Brave and Slack plugin installs from trusted catalog metadata during `openclaw doctor --fix`, unblocking externalized stock plugin recovery after upgrade. (#82425) Thanks @joshavant.
+- Config/memory: warn instead of rejecting configs that select the official external `memory-lancedb` slot before the plugin is installed, with an explicit no-persistent-memory startup warning and install hint. Fixes #82428. (#82438) Thanks @giodl73-repo.
 - Agents/bootstrap: ignore stale completed root `BOOTSTRAP.md` context after workspace setup cleanup fails, preventing channel agent turns from treating it as a directory. (#82463) Thanks @joshavant.
 - Update/doctor: re-enable the Codex plugin during `openclaw doctor --fix` when configured OpenAI agent models require the Codex runtime, preventing upgraded configs from failing with an unregistered Codex harness. Fixes #82368. (#82502) Thanks @joshavant.
 - Configure: show one OpenAI provider entry with ChatGPT/Codex sign-in and API key choices, and keep browsed Codex models in the saved `/model` picker allowlist.

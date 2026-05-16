@@ -51,6 +51,7 @@ import {
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
+import { getPluginCompatRecord } from "./compat/registry.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
   isReservedCommandName,
@@ -187,6 +188,16 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
 };
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
+
+function formatLegacyDeactivateHookAliasDiagnostic(): string {
+  const removeAfter =
+    LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.removeAfter ?? "a future breaking release";
+  return (
+    `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
+    `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
+  );
+}
 
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
@@ -2304,7 +2315,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: 'typed hook "deactivate" is a compatibility alias for "gateway_stop"',
+        message: formatLegacyDeactivateHookAliasDiagnostic(),
       });
     }
     let effectiveHandler = handler;

@@ -1302,6 +1302,9 @@ export async function runAgentTurnWithFallback(params: {
     provider: string,
     model: string,
   ): Promise<(() => Promise<void>) | undefined> => {
+    if (params.followupRun.run.hasOneTurnModelOverride === true) {
+      return undefined;
+    }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||

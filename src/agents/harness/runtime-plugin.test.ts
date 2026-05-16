@@ -45,6 +45,32 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+  it("tries to load Codex for the implicit official OpenAI runtime before selection", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex"],
+      }),
+    );
+  });
+
   it("keeps custom OpenAI-compatible providers on Pi when no runtime override is set", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
