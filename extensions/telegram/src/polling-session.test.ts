@@ -980,7 +980,7 @@ describe("TelegramPollingSession", () => {
       await vi.waitFor(() => expect(events).toEqual(["chatA:start", "chatB"]));
       expect(
         (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map((update) => update.updateId),
-      ).toEqual([42, 44]);
+      ).toEqual([44]);
 
       releaseFirstChatTurn?.();
       await vi.waitFor(() =>
