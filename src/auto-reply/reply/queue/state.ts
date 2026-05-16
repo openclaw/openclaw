@@ -8,7 +8,6 @@ import {
   type FollowupQueueState,
   type FollowupRun,
   type QueueDropPolicy,
-  type QueueMode,
   type QueueSettings,
 } from "./types.js";
 
