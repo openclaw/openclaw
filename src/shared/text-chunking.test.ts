@@ -37,4 +37,11 @@ describe("shared/text-chunking", () => {
       "def",
     ]);
   });
+
+  it("trims trailing whitespace from the final chunk", () => {
+    expect(chunkTextByBreakResolver("abcd ef  ", 5, (window) => window.lastIndexOf(" "))).toEqual([
+      "abcd",
+      "ef",
+    ]);
+  });
 });
