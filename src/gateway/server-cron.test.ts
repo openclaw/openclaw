@@ -136,6 +136,10 @@ function callArg(
   return call[argIndex];
 }
 
+function expectMainCronRunSessionKey(value: unknown, jobId: string) {
+  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
+}
+
 function lastMockCall(mock: { mock: { calls: Array<Array<unknown>> } }, label: string) {
   const calls = mock.mock.calls;
   const call = calls[calls.length - 1];
@@ -365,14 +369,16 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(callArg(enqueueSystemEventMock, 0, 0, "system event text")).toBe("hello");
-      expect(
-        requireRecord(callArg(enqueueSystemEventMock, 0, 1, "system event options"), "options")
-          .sessionKey,
-      ).toBe("agent:main:discord:channel:ops");
-      expect(
-        requireRecord(callArg(requestHeartbeatMock, 0, 0, "heartbeat request"), "request")
-          .sessionKey,
-      ).toBe("agent:main:discord:channel:ops");
+      const eventOptions = requireRecord(
+        callArg(enqueueSystemEventMock, 0, 1, "system event options"),
+        "options",
+      );
+      expectMainCronRunSessionKey(eventOptions.sessionKey, job.id);
+      const heartbeatRequest = requireRecord(
+        callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
+        "request",
+      );
+      expectMainCronRunSessionKey(heartbeatRequest.sessionKey, job.id);
     } finally {
       state.cron.stop();
     }
@@ -529,7 +535,7 @@ describe("buildGatewayCronService", () => {
         callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
         "heartbeat request",
       );
-      expect(call.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
+      expectMainCronRunSessionKey(call.sessionKey, job.id);
       expect(call.heartbeat).toEqual({
         target: "last",
         to: undefined,
