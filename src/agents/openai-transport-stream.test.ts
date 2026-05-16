@@ -5725,6 +5725,14 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const kimiCodingProxyModel = {
+    ...customKimiProxyModel,
+    id: "kimi-for-coding",
+    name: "Kimi for Coding",
+    provider: "kimi",
+    baseUrl: "https://api.kimi.com/coding/v1",
+  } satisfies Model<"openai-completions">;
+
   function getAssistantMessage(params: { messages: unknown }) {
     expect(Array.isArray(params.messages)).toBe(true);
     const list = params.messages as Array<Record<string, unknown>>;
@@ -5916,12 +5924,37 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
+  it("preserves reasoning_content replay for Kimi Coding OpenAI-compatible routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(kimiCodingProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
   it("preserves reasoning_content replay for suffixed reasoning model ids", () => {
     const assistant = getAssistantMessage(
       buildReplayParams(
         {
           ...customMiMoProxyModel,
           id: "xiaomi/mimo-v2.5-pro:cloud",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it("preserves reasoning_content replay for prefixed reasoning model ids", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customKimiProxyModel,
+          id: "hf:moonshotai/kimi-k2-thinking",
         },
         "reasoning_content",
       ),
