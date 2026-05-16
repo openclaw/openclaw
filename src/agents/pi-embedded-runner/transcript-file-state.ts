@@ -96,6 +96,10 @@ function hasToolCallId(value: Record<string, unknown>): boolean {
   );
 }
 
+function isToolCallPayload(value: unknown): boolean {
+  return isRecord(value) || typeof value === "string";
+}
+
 function isToolCallContent(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -103,7 +107,7 @@ function isToolCallContent(value: unknown): boolean {
     repairableToolCallContentTypes.has(value.type) &&
     hasToolCallId(value) &&
     isString(value.name) &&
-    (isRecord(value.arguments) || isRecord(value.input)) &&
+    (isToolCallPayload(value.arguments) || isToolCallPayload(value.input)) &&
     isOptionalString(value.thoughtSignature)
   );
 }

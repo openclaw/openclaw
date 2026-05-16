@@ -180,7 +180,7 @@ describe("readTranscriptFileState", () => {
                 type: "function_call",
                 call_id: "call-legacy",
                 name: "search",
-                arguments: { query: "docs" },
+                arguments: '{"query":"docs"}',
               },
             ],
           },
