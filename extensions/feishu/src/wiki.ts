@@ -39,27 +39,6 @@ function optionalWikiSpaceId(value: unknown, fieldName: string): string | undefi
   return requireWikiSpaceId(value, fieldName);
 }
 
-function validateWikiSpaceIds(params: { action?: unknown } & Record<string, unknown>): {
-  spaceId?: string;
-  targetSpaceId?: string;
-} {
-  switch (params.action) {
-    case "nodes":
-    case "create":
-    case "rename":
-      return { spaceId: requireWikiSpaceId(params.space_id, "space_id") };
-    case "move":
-      return {
-        spaceId: requireWikiSpaceId(params.space_id, "space_id"),
-        targetSpaceId: optionalWikiSpaceId(params.target_space_id, "target_space_id"),
-      };
-    case "search":
-      return { spaceId: optionalWikiSpaceId(params.space_id, "space_id") };
-    default:
-      return {};
-  }
-}
-
 async function listSpaces(client: Lark.Client) {
   const res = await client.wiki.space.list({});
   if (res.code !== 0) {
@@ -223,42 +202,60 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
         async execute(_toolCallId, params) {
           const p = params as FeishuWikiExecuteParams;
           try {
-            const { spaceId, targetSpaceId } = validateWikiSpaceIds(
-              p as { action?: unknown } & Record<string, unknown>,
-            );
-            const client = createFeishuToolClient({
-              api,
-              executeParams: p,
-              defaultAccountId,
-            });
+            const createClient = () =>
+              createFeishuToolClient({
+                api,
+                executeParams: p,
+                defaultAccountId,
+              });
             switch (p.action) {
               case "spaces":
-                return jsonToolResult(await listSpaces(client));
-              case "nodes":
-                return jsonToolResult(await listNodes(client, spaceId!, p.parent_node_token));
+                return jsonToolResult(await listSpaces(createClient()));
+              case "nodes": {
+                const spaceId = requireWikiSpaceId(p.space_id, "space_id");
+                return jsonToolResult(
+                  await listNodes(createClient(), spaceId, p.parent_node_token),
+                );
+              }
               case "get":
-                return jsonToolResult(await getNode(client, p.token));
+                return jsonToolResult(await getNode(createClient(), p.token));
               case "search":
+                optionalWikiSpaceId(p.space_id, "space_id");
+                createClient();
                 return jsonToolResult({
                   error:
                     "Search is not available. Use feishu_wiki with action: 'nodes' to browse or action: 'get' to lookup by token.",
                 });
-              case "create":
+              case "create": {
+                const spaceId = requireWikiSpaceId(p.space_id, "space_id");
                 return jsonToolResult(
-                  await createNode(client, spaceId!, p.title, p.obj_type, p.parent_node_token),
+                  await createNode(
+                    createClient(),
+                    spaceId,
+                    p.title,
+                    p.obj_type,
+                    p.parent_node_token,
+                  ),
                 );
-              case "move":
+              }
+              case "move": {
+                const spaceId = requireWikiSpaceId(p.space_id, "space_id");
                 return jsonToolResult(
                   await moveNode(
-                    client,
-                    spaceId!,
+                    createClient(),
+                    spaceId,
                     p.node_token,
-                    targetSpaceId,
+                    optionalWikiSpaceId(p.target_space_id, "target_space_id"),
                     p.target_parent_token,
                   ),
                 );
-              case "rename":
-                return jsonToolResult(await renameNode(client, spaceId!, p.node_token, p.title));
+              }
+              case "rename": {
+                const spaceId = requireWikiSpaceId(p.space_id, "space_id");
+                return jsonToolResult(
+                  await renameNode(createClient(), spaceId, p.node_token, p.title),
+                );
+              }
               default:
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }
