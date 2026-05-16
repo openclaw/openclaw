@@ -12,6 +12,7 @@ import {
   emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
+  hasBeforeToolCallPolicy,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
   loadCodexBundleMcpThreadConfig,
@@ -64,6 +65,7 @@ import {
 } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
@@ -429,6 +431,45 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
   };
 }
 
+function resolveCodexAppServerForOpenClawToolPolicy(params: {
+  appServer: CodexAppServerRuntimeOptions;
+  pluginConfig: CodexPluginConfig;
+  env: NodeJS.ProcessEnv;
+  shouldPromote: boolean;
+  canUseUntrustedApprovalPolicy: boolean;
+}): CodexAppServerRuntimeOptions {
+  if (
+    !params.shouldPromote ||
+    !params.canUseUntrustedApprovalPolicy ||
+    params.appServer.approvalPolicy !== "never"
+  ) {
+    return params.appServer;
+  }
+  const explicitMode =
+    params.pluginConfig.appServer?.mode !== undefined ||
+    isCodexAppServerPolicyMode(params.env.OPENCLAW_CODEX_APP_SERVER_MODE);
+  const explicitApprovalPolicy =
+    params.pluginConfig.appServer?.approvalPolicy !== undefined ||
+    isCodexAppServerApprovalPolicy(params.env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
+  if (explicitMode || explicitApprovalPolicy) {
+    return params.appServer;
+  }
+  return {
+    ...params.appServer,
+    approvalPolicy: "untrusted",
+  };
+}
+
+function isCodexAppServerPolicyMode(value: unknown): boolean {
+  return value === "guardian" || value === "yolo";
+}
+
+function isCodexAppServerApprovalPolicy(value: unknown): boolean {
+  return (
+    value === "never" || value === "on-request" || value === "on-failure" || value === "untrusted"
+  );
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -466,7 +507,15 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const appServer = restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox);
+  const appServer = resolveCodexAppServerForOpenClawToolPolicy({
+    appServer: restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox),
+    pluginConfig,
+    env: process.env,
+    shouldPromote: hasBeforeToolCallPolicy(),
+    canUseUntrustedApprovalPolicy:
+      configuredAppServer.start.transport !== "stdio" ||
+      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+  });
   let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -3544,6 +3593,7 @@ export const __testing = {
   remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
   restrictCodexAppServerSandboxForOpenClawSandbox,
+  resolveCodexAppServerForOpenClawToolPolicy,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

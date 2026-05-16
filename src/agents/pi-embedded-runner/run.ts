@@ -539,6 +539,7 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         workspaceDir: resolvedWorkspace,
       });
       const agentHarness = selectAgentHarness({
@@ -548,6 +549,7 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentHarnessId: params.agentHarnessId,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
       const dynamicModelResolution = await resolveModelAsync(

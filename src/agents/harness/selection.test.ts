@@ -366,6 +366,26 @@ describe("selectAgentHarness", () => {
     expect(supports).toHaveBeenCalledTimes(1);
   });
 
+  it("honors explicit PI runtime overrides when selecting a harness", async () => {
+    registerSuccessfulCodexHarness();
+
+    const harness = selectAgentHarness({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "pi",
+    });
+
+    expect(harness.id).toBe("pi");
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "pi",
+    });
+    expect(result.sessionIdUsed).toBe("pi");
+  });
+
   it("allows per-agent model runtime policy overrides", () => {
     const config = agentModelRuntimeConfig("anthropic/sonnet-4.6", "codex", "strict");
 

@@ -3079,8 +3079,89 @@ describe("runCodexAppServerAttempt", () => {
     expect(preToolUseCommand?.type).toBe("command");
     expect(preToolUseCommand?.timeout).toBe(9);
     expect(preToolUseCommand?.command).toContain("--event pre_tool_use --timeout 4321");
+    const hookState = startConfig?.["hooks.state"] as Record<
+      string,
+      { enabled?: unknown; trusted_hash?: unknown }
+    >;
+    const preToolUseState = hookState?.["/<session-flags>/config.toml:pre_tool_use:0:0"];
+    expect(preToolUseState?.enabled).toBe(true);
+    expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.sandbox).toBe("danger-full-access");
+  });
+
+  it("keeps implicit Codex yolo approval policy when untrusted approvals are disallowed", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null });
+
+    const resolved = __testing.resolveCodexAppServerForOpenClawToolPolicy({
+      appServer,
+      pluginConfig: readCodexPluginConfig({}),
+      env: {},
+      shouldPromote: true,
+      canUseUntrustedApprovalPolicy: false,
+    });
+
+    expect(resolved.approvalPolicy).toBe("never");
+  });
+
+  it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
+    expect(startParams?.sandbox).toBe("danger-full-access");
+  });
+
+  it("ignores invalid Codex app-server env overrides when promoting tool policy approval", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_MODE", " ");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY", "always");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("untrusted");
   });
 
   it("keeps the native hook relay default floor for short Codex turns", async () => {

@@ -2298,14 +2298,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const effectiveHookName = hookName === "deactivate" ? "gateway_stop" : hookName;
+    if (hookName === "deactivate") {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: 'typed hook "deactivate" is a compatibility alias for "gateway_stop"',
+      });
+    }
     let effectiveHandler = handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
-      if (hookName !== "before_agent_start") {
+    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
+      if (effectiveHookName !== "before_agent_start") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
         });
         return;
       }
@@ -2313,13 +2322,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       });
       effectiveHandler = constrainLegacyPromptInjectionHook(
         handler as PluginHookHandlerMap["before_agent_start"],
       ) as PluginHookHandlerMap[K];
     }
-    if (isConversationHookName(hookName)) {
+    if (isConversationHookName(effectiveHookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
       if (record.origin !== "bundled" && explicitConversationAccess !== true) {
         pushDiagnostic({
@@ -2327,7 +2336,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           pluginId: record.id,
           source: record.source,
           message:
-            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `typed hook "${effectiveHookName}" blocked because non-bundled plugins must set ` +
             `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         });
         return;
@@ -2337,16 +2346,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
         });
         return;
       }
     }
-    const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
-      hookName,
+      hookName: effectiveHookName,
       handler: effectiveHandler,
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
@@ -2411,7 +2420,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           } satisfies PluginRuntime["state"];
         }
         if (prop === "config") {
-          const config = Reflect.get(target, prop, receiver);
+          const config: PluginRuntime["config"] = Reflect.get(target, prop, receiver);
           return {
             ...config,
             current: () => runWithPluginScope(() => config.current()),

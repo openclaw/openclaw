@@ -473,6 +473,23 @@ describe("session store writer queue", () => {
     expect(store["agent:main:unsafe-id"]).toBeUndefined();
   });
 
+  it("keeps metadata-only canonical sessions without treating their ids as transcript ids", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:metadata": {
+        sessionId: "agent:main:metadata",
+        updatedAt: Date.now(),
+        groupActivation: "always",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:metadata"]).toMatchObject({
+      groupActivation: "always",
+    });
+    expect(store["agent:main:metadata"]?.sessionId).toBeUndefined();
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({

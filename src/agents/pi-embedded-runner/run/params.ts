@@ -125,6 +125,8 @@ export type RunEmbeddedPiAgentParams = {
   modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force PI. */
+  agentHarnessRuntimeOverride?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

@@ -274,13 +274,10 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
-  if (params.writeOptions?.skipPluginValidation) {
-    // Skip the include fast path so the root writer handles the write with
-    // plugin validation disabled end-to-end (including the post-write readback).
-    return null;
-  }
-
-  const validated = validateConfigObjectWithPlugins(nextConfig);
+  const validated = validateConfigObjectWithPlugins(
+    nextConfig,
+    params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
+  );
   if (!validated.ok) {
     throw createInvalidConfigError(
       params.snapshot.path,
@@ -303,7 +300,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
 
   const refreshed = await (
     params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
-  )();
+  )(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : undefined);
   const refreshedSnapshot = refreshed.snapshot;
   const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
   if (!refreshedSnapshot.valid) {

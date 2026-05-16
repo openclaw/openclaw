@@ -62,6 +62,7 @@ export function selectAgentHarness(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
 }): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
 }
@@ -73,8 +74,18 @@ function selectAgentHarnessDecision(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
-  const policy = resolveAgentHarnessPolicy(params);
+  const resolvedPolicy = resolveAgentHarnessPolicy(params);
+  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const policy =
+    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
+      ? ({
+          ...resolvedPolicy,
+          runtime: runtimeOverride,
+          runtimeSource: "model",
+        } as AgentHarnessPolicy)
+      : resolvedPolicy;
   // PI is intentionally not part of the plugin candidate list. Explicit plugin
   // runtimes fail closed; only `auto` may route an unmatched turn to PI.
   const pluginHarnesses = listPluginAgentHarnesses();
@@ -147,6 +158,7 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     agentHarnessId: params.agentHarnessId,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
   logAgentHarnessSelection(selection, {
