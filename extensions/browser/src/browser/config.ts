@@ -502,13 +502,10 @@ export function resolveProfile(
   } else if (rawProfileUrl) {
     const parsed = parseBrowserHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
-    // When the URL has an explicit port, always use it. When the URL omits the
-    // port (e.g. "http://127.0.0.1"), prefer an already-configured cdpPort over
-    // the protocol default (80/443) to avoid binding Chrome to a privileged
-    // port.
-    if (parsed.parsed.port) {
+    // Port precedence: explicit URL port > configured cdpPort > protocol default.
+    if (parsed.hasExplicitPort) {
       cdpPort = parsed.port;
-      cdpUrl = parsed.normalized;
+      cdpUrl = parsed.normalizedWithPort;
     } else if (cdpPort) {
       // URL omitted the port but we have an explicit cdpPort — inject it while
       // preserving the rest of the URL (path, query, credentials, etc.).
