@@ -315,6 +315,66 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshOrphanTranscript);
   });
 
+  it("sessions cleanup fix-missing prunes malformed stored session rows", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const validTranscript = path.join(testDir, "valid-present.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+          "invalid-bad-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "../outside.jsonl",
+            updatedAt: now,
+          },
+          "invalid-missing-relative-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "missing.jsonl",
+            updatedAt: now,
+          },
+          "valid-present": { sessionId: "valid-present", updatedAt: now },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(validTranscript, "valid", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.missing).toBe(3);
+    expect(preview?.summary.beforeCount).toBe(4);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
+    const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(rawAfterDryRun).toHaveProperty("invalid-no-file");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(3);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(persisted)).toEqual(["valid-present"]);
+    await expectPathExists(validTranscript);
+  });
+
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 

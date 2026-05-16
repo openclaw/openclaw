@@ -205,11 +205,15 @@ function pruneMissingTranscriptEntries(params: {
   });
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
-    if (!entry?.sessionId) {
-      continue;
+    let transcriptPath: string | undefined;
+    if (entry?.sessionId) {
+      try {
+        transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+      } catch {
+        // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
+      }
     }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    if (!fs.existsSync(transcriptPath)) {
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);
