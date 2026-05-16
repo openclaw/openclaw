@@ -1,3 +1,4 @@
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -9,6 +10,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveSubagentModelConfigSelectionResult,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -21,12 +23,7 @@ type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "pay
 export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  agentConfigOverride?: {
-    model?: unknown;
-    subagents?: {
-      model?: unknown;
-    };
-  };
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
@@ -86,14 +83,14 @@ export async function resolveCronModelSelection(
     return catalog;
   };
 
-  const agentSubagentModel = normalizeModelSelection(params.agentConfigOverride?.subagents?.model);
-  const agentModel = normalizeModelSelection(params.agentConfigOverride?.model);
-  const defaultSubagentModel = normalizeModelSelection(
-    params.cfg.agents?.defaults?.subagents?.model,
-  );
-  const subagentModelRaw = agentSubagentModel ?? agentModel ?? defaultSubagentModel;
+  const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    agentConfigOverride: params.agentConfigOverride,
+  });
+  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection?.raw);
   const subagentModelSource: CronModelSelectionSource =
-    agentSubagentModel !== undefined ? "subagent" : agentModel !== undefined ? "agent" : "subagent";
+    subagentModelConfigSelection?.source === "agent" ? "agent" : "subagent";
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,

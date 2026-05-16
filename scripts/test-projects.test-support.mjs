@@ -589,6 +589,21 @@ function listRepoFilesRecursive(root, cwd) {
   });
 }
 
+function listGatewayFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", "src/gateway"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0);
+}
+
 function isGatewayServerFullSuiteTarget(relative) {
   if (
     GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) ||
@@ -609,7 +624,7 @@ function resolveGatewayServerFullSuiteTargets(cwd) {
   if (!fs.existsSync(gatewayDir)) {
     return [];
   }
-  return listRepoFilesRecursive(gatewayDir, cwd)
+  return (listGatewayFilesFromGit(cwd) ?? listRepoFilesRecursive(gatewayDir, cwd))
     .filter(isGatewayServerFullSuiteTarget)
     .toSorted((a, b) => a.localeCompare(b));
 }

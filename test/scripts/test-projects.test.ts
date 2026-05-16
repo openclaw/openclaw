@@ -1172,9 +1172,20 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
+    const readdirSync = vi.spyOn(fs, "readdirSync");
+    const before = readdirSync.mock.calls.length;
+    let gatewayTreeReads: unknown[][] = [];
     try {
       plans = buildFullSuiteVitestRunPlans([], process.cwd());
+      gatewayTreeReads = readdirSync.mock.calls
+        .slice(before)
+        .filter(([target]) =>
+          typeof target === "string"
+            ? normalizeRepoPath(target).includes("src/gateway")
+            : false,
+        );
     } finally {
+      readdirSync.mockRestore();
       if (previous === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
       } else {
@@ -1182,6 +1193,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       }
     }
 
+    expect(gatewayTreeReads).toEqual([]);
     expect(plans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
       "test/vitest/vitest.unit-src.config.ts",

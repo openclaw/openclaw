@@ -2368,10 +2368,12 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 
 export async function readConfigFileSnapshot(options?: {
   measure?: ConfigSnapshotReadMeasure;
+  skipPluginValidation?: boolean;
 }): Promise<ConfigFileSnapshot> {
-  return await createConfigIO(
-    options?.measure ? { measure: options.measure } : {},
-  ).readConfigFileSnapshot();
+  return await createConfigIO({
+    ...(options?.measure ? { measure: options.measure } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+  }).readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotWithPluginMetadata(options?: {
