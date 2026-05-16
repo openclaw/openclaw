@@ -14,11 +14,51 @@ export function injectCanvasLiveReload(html: string): string {
   const snippet = `
 <script>
 (() => {
+  const CANVAS_LIVE_RELOAD_ERROR_EVENT = "openclaw:canvas-live-reload-error";
+
   // Cross-platform action bridge helper.
   // Works on:
   // - iOS: window.webkit.messageHandlers.openclawCanvasA2UIAction.postMessage(...)
   // - Android: window.openclawCanvasA2UIAction.postMessage(...)
   const handlerNames = ["openclawCanvasA2UIAction"];
+  let liveReloadErrorReported = false;
+  function describeError(err) {
+    if (
+      err &&
+      typeof err === "object" &&
+      "message" in err &&
+      typeof err.message === "string" &&
+      err.message
+    ) {
+      return err.message;
+    }
+    if (err && typeof err === "object") {
+      const parts = ["WebSocket connection failed"];
+      if ("code" in err && err.code) parts.push("code=" + String(err.code));
+      if ("reason" in err && err.reason) parts.push(String(err.reason));
+      return parts.join(": ");
+    }
+    return String(err);
+  }
+  function reportCanvasLiveReloadError(err) {
+    if (liveReloadErrorReported) return;
+    liveReloadErrorReported = true;
+    const message = describeError(err);
+    try {
+      console.error("OpenClaw canvas live reload unavailable:", err);
+    } catch {}
+    try {
+      document.documentElement?.setAttribute("data-openclaw-live-reload", "error");
+      document.documentElement?.setAttribute("data-openclaw-live-reload-error", message);
+    } catch {}
+    try {
+      globalThis.dispatchEvent?.(
+        new CustomEvent(CANVAS_LIVE_RELOAD_ERROR_EVENT, {
+          detail: { message },
+        }),
+      );
+    } catch {}
+  }
   function postToNode(payload) {
     try {
       const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -59,7 +99,15 @@ export function injectCanvasLiveReload(html: string): string {
     ws.onmessage = (ev) => {
       if (String(ev.data || "") === "reload") location.reload();
     };
-  } catch {}
+    ws.onerror = (ev) => {
+      reportCanvasLiveReloadError(ev);
+    };
+    ws.onclose = (ev) => {
+      reportCanvasLiveReloadError(ev);
+    };
+  } catch (err) {
+    reportCanvasLiveReloadError(err);
+  }
 })();
 </script>
 `.trim();
