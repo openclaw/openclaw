@@ -43,6 +43,28 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
+  it("honors provider wildcard agent model runtime policy entries without a concrete model id", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": { agentRuntime: { id: "pi" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "vllm",
+      }),
+    ).toEqual({
+      policy: { id: "pi" },
+      source: "model",
+    });
+  });
+
   it("prefers exact agent model runtime policy entries over provider wildcards", () => {
     const config = {
       agents: {

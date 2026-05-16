@@ -51,7 +51,7 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("ignores session PI pins when validating OpenAI auth profiles", () => {
+  it("validates Codex harness auth through the Codex provider contract", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",

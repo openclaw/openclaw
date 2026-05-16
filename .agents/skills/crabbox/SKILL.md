@@ -378,6 +378,30 @@ browser/app inside the visible session, bridges the lease into the authenticated
 WebVNC portal, and opens the portal. Keep browsers windowed for human QA; use
 `--fullscreen` only for capture/video workflows.
 
+Human handoff preflight:
+
+- Do not assume a visible desktop or launched browser means the repo CLI/app is
+  installed, built, or on the interactive terminal's `PATH`.
+- Before handing WebVNC to a human tester, prove the expected command from the
+  same kept lease and from a neutral directory such as `~`.
+- If the handoff needs repo-local code, sync/build/link it explicitly on that
+  lease. Source-tree CLIs often need build output before a symlink works.
+- Prefer a real `command -v <expected-command> && <expected-command> --version`
+  check over a repo-root-only `pnpm ...` command.
+
+Generic handoff repair pattern:
+
+```sh
+../crabbox/bin/crabbox run --id <cbx_id-or-slug> --full-resync --shell -- \
+  "set -euo pipefail
+   pnpm install --frozen-lockfile
+   pnpm build
+   sudo ln -sf \"\$PWD/<cli-entry>\" /usr/local/bin/<expected-command>
+   cd ~
+   command -v <expected-command>
+   <expected-command> --version"
+```
+
 ## If Crabbox Fails
 
 Keep the fallback narrow. First decide whether the failure is Crabbox itself,
