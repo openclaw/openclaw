@@ -51,7 +51,37 @@ function normalizeTranscriptSegments(value: unknown): AudioTranscriptSegment[] |
     if (!text) {
       continue;
     }
-    segments.push({ ...record, text } as AudioTranscriptSegment);
+    const extra = { ...record };
+    delete extra.text;
+    delete extra.start;
+    delete extra.end;
+    delete extra.speaker;
+    delete extra.id;
+    delete extra.type;
+    const { start, end, speaker, id, type } = record;
+    const normalized: AudioTranscriptSegment = { ...extra, text };
+    if (typeof start === "number" && Number.isFinite(start)) {
+      normalized.start = start;
+    }
+    if (typeof end === "number" && Number.isFinite(end)) {
+      normalized.end = end;
+    }
+    if (typeof speaker === "string") {
+      const trimmedSpeaker = speaker.trim();
+      if (trimmedSpeaker) {
+        normalized.speaker = trimmedSpeaker;
+      }
+    }
+    if (typeof id === "string" || typeof id === "number") {
+      normalized.id = id;
+    }
+    if (typeof type === "string") {
+      const trimmedType = type.trim();
+      if (trimmedType) {
+        normalized.type = trimmedType;
+      }
+    }
+    segments.push(normalized);
   }
   return segments.length > 0 ? segments : undefined;
 }

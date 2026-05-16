@@ -218,6 +218,43 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect(Object.hasOwn(result, "segments")).toBe(false);
   });
 
+  it("normalizes known transcript segment fields before returning them", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      text: "Speaker A",
+      segments: [
+        {
+          type: " transcript.text.segment ",
+          id: { nested: true },
+          speaker: { name: "A" },
+          start: "0",
+          end: 1.2,
+          text: "  Speaker A  ",
+          confidence: 0.92,
+        },
+      ],
+    });
+
+    const result = await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "meeting.wav",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-transcribe-diarize",
+    });
+
+    expect(result.segments).toEqual([
+      {
+        type: "transcript.text.segment",
+        end: 1.2,
+        text: "Speaker A",
+        confidence: 0.92,
+      },
+    ]);
+  });
+
   it("returns diarized transcript segments when the provider includes them", async () => {
     const { fetchFn } = createRequestCaptureJsonFetch({
       text: "Speaker A then Speaker B",
