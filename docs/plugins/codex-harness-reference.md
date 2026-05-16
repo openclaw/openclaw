@@ -261,12 +261,19 @@ interrupts the Codex turn, records a diagnostic timeout, and releases the
 OpenClaw session lane so follow-up chat messages are not queued behind a stale
 native turn.
 
-Any non-terminal notification for the same turn, including
-`rawResponseItem/completed`, disarms that short watchdog because Codex has
-proven the turn is still alive. The longer terminal watchdog continues to
-protect genuinely stuck turns. Timeout diagnostics include the last app-server
-notification method and, for raw assistant response items, the item type, role,
-id, and a bounded assistant text preview.
+Most non-terminal notifications for the same turn disarm that short watchdog
+because Codex has proven the turn is still alive. Raw `custom_tool_call_output`
+completions keep the short post-tool watchdog armed because they are the
+turn-scoped tool-result handoff. When Codex emits a completed `agentMessage` item
+and then goes quiet without `turn/completed`, OpenClaw treats the assistant
+output as effectively complete, best-effort interrupts the native Codex turn, and
+releases the session lane. The same fallback applies to a raw assistant
+`rawResponseItem/completed` item only before the turn has crossed an OpenClaw
+dynamic-tool handoff, so post-tool raw assistant progress keeps waiting for
+`turn/completed` or the terminal watchdog. The longer terminal watchdog
+continues to protect genuinely stuck turns. Timeout diagnostics include the last
+app-server notification method and, for raw assistant response items, the item
+type, role, id, and a bounded assistant text preview.
 
 ## Model discovery
 

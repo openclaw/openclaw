@@ -1394,6 +1394,9 @@ export async function runCodexAppServerAttempt(
       activeOpenClawDynamicToolCallIds,
     );
     const rawToolOutputCompletion = isRawToolOutputCompletionNotification(notification);
+    const rawAssistantCompletionCanRelease =
+      isRawAssistantCompletionNotification(notification) &&
+      activeOpenClawDynamicToolCallIds.size === 0;
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
@@ -1409,7 +1412,10 @@ export async function runCodexAppServerAttempt(
       disarmTurnAssistantCompletionIdleWatch();
     } else if (isTurnCompletion) {
       disarmTurnAssistantCompletionIdleWatch();
-    } else if (isCurrentTurnNotification && isCompletedAssistantNotification(notification)) {
+    } else if (
+      isCurrentTurnNotification &&
+      (isCompletedAssistantNotification(notification) || rawAssistantCompletionCanRelease)
+    ) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
@@ -3074,6 +3080,19 @@ function isRawToolOutputCompletionNotification(notification: CodexServerNotifica
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
   return item ? readString(item, "type") === "custom_tool_call_output" : false;
+}
+
+function isRawAssistantCompletionNotification(notification: CodexServerNotification): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return Boolean(
+    item &&
+    readString(item, "type") === "message" &&
+    readString(item, "role") === "assistant" &&
+    readRawAssistantTextPreview(item),
+  );
 }
 
 function readRawAssistantTextPreview(item: JsonObject): string | undefined {
