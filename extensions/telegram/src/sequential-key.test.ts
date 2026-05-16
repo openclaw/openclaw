@@ -90,6 +90,30 @@ describe("getTelegramSequentialKey", () => {
       "telegram:-100:control",
     ],
     [
+      {
+        me: { username: "openclaw_bot" },
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@some_other_bot",
+        }),
+      },
+      "telegram:-100:topic:5907",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" },
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@openclaw_bot!",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) },
       "telegram:123:control",
     ],

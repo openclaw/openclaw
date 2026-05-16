@@ -49,14 +49,22 @@ function resolveStatusCommandControlLane(params: {
   return command?.category === "status" && command.key !== "export-session";
 }
 
-function isTelegramTargetedStopCommand(rawText?: string): boolean {
+function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): boolean {
   const trimmed = rawText?.trim();
   if (!trimmed) {
     return false;
   }
   // Isolated ingress may not have getMe() metadata yet. A targeted Telegram
   // /stop@bot command still needs the control lane so it can cancel a busy turn.
-  return /^\/stop@[A-Za-z0-9_]+(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu.test(trimmed);
+  const match = trimmed.match(/^\/stop@([A-Za-z0-9_]+)(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu);
+  if (!match) {
+    return false;
+  }
+  const normalizedBotUsername = botUsername?.trim().toLowerCase();
+  if (!normalizedBotUsername) {
+    return true;
+  }
+  return match[1]?.toLowerCase() === normalizedBotUsername;
 }
 
 export function isTelegramControlLaneText(params: {
@@ -71,7 +79,7 @@ export function isTelegramControlLaneText(params: {
   ) {
     return true;
   }
-  if (isTelegramTargetedStopCommand(params.rawText)) {
+  if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
     return true;
   }
   return resolveStatusCommandControlLane(params);
