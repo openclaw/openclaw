@@ -125,6 +125,11 @@ export type TtsSynthesisResult = {
   voiceCompatible?: boolean;
   fileExtension?: string;
   target?: "audio-file" | "voice-note";
+  wordTimestamps?: {
+    characters: string[];
+    characterStartTimesSeconds: number[];
+    characterEndTimesSeconds: number[];
+  };
 };
 
 export type TtsStreamResult = {
@@ -1159,6 +1164,7 @@ export async function textToSpeech(params: {
       outputFormat,
     }),
     target: synthesis.target,
+    wordTimestamps: synthesis.wordTimestamps,
   };
 }
 
@@ -1312,6 +1318,7 @@ export async function synthesizeSpeech(params: {
         voiceCompatible: synthesis.voiceCompatible,
         fileExtension: synthesis.fileExtension,
         target,
+        wordTimestamps: synthesis.wordTimestamps,
       };
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
