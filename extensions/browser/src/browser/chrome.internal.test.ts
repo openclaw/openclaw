@@ -1022,6 +1022,10 @@ describe("chrome.ts internal", () => {
     it("buffers stderr chunks when Chrome emits diagnostics while CDP comes up", async () => {
       // Covers onStderr (pushing chunks to stderrChunks) plus the
       // stderrHint truthy branch on failure.
+      const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-redact-off-"));
+      const configPath = path.join(configDir, "openclaw.json");
+      await fsp.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         if (
@@ -1068,6 +1072,7 @@ describe("chrome.ts internal", () => {
       expect(message).toContain("Chrome stderr:");
       expect(message).toContain("chrome crash log");
       expect(message).not.toContain(secretToken);
+      await fsp.rm(configDir, { recursive: true, force: true });
     });
 
     it("omits the sandbox hint on non-linux platforms", async () => {
