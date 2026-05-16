@@ -38,9 +38,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS: LegacyConfigMigration
       diagnostics.memoryPressureSnapshot =
         typeof diagnostics.memoryPressureBundle === "boolean"
           ? diagnostics.memoryPressureBundle
-          : legacy?.enabled === false
-            ? false
-            : true;
+          : legacy?.enabled !== false;
       delete diagnostics.memoryPressureBundle;
       changes.push("Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.");
     },
