@@ -49,6 +49,23 @@ describe("check-test-temp-cleanup", () => {
     ]);
   });
 
+  it("scans UI test files", async () => {
+    const root = await createFixtureRepo({
+      relativePath: "ui/leaky-ui.test.ts",
+      source: `import fs from "node:fs";\nimport os from "node:os";\nimport path from "node:path";\nconst dir = fs.mkdtempSync(path.join(os.tmpdir(), "leaky-ui-"));\nconsole.log(dir);\n`,
+    });
+
+    await expect(collectTestTempCleanupFindings(root)).resolves.toEqual([
+      expect.objectContaining({
+        file: "ui/leaky-ui.test.ts",
+        severity: "error",
+        cleanup: expect.objectContaining({
+          bindings: [expect.objectContaining({ variableName: "dir", hasCleanupCall: false })],
+        }),
+      }),
+    ]);
+  });
+
   it("keeps files with hooks but no cleanup call in the result set", async () => {
     const root = await createFixtureRepo({
       relativePath: "src/mixed-hooks.test.ts",

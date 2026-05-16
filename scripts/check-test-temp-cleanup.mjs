@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const TEST_FILE_GLOBS = ["src", "test", "packages", "extensions", "scripts"];
+const TEST_FILE_GLOBS = ["src", "test", "packages", "extensions", "scripts", "ui"];
 const TEST_FILE_PATTERN =
   /(?:\.test(?:-[^./]+)?|\.test-helpers|\.test-harness|\.test-support)\.ts$/u;
 const MKDTEMP_PATTERN = /\bmkdtemp(?:Sync)?\s*\(/u;
