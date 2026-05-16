@@ -1034,6 +1034,85 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("yields to aborts during bursty OpenAI-compatible streams", async () => {
+    const model = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      provider: "opencode-go",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      for (let index = 0; index < 512; index += 1) {
+        yield {
+          id: "chatcmpl-bursty",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "x" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("yields to aborts during bursty Responses streams", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      yield { type: "response.output_item.added", item: { type: "message" } };
+      for (let index = 0; index < 512; index += 1) {
+        yield { type: "response.output_text.delta", delta: "x" };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      __testing.processResponsesStream(mockStream(), output, stream, model, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {
     const model = {
       id: "glm-5",

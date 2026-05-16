@@ -73,6 +73,8 @@ const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
+const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -91,6 +93,42 @@ type BaseStreamOptions = {
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
 };
+
+type ModelStreamCooperativeScheduler = {
+  afterEvent: () => Promise<void>;
+};
+
+function throwIfModelStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+}
+
+function createModelStreamCooperativeScheduler(
+  signal?: AbortSignal,
+): ModelStreamCooperativeScheduler {
+  let lastYieldedAt = Date.now();
+  let eventsSinceYield = 0;
+  return {
+    async afterEvent() {
+      throwIfModelStreamAborted(signal);
+      eventsSinceYield += 1;
+      const now = Date.now();
+      if (
+        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+      ) {
+        return;
+      }
+      eventsSinceYield = 0;
+      lastYieldedAt = now;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      throwIfModelStreamAborted(signal);
+    },
+  };
+}
 
 type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
@@ -722,6 +760,7 @@ async function processResponsesStream(
       serviceTier?: ResponseCreateParamsStreaming["service_tier"],
     ) => void;
     firstEventTimeoutMs?: number;
+    signal?: AbortSignal;
   },
 ) {
   let currentItem: Record<string, unknown> | null = null;
@@ -736,7 +775,9 @@ async function processResponsesStream(
     model,
     options?.firstEventTimeoutMs,
   );
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawEvent of guardedStream) {
+    throwIfModelStreamAborted(options?.signal);
     const event = rawEvent as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
     eventCount += 1;
@@ -933,6 +974,7 @@ async function processResponsesStream(
           : "Unknown error (no error details in response)";
       throw new Error(msg);
     }
+    await cooperativeScheduler.afterEvent();
   }
   const eventTypeSummary = [...eventTypes.entries()]
     .slice(0, 12)
@@ -1141,6 +1183,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
           applyServiceTierPricing,
+          signal: options?.signal,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -1538,6 +1581,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
           firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+          signal: options?.signal,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -1738,7 +1782,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
-        await processOpenAICompletionsStream(responseStream, output, model, stream);
+        await processOpenAICompletionsStream(responseStream, output, model, stream, {
+          signal: options?.signal,
+        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -1760,6 +1806,7 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model<Api>,
   stream: { push(event: unknown): void },
+  options?: { signal?: AbortSignal },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -1907,8 +1954,11 @@ async function processOpenAICompletionsStream(
       appendVisibleTextDelta(part);
     }
   };
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    throwIfModelStreamAborted(options?.signal);
     if (!rawChunk || typeof rawChunk !== "object") {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     const chunk = rawChunk as ChatCompletionChunk;
@@ -1918,6 +1968,7 @@ async function processOpenAICompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
@@ -1935,6 +1986,7 @@ async function processOpenAICompletionsStream(
       choice.delta ??
       (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
     if (!choiceDelta) {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     if (choiceDelta.content) {
@@ -2026,6 +2078,7 @@ async function processOpenAICompletionsStream(
       }
     }
     flushPendingPostToolCallDeltas();
+    await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
   finishCurrentBlock();
