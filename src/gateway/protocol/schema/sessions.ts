@@ -169,6 +169,7 @@ export const SessionsAbortParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -351,8 +352,10 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
 
 export const SessionsUsageParamsSchema = Type.Object(
   {
-    /** Specific session key to analyze; if omitted returns all sessions. */
+    /** Specific session key to analyze; if omitted returns sessions for the effective agent. */
     key: Type.Optional(NonEmptyString),
+    /** Agent scope for list-style usage queries. */
+    agentId: Type.Optional(NonEmptyString),
     /** Start date for range filter (YYYY-MM-DD). */
     startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
     /** End date for range filter (YYYY-MM-DD). */
