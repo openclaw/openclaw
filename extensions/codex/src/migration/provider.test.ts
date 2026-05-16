@@ -1061,7 +1061,7 @@ describe("buildCodexMigrationProvider", () => {
       kind: "plugin",
       action: "install",
       status: "warning",
-      reason: "marketplace_missing",
+      reason: "plugin_missing",
     });
     expect(result.warnings).toContain(
       "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
