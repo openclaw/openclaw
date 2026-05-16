@@ -10,6 +10,7 @@ import {
 } from "../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
+import { extractErrorCode, formatErrorMessage } from "./errors.js";
 
 const TAILSCALE_STATUS_RETRY_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
@@ -19,14 +20,11 @@ function sleepMs(ms: number): Promise<void> {
 }
 
 function isNonRetryableTailscaleStatusError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as NodeJS.ErrnoException).code;
+  const code = extractErrorCode(err);
   if (code === "ENOENT" || code === "ENOTDIR") {
     return true;
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatErrorMessage(err);
   if (/command not found/i.test(message)) {
     return true;
   }
