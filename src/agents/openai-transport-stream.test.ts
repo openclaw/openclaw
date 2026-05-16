@@ -1774,6 +1774,68 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("include");
   });
 
+  it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("passes explicit xAI Grok 4.3 reasoning effort through", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
   it("keeps developer role for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(
       {

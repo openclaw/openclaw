@@ -9,6 +9,10 @@ describe("xai runtime model compat", () => {
       reasoning: true,
     });
 
+    expect(model.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+    });
     expect(model.thinkingLevelMap).toEqual({
       off: null,
       minimal: "low",

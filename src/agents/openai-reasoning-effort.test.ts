@@ -88,4 +88,15 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual([]);
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBeUndefined();
   });
+
+  it("does not turn disabled reasoning into a fallback effort when compat omits none", () => {
+    const model = {
+      provider: "xai",
+      id: "grok-4.3",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+    };
+
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
+  });
 });

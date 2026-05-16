@@ -28,7 +28,7 @@ const XAI_REASONING_EFFORTS = {
   xhigh: "high",
 } satisfies NonNullable<XaiRuntimeModelCompat["thinkingLevelMap"]>;
 
-const XAI_SUPPORTED_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
+const XAI_SUPPORTED_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 
 function normalizeXaiCompatModelId(id: unknown): string {
   return typeof id === "string" ? id.trim().toLowerCase() : "";
