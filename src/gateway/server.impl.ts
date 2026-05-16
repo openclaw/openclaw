@@ -666,6 +666,7 @@ export async function startGatewayServer(
   );
   const {
     gatewayPluginConfigAtStart,
+    activationSourceConfig: effectiveActivationSourceConfig,
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
@@ -675,7 +676,7 @@ export async function startGatewayServer(
   } = pluginBootstrap;
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
-    config: startupActivationSourceConfig,
+    config: effectiveActivationSourceConfig,
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
     env: process.env,
     workspaceDir: defaultWorkspaceDir,
@@ -1393,7 +1394,7 @@ export async function startGatewayServer(
         const { reloadDeferredGatewayPlugins } = await import("./server-plugin-bootstrap.js");
         const loaded = reloadDeferredGatewayPlugins({
           cfg: gatewayPluginConfigAtStart,
-          activationSourceConfig: startupActivationSourceConfig,
+          activationSourceConfig: effectiveActivationSourceConfig,
           workspaceDir: defaultWorkspaceDir,
           log,
           coreGatewayMethodNames,
@@ -1504,7 +1505,7 @@ export async function startGatewayServer(
                   const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
                   return loadGatewayStartupPluginRuntime({
                     cfg: gatewayPluginConfigAtStart,
-                    activationSourceConfig: startupActivationSourceConfig,
+                    activationSourceConfig: effectiveActivationSourceConfig,
                     workspaceDir: defaultWorkspaceDir,
                     log,
                     baseMethods,

@@ -209,4 +209,38 @@ describe("ensureCodexRuntimePluginForGatewayStartup", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBeUndefined();
     expect(log.messages.some((m) => m.includes("plugins.enabled"))).toBe(true);
   });
+
+  it("does not invoke any install side effect when plugins.deny blocks codex and the package is missing", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      plugins: { deny: ["codex"] },
+    } as OpenClawConfig;
+    const log = createLog();
+
+    const { ensureCodexRuntimePluginForGatewayStartup } =
+      await import("./codex-runtime-plugin-install.js");
+    const result = await ensureCodexRuntimePluginForGatewayStartup({ cfg, log: log.log });
+
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    expect(result.cfg).toBe(cfg);
+    expect(log.messages.some((m) => m.includes("skipping startup install"))).toBe(true);
+  });
+
+  it("does not invoke any install side effect when plugins.enabled is false and the package is missing", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      plugins: { enabled: false },
+    } as OpenClawConfig;
+    const log = createLog();
+
+    const { ensureCodexRuntimePluginForGatewayStartup } =
+      await import("./codex-runtime-plugin-install.js");
+    const result = await ensureCodexRuntimePluginForGatewayStartup({ cfg, log: log.log });
+
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    expect(result.cfg).toBe(cfg);
+    expect(log.messages.some((m) => m.includes("skipping startup install"))).toBe(true);
+  });
 });

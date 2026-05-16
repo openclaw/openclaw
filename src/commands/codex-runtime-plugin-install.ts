@@ -115,17 +115,27 @@ export async function ensureCodexRuntimePluginForGatewayStartup(params: {
   log: (message: string) => void;
   env?: NodeJS.ProcessEnv;
 }): Promise<EnsureCodexRuntimePluginForGatewayStartupResult> {
+  const passthrough = (): EnsureCodexRuntimePluginForGatewayStartupResult => ({
+    cfg: params.cfg,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+  });
   const { collectConfiguredModelRefs } = await import("../config/model-refs.js");
   const needsCodex = collectConfiguredModelRefs(params.cfg).some(({ value }) =>
     modelSelectionShouldEnsureCodexPlugin({ model: value, config: params.cfg }),
   );
   if (!needsCodex) {
-    return {
-      cfg: params.cfg,
-      ...(params.activationSourceConfig !== undefined
-        ? { activationSourceConfig: params.activationSourceConfig }
-        : {}),
-    };
+    return passthrough();
+  }
+  // Explicit operator policy can block codex even when configured models
+  // require the harness. Warn loudly and bail out before any network/install
+  // side effects — performing an npm install whose result cannot activate
+  // would be the wrong side effect against declared policy.
+  const policyBlock = detectCodexPolicyBlock(params.cfg);
+  if (policyBlock) {
+    params.log(policyBlock);
+    return passthrough();
   }
   // Pre-clear the runtime allowlist so the install path's own enablement step
   // does not fail with "blocked by allowlist" before we even reach disk.
@@ -186,26 +196,24 @@ export async function ensureCodexRuntimePluginForGatewayStartup(params: {
   };
 }
 
+function detectCodexPolicyBlock(cfg: OpenClawConfig): string | null {
+  if (cfg.plugins?.enabled === false) {
+    return `gateway: codex runtime plugin required by configured openai models, but \`plugins.enabled\` is false — skipping startup install. The openai harness will not register until plugins are re-enabled.`;
+  }
+  if (cfg.plugins?.deny?.includes(CODEX_RUNTIME_PLUGIN_ID)) {
+    return `gateway: codex runtime plugin required by configured openai models, but \`${CODEX_RUNTIME_PLUGIN_ID}\` is listed in \`plugins.deny\` — skipping startup install. Remove it from the denylist to register the openai harness.`;
+  }
+  return null;
+}
+
 // Force codex enabled (and present in plugins.allow) on an in-memory startup
-// config copy. The user's on-disk config is untouched. Logs once per call when
-// an override is applied so operators can tell why their allowlist appears to
-// have grown a member.
+// config copy. The user's on-disk config is untouched. Reached only after
+// detectCodexPolicyBlock returns null, so the explicit deny/disabled cases
+// are handled upstream and we only need to deal with allowlist gating here.
 function ensureCodexEnabledInStartupConfig(
   cfg: OpenClawConfig,
   log: (message: string) => void,
 ): OpenClawConfig {
-  if (cfg.plugins?.enabled === false) {
-    log(
-      `gateway: codex runtime plugin required by configured openai models, but \`plugins.enabled\` is false. The openai harness will not register until plugins are re-enabled.`,
-    );
-    return cfg;
-  }
-  if (cfg.plugins?.deny?.includes(CODEX_RUNTIME_PLUGIN_ID)) {
-    log(
-      `gateway: codex runtime plugin required by configured openai models, but \`${CODEX_RUNTIME_PLUGIN_ID}\` is listed in \`plugins.deny\`. Remove it from the denylist to register the openai harness.`,
-    );
-    return cfg;
-  }
   let next = cfg;
   const allow = cfg.plugins?.allow;
   if (Array.isArray(allow) && allow.length > 0 && !allow.includes(CODEX_RUNTIME_PLUGIN_ID)) {

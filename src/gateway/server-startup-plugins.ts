@@ -163,6 +163,7 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
+    activationSourceConfig,
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
