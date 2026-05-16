@@ -253,13 +253,22 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
-  // The watchdog forces a reconnect when no inbound message has arrived in
-  // this window. Once the connection layer sends a presence keepalive
-  // (session.ts), the WS itself stays healthy and the 30-min default fires
-  // spuriously on personal accounts that go hours without traffic. 4h keeps
-  // the safety net for genuinely dead connections without crying wolf.
-  const messageTimeoutMs = tuning.messageTimeoutMs ?? 4 * 60 * 60 * 1000;
+  // Recent-inbound silence timeout: the shorter watchdog window used after a
+  // reconnect that just saw real inbound traffic. If a reconnect-with-traffic
+  // session goes silent again, we want to notice quickly. 30 min was the
+  // original default and we preserve it here.
+  const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
+  // Quiet-session app-silence cap: the longer watchdog window for genuinely
+  // idle linked devices that never see inbound traffic. The presence
+  // keepalive below already prevents WhatsApp's server from kicking us, so
+  // this watchdog is just a safety net for truly dead application paths.
+  // Explicit value, deliberately not derived from messageTimeoutMs.
+  const appSilenceTimeoutMs = tuning.appSilenceTimeoutMs ?? 4 * 60 * 60 * 1000;
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
+  // Presence keepalive cadence: how often we send a low-impact "unavailable"
+  // presence packet on an open socket so WhatsApp's server-side liveness
+  // timer keeps resetting and does not emit xmlstreamend (status 428).
+  const presenceKeepaliveIntervalMs = tuning.presenceKeepaliveIntervalMs ?? 5 * 60 * 1000;
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
     authDir: account.authDir,
@@ -268,7 +277,9 @@ export async function monitorWebChannel(
     heartbeatSeconds,
     transportTimeoutMs,
     messageTimeoutMs,
+    appSilenceTimeoutMs,
     watchdogCheckMs,
+    presenceKeepaliveIntervalMs,
     reconnectPolicy,
     socketTiming,
     abortSignal,

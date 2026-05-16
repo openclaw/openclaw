@@ -41,6 +41,7 @@ type WhatsAppLiveConnection = {
   listener: ManagedWhatsAppListener;
   heartbeat: TimerHandle | null;
   watchdogTimer: TimerHandle | null;
+  presenceKeepaliveTimer: TimerHandle | null;
   lastInboundAt: number | null;
   lastTransportActivityAt: number;
   handledMessages: number;
@@ -120,6 +121,7 @@ function createLiveConnection(params: {
     listener: params.listener,
     heartbeat: null,
     watchdogTimer: null,
+    presenceKeepaliveTimer: null,
     lastInboundAt: null,
     lastTransportActivityAt: Date.now(),
     handledMessages: 0,
@@ -271,6 +273,7 @@ export class WhatsAppConnectionController {
   private readonly messageTimeoutMs: number;
   private readonly appSilenceTimeoutMs: number;
   private readonly watchdogCheckMs: number;
+  private readonly presenceKeepaliveIntervalMs: number;
   private readonly verbose: boolean;
   private readonly abortSignal?: AbortSignal;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -291,7 +294,9 @@ export class WhatsAppConnectionController {
     heartbeatSeconds: number;
     transportTimeoutMs: number;
     messageTimeoutMs: number;
+    appSilenceTimeoutMs: number;
     watchdogCheckMs: number;
+    presenceKeepaliveIntervalMs: number;
     reconnectPolicy: ReconnectPolicy;
     abortSignal?: AbortSignal;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -304,9 +309,23 @@ export class WhatsAppConnectionController {
     this.keepAlive = params.keepAlive;
     this.heartbeatSeconds = params.heartbeatSeconds;
     this.transportTimeoutMs = params.transportTimeoutMs;
+    // Three independent timing policies, deliberately not derived from each
+    // other:
+    //   - messageTimeoutMs: recent-inbound silence timeout. Used when a
+    //     connection has just seen traffic (openedAfterRecentInbound=true).
+    //     Shorter, so a reconnect after real activity still gets a tight
+    //     watchdog.
+    //   - appSilenceTimeoutMs: quiet-session app-silence cap. Used for
+    //     genuinely idle linked devices. Longer, because the presence
+    //     keepalive below already prevents WhatsApp's server from kicking
+    //     us; the watchdog is just the safety net for truly dead apps.
+    //   - presenceKeepaliveIntervalMs: cadence of the periodic
+    //     sendPresenceUpdate("unavailable") that keeps the WhatsApp server
+    //     from treating an idle connection as stale (CB:xmlstreamend / 428).
     this.messageTimeoutMs = params.messageTimeoutMs;
-    this.appSilenceTimeoutMs = Math.max(params.messageTimeoutMs, params.messageTimeoutMs * 4);
+    this.appSilenceTimeoutMs = params.appSilenceTimeoutMs;
     this.watchdogCheckMs = params.watchdogCheckMs;
+    this.presenceKeepaliveIntervalMs = params.presenceKeepaliveIntervalMs;
     this.reconnectPolicy = params.reconnectPolicy;
     this.abortSignal = params.abortSignal;
     this.sleep = params.sleep ?? ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal));
@@ -582,6 +601,10 @@ export class WhatsAppConnectionController {
     if (connection.watchdogTimer) {
       clearInterval(connection.watchdogTimer);
     }
+    if (connection.presenceKeepaliveTimer) {
+      clearInterval(connection.presenceKeepaliveTimer);
+      connection.presenceKeepaliveTimer = null;
+    }
     if (connection.backgroundTasks.size > 0) {
       await Promise.allSettled(connection.backgroundTasks);
       connection.backgroundTasks.clear();
@@ -645,6 +668,24 @@ export class WhatsAppConnectionController {
         error: WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
       });
     }, this.watchdogCheckMs);
+
+    // Presence keepalive: send a low-impact "unavailable" presence packet on a
+    // fixed cadence so WhatsApp's server-side liveness timer keeps resetting.
+    // markOnlineOnConnect stays false, so the user's phone retains
+    // primary-device status; "unavailable" is the lowest-impact presence type
+    // and does not change device prioritisation. Errors are caught and logged
+    // at warn level via the controller's noop-friendly background tasks set.
+    connection.presenceKeepaliveTimer = setInterval(() => {
+      const sock = this.socketRef.current;
+      if (!sock) {
+        return;
+      }
+      const task = sock.sendPresenceUpdate("unavailable").catch(() => {
+        // Best-effort. Watchdog still catches a genuinely-dead socket.
+      });
+      connection.backgroundTasks.add(task);
+      void task.finally(() => connection.backgroundTasks.delete(task));
+    }, this.presenceKeepaliveIntervalMs);
   }
 
   private attachTransportActivityListener(sock: WASocket): (() => void) | null {

@@ -328,7 +328,9 @@ export function startWebAutoReplyMonitor(params: {
   heartbeatSeconds?: number;
   transportTimeoutMs?: number;
   messageTimeoutMs?: number;
+  appSilenceTimeoutMs?: number;
   watchdogCheckMs?: number;
+  presenceKeepaliveIntervalMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
   accountId?: string;
   statusSink?: (status: WebChannelStatus) => void;
@@ -346,7 +348,9 @@ export function startWebAutoReplyMonitor(params: {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
       transportTimeoutMs: params.transportTimeoutMs,
       messageTimeoutMs: params.messageTimeoutMs,
+      appSilenceTimeoutMs: params.appSilenceTimeoutMs,
       watchdogCheckMs: params.watchdogCheckMs,
+      presenceKeepaliveIntervalMs: params.presenceKeepaliveIntervalMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
       sleep: params.sleep,
       accountId: params.accountId,

@@ -37,8 +37,13 @@ export type WebMonitorTuning = {
   socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
   transportTimeoutMs?: number;
+  /** Recent-inbound silence timeout: shorter watchdog after reconnects with recent traffic. */
   messageTimeoutMs?: number;
+  /** Quiet-session app-silence cap: longer watchdog for genuinely idle linked devices. */
+  appSilenceTimeoutMs?: number;
   watchdogCheckMs?: number;
+  /** Cadence of the periodic sock.sendPresenceUpdate("unavailable") keepalive. */
+  presenceKeepaliveIntervalMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   statusSink?: (status: WebChannelStatus) => void;
   /** WhatsApp account id. Default: "default". */

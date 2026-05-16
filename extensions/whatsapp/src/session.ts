@@ -182,20 +182,6 @@ export async function createWaSocket(
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
-
-  // Periodic presence keepalive: WhatsApp's server treats a fully-silent
-  // connection as stale and closes it via xmlstreamend (status 428) after
-  // ~28-30 min. A low-cadence "unavailable" presence packet keeps the
-  // server-side liveness timer reset without taking primary-device status
-  // away from the user's phone (markOnlineOnConnect stays false).
-  let presenceKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  const stopPresenceKeepalive = () => {
-    if (presenceKeepaliveTimer) {
-      clearInterval(presenceKeepaliveTimer);
-      presenceKeepaliveTimer = null;
-    }
-  };
-
   sock.ev.on("connection.update", async (update: Partial<import("baileys").ConnectionState>) => {
     try {
       const { connection, lastDisconnect, qr } = update;
@@ -209,7 +195,6 @@ export async function createWaSocket(
         }
       }
       if (connection === "close") {
-        stopPresenceKeepalive();
         const status = getStatusCode(lastDisconnect?.error);
         if (status === LOGGED_OUT_STATUS) {
           console.error(
@@ -219,16 +204,8 @@ export async function createWaSocket(
           );
         }
       }
-      if (connection === "open") {
-        stopPresenceKeepalive();
-        presenceKeepaliveTimer = setInterval(() => {
-          void sock.sendPresenceUpdate("unavailable").catch((err) => {
-            sessionLogger.warn({ error: String(err) }, "presence keepalive failed");
-          });
-        }, 5 * 60 * 1000);
-        if (verbose) {
-          console.log(success("WhatsApp Web connected."));
-        }
+      if (connection === "open" && verbose) {
+        console.log(success("WhatsApp Web connected."));
       }
     } catch (err) {
       sessionLogger.error({ error: String(err) }, "connection.update handler error");

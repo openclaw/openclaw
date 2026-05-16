@@ -50,6 +50,7 @@ async function startWatchdogScenario(params: {
     sleep,
     heartbeatSeconds: 60,
     messageTimeoutMs: 30,
+    appSilenceTimeoutMs: 120,
     watchdogCheckMs: 5,
     statusSink: params.statusSink,
   });
@@ -496,6 +497,7 @@ describe("web auto-reply connection", () => {
         sleep,
         heartbeatSeconds: 60,
         messageTimeoutMs: 30,
+        appSilenceTimeoutMs: 120,
         watchdogCheckMs: 5,
       });
 
@@ -535,6 +537,7 @@ describe("web auto-reply connection", () => {
         sleep,
         heartbeatSeconds: 60,
         messageTimeoutMs: 30,
+        appSilenceTimeoutMs: 120,
         watchdogCheckMs: 5,
       });
 
