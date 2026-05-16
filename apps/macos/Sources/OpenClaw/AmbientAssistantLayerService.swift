@@ -43,12 +43,14 @@ enum AmbientAssistantLayerService {
             return AmbientAssistantChatSummary(
                 lastUserText: lastUser.flatMap(Self.messageText),
                 lastAssistantText: lastAssistant.flatMap(Self.messageText),
+                messages: Self.chatTranscript(from: messages, awaiting: awaiting),
                 isAwaitingResponse: awaiting,
                 error: nil)
         } catch {
             return AmbientAssistantChatSummary(
                 lastUserText: nil,
                 lastAssistantText: nil,
+                messages: [],
                 isAwaitingResponse: false,
                 error: error.localizedDescription)
         }
@@ -94,6 +96,30 @@ enum AmbientAssistantLayerService {
         let text = message.content.compactMap(\.text).joined(separator: "\n")
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func chatTranscript(
+        from messages: [OpenClawChatMessage],
+        awaiting: Bool) -> [AmbientAssistantChatMessage]
+    {
+        let visible = messages.compactMap { message -> AmbientAssistantChatMessage? in
+            guard let role = AmbientAssistantChatRole(rawValue: message.role),
+                  role == .user || role == .assistant,
+                  let text = Self.messageText(message)
+            else {
+                return nil
+            }
+            return AmbientAssistantChatMessage(
+                id: "\(message.timestamp ?? 0)-\(role.rawValue)-\(text.hashValue)",
+                role: role,
+                text: text,
+                isPending: false)
+        }
+        var trimmed = Array(visible.suffix(6))
+        if awaiting, let lastIndex = trimmed.lastIndex(where: { $0.role == .user }) {
+            trimmed[lastIndex].isPending = true
+        }
+        return trimmed
     }
 
     private static func isAwaitingAssistant(

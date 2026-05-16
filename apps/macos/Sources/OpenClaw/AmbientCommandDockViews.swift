@@ -183,6 +183,9 @@ struct AmbientCommandDockView: View {
                 await self.model.refreshAssistantSnapshot()
             }
         }
+        .task {
+            await self.model.consumeAssistantEvents()
+        }
     }
 
     private var assistantHeader: some View {
@@ -231,6 +234,10 @@ struct AmbientCommandDockView: View {
                 }
             }
 
+            if !self.model.assistantSnapshot.chatMessages.isEmpty {
+                self.chatTranscript
+            }
+
             HStack(spacing: 8) {
                 ForEach(Array(self.model.assistantSnapshot.subagents.prefix(2))) { item in
                     self.laneItem(item)
@@ -264,6 +271,41 @@ struct AmbientCommandDockView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var chatTranscript: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            self.cardLabel("Conversation", tone: .reading)
+            ForEach(Array(self.model.assistantSnapshot.chatMessages.suffix(4))) { message in
+                self.chatBubble(message)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func chatBubble(_ message: AmbientAssistantChatMessage) -> some View {
+        let isUser = message.role == .user
+        return HStack(alignment: .top, spacing: 7) {
+            Text(isUser ? "You" : "Thomas")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(isUser ? .secondary : self.toneColor(.success))
+                .frame(width: 52, alignment: .leading)
+            Text(message.text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(message.isPending ? .secondary : .primary)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if message.isPending {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 14, height: 14)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background((isUser ? Color.white.opacity(0.05) : self.toneColor(.success).opacity(0.10)), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
     private var statusCard: some View {

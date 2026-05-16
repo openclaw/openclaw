@@ -29,6 +29,10 @@ struct AmbientAssistantLayerModelTests {
             chat: AmbientAssistantChatSummary(
                 lastUserText: "Can you deploy this?",
                 lastAssistantText: "I can build, verify, and deploy it now.",
+                messages: [
+                    AmbientAssistantChatMessage(role: .user, text: "Can you deploy this?", isPending: false),
+                    AmbientAssistantChatMessage(role: .assistant, text: "I can build, verify, and deploy it now.", isPending: false),
+                ],
                 isAwaitingResponse: false,
                 error: nil),
             schedule: AmbientAssistantScheduleSummary(
@@ -52,6 +56,8 @@ struct AmbientAssistantLayerModelTests {
         #expect(snapshot.liveCards[0].detail.contains("I can build"))
         #expect(snapshot.liveCards[1].detail.contains("Standup"))
         #expect(snapshot.liveCards[2].detail.contains("Daily news brief"))
+        #expect(snapshot.chatMessages.map(\.role) == [.user, .assistant])
+        #expect(snapshot.chatMessages.last?.text == "I can build, verify, and deploy it now.")
         #expect(snapshot.receipt.summary == "Daily news brief")
     }
 
@@ -65,6 +71,9 @@ struct AmbientAssistantLayerModelTests {
             chat: AmbientAssistantChatSummary(
                 lastUserText: "Ping",
                 lastAssistantText: nil,
+                messages: [
+                    AmbientAssistantChatMessage(role: .user, text: "Ping", isPending: true),
+                ],
                 isAwaitingResponse: true,
                 error: nil),
             schedule: AmbientAssistantScheduleSummary(
@@ -82,6 +91,7 @@ struct AmbientAssistantLayerModelTests {
         #expect(snapshot.status.detail == "Running tool browser.open")
         #expect(snapshot.status.tone == .working)
         #expect(snapshot.liveCards[0].tone == .working)
+        #expect(snapshot.chatMessages.first?.isPending == true)
         #expect(snapshot.liveCards[1].tone == .waitingForApproval)
         #expect(snapshot.liveCards[2].tone == .error)
         #expect(snapshot.proposals.first?.title == "Review failed automation")

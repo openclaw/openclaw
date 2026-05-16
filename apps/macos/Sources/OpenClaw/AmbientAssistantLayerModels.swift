@@ -104,9 +104,35 @@ struct AmbientAssistantLaneItem: Equatable, Identifiable, Sendable {
     var tone: AmbientAssistantTone
 }
 
+enum AmbientAssistantChatRole: String, Equatable, Sendable {
+    case user
+    case assistant
+    case system
+}
+
+struct AmbientAssistantChatMessage: Equatable, Identifiable, Sendable {
+    var id: String
+    var role: AmbientAssistantChatRole
+    var text: String
+    var isPending: Bool
+
+    init(
+        id: String = UUID().uuidString,
+        role: AmbientAssistantChatRole,
+        text: String,
+        isPending: Bool)
+    {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.isPending = isPending
+    }
+}
+
 struct AmbientAssistantChatSummary: Equatable, Sendable {
     var lastUserText: String?
     var lastAssistantText: String?
+    var messages: [AmbientAssistantChatMessage] = []
     var isAwaitingResponse: Bool
     var error: String?
 }
@@ -160,6 +186,7 @@ struct AmbientAssistantSurfaceSnapshot: Equatable, Sendable {
     var receipt: AmbientAssistantReceiptSummary
     var subagents: [AmbientAssistantLaneItem]
     var liveCards: [AmbientAssistantLaneItem]
+    var chatMessages: [AmbientAssistantChatMessage]
     var status: AmbientAssistantLaneItem
 
     static let `default` = AmbientAssistantSurfaceSnapshot(
@@ -209,6 +236,7 @@ struct AmbientAssistantSurfaceSnapshot: Equatable, Sendable {
             AmbientAssistantLaneItem(id: "schedule", title: "Schedule", detail: "Calendar and Reminders are ready to connect", tone: .ready),
             AmbientAssistantLaneItem(id: "automation", title: "Automation", detail: "No recent cron result yet", tone: .ready),
         ],
+        chatMessages: [],
         status: AmbientAssistantLaneItem(
             id: "status",
             title: "Thomas",
@@ -236,6 +264,7 @@ enum AmbientAssistantSnapshotBuilder {
             scheduleCard(from: inputs.schedule),
             automationCard(from: inputs.automation),
         ]
+        snapshot.chatMessages = chatMessages(from: inputs.chat)
         snapshot.receipt = receipt(from: inputs.automation)
         snapshot.proposals = proposals(from: inputs)
         snapshot.capabilities = capabilities(from: inputs)
@@ -277,6 +306,30 @@ enum AmbientAssistantSnapshotBuilder {
             title: "Chat",
             detail: "Type a prompt here and Thomas replies in this layer",
             tone: .ready)
+    }
+
+    private static func chatMessages(from summary: AmbientAssistantChatSummary) -> [AmbientAssistantChatMessage] {
+        let explicit = summary.messages
+            .filter { !clean($0.text, fallback: "").isEmpty }
+            .suffix(6)
+        if !explicit.isEmpty {
+            return Array(explicit)
+        }
+
+        var messages: [AmbientAssistantChatMessage] = []
+        if let user = nonEmpty(summary.lastUserText) {
+            messages.append(AmbientAssistantChatMessage(
+                role: .user,
+                text: user,
+                isPending: summary.isAwaitingResponse))
+        }
+        if let assistant = nonEmpty(summary.lastAssistantText) {
+            messages.append(AmbientAssistantChatMessage(
+                role: .assistant,
+                text: assistant,
+                isPending: false))
+        }
+        return messages
     }
 
     private static func scheduleCard(from summary: AmbientAssistantScheduleSummary) -> AmbientAssistantLaneItem {

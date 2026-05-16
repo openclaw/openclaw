@@ -47,6 +47,36 @@ struct AmbientCommandDockModelTests {
         #expect(model.thomasState == .success)
     }
 
+    @Test func `submitting prompt shows user message in chat transcript`() async {
+        let model = AmbientCommandDockModel(
+            registry: .default,
+            actions: AmbientCommandDockActionExecutor(environment: .testing(
+                sendPrompt: { _ in .success("Thomas is replying") })))
+        model.inputText = "What should we do next?"
+
+        await model.submit()
+
+        #expect(model.inputText == "")
+        #expect(model.assistantSnapshot.chatMessages.first?.role == .user)
+        #expect(model.assistantSnapshot.chatMessages.first?.text == "What should we do next?")
+        #expect(model.assistantSnapshot.chatMessages.first?.isPending == true)
+    }
+
+    @Test func `refresh keeps local prompt visible until history catches up`() async {
+        let model = AmbientCommandDockModel(
+            registry: .default,
+            actions: AmbientCommandDockActionExecutor(environment: .testing(
+                sendPrompt: { _ in .success("Thomas is replying") },
+                assistantSnapshot: { .default })))
+        model.inputText = "Stay visible please"
+
+        await model.submit()
+        await model.refreshAssistantSnapshot()
+
+        #expect(model.assistantSnapshot.chatMessages.first?.text == "Stay visible please")
+        #expect(model.assistantSnapshot.chatMessages.first?.isPending == true)
+    }
+
     @Test func `return accepts partial suggestions but submits exact commands`() {
         let model = AmbientCommandDockModel(registry: .default)
 
