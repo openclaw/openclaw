@@ -53,6 +53,7 @@ import {
 import {
   normalizeSlackChannelType,
   resolveSlackChatType,
+  type SlackAssistantThreadContext,
   type SlackMonitorContext,
 } from "../context.js";
 import { resolveConversationLabel } from "../conversation.runtime.js";
@@ -76,6 +77,42 @@ const SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const SLACK_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function recordString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  return normalizeOptionalString(record?.[key]);
+}
+
+function resolveSlackMessageAssistantThreadContext(
+  message: SlackMessageEvent,
+): Omit<SlackAssistantThreadContext, "updatedAt"> | undefined {
+  const thread = asRecord(message.assistant_thread);
+  if (!thread) {
+    return undefined;
+  }
+  const context = asRecord(thread.context);
+  const assistantChannelId = recordString(thread, "channel_id") ?? message.channel;
+  const threadTs = recordString(thread, "thread_ts") ?? message.thread_ts ?? message.ts;
+  if (!assistantChannelId || !threadTs) {
+    return undefined;
+  }
+  return {
+    assistantChannelId,
+    threadTs,
+    userId: recordString(thread, "user_id") ?? message.user,
+    channelId: recordString(context, "channel_id"),
+    teamId: recordString(context, "team_id"),
+    enterpriseId: recordString(context, "enterprise_id"),
+  };
+}
 
 function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
@@ -536,6 +573,11 @@ export async function prepareSlackMessage(params: {
     : isGroupDm
       ? "group"
       : "channel";
+  const messageAssistantThreadContext = resolveSlackMessageAssistantThreadContext(message);
+  const assistantThreadContext = isDirectMessage
+    ? (ctx.getSlackAssistantThreadContext(message.channel, message.thread_ts ?? message.ts) ??
+      messageAssistantThreadContext)
+    : undefined;
   const willImplicitlyThreadReply =
     isRoom && !channelRequireMention && resolveSlackReplyToMode(account, channelChatType) !== "off";
   const seedTopLevelRoomThreadBySource =
@@ -552,6 +594,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     seedTopLevelRoomThread: seedTopLevelRoomThreadBySource,
+    isAssistantThread: Boolean(assistantThreadContext),
   });
 
   const resolveWasMentioned = (mentionRegexes: RegExp[]) =>
@@ -589,6 +632,7 @@ export async function prepareSlackMessage(params: {
       isRoom,
       isRoomish,
       seedTopLevelRoomThread: true,
+      isAssistantThread: Boolean(assistantThreadContext),
     });
     mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
     wasMentioned = resolveWasMentioned(mentionRegexes);
@@ -638,6 +682,7 @@ export async function prepareSlackMessage(params: {
     }
   }
   const directThreadRoutedToDmSession =
+    !assistantThreadContext &&
     isDirectMessage &&
     isThreadReply &&
     threadTs &&
@@ -1146,6 +1191,10 @@ export async function prepareSlackMessage(params: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
       TransportThreadId: directThreadRoutedToDmSession ? threadContext.messageThreadId : undefined,
+      SlackAssistantThread: assistantThreadContext ? true : undefined,
+      SlackAssistantThreadContextChannelId: assistantThreadContext?.channelId,
+      SlackAssistantThreadContextTeamId: assistantThreadContext?.teamId,
+      SlackAssistantThreadContextEnterpriseId: assistantThreadContext?.enterpriseId ?? undefined,
       IsFirstThreadTurn:
         isThreadReply &&
         threadTs &&
@@ -1259,6 +1308,9 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
+    ...(assistantThreadContext?.threadTs
+      ? { forcedReplyThreadTs: assistantThreadContext.threadTs }
+      : {}),
     requireMention: shouldRequireMention,
     isDirectMessage,
     isRoomish,

@@ -168,6 +168,70 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.saveSlackAssistantThreadContext({
+      assistantChannelId: "D123",
+      threadTs: "10.000",
+      userId: "U1",
+      channelId: "C999",
+      teamId: "T1",
+      enterpriseId: "E1",
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "B1",
+        text: "assistant thread message",
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+    expect(payload.SlackAssistantThread).toBe(true);
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
+    expect(payload.SlackAssistantThreadContextEnterpriseId).toBe("E1");
+    expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
+  });
+
+  it("routes Slack assistant DM threads from the message marker without lifecycle cache", async () => {
+    const prepared = await prepareMessageWith(
+      createDefaultSlackCtx(),
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "B1",
+        text: "assistant thread message",
+        assistant_thread: {
+          channel_id: "D123",
+          thread_ts: "10.000",
+          context: {
+            channel_id: "C999",
+            team_id: "T1",
+          },
+        },
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+    expect(payload.SlackAssistantThread).toBe(true);
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
+    expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
+  });
+
   function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
     return createInboundSlackCtx({
       cfg: params.cfg,

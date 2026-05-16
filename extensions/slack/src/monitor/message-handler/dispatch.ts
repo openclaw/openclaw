@@ -392,10 +392,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const { statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
+  const threadTargets = resolveSlackThreadTargets({
     message,
     replyToMode: prepared.replyToMode,
   });
+  const forcedReplyThreadTs = prepared.forcedReplyThreadTs;
+  const statusThreadTs = forcedReplyThreadTs ?? threadTargets.statusThreadTs;
+  const isThreadReply = threadTargets.isThreadReply;
+  const replyDeliveryMode = forcedReplyThreadTs ? "off" : prepared.replyToMode;
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
     ctx: prepared.ctxPayload,
@@ -462,11 +466,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // mark this to ensure only the first reply is threaded.
   const hasRepliedRef = { value: false };
   const replyPlan = createSlackReplyDeliveryPlan({
-    replyToMode: prepared.replyToMode,
-    incomingThreadTs,
+    replyToMode: replyDeliveryMode,
+    incomingThreadTs: forcedReplyThreadTs ?? incomingThreadTs,
     messageTs,
     hasRepliedRef,
-    isThreadReply,
+    isThreadReply: Boolean(forcedReplyThreadTs) || isThreadReply,
   });
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
@@ -537,12 +541,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streaming: account.config.streaming,
     nativeStreaming: resolveChannelStreamingNativeTransport(account.config),
   });
-  const streamThreadHint = resolveSlackStreamingThreadHint({
-    replyToMode: prepared.replyToMode,
-    incomingThreadTs,
-    messageTs,
-    isThreadReply,
-  });
+  const streamThreadHint =
+    forcedReplyThreadTs ??
+    resolveSlackStreamingThreadHint({
+      replyToMode: replyDeliveryMode,
+      incomingThreadTs,
+      messageTs,
+      isThreadReply,
+    });
   const previewStreamingEnabled =
     !sourceRepliesAreToolOnly &&
     shouldEnableSlackPreviewStreaming({
@@ -623,7 +629,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         runtime,
         textLimit: ctx.textLimit,
         replyThreadTs: session.threadTs,
-        replyToMode: prepared.replyToMode,
+        replyToMode: replyDeliveryMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       markSlackStreamFallbackDelivered(session);
@@ -668,12 +674,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
-      replyToMode: prepared.replyToMode,
+      replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     observedReplyDelivery = true;
     const deliveredThreadTs = resolveDeliveredSlackReplyThreadTs({
-      replyToMode: prepared.replyToMode,
+      replyToMode: replyDeliveryMode,
       payloadReplyToId: params.payload.replyToId,
       replyThreadTs,
     });
