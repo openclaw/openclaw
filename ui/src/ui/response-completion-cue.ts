@@ -111,14 +111,14 @@ function isDocumentVisible(): boolean {
   if (typeof document === "undefined") {
     return true;
   }
-  const visibilityState = String(document.visibilityState);
+  const visibilityState = document.visibilityState;
   if (visibilityState === "hidden") {
     return false;
   }
   if (typeof document.hasFocus === "function") {
     return document.hasFocus();
   }
-  return visibilityState !== "hidden";
+  return true;
 }
 
 function normalizeVolume(value: unknown): number {
@@ -179,6 +179,5 @@ declare global {
   }
 
   // Some browsers still expose only webkitAudioContext on globalThis.
-  // eslint-disable-next-line no-var
   var webkitAudioContext: typeof AudioContext | undefined;
 }
