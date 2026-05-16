@@ -34,14 +34,7 @@
 export const SDK_VERSION = "0.1.0";
 
 // AST types
-export type {
-  AstBlock,
-  AstItem,
-  Diagnostic,
-  FrontmatterEntry,
-  ParseResult,
-  MdAst,
-} from "./ast.js";
+export type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult, MdAst } from "./ast.js";
 export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 export type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 

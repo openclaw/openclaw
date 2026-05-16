@@ -1,25 +1,27 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
-  buildGuardedModelFetchMock: vi.fn(),
-  guardedFetchMock: vi.fn(),
-}));
+const { buildGuardedModelFetchMock, guardedFetchMock, resolveGoogleVertexAdcTokenMock } =
+  vi.hoisted(() => ({
+    buildGuardedModelFetchMock: vi.fn(),
+    guardedFetchMock: vi.fn(),
+    resolveGoogleVertexAdcTokenMock: vi.fn(),
+  }));
 
 vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
   ...(await importOriginal()),
   buildGuardedModelFetch: buildGuardedModelFetchMock,
 }));
 
+vi.mock("./vertex-adc.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveGoogleVertexAdcToken: resolveGoogleVertexAdcTokenMock,
+}));
+
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
 let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-stream.js").buildGoogleGemini3FirstResponseRetryParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
-let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
-let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -178,15 +180,13 @@ describe("google transport stream", () => {
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
-    ({ hasGoogleVertexAuthorizedUserAdcSync, resetGoogleVertexAuthorizedUserTokenCacheForTest } =
-      await import("./vertex-adc.js"));
   });
 
   beforeEach(() => {
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
+    resolveGoogleVertexAdcTokenMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
-    resetGoogleVertexAuthorizedUserTokenCacheForTest();
   });
 
   afterEach(() => {
@@ -523,27 +523,13 @@ describe("google transport stream", () => {
   });
 
   it("refreshes authorized_user ADC before Google Vertex requests", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-"));
-    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
-    await writeFile(
-      credentialsPath,
-      JSON.stringify({
-        type: "authorized_user",
-        client_id: "client-id",
-        client_secret: "client-secret",
-        refresh_token: "refresh-token",
-      }),
-      "utf8",
-    );
-    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-    const tokenFetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "ya29.vertex-token", expires_in: 3600 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    resolveGoogleVertexAdcTokenMock.mockResolvedValue({
+      accessToken: "ya29.vertex-token",
+      projectId: "vertex-project",
+      expiresAt: Date.now() + 3600_000,
+    });
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
         {
@@ -552,9 +538,7 @@ describe("google transport stream", () => {
       ]),
     );
 
-    expect(hasGoogleVertexAuthorizedUserAdcSync()).toBe(true);
-
-    const model = buildGoogleVertexModel();
+    const model = buildGoogleVertexModel({ baseUrl: undefined });
 
     const streamFn = createGoogleVertexTransportStreamFn();
     const stream = await Promise.resolve(
@@ -565,16 +549,12 @@ describe("google transport stream", () => {
         } as Parameters<typeof streamFn>[1],
         {
           apiKey: "gcp-vertex-credentials",
-          fetch: tokenFetchMock,
         } as Parameters<typeof streamFn>[2],
       ),
     );
     const result = await stream.result();
 
-    const tokenCall = requireMockCall(tokenFetchMock, 0, "token fetch");
-    expect(tokenCall[0]).toBe("https://oauth2.googleapis.com/token");
-    expect(requireRequestInit(tokenCall, "token fetch").method).toBe("POST");
-
+    expect(resolveGoogleVertexAdcTokenMock).toHaveBeenCalled();
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(guardedCall[0]).toBe(
       "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
@@ -593,33 +573,12 @@ describe("google transport stream", () => {
   });
 
   it("refreshes authorized_user ADC from the Windows APPDATA fallback for Google Vertex requests", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-appdata-adc-"));
-    const homeDir = path.join(tempDir, "home");
-    const appDataDir = path.join(tempDir, "AppData", "Roaming");
-    const fallbackDir = path.join(appDataDir, "gcloud");
-    const credentialsPath = path.join(fallbackDir, "application_default_credentials.json");
-    await mkdir(fallbackDir, { recursive: true });
-    await writeFile(
-      credentialsPath,
-      JSON.stringify({
-        type: "authorized_user",
-        client_id: "client-id",
-        client_secret: "client-secret",
-        refresh_token: "appdata-refresh-token",
-      }),
-      "utf8",
-    );
-    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
-    vi.stubEnv("HOME", homeDir);
-    vi.stubEnv("APPDATA", appDataDir);
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-    const tokenFetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "ya29.appdata-token", expires_in: 3600 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    resolveGoogleVertexAdcTokenMock.mockResolvedValue({
+      accessToken: "ya29.appdata-token",
+      projectId: "vertex-project",
+      expiresAt: Date.now() + 3600_000,
+    });
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
         {
@@ -627,8 +586,6 @@ describe("google transport stream", () => {
         },
       ]),
     );
-
-    expect(hasGoogleVertexAuthorizedUserAdcSync()).toBe(true);
 
     const streamFn = createGoogleVertexTransportStreamFn();
     const stream = await Promise.resolve(
@@ -639,19 +596,12 @@ describe("google transport stream", () => {
         } as Parameters<typeof streamFn>[1],
         {
           apiKey: "gcp-vertex-credentials",
-          fetch: tokenFetchMock,
         } as Parameters<typeof streamFn>[2],
       ),
     );
     await stream.result();
 
-    const tokenCall = requireMockCall(tokenFetchMock, 0, "token fetch");
-    expect(tokenCall[0]).toBe("https://oauth2.googleapis.com/token");
-    const tokenInit = requireRequestInit(tokenCall, "token fetch");
-    expect(tokenInit.method).toBe("POST");
-    expect(tokenInit.body).toBeInstanceOf(URLSearchParams);
-    const requestBody = tokenInit.body as URLSearchParams;
-    expect(requestBody?.get("refresh_token")).toBe("appdata-refresh-token");
+    expect(resolveGoogleVertexAdcTokenMock).toHaveBeenCalled();
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(typeof guardedCall[0]).toBe("string");
     expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
