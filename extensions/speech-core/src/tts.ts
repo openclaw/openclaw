@@ -1759,7 +1759,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const mode = config.mode ?? "final";
-  if (mode === "final" && params.kind && params.kind !== "final") {
+  if (mode === "final" && params.kind && params.kind !== "final" && params.kind !== "block") {
     return nextPayload;
   }
 
@@ -1849,6 +1849,7 @@ export async function maybeApplyTtsToPayload(params: {
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
+      trustedLocalMedia: true,
     };
   }
 
