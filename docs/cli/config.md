@@ -258,6 +258,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     ```bash
     openclaw config unset tools.alsoAllow --dry-run
     ```
+
   </Tab>
   <Tab title="--dry-run --json">
     Output structured JSON for scripting. Requires `--dry-run`.
@@ -278,6 +279,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
       "skippedExecRefs": 0
     }
     ```
+
   </Tab>
   <Tab title="--allow-exec">
     Allow exec SecretRef resolvability checks during dry-run. Exec providers are skipped by default to avoid command side effects. Requires `--dry-run`.
@@ -285,6 +287,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     ```bash
     openclaw config unset secrets.providers.vault --dry-run --allow-exec
     ```
+
   </Tab>
 </Tabs>
 
@@ -298,6 +301,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     Dry run failed: 1 SecretRef assignment(s) could not be resolved.
     - env:env-provider:TEST_API_KEY -> SecretProviderResolutionError: Secret provider "env-provider" is not configured.
     ```
+
   </Accordion>
   <Accordion title="Exec SecretRef handling">
     By default, exec-backed SecretRefs are skipped during dry-run to avoid executing arbitrary commands. Use `--allow-exec` to opt in:
@@ -311,6 +315,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     # With --allow-exec: exec providers are executed
     $ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     ```
+
   </Accordion>
 </AccordionGroup>
 
