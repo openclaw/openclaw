@@ -57,7 +57,9 @@ describe("WhatsAppConnectionController", () => {
       heartbeatSeconds: 30,
       transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
       watchdogCheckMs: 5_000,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
       reconnectPolicy: {
         initialMs: 250,
         maxMs: 1_000,
@@ -136,7 +138,9 @@ describe("WhatsAppConnectionController", () => {
       heartbeatSeconds: 30,
       transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
       watchdogCheckMs: 5_000,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
       reconnectPolicy: {
         initialMs: 250,
         maxMs: 1_000,
@@ -163,7 +167,9 @@ describe("WhatsAppConnectionController", () => {
       heartbeatSeconds: 30,
       transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
       watchdogCheckMs: 5_000,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
       reconnectPolicy: {
         initialMs: 250,
         maxMs: 1_000,
@@ -201,7 +207,9 @@ describe("WhatsAppConnectionController", () => {
       heartbeatSeconds: 1,
       transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
       watchdogCheckMs: 5_000,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
       reconnectPolicy: {
         initialMs: 250,
         maxMs: 1_000,
@@ -250,7 +258,9 @@ describe("WhatsAppConnectionController", () => {
       heartbeatSeconds: 1,
       transportTimeoutMs: 30,
       messageTimeoutMs: 3_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
       watchdogCheckMs: 5,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
       reconnectPolicy: {
         initialMs: 250,
         maxMs: 1_000,
@@ -274,6 +284,179 @@ describe("WhatsAppConnectionController", () => {
 
       await vi.advanceTimersByTimeAsync(40);
 
+      expect(timeouts.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await controller.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ticks the presence keepalive on its cadence and clears it on shutdown", async () => {
+    vi.useFakeTimers();
+    const sendPresenceUpdate = vi.fn(async (_presence: string) => undefined);
+    const sock = {
+      ...createSocketWithTransportEmitter(),
+      sendPresenceUpdate,
+    };
+    const controller = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: true,
+      heartbeatSeconds: 60,
+      transportTimeoutMs: 60_000,
+      messageTimeoutMs: 30 * 60 * 1_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
+      watchdogCheckMs: 60_000,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+    });
+
+    try {
+      createWaSocketMock.mockResolvedValueOnce(sock as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+
+      await controller.openConnection({
+        connectionId: "conn-presence-cadence",
+        createListener: async () => createListenerStub() as never,
+      });
+
+      // Three intervals: 15 minutes of fake time -> three ticks.
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1_000);
+      expect(sendPresenceUpdate).toHaveBeenCalledTimes(3);
+      expect(sendPresenceUpdate.mock.calls.every((c) => c[0] === "unavailable")).toBe(true);
+
+      // After shutdown the timer must stop; no more ticks even on a long wait.
+      await controller.shutdown();
+      sendPresenceUpdate.mockClear();
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1_000);
+      expect(sendPresenceUpdate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not duplicate the presence keepalive timer on reconnect", async () => {
+    vi.useFakeTimers();
+    const sendPresenceUpdate = vi.fn(async (_presence: string) => undefined);
+    const makeSock = () => ({
+      ...createSocketWithTransportEmitter(),
+      sendPresenceUpdate,
+    });
+    const controller = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: true,
+      heartbeatSeconds: 60,
+      transportTimeoutMs: 60_000,
+      messageTimeoutMs: 30 * 60 * 1_000,
+      appSilenceTimeoutMs: 4 * 60 * 60 * 1_000,
+      watchdogCheckMs: 60_000,
+      presenceKeepaliveIntervalMs: 5 * 60 * 1_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+    });
+
+    try {
+      // First connection: opens, ticks once, then reopens (simulating a
+      // reconnect via openConnection again, which the controller handles by
+      // closing the prior connection first).
+      createWaSocketMock.mockResolvedValueOnce(makeSock() as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+      await controller.openConnection({
+        connectionId: "conn-presence-reconnect-1",
+        createListener: async () => createListenerStub() as never,
+      });
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      expect(sendPresenceUpdate).toHaveBeenCalledTimes(1);
+
+      createWaSocketMock.mockResolvedValueOnce(makeSock() as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+      await controller.openConnection({
+        connectionId: "conn-presence-reconnect-2",
+        createListener: async () => createListenerStub() as never,
+      });
+
+      sendPresenceUpdate.mockClear();
+      // One interval after reopen: exactly one tick from the new timer (no
+      // leftover ticks from the prior connection's interval).
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      expect(sendPresenceUpdate).toHaveBeenCalledTimes(1);
+    } finally {
+      await controller.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits the explicit appSilenceTimeoutMs (not messageTimeoutMs) for quiet sessions", async () => {
+    // Regression guard: prior implementation derived appSilenceTimeoutMs as
+    // Math.max(messageTimeoutMs, messageTimeoutMs * 4), so a caller raising
+    // messageTimeoutMs to 4h would silently end up with a 16h cap. This test
+    // pins the two policies as independent: messageTimeoutMs is the
+    // recent-inbound short window, appSilenceTimeoutMs is the quiet-session
+    // long cap, and neither is derived from the other.
+    vi.useFakeTimers();
+    const sendPresenceUpdate = vi.fn(async () => undefined);
+    const sock = {
+      ...createSocketWithTransportEmitter(),
+      sendPresenceUpdate,
+    };
+    // Distinct, short values so the assertion runs fast.
+    const RECENT_INBOUND_MS = 100;
+    const QUIET_SESSION_MS = 600;
+    const controller = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: true,
+      heartbeatSeconds: 60,
+      // Transport timeout kept long so only the app-silence policy fires.
+      transportTimeoutMs: 10_000,
+      messageTimeoutMs: RECENT_INBOUND_MS,
+      appSilenceTimeoutMs: QUIET_SESSION_MS,
+      watchdogCheckMs: 5,
+      // Long keepalive cadence so it doesn't interfere with watchdog timing.
+      presenceKeepaliveIntervalMs: 60 * 60 * 1_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+    });
+
+    try {
+      createWaSocketMock.mockResolvedValueOnce(sock as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+      const timeouts: string[] = [];
+      await controller.openConnection({
+        connectionId: "conn-quiet-session",
+        createListener: async () => createListenerStub() as never,
+        onWatchdogTimeout: () => timeouts.push("timeout"),
+      });
+
+      // Past the recent-inbound short window. If the derivation bug had
+      // returned (messageTimeoutMs used for the quiet path), the watchdog
+      // would fire here. It must not.
+      await vi.advanceTimersByTimeAsync(RECENT_INBOUND_MS + 50);
+      expect(timeouts).toEqual([]);
+
+      // Cross the quiet-session cap. Watchdog must fire now.
+      await vi.advanceTimersByTimeAsync(QUIET_SESSION_MS);
       expect(timeouts.length).toBeGreaterThanOrEqual(1);
     } finally {
       await controller.shutdown();
