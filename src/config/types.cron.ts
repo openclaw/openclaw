@@ -32,7 +32,7 @@ export type CronFailureDestinationConfig = {
 export type CronModelPreflightConfig = {
   /** Timeout in ms for each local model provider preflight probe. Default: 2500. */
   timeoutMs?: number;
-  /** Number of probe attempts before marking the run skipped. Default: 1. */
+  /** Probe attempts before advancing to a fallback or skipping the run. Default: 1. */
   maxAttempts?: number;
   /** Delay in ms between failed probe attempts. Default: 0. */
   retryDelayMs?: number;
