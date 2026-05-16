@@ -231,7 +231,8 @@ Then enable OpenClaw proxy routing:
 
 ```bash
 openclaw config set proxy.enabled true
-openclaw config set proxy.proxyUrl http://127.0.0.1:3128
+openclaw config set proxy.proxyUrl https://proxy.corp.example:8443
+openclaw config set proxy.tls.caFile /etc/openclaw/proxy-ca.pem
 openclaw gateway run
 ```
 
