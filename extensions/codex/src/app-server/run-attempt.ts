@@ -1464,6 +1464,19 @@ export async function runCodexAppServerAttempt(
     });
   };
 
+  const isTerminalTurnNotificationForTurn = (
+    notification: CodexServerNotification,
+    notificationTurnId: string,
+  ): boolean => {
+    if (!isTurnNotification(notification.params, thread.threadId, notificationTurnId)) {
+      return false;
+    }
+    return (
+      notification.method === "turn/completed" ||
+      isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt })
+    );
+  };
+
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
@@ -1562,7 +1575,7 @@ export async function runCodexAppServerAttempt(
     const isTurnAbortMarker =
       isCurrentTurnNotification &&
       isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
-    const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
+    const isTurnTerminal = isTerminalTurnNotificationForTurn(notification, turnId);
     if (isTurnTerminal) {
       terminalTurnNotificationQueued = true;
     }
@@ -1596,16 +1609,7 @@ export async function runCodexAppServerAttempt(
       pendingNotifications.push(notification);
       return Promise.resolve();
     }
-    const isCurrentTurnNotification = isTurnNotification(
-      notification.params,
-      thread.threadId,
-      turnId,
-    );
-    if (
-      isCurrentTurnNotification &&
-      (notification.method === "turn/completed" ||
-        isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt }))
-    ) {
+    if (isTerminalTurnNotificationForTurn(notification, turnId)) {
       terminalTurnNotificationQueued = true;
     }
     notificationQueue = notificationQueue.then(
@@ -2034,6 +2038,14 @@ export async function runCodexAppServerAttempt(
     nativePostToolUseRelayEnabled:
       nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
   });
+  if (
+    isTerminalTurnStatus(turn.turn.status) ||
+    pendingNotifications.some((notification) =>
+      isTerminalTurnNotificationForTurn(notification, activeTurnId),
+    )
+  ) {
+    terminalTurnNotificationQueued = true;
+  }
   closeCleanup = (
     client as {
       addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
