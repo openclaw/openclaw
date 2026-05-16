@@ -70,7 +70,10 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
-import { resolveTelegramSessionConversation } from "./session-conversation.js";
+import {
+  resolveTelegramSessionConversation,
+  resolveTelegramSessionTarget,
+} from "./session-conversation.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
@@ -749,6 +752,7 @@ export const telegramPlugin = createChatChannelPlugin({
         resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
       resolveSessionConversation: ({ kind, rawId }) =>
         resolveTelegramSessionConversation({ kind, rawId }),
+      resolveSessionTarget: ({ kind, id }) => resolveTelegramSessionTarget({ kind, id }),
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
