@@ -37,7 +37,11 @@ function makeRuntime() {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv & { log: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; exit: ReturnType<typeof vi.fn> };
+  } as unknown as RuntimeEnv & {
+    log: ReturnType<typeof vi.fn>;
+    error: ReturnType<typeof vi.fn>;
+    exit: ReturnType<typeof vi.fn>;
+  };
 }
 
 describe("docsSearchCommand", () => {
@@ -74,16 +78,15 @@ describe("docsSearchCommand", () => {
 
     await docsSearchCommand(["browser", "existing-session"], runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("MCP error -32602"),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("MCP error -32602"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("renders successful results when no MCP error is present", async () => {
     runCommandWithTimeout.mockResolvedValueOnce({
       code: 0,
-      stdout: "Title: Plugin allowlist\nLink: https://docs.openclaw.ai/plugins/allowlist\nContent: How to configure the allowlist.",
+      stdout:
+        "Title: Plugin allowlist\nLink: https://docs.openclaw.ai/plugins/allowlist\nContent: How to configure the allowlist.",
       stderr: "",
     });
     const runtime = makeRuntime();

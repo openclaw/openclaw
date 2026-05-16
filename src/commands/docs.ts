@@ -191,9 +191,9 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
 
   const combined = `${res.stdout}\n${res.stderr}`;
   if (MCP_ERROR_PATTERN.test(combined)) {
-    const err = (res.stderr.trim() || res.stdout.trim()).split("\n").find((line) =>
-      MCP_ERROR_PATTERN.test(line),
-    );
+    const err = (res.stderr.trim() || res.stdout.trim())
+      .split("\n")
+      .find((line) => MCP_ERROR_PATTERN.test(line));
     runtime.error(`Docs search failed: ${err ?? "MCP error reported by docs search tool"}`);
     runtime.exit(1);
     return;
