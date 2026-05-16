@@ -1400,7 +1400,7 @@ function summarizePackageManagerCommand(
 
 const PACKAGE_MANAGER_INSTALL_SUBCOMMANDS = new Set(["install", "i", "add", "update", "upgrade"]);
 
-const PACKAGE_MANAGER_EXEC_SUBCOMMANDS = new Set(["exec", "dlx"]);
+const PACKAGE_MANAGER_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "x"]);
 
 const PACKAGE_MANAGER_SCRIPT_SUBCOMMANDS = new Set(["run"]);
 

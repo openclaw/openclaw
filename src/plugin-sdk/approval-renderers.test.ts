@@ -2086,6 +2086,11 @@ describe("plugin-sdk/approval-renderers", () => {
       manager: "npm",
     },
     {
+      command: "npm x create-vite@latest app",
+      id: "plugin-command-npm-x",
+      manager: "npm",
+    },
+    {
       command: "pnpm dlx create-vite@latest app",
       id: "plugin-command-pnpm-dlx",
       manager: "pnpm",
