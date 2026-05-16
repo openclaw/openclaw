@@ -102,10 +102,18 @@ export type CodexAppServerStartOptions = {
 
 export type CodexApprovalPolicyDowngradeReason = "user-codex-features-hooks-disabled";
 
+export type CodexApprovalPolicyDowngradeBlockedReason = "managed-codex-requirements-disallow-never";
+
 export type CodexApprovalPolicyDowngrade = {
   from: CodexAppServerApprovalPolicy;
   to: CodexAppServerApprovalPolicy;
   reason: CodexApprovalPolicyDowngradeReason;
+};
+
+export type CodexApprovalPolicyDowngradeBlocked = {
+  desiredFrom: CodexAppServerApprovalPolicy;
+  desiredReason: CodexApprovalPolicyDowngradeReason;
+  blockedBy: CodexApprovalPolicyDowngradeBlockedReason;
 };
 
 export type CodexAppServerRuntimeOptions = {
@@ -117,6 +125,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
   approvalPolicyDowngrade?: CodexApprovalPolicyDowngrade;
+  approvalPolicyDowngradeBlocked?: CodexApprovalPolicyDowngradeBlocked;
 };
 
 export type CodexPluginConfig = {
@@ -1065,6 +1074,11 @@ export function applyCodexHomeApprovalPolicyDowngrade(
     configToml?: string | null;
     readConfigFile?: (filePath: string) => string | undefined;
     hooksEnabled?: boolean;
+    env?: NodeJS.ProcessEnv;
+    requirementsToml?: string | null;
+    requirementsPath?: string;
+    readRequirementsFile?: (path: string) => string | undefined;
+    platform?: NodeJS.Platform;
   } = {},
 ): CodexAppServerRuntimeOptions {
   if (runtimeOptions.start.transport !== "stdio") {
@@ -1084,6 +1098,30 @@ export function applyCodexHomeApprovalPolicyDowngrade(
     });
   if (hooksEnabled !== false) {
     return runtimeOptions;
+  }
+  // Honor managed Codex requirements: if `allowed_approval_policies` excludes
+  // "never", refuse to lower the policy. Doing so would either silently
+  // violate admin intent or make Codex reject the run at startup. Surface
+  // the blocked downgrade on the runtime options so the caller can log
+  // loudly; operators must either widen `allowed_approval_policies` or
+  // re-enable `features.hooks` in the Codex home.
+  const requirementsAllowNever = isCodexAppServerApprovalPolicyAllowedByRequirements("never", {
+    env: params.env,
+    requirementsToml: params.requirementsToml,
+    requirementsPath: params.requirementsPath,
+    readRequirementsFile: params.readRequirementsFile,
+    platform: params.platform,
+  });
+  if (!requirementsAllowNever) {
+    const blocked: CodexApprovalPolicyDowngradeBlocked = {
+      desiredFrom: runtimeOptions.approvalPolicy as CodexAppServerApprovalPolicy,
+      desiredReason: "user-codex-features-hooks-disabled",
+      blockedBy: "managed-codex-requirements-disallow-never",
+    };
+    return {
+      ...runtimeOptions,
+      approvalPolicyDowngradeBlocked: blocked,
+    };
   }
   const downgrade: CodexApprovalPolicyDowngrade = {
     from: runtimeOptions.approvalPolicy as CodexAppServerApprovalPolicy,

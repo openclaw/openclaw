@@ -434,6 +434,7 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
 }
 
 const reportedCodexApprovalPolicyDowngradeReasons = new Set<string>();
+const reportedCodexApprovalPolicyDowngradeBlockedReasons = new Set<string>();
 
 function reportCodexApprovalPolicyDowngradeOnce(
   downgrade: CodexAppServerRuntimeOptions["approvalPolicyDowngrade"],
@@ -454,6 +455,34 @@ function reportCodexApprovalPolicyDowngradeOnce(
         "plugins.codex.config.appServer.approvalPolicy=never to silence this warning.",
       {
         approvalPolicyDowngrade: downgrade,
+      },
+    );
+  }
+}
+
+function reportCodexApprovalPolicyDowngradeBlockedOnce(
+  blocked: CodexAppServerRuntimeOptions["approvalPolicyDowngradeBlocked"],
+): void {
+  if (!blocked) {
+    return;
+  }
+  const key = `${blocked.blockedBy}:${blocked.desiredReason}`;
+  if (reportedCodexApprovalPolicyDowngradeBlockedReasons.has(key)) {
+    return;
+  }
+  reportedCodexApprovalPolicyDowngradeBlockedReasons.add(key);
+  if (
+    blocked.blockedBy === "managed-codex-requirements-disallow-never" &&
+    blocked.desiredReason === "user-codex-features-hooks-disabled"
+  ) {
+    embeddedAgentLog.warn(
+      "codex: app-server approvalPolicy downgrade SUPPRESSED. The user's Codex config disables features.hooks " +
+        `(approvalPolicy "${blocked.desiredFrom}" would normally degrade to "never" to keep exec working), but the ` +
+        'managed Codex requirements file excludes "never" from allowed_approval_policies. The non-never policy ' +
+        "will run, and exec calls will likely return declined until either features.hooks is re-enabled in the " +
+        "spawned Codex home or allowed_approval_policies is widened.",
+      {
+        approvalPolicyDowngradeBlocked: blocked,
       },
     );
   }
@@ -567,6 +596,7 @@ export async function runCodexAppServerAttempt(
       isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
   });
   reportCodexApprovalPolicyDowngradeOnce(appServer.approvalPolicyDowngrade);
+  reportCodexApprovalPolicyDowngradeBlockedOnce(appServer.approvalPolicyDowngradeBlocked);
   let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -3847,8 +3877,10 @@ export const __testing = {
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
   reportCodexApprovalPolicyDowngradeOnce,
+  reportCodexApprovalPolicyDowngradeBlockedOnce,
   resetReportedCodexApprovalPolicyDowngradeReasonsForTests(): void {
     reportedCodexApprovalPolicyDowngradeReasons.clear();
+    reportedCodexApprovalPolicyDowngradeBlockedReasons.clear();
   },
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,

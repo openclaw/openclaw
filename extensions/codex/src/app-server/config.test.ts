@@ -1036,6 +1036,51 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       expect(reads[0]).toMatch(/\/etc\/openclaw\/codex-home[\\/]config\.toml$/);
     });
 
+    it("respects managed Codex requirements that exclude 'never' from allowed_approval_policies", () => {
+      const baseRuntime = resolveRuntimeForTest({
+        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
+      });
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(baseRuntime, {
+        configToml: "[features]\nhooks = false\n",
+        requirementsToml: 'allowed_approval_policies = ["on-request"]\n',
+      });
+
+      expect(runtime.approvalPolicy).toBe("on-request");
+      expect(runtime.approvalPolicyDowngrade).toBeUndefined();
+      expect(runtime.approvalPolicyDowngradeBlocked).toEqual({
+        desiredFrom: "on-request",
+        desiredReason: "user-codex-features-hooks-disabled",
+        blockedBy: "managed-codex-requirements-disallow-never",
+      });
+    });
+
+    it("applies the downgrade when managed requirements explicitly allow 'never'", () => {
+      const baseRuntime = resolveRuntimeForTest({
+        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
+      });
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(baseRuntime, {
+        configToml: "[features]\nhooks = false\n",
+        requirementsToml: 'allowed_approval_policies = ["never", "on-request"]\n',
+      });
+
+      expect(runtime.approvalPolicy).toBe("never");
+      expect(runtime.approvalPolicyDowngrade?.reason).toBe("user-codex-features-hooks-disabled");
+      expect(runtime.approvalPolicyDowngradeBlocked).toBeUndefined();
+    });
+
+    it("applies the downgrade when no managed requirements file is present", () => {
+      const baseRuntime = resolveRuntimeForTest({
+        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
+      });
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(baseRuntime, {
+        configToml: "[features]\nhooks = false\n",
+        requirementsToml: null,
+      });
+
+      expect(runtime.approvalPolicy).toBe("never");
+      expect(runtime.approvalPolicyDowngrade?.reason).toBe("user-codex-features-hooks-disabled");
+    });
+
     it("returns runtime options unchanged for websocket transport", () => {
       const baseRuntime = resolveRuntimeForTest({
         pluginConfig: {

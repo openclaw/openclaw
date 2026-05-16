@@ -3787,6 +3787,29 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
+  it("emits the blocked-downgrade warning at most once per process per blocker", () => {
+    __testing.resetReportedCodexApprovalPolicyDowngradeReasonsForTests();
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    try {
+      const blocked = {
+        desiredFrom: "on-request" as const,
+        desiredReason: "user-codex-features-hooks-disabled" as const,
+        blockedBy: "managed-codex-requirements-disallow-never" as const,
+      };
+      __testing.reportCodexApprovalPolicyDowngradeBlockedOnce(blocked);
+      __testing.reportCodexApprovalPolicyDowngradeBlockedOnce(blocked);
+      __testing.reportCodexApprovalPolicyDowngradeBlockedOnce(blocked);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [message, fields] = warnSpy.mock.calls[0] ?? [];
+      expect(message).toMatch(/SUPPRESSED/);
+      expect(message).toMatch(/allowed_approval_policies/);
+      expect(fields).toEqual({ approvalPolicyDowngradeBlocked: blocked });
+    } finally {
+      warnSpy.mockRestore();
+      __testing.resetReportedCodexApprovalPolicyDowngradeReasonsForTests();
+    }
+  });
+
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
