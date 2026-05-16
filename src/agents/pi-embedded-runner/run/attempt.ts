@@ -3710,6 +3710,36 @@ export async function runEmbeddedAttempt(
           }
           prePromptMessageCount = activeSession.messages.length;
 
+          // Run before_assemble hook to allow plugins to modify the message list.
+          // Skip in raw model mode — raw probes bypass normal context assembly and should
+          // not be intercepted by conversation-mutating hooks (Codex P2c).
+          if (!isRawModelRun && hookRunner && hookAgentId) {
+            const beforeAssembleResult = await hookRunner
+              .runBeforeAssemble(
+                {
+                  sessionId: params.sessionId,
+                  messages: activeSession.messages,
+                  sessionFile: params.sessionFile,
+                },
+                {
+                  runId: params.runId,
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  messageProvider: params.messageProvider ?? undefined,
+                  trigger: params.trigger,
+                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                },
+              )
+              .catch((err) => {
+                log.warn(`before_assemble hook failed: ${String(err)}`);
+              });
+            if (beforeAssembleResult?.messages) {
+              activeSession.agent.state.messages = beforeAssembleResult.messages as AgentMessage[];
+            }
+          }
+
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
@@ -4170,6 +4200,36 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptForModel,
             });
+            // Run after_assemble hook to allow plugins to observe the
+            // final context before it is sent to the LLM.
+            // Skip in raw model mode — raw probes bypass normal context assembly (Codex P2c).
+            if (!isRawModelRun && hookRunner && hookAgentId) {
+              hookRunner
+                .runAfterAssemble(
+                  {
+                    sessionId: params.sessionId,
+                    assembledMessages: activeSession.messages,
+                    sessionFile: params.sessionFile,
+                    systemPrompt: systemPromptText || undefined,
+                    prompt: promptSubmission.prompt || undefined,
+                    imagesCount: imageResult.images.length,
+                  },
+                  {
+                    runId: params.runId,
+                    agentId: hookAgentId,
+                    sessionKey: params.sessionKey,
+                    sessionId: params.sessionId,
+                    workspaceDir: params.workspaceDir,
+                    messageProvider: params.messageProvider ?? undefined,
+                    trigger: params.trigger,
+                    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                  },
+                )
+                .catch((err) => {
+                  log.warn(`after_assemble hook failed: ${String(err)}`);
+                });
+            }
+
             if (promptSubmission.runtimeOnly) {
               await promptActiveSession(promptForModel);
             } else {
