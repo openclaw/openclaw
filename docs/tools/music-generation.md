@@ -15,11 +15,11 @@ MiniMax, and workflow-configured ComfyUI today.
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
 when the track is ready so the agent can tell the user and attach the
-finished audio. In group/channel chats that use message-tool-only visible
-delivery, the agent relays the result through the message tool. If the
-completion agent writes only a private final reply, OpenClaw falls back to a
-direct channel send with the generated media. The completion wake explicitly
-warns the agent that normal final replies are private in those routes.
+finished audio. Generated-media completions are delivered by the agent through
+the message tool; OpenClaw does not auto-post the file as a fallback if the
+completion agent writes only a private final reply. The completion wake
+explicitly warns the agent that normal final replies are private for this
+route.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation
@@ -161,7 +161,6 @@ Direct generation example:
   Output format hint when the provider supports it.
 </ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.musicGenerationModel.timeoutMs` if configured. Values below 10000ms are raised to 10000ms and reported in the tool result.</ParamField>
 
 <Note>
 Not all providers support all parameters. OpenClaw still validates hard
@@ -172,6 +171,11 @@ are ignored with a warning when the selected provider or model cannot honor
 them. Tool results report applied settings; `details.normalization`
 captures any requested-to-applied mapping.
 </Note>
+
+Provider request timeouts are operator configuration only. OpenClaw uses
+`agents.defaults.musicGenerationModel.timeoutMs` when configured, raises values
+below 120000ms to 120000ms, and otherwise defaults provider requests to
+300000ms.
 
 ## Async behavior
 

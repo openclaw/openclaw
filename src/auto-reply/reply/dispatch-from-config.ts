@@ -173,6 +173,9 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+    return params.payload;
+  }
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
@@ -826,7 +829,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
-    strictMessageToolOnly: ctx.InboundTurnKind === "room_event",
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1507,9 +1510,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               // Accumulate block text for TTS generation after streaming.
-              // Exclude compaction status notices — they are informational UI
-              // signals and must not be synthesised into the spoken reply.
-              if (payload.text && !payload.isCompactionNotice) {
+              // Exclude status notices — they are informational UI signals
+              // and must not be synthesised into the spoken reply.
+              const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+              if (payload.text && !isStatusNotice) {
                 const joinsBufferedTtsDirective =
                   cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                 if (accumulatedBlockText.length > 0) {
@@ -1523,7 +1527,7 @@ export async function dispatchReplyFromConfig(
                 blockCount++;
               }
               const visiblePayload =
-                payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                payload.text && cleanBlockTtsDirectiveText && !isStatusNotice
                   ? (() => {
                       const text = cleanBlockTtsDirectiveText.push(payload.text);
                       return { ...payload, text: text.trim() ? text : undefined };
@@ -1624,7 +1628,7 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
-      ctx.InboundTurnKind !== "room_event" &&
+      ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
@@ -1642,7 +1646,7 @@ export async function dispatchReplyFromConfig(
               `provider=${ctx.Provider ?? "unknown"}`,
               `surface=${ctx.Surface ?? "unknown"}`,
               `chatType=${chatType ?? "unknown"}`,
-              `turn=${ctx.InboundTurnKind ?? "unknown"}`,
+              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
               `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
               `${formatSuppressedReplyPayloadForLog(reply)})`,
             ].join(" "),
@@ -1700,6 +1704,7 @@ export async function dispatchReplyFromConfig(
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
               spokenText: accumulatedBlockTtsText,
+              trustedLocalMedia: true,
             };
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);

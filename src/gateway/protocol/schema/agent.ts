@@ -93,7 +93,7 @@ export const MessageActionParamsSchema = Type.Object(
     senderIsOwner: Type.Optional(Type.Boolean()),
     sessionKey: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),
-    inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
+    inboundEventKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
     agentId: Type.Optional(Type.String()),
     toolContext: Type.Optional(MessageActionToolContextSchema),
     idempotencyKey: NonEmptyString,

@@ -39,8 +39,12 @@ import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
   hasSessionAutoModelFallbackProvenance,
   listAgentIds,
+  markAutoFallbackPrimaryProbe,
+  resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -226,6 +230,9 @@ type PersistSessionEntryParams = {
 type OverrideFieldClearedByDelete =
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -237,6 +244,9 @@ type OverrideFieldClearedByDelete =
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -248,8 +258,12 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
 
-async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  await persistSessionEntryBase({
+async function persistSessionEntry(
+  params: PersistSessionEntryParams & {
+    shouldPersist?: (entry: SessionEntry | undefined) => boolean;
+  },
+): Promise<SessionEntry | undefined> {
+  return await persistSessionEntryBase({
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
   });
@@ -834,6 +848,21 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
+    const autoFallbackPrimaryProbe = !hasExplicitRunOverride
+      ? resolveAutoFallbackPrimaryProbe({
+          entry: sessionEntry,
+          sessionKey,
+          primaryProvider: defaultProvider,
+          primaryModel: defaultModel,
+        })
+      : undefined;
+    let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
+    if (autoFallbackPrimaryProbe && sessionEntry) {
+      provider = autoFallbackPrimaryProbe.provider;
+      model = autoFallbackPrimaryProbe.model;
+      autoFallbackPrimaryProbeSessionEntry = { ...sessionEntry };
+      clearAutoFallbackPrimaryProbeSelection(autoFallbackPrimaryProbeSessionEntry);
+    }
     let providerForAuthProfileValidation = provider;
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
@@ -877,11 +906,11 @@ async function agentCommandInternal(
       workspaceDir,
     });
 
-    let sessionEntryForAttempt = sessionEntry;
-    if (sessionEntry) {
-      const authProfileId = sessionEntry.authProfileOverride;
+    let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
+    if (sessionEntryForAttempt) {
+      const authProfileId = sessionEntryForAttempt.authProfileOverride;
       if (authProfileId) {
-        const entry = sessionEntry;
+        const entry = sessionEntryForAttempt;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
         const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
@@ -908,7 +937,7 @@ async function agentCommandInternal(
             }),
           );
         if (!profileMatchesRuntime) {
-          if (hasExplicitRunOverride) {
+          if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
             sessionEntryForAttempt = {
               ...entry,
               authProfileOverride: undefined,
@@ -1025,6 +1054,7 @@ async function agentCommandInternal(
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
+    let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1068,6 +1098,22 @@ async function agentCommandInternal(
               result,
             }),
           run: async (providerOverride, modelOverride, runOptions) => {
+            const isAutoFallbackPrimaryProbeCandidate =
+              autoFallbackPrimaryProbe &&
+              providerOverride === autoFallbackPrimaryProbe.provider &&
+              modelOverride === autoFallbackPrimaryProbe.model;
+            const attemptSessionEntry =
+              autoFallbackPrimaryProbe &&
+              providerOverride === autoFallbackPrimaryProbe.fallbackProvider &&
+              !isAutoFallbackPrimaryProbeCandidate
+                ? sessionEntry
+                : sessionEntryForAttempt;
+            if (isAutoFallbackPrimaryProbeCandidate) {
+              markAutoFallbackPrimaryProbe({
+                probe: autoFallbackPrimaryProbe,
+                sessionKey,
+              });
+            }
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
             opts.onActiveModelSelected?.({
@@ -1080,7 +1126,7 @@ async function agentCommandInternal(
               modelFallbacksOverride: effectiveFallbacksOverride,
               originalProvider: provider,
               cfg,
-              sessionEntry: sessionEntryForAttempt,
+              sessionEntry: attemptSessionEntry,
               sessionId,
               sessionKey,
               sessionAgentId,
@@ -1132,6 +1178,49 @@ async function agentCommandInternal(
         result = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (
+          autoFallbackPrimaryProbe &&
+          !autoFallbackPrimaryProbeInterruptedByLiveSwitch &&
+          sessionEntry &&
+          sessionStore &&
+          sessionKey &&
+          entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe)
+        ) {
+          const nextSessionEntry = { ...sessionEntry };
+          if (
+            fallbackProvider === autoFallbackPrimaryProbe.provider &&
+            fallbackModel === autoFallbackPrimaryProbe.model
+          ) {
+            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
+          } else {
+            nextSessionEntry.providerOverride = fallbackProvider;
+            nextSessionEntry.modelOverride = fallbackModel;
+            nextSessionEntry.modelOverrideSource = "auto";
+            nextSessionEntry.modelOverrideFallbackOriginProvider =
+              autoFallbackPrimaryProbe.provider;
+            nextSessionEntry.modelOverrideFallbackOriginModel = autoFallbackPrimaryProbe.model;
+            if (
+              nextSessionEntry.authProfileOverrideSource === "auto" &&
+              fallbackProvider !== autoFallbackPrimaryProbe.fallbackProvider
+            ) {
+              delete nextSessionEntry.authProfileOverride;
+              delete nextSessionEntry.authProfileOverrideSource;
+              delete nextSessionEntry.authProfileOverrideCompactionCount;
+            }
+            nextSessionEntry.updatedAt = Date.now();
+          }
+          const persistedEntry = await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: nextSessionEntry,
+            shouldPersist: (current) =>
+              Boolean(
+                current && entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
+              ),
+          });
+          sessionEntry = persistedEntry ?? sessionEntry;
+        }
         if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
           result = {
             ...result,
@@ -1214,6 +1303,9 @@ async function agentCommandInternal(
           }
           const previousProvider = provider;
           const previousModel = model;
+          if (autoFallbackPrimaryProbe) {
+            autoFallbackPrimaryProbeInterruptedByLiveSwitch = true;
+          }
           provider = err.provider;
           model = err.model;
           fallbackProvider = err.provider;

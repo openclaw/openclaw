@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   resetDiagnosticTraceContextForTest,
@@ -23,6 +24,10 @@ beforeAll(async () => {
   await logPathTracker.setup();
 });
 
+beforeEach(() => {
+  resetDiagnosticEventsForTest();
+});
+
 afterEach(() => {
   if (originalConfigPath === undefined) {
     delete process.env.OPENCLAW_CONFIG_PATH;
@@ -39,6 +44,7 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_TEST_FILE_LOG = originalTestFileLog;
   }
+  resetDiagnosticEventsForTest();
   resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);

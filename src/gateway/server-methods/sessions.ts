@@ -84,6 +84,12 @@ import {
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+  resolveStoredSessionOwnerAgentId,
+} from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -540,24 +546,78 @@ function resolveAbortSessionKey(params: {
   context: Pick<GatewayRequestContext, "chatAbortControllers">;
   requestedKey: string;
   canonicalKey: string;
-  runId?: string;
+  activeRunSessionKey?: string;
+  aliasKeys?: string[];
 }): string {
-  const activeRunKey =
-    typeof params.runId === "string"
-      ? params.context.chatAbortControllers.get(params.runId)?.sessionKey
-      : undefined;
-  if (activeRunKey) {
-    return activeRunKey;
+  if (params.activeRunSessionKey) {
+    return params.activeRunSessionKey;
   }
+  const candidates = [params.canonicalKey, params.requestedKey, ...(params.aliasKeys ?? [])];
   for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey === params.canonicalKey) {
-      return params.canonicalKey;
-    }
-    if (active.sessionKey === params.requestedKey) {
-      return params.requestedKey;
+    for (const candidate of candidates) {
+      if (active.sessionKey === candidate) {
+        return candidate;
+      }
     }
   }
   return params.requestedKey;
+}
+
+function resolveSessionKeyAgentId(
+  sessionKey: string | undefined,
+  cfg: OpenClawConfig,
+): string | undefined {
+  const key = normalizeOptionalString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  if (!parseAgentSessionKey(key) && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  return resolveSessionStoreAgentId(cfg, canonicalKey);
+}
+
+function sessionKeyBelongsToAgent(
+  sessionKey: string | undefined,
+  agentId: string,
+  cfg: OpenClawConfig,
+): boolean {
+  const key = normalizeOptionalString(sessionKey);
+  if (cfg.session?.scope === "global" && key?.toLowerCase() === "global") {
+    return true;
+  }
+  const sessionAgentId = resolveSessionKeyAgentId(sessionKey, cfg);
+  return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
+}
+
+function resolveScopedAbortKey(params: {
+  cfg: OpenClawConfig;
+  key: string | undefined;
+  agentId: string | undefined;
+}): string | undefined {
+  const key = normalizeOptionalString(params.key);
+  if (!key) {
+    return undefined;
+  }
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  if (!requestedAgentId) {
+    return key;
+  }
+  const scopedAgentId = normalizeAgentId(requestedAgentId);
+  const ownerAgentId = resolveStoredSessionOwnerAgentId({
+    cfg: params.cfg,
+    agentId: scopedAgentId,
+    sessionKey: key,
+  });
+  if (ownerAgentId && ownerAgentId !== scopedAgentId) {
+    return undefined;
+  }
+  return resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: scopedAgentId,
+    sessionKey: key,
+  });
 }
 
 function collectTrackedActiveSessionRunKeys(
@@ -1676,11 +1736,53 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
+    const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);
+    const requestedKey = normalizeOptionalString(p.key);
+    const requestedParamAgentId = normalizeOptionalString(p.agentId);
+    const scopedRequestedKey = resolveScopedAbortKey({
+      cfg,
+      key: requestedKey,
+      agentId: requestedParamAgentId,
+    });
+    if (requestedKey && requestedParamAgentId && !scopedRequestedKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      );
+      return;
+    }
+    const requestedKeyAgentId = scopedRequestedKey
+      ? resolveSessionKeyAgentId(scopedRequestedKey, cfg)
+      : undefined;
+    const activeRunSessionKey = requestedRunId
+      ? context.chatAbortControllers.get(requestedRunId)?.sessionKey
+      : undefined;
+    const inferredRunAgentId =
+      requestedParamAgentId ??
+      requestedKeyAgentId ??
+      (requestedRunId && !activeRunSessionKey ? resolveDefaultAgentId(cfg) : undefined);
+    const requestedRunAgentId = requestedRunId
+      ? inferredRunAgentId
+        ? normalizeAgentId(inferredRunAgentId)
+        : undefined
+      : undefined;
+    const scopedActiveRunSessionKey = activeRunSessionKey
+      ? requestedRunAgentId
+        ? sessionKeyBelongsToAgent(activeRunSessionKey, requestedRunAgentId, cfg)
+          ? activeRunSessionKey
+          : undefined
+        : activeRunSessionKey
+      : undefined;
     const keyCandidate =
-      p.key ??
-      (requestedRunId ? context.chatAbortControllers.get(requestedRunId)?.sessionKey : undefined) ??
-      (requestedRunId ? resolveSessionKeyForRun(requestedRunId) : undefined);
+      scopedRequestedKey ??
+      scopedActiveRunSessionKey ??
+      (requestedRunId
+        ? resolveSessionKeyForRun(requestedRunId, {
+            agentId: requestedRunAgentId ?? resolveDefaultAgentId(cfg),
+          })
+        : undefined);
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
       return;
@@ -1690,11 +1792,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { canonicalKey } = loadSessionEntry(key);
+    const requestedKeyAliases =
+      requestedKey &&
+      requestedKey !== key &&
+      (!requestedParamAgentId || sessionKeyBelongsToAgent(requestedKey, requestedParamAgentId, cfg))
+        ? [requestedKey]
+        : undefined;
     const abortSessionKey = resolveAbortSessionKey({
       context,
       requestedKey: key,
       canonicalKey,
-      runId: requestedRunId,
+      activeRunSessionKey: scopedActiveRunSessionKey,
+      aliasKeys: requestedKeyAliases,
     });
     // Capture run kinds before the abort because abortChatRunById deletes entries
     // from chatAbortControllers synchronously. We use this snapshot to choose the

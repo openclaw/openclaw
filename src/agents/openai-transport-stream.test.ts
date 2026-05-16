@@ -1745,6 +1745,97 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]?.role).toBe("system");
   });
 
+  it("omits Responses reasoning params when model compat disables reasoning effort", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 2_000_000,
+        maxTokens: 30_000,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("passes explicit xAI Grok 4.3 reasoning effort through", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
   it("keeps developer role for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -5839,6 +5930,18 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 8192,
   } satisfies Model<"openai-completions">;
 
+  const openRouterAnthropicModel = {
+    ...openRouterModel,
+    id: "anthropic/claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+  } satisfies Model<"openai-completions">;
+
+  const openRouterXaiModel = {
+    ...openRouterModel,
+    id: "x-ai/grok-4.3",
+    name: "Grok 4.3",
+  } satisfies Model<"openai-completions">;
+
   const openAIModel = {
     id: "gpt-5.4-mini",
     name: "GPT-5.4 Mini",
@@ -5974,6 +6077,25 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(assistant).not.toHaveProperty("reasoning_details");
     expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["Anthropic", openRouterAnthropicModel],
+    ["xAI", openRouterXaiModel],
+  ] as const)("strips OpenRouter %s non-replayable reasoning fields", (_label, model) => {
+    for (const thinkingSignature of [
+      "reasoning_details",
+      "reasoning_content",
+      "reasoning",
+      "reasoning_text",
+    ]) {
+      const assistant = getAssistantMessage(buildReplayParams(model, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    }
   });
 
   it.each(["reasoning", "reasoning_content"])(

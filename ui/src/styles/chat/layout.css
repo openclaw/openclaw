@@ -1217,6 +1217,21 @@
   grid-template-areas: "session model thinking";
 }
 
+.chat-controls__session-row--has-quota {
+  grid-template-columns:
+    minmax(116px, 5fr) minmax(132px, 7fr) minmax(132px, 5fr)
+    minmax(128px, 4fr) minmax(104px, auto);
+  grid-template-areas: "agent session model thinking quota";
+}
+
+.chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+  grid-template-columns: minmax(132px, 7fr) minmax(132px, 5fr) minmax(128px, 4fr) minmax(
+      104px,
+      auto
+    );
+  grid-template-areas: "session model thinking quota";
+}
+
 .chat-controls__session-picker {
   grid-area: session;
 }
@@ -1268,6 +1283,49 @@
   grid-area: thinking;
   min-width: 0;
   max-width: none;
+}
+
+.chat-controls__quota {
+  grid-area: quota;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  min-width: 104px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 86%, var(--bg-elevated) 14%);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.chat-controls__quota:hover {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 28%, var(--card));
+}
+
+.chat-controls__quota-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chat-controls__quota-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-controls__quota--warn .chat-controls__quota-value {
+  color: var(--warn);
+}
+
+.chat-controls__quota--danger .chat-controls__quota-value {
+  color: var(--danger);
 }
 
 .chat-controls__thinking {
