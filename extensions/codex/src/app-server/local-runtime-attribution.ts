@@ -17,8 +17,12 @@ function normalizeRuntimeId(value: string | undefined): string {
 export function resolveCodexLocalRuntimeAttribution(
   params: EmbeddedRunAttemptParams,
 ): CodexLocalRuntimeAttribution {
+  const authProfileProvider = normalizeRuntimeId(
+    params.runtimePlan?.auth?.authProfileProviderForAuth,
+  );
   if (
     normalizeRuntimeId(params.runtimePlan?.observability.harnessId) === "codex" &&
+    authProfileProvider !== OPENAI_PROVIDER_ID &&
     normalizeRuntimeId(params.model.provider) === OPENAI_PROVIDER_ID &&
     normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API
   ) {
