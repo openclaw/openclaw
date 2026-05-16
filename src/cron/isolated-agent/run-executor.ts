@@ -32,12 +32,30 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import { isSilentForCronDelivery } from "./silent-reply-normalization.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
+type CronPromptRunResolvedOptions = {
+  disableTools?: boolean;
+  disableBundleMcpForCli?: boolean;
+  cliSession?: {
+    provider: string;
+    sessionId: string;
+  };
+};
+type CronPromptRunAttempt = {
+  provider: string;
+  model: string;
+  executionProvider: string;
+  usesCliProvider: boolean;
+};
+type CronPromptRunOptions = CronPromptRunResolvedOptions & {
+  resolveForAttempt?: (attempt: CronPromptRunAttempt) => CronPromptRunResolvedOptions;
+};
 
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
@@ -91,7 +109,31 @@ export type CronExecutionResult = {
   runStartedAt: number;
   runEndedAt: number;
   liveSelection: CronLiveSelection;
+  emptyOutputRepairAttempted?: boolean;
+  emptyOutputRepairFailed?: boolean;
+  emptyOutputHadFreshDescendants?: boolean;
 };
+
+function buildEmptyOutputRepairPrompt(commandBody: string): string {
+  return [
+    "Your previous response for this cron task produced no deliverable user-visible text after sanitization.",
+    "Repair it now using only information already available in this session.",
+    "Do not call tools, do not browse, do not spawn subagents, and do not delegate.",
+    "Return only the final user-facing text for the original cron task.",
+    "",
+    "Original cron task:",
+    commandBody,
+  ].join("\n");
+}
+
+function didDescendantStartSinceRunStart(
+  entry: { startedAt?: number; createdAt?: number },
+  runStartedAt: number,
+): boolean {
+  const descendantStartedAt =
+    typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+  return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
+}
 
 export function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
@@ -156,7 +198,7 @@ export function createCronPromptExecutor(params: {
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
 
-  const runPrompt = async (promptText: string) => {
+  const runPrompt = async (promptText: string, options?: CronPromptRunOptions) => {
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -177,12 +219,26 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             modelId: modelOverride,
           }) ?? providerOverride;
+        const usesCliProvider = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+        const resolvedOptions =
+          options?.resolveForAttempt?.({
+            provider: providerOverride,
+            model: modelOverride,
+            executionProvider,
+            usesCliProvider,
+          }) ?? options;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
-          const cliSessionId = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
+        if (usesCliProvider) {
+          const optionCliSessionId =
+            resolvedOptions?.cliSession?.provider === executionProvider
+              ? resolvedOptions.cliSession.sessionId.trim() || undefined
+              : undefined;
+          const cliSessionId =
+            optionCliSessionId ??
+            (params.cronSession.isNewSession
+              ? undefined
+              : await getCliSessionId(params.cronSession.sessionEntry, executionProvider));
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -200,6 +256,8 @@ export function createCronPromptExecutor(params: {
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
             cliSessionId,
+            disableTools: resolvedOptions?.disableTools,
+            disableBundleMcp: resolvedOptions?.disableBundleMcpForCli,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,
@@ -277,6 +335,7 @@ export function createCronPromptExecutor(params: {
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
           forceMessageTool: params.toolPolicy.forceMessageTool,
+          disableTools: resolvedOptions?.disableTools,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -394,6 +453,11 @@ export async function executeCronRun(params: {
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();
+  const didDescendantStartDuringRun = (entry: { startedAt?: number; createdAt?: number }) =>
+    didDescendantStartSinceRunStart(entry, runStartedAt);
+  let emptyOutputRepairAttempted = false;
+  let emptyOutputRepairFailed = false;
+  let emptyOutputHadFreshDescendants = false;
   const MAX_MODEL_SWITCH_RETRIES = 2;
   let modelSwitchRetries = 0;
   while (true) {
@@ -436,6 +500,16 @@ export async function executeCronRun(params: {
   if (!runResult) {
     throw new Error("cron isolated run returned no result");
   }
+  const resolvePayloadOutcomeForRun = async (result: CronPromptRunResult) =>
+    resolveCronPayloadOutcome({
+      payloads: result.payloads ?? [],
+      runLevelError: result.meta?.error,
+      failureSignal: result.meta?.failureSignal,
+      finalAssistantVisibleText: result.meta?.finalAssistantVisibleText,
+      preferFinalAssistantVisibleText: (
+        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
+      ).preferFinalAssistantVisibleText,
+    });
 
   if (!params.isAborted()) {
     const interimPayloads = runResult.payloads ?? [];
@@ -443,15 +517,7 @@ export async function executeCronRun(params: {
       deliveryPayloadHasStructuredContent: interimPayloadHasStructuredContent,
       hasFatalErrorPayload: interimHasFatalErrorPayload,
       outputText: interimOutputText,
-    } = resolveCronPayloadOutcome({
-      payloads: interimPayloads,
-      runLevelError: runResult.meta?.error,
-      failureSignal: runResult.meta?.failureSignal,
-      finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
-      preferFinalAssistantVisibleText: (
-        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
-      ).preferFinalAssistantVisibleText,
-    });
+    } = await resolvePayloadOutcomeForRun(runResult);
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
       !runResult.meta?.error &&
@@ -466,11 +532,9 @@ export async function executeCronRun(params: {
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
         await loadCronSubagentRegistryRuntime();
-      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
-        const descendantStartedAt =
-          typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
-        return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-      });
+      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some(
+        didDescendantStartDuringRun,
+      );
       hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
     }
 
@@ -489,6 +553,80 @@ export async function executeCronRun(params: {
   if (!runResult) {
     throw new Error("cron isolated run returned no result");
   }
+
+  if (!params.isAborted()) {
+    const finalPayloads = runResult.payloads ?? [];
+    const {
+      deliveryPayloadHasStructuredContent: finalPayloadHasStructuredContent,
+      hasFatalErrorPayload: finalHasFatalErrorPayload,
+      outputText: finalOutputText,
+    } = await resolvePayloadOutcomeForRun(runResult);
+    const finalText = finalOutputText?.trim() ?? "";
+    const shouldRetryEmptyOutput =
+      !runResult.meta?.error &&
+      !finalHasFatalErrorPayload &&
+      !runResult.didSendViaMessagingTool &&
+      !finalPayloadHasStructuredContent &&
+      !finalPayloads.some((payload) => payload?.isError === true) &&
+      finalText.length === 0;
+
+    let hasFreshDescendants = false;
+    let hasActiveDescendants = false;
+    if (shouldRetryEmptyOutput) {
+      const { countActiveDescendantRuns, listDescendantRunsForRequester } =
+        await loadCronSubagentRegistryRuntime();
+      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some(
+        didDescendantStartDuringRun,
+      );
+      hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
+      emptyOutputHadFreshDescendants = hasFreshDescendants;
+    }
+
+    if (shouldRetryEmptyOutput && !hasFreshDescendants && !hasActiveDescendants) {
+      emptyOutputRepairAttempted = true;
+      const repairProvider = runResult.meta?.agentMeta?.provider ?? fallbackProvider;
+      const repairUsesCliProvider = isCliProvider(repairProvider, params.cfgWithAgentDefaults);
+      const repairCliSessionId =
+        runResult.meta?.agentMeta?.cliSessionBinding?.sessionId?.trim() ||
+        runResult.meta?.agentMeta?.sessionId?.trim() ||
+        undefined;
+      logWarn(
+        repairUsesCliProvider
+          ? `[cron:${params.job.id}] empty deliverable output after sanitization; attempting CLI repair pass with bundled MCP disabled`
+          : `[cron:${params.job.id}] empty deliverable output after sanitization; attempting no-tools repair pass`,
+      );
+      await executor.runPrompt(buildEmptyOutputRepairPrompt(params.commandBody), {
+        resolveForAttempt: ({ executionProvider, usesCliProvider }) => ({
+          disableTools: usesCliProvider ? undefined : true,
+          disableBundleMcpForCli: usesCliProvider ? true : undefined,
+          cliSession:
+            usesCliProvider && repairCliSessionId && executionProvider === repairProvider
+              ? { provider: executionProvider, sessionId: repairCliSessionId }
+              : undefined,
+        }),
+      });
+      ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
+
+      if (!runResult) {
+        throw new Error("cron isolated run returned no result");
+      }
+      const repairedPayloads = runResult.payloads ?? [];
+      const {
+        deliveryPayloadHasStructuredContent: repairedPayloadHasStructuredContent,
+        hasFatalErrorPayload: repairedHasFatalErrorPayload,
+        outputText: repairedOutputText,
+      } = await resolvePayloadOutcomeForRun(runResult);
+      const repairedText = repairedOutputText?.trim() ?? "";
+      emptyOutputRepairFailed =
+        !runResult.meta?.error &&
+        !repairedHasFatalErrorPayload &&
+        !runResult.didSendViaMessagingTool &&
+        !repairedPayloadHasStructuredContent &&
+        !repairedPayloads.some((payload) => payload?.isError === true) &&
+        (repairedText.length === 0 || isSilentForCronDelivery(repairedText));
+    }
+  }
+
   return {
     runResult,
     fallbackProvider,
@@ -496,5 +634,8 @@ export async function executeCronRun(params: {
     runStartedAt,
     runEndedAt,
     liveSelection: params.liveSelection,
+    emptyOutputRepairAttempted,
+    emptyOutputRepairFailed,
+    emptyOutputHadFreshDescendants,
   };
 }

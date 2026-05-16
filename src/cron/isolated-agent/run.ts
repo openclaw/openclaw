@@ -1011,6 +1011,24 @@ async function finalizeCronRun(params: {
     }
   };
 
+  if (execution.emptyOutputRepairFailed && !hasFatalErrorPayload) {
+    const error =
+      "cron produced no deliverable text after sanitization and the repair pass did not recover a final reply";
+    return prepared.withRunSession({
+      status: "error",
+      error,
+      summary,
+      outputText,
+      delivered: false,
+      deliveryAttempted: prepared.deliveryRequested,
+      diagnostics: mergeCronRunDiagnostics(
+        agentDiagnostics,
+        createCronRunDiagnosticsFromError("agent-run", error),
+      ),
+      ...telemetry,
+    });
+  }
+
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
@@ -1056,6 +1074,7 @@ async function finalizeCronRun(params: {
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
+    emptyOutputHadFreshDescendants: execution.emptyOutputHadFreshDescendants,
     synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,

@@ -200,7 +200,8 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
-  const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  const bundleMcpEnabled =
+    backendResolved.bundleMcp && params.disableTools !== true && params.disableBundleMcp !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {

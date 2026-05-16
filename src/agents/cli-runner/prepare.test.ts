@@ -1135,6 +1135,70 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("can disable bundled MCP without rejecting native tool-capable CLI backends", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "codex-config-overrides",
+            nativeToolMode: "always-on",
+            config: {
+              command: "native-cli",
+              args: ["exec", "--sandbox", "workspace-write"],
+              resumeArgs: ["exec", "resume", "{sessionId}"],
+              output: "jsonl",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-disable-bundle-mcp",
+        config: createCliBackendConfig(),
+        disableBundleMcp: true,
+      });
+
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+      expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
+      expect(context.preparedBackend.env).toBeUndefined();
+      expect(context.preparedBackend.backend.args).toEqual([
+        "exec",
+        "--sandbox",
+        "workspace-write",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("drops the claude-cli sessionId when the on-disk transcript is missing (#77011)", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

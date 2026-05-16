@@ -589,7 +589,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
-            requestHost,
+            requestHost: hasUntrustedProxyHeaders ? undefined : requestHost,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,

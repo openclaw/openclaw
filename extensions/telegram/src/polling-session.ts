@@ -290,7 +290,7 @@ export class TelegramPollingSession {
         token: this.opts.token,
         runtime: this.opts.runtime,
         proxyFetch: this.opts.proxyFetch,
-        config: this.opts.config,
+        ...(this.opts.config === undefined ? {} : { config: this.opts.config }),
         accountId: this.opts.accountId,
         botInfo: this.opts.botInfo,
         fetchAbortSignal: fetchAbortController.signal,

@@ -6,13 +6,17 @@ import {
 import {
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
+  isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
+  logWarnMock,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
+  resolveCronPayloadOutcomeMock,
   resolveCronDeliveryPlanMock,
   runEmbeddedPiAgentMock,
+  runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -29,11 +33,13 @@ function requireEmbeddedAgentCall(index: number): { prompt?: string } {
 function requireDeliveryRequest(): {
   skipHeartbeatDelivery?: boolean;
   deliveryPayloads?: unknown;
+  emptyOutputHadFreshDescendants?: boolean;
 } {
   const request = dispatchCronDeliveryMock.mock.calls[0]?.[0] as
     | {
         skipHeartbeatDelivery?: boolean;
         deliveryPayloads?: unknown;
+        emptyOutputHadFreshDescendants?: boolean;
       }
     | undefined;
   if (!request) {
@@ -184,5 +190,271 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(countActiveDescendantRunsMock).toHaveBeenCalledWith(
       "agent:default:cron:test:run:test-session-id",
     );
+  });
+
+  it("marks empty-output delivery when a fresh descendant already settled", async () => {
+    usePayloadTextExtraction();
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "   " }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    listDescendantRunsForRequesterMock.mockReturnValue([
+      {
+        startedAt: Date.now() + 60_000,
+      },
+    ]);
+    countActiveDescendantRunsMock.mockReturnValue(0);
+
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(1, 1);
+
+    const deliveryRequest = requireDeliveryRequest();
+    expect(deliveryRequest.deliveryPayloads).toEqual([]);
+    expect(deliveryRequest.emptyOutputHadFreshDescendants).toBe(true);
+  });
+
+  it("runs one no-tools repair pass when final cron output has no deliverable text", async () => {
+    usePayloadTextExtraction();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Morning report ready." }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(2, 2);
+
+    const repairCall = runEmbeddedPiAgentMock.mock.calls.at(1)?.[0] as
+      | { disableTools?: boolean; prompt?: string }
+      | undefined;
+    expect(repairCall?.disableTools).toBe(true);
+    expect(repairCall?.prompt).toContain("produced no deliverable user-visible text");
+    expect(repairCall?.prompt).toContain("Original cron task:");
+    expect(repairCall?.prompt).toContain("[cron:test-job Test Job] test");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "Morning report ready." }]);
+  });
+
+  it("uses explicit CLI repair mode and resumes the first CLI session", async () => {
+    usePayloadTextExtraction();
+    isCliProviderMock.mockReturnValue(true);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runCliAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: {
+          agentMeta: {
+            sessionId: "first-cli-session",
+            usage: { input: 10, output: 20 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "CLI repair ready." }],
+        meta: { agentMeta: { sessionId: "first-cli-session", usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    const repairCall = runCliAgentMock.mock.calls.at(1)?.[0] as
+      | {
+          cliSessionId?: string;
+          disableBundleMcp?: boolean;
+          disableTools?: boolean;
+          prompt?: string;
+        }
+      | undefined;
+    expect(repairCall?.cliSessionId).toBe("first-cli-session");
+    expect(repairCall?.disableBundleMcp).toBe(true);
+    expect(repairCall?.disableTools).toBeUndefined();
+    expect(repairCall?.prompt).toContain("produced no deliverable user-visible text");
+    expect(repairCall?.prompt).toContain("Original cron task:");
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("attempting CLI repair pass with bundled MCP disabled"),
+    );
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "CLI repair ready." }]);
+  });
+
+  it("recomputes empty-output repair constraints for each fallback runtime candidate", async () => {
+    usePayloadTextExtraction();
+    isCliProviderMock.mockImplementation((provider?: string) => provider === "claude-cli");
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "   " }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          sessionId: "first-cli-session",
+          usage: { input: 10, output: 20 },
+        },
+      },
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Embedded repair ready." }],
+      meta: { agentMeta: { provider: "openai", usage: { input: 10, output: 20 } } },
+    });
+    runWithModelFallbackMock
+      .mockImplementationOnce(async ({ run }) => {
+        const result = await run("claude-cli", "claude");
+        return { result, provider: "claude-cli", model: "claude", attempts: [] };
+      })
+      .mockImplementationOnce(async ({ run }) => {
+        const result = await run("openai", "gpt-5.4");
+        return { result, provider: "openai", model: "gpt-5.4", attempts: [] };
+      });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const repairCall = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as
+      | { disableTools?: boolean; prompt?: string }
+      | undefined;
+    expect(repairCall?.disableTools).toBe(true);
+    expect(repairCall?.prompt).toContain("produced no deliverable user-visible text");
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "Embedded repair ready." }]);
+  });
+
+  it("preserves external-hook non-owner scope during CLI empty-output repair", async () => {
+    usePayloadTextExtraction();
+    isCliProviderMock.mockReturnValue(true);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runCliAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: {
+          agentMeta: {
+            sessionId: "external-hook-cli-session",
+            usage: { input: 10, output: 20 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "External hook CLI repair ready." }],
+        meta: {
+          agentMeta: {
+            sessionId: "external-hook-cli-session",
+            usage: { input: 10, output: 20 },
+          },
+        },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: {
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            externalContentSource: "webhook",
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    const firstCall = runCliAgentMock.mock.calls.at(0)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    const repairCall = runCliAgentMock.mock.calls.at(1)?.[0] as
+      | {
+          cliSessionId?: string;
+          disableBundleMcp?: boolean;
+          senderIsOwner?: boolean;
+        }
+      | undefined;
+    expect(firstCall?.senderIsOwner).toBe(false);
+    expect(repairCall?.senderIsOwner).toBe(false);
+    expect(repairCall?.cliSessionId).toBe("external-hook-cli-session");
+    expect(repairCall?.disableBundleMcp).toBe(true);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([
+      { text: "External hook CLI repair ready." },
+    ]);
+  });
+
+  it("fails explicitly when the no-tools repair pass still has no deliverable text", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "\n\n" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("repair pass did not recover a final reply");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly when the repair pass returns a silent NO_REPLY token", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("repair pass did not recover a final reply");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
   });
 });
