@@ -138,7 +138,7 @@ describe("wrapEditToolWithRecovery — recovery diff attachment (#82015)", () =>
       name: "edit",
       description: "test",
       parameters: { type: "object" },
-      execute: async (_id: string, params: unknown) => (await behavior(params)) as never,
+      execute: async (_id: string, params: unknown) => await behavior(params),
     } as unknown as AnyAgentTool;
   }
 
