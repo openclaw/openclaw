@@ -177,6 +177,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: expose optional `isHeartbeat` metadata on agent event payloads so clients can distinguish scheduled heartbeat runs from ordinary chat runs. (#80610) Thanks @medns.
 - Agents: add `agents.defaults.runRetries` and `agents.list[].runRetries` config for embedded Pi runner retry loop limits. (#80661) Thanks @medns.
 - Codex: add node-backed Codex CLI session listing and binding so an OpenClaw conversation can continue an existing Codex CLI session running on a paired node.
+- Plugins/ClawHub: check exact-release trust before ClawHub plugin install/update downloads, require confirmation for risky releases, and add `--acknowledge-clawhub-risk` for reviewed automation. (#81364) Thanks @jesse-merhi.
 
 ### Fixes
 

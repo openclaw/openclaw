@@ -121,6 +121,6 @@ export async function repairCodexRuntimePluginInstallForModelSelection(params: {
   return {
     required: true,
     changes: result.changes,
-    warnings: result.warnings,
+    warnings: [...result.warnings, ...(result.notices ?? [])],
   };
 }

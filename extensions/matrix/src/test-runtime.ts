@@ -6,43 +6,35 @@ import { vi } from "vitest";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
 
+type MatrixRuntimeChannelMediaStub = Partial<NonNullable<PluginRuntime["channel"]>["media"]>;
+type MatrixRuntimeChannelStub = Partial<Omit<PluginRuntime["channel"], "media">> & {
+  media?: MatrixRuntimeChannelMediaStub;
+};
+type MatrixRuntimeSaveMediaBuffer = NonNullable<
+  PluginRuntime["channel"]
+>["media"]["saveMediaBuffer"];
+
 type MatrixTestRuntimeOptions = {
   cfg?: Record<string, unknown>;
   logging?: Partial<PluginRuntime["logging"]>;
-  channel?: Partial<PluginRuntime["channel"]>;
+  channel?: MatrixRuntimeChannelStub;
   stateDir?: string;
 };
 
 type MatrixRuntimeStub = {
   config: Pick<PluginRuntime["config"], "current" | "mutateConfigFile" | "replaceConfigFile">;
-  channel?: PluginRuntime["channel"];
+  channel?: MatrixRuntimeChannelStub;
   logging?: PluginRuntime["logging"];
   state: Pick<NonNullable<PluginRuntime["state"]>, "resolveStateDir">;
 };
 
-function createMatrixRuntimeMediaMock(
-  overrides: Partial<NonNullable<PluginRuntime["channel"]>["media"]> = {},
-): NonNullable<PluginRuntime["channel"]>["media"] {
-  const readRemoteMediaBuffer = vi.fn() as NonNullable<
-    PluginRuntime["channel"]
-  >["media"]["readRemoteMediaBuffer"];
-  return {
-    readRemoteMediaBuffer,
-    fetchRemoteMedia: readRemoteMediaBuffer,
-    saveRemoteMedia: vi.fn().mockResolvedValue({
-      path: "/tmp/test-media.jpg",
-      contentType: "image/jpeg",
-    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveRemoteMedia"],
-    saveResponseMedia: vi.fn().mockResolvedValue({
-      path: "/tmp/test-media.jpg",
-      contentType: "image/jpeg",
-    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveResponseMedia"],
-    saveMediaBuffer: vi.fn().mockResolvedValue({
-      path: "/tmp/test-media.jpg",
-      contentType: "image/jpeg",
-    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
-    ...overrides,
-  };
+function createDefaultSaveMediaBuffer(): MatrixRuntimeSaveMediaBuffer {
+  return vi.fn(async (buffer: Buffer, contentType?: string) => ({
+    id: "test-media.jpg",
+    path: "/tmp/test-media.jpg",
+    size: buffer.byteLength,
+    ...(contentType ? { contentType } : { contentType: "image/jpeg" }),
+  }));
 }
 
 export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
@@ -69,7 +61,7 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
       mutateConfigFile: vi.fn(),
       replaceConfigFile: vi.fn(),
     },
-    ...(options.channel ? { channel: options.channel as PluginRuntime["channel"] } : {}),
+    ...(options.channel ? { channel: options.channel } : {}),
     ...(logging ? { logging } : {}),
     state: {
       resolveStateDir: defaultStateDirResolver,
@@ -100,9 +92,9 @@ export function installMatrixMonitorTestRuntime(
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
       },
-      media: createMatrixRuntimeMediaMock({
-        saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),
-      }),
+      media: {
+        saveMediaBuffer: options.saveMediaBuffer ?? createDefaultSaveMediaBuffer(),
+      },
     },
   });
 }

@@ -69,6 +69,13 @@ function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boole
   );
 }
 
+function readInstallFailureWarning(result: InstallPluginFromClawHubResult): string | undefined {
+  if (result.ok || !("warning" in result) || typeof result.warning !== "string") {
+    return undefined;
+  }
+  return result.warning;
+}
+
 function resolveRealDirectory(dir: string): string | null {
   try {
     const resolved = fs.realpathSync(dir);
@@ -626,6 +633,30 @@ function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): voi
   runtime.log?.(`${sanitized}\n`);
 }
 
+function logInstallWarningWithLineBreaks(runtime: RuntimeEnv, message: string): void {
+  const sanitized = message
+    .split("\n")
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n")
+    .trim();
+  if (!sanitized) {
+    return;
+  }
+  runtime.log?.(`${sanitized}\n`);
+}
+
+function isReviewRequiredClawHubTrustWarning(message: string): boolean {
+  return message.includes("REVIEW REQUIRED - ClawHub");
+}
+
+function isClawHubTrustWarning(message: string): boolean {
+  return (
+    isReviewRequiredClawHubTrustWarning(message) ||
+    message.includes("BLOCKED - ClawHub") ||
+    message.includes("REVIEW RECOMMENDED - ClawHub")
+  );
+}
+
 async function installPluginFromNpmSpecWithProgress(params: {
   entry: OnboardingPluginInstallEntry;
   npmSpec: string;
@@ -905,6 +936,11 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     }
     animated.setLabel(shortenInstallLabel(sanitized));
   };
+  let renderedTrustWarning = false;
+  const renderTrustWarning = (message: string) => {
+    logInstallWarningWithLineBreaks(params.runtime, message);
+    renderedTrustWarning = true;
+  };
 
   try {
     const { installPluginFromClawHub } = await import("../plugins/clawhub.js");
@@ -919,13 +955,43 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
+            if (isReviewRequiredClawHubTrustWarning(message)) {
+              return;
+            }
+            if (isClawHubTrustWarning(message)) {
+              renderTrustWarning(message);
+              return;
+            }
             logInstallWarningWithSpacing(params.runtime, message);
           },
+        },
+        onClawHubRisk: async (request) => {
+          animated.stop();
+          progress.stop("Review ClawHub warning");
+          renderTrustWarning(request.warning);
+          const packageName = sanitizeTerminalText(request.packageName);
+          const releaseLabel = `${packageName}@${sanitizeTerminalText(request.version)}`;
+          if (request.acknowledgementKind === "type-package") {
+            const answer = await params.prompter.text({
+              message: `To install anyway, type the package name for "${releaseLabel}"`,
+              placeholder: packageName,
+            });
+            return answer.trim() === packageName;
+          }
+          return await params.prompter.confirm({
+            message: `Install ClawHub package "${releaseLabel}" after reviewing the warning above?`,
+            initialValue: false,
+          });
         },
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
     );
     animated.stop();
+    const failureWarning = readInstallFailureWarning(result);
+    if (failureWarning && !renderedTrustWarning) {
+      progress.stop("Review ClawHub warning");
+      renderTrustWarning(failureWarning);
+    }
     if (result.ok) {
       progress.stop(formatPluginInstalled(safeLabel));
     } else {

@@ -116,6 +116,23 @@ function logShadowedNpmInstallWarning(params: {
   );
 }
 
+function logNonClawHubInstallWarning(params: {
+  install: Omit<PluginInstallUpdate, "pluginId">;
+  runtime: RuntimeEnv;
+}): void {
+  if (params.install.source === "clawhub") {
+    return;
+  }
+  params.runtime.log(
+    theme.warn(
+      [
+        "Warning: this plugin is not being installed from ClawHub, so OpenClaw does not have ClawHub trust metadata for it.",
+        "Future OpenClaw versions may block plugin installs from outside ClawHub.",
+      ].join("\n"),
+    ),
+  );
+}
+
 function resolveComparableInstallPath(
   install: Pick<PluginInstallRecord, "installPath" | "sourcePath">,
 ) {
@@ -269,6 +286,10 @@ export async function persistPluginInstall(params: {
   if (params.warningMessage) {
     runtime.log(theme.warn(params.warningMessage));
   }
+  logNonClawHubInstallWarning({
+    install: params.install,
+    runtime,
+  });
   runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
   logShadowedNpmInstallWarning({
     config: next,

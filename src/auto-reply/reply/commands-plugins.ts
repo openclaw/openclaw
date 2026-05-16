@@ -15,7 +15,8 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { installPluginFromClawHub } from "../../plugins/clawhub.js";
+import { buildClawHubPluginInstallRecordFields } from "../../plugins/clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -208,7 +209,9 @@ function findTrustedCatalogPackageInstall(packageName: string):
 async function installPluginFromPluginsCommand(params: {
   raw: string;
   snapshot: ConfigSnapshotForInstallPersist;
-}): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
+}): Promise<
+  { ok: true; pluginId: string; warnings?: readonly string[] } | { ok: false; error: string }
+> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
   if (fileSpec && !fileSpec.ok) {
     return { ok: false, error: fileSpec.error };
@@ -274,30 +277,41 @@ async function installPluginFromPluginsCommand(params: {
 
   const clawhubSpec = parseClawHubPluginSpec(params.raw);
   if (clawhubSpec) {
+    const warnings: string[] = [];
+    const logger = createPluginInstallLogger();
     const result = await installPluginFromClawHub({
       spec: params.raw,
-      logger: createPluginInstallLogger(),
+      logger: {
+        info: logger.info,
+        warn: (message) => {
+          warnings.push(message);
+          logger.warn(message);
+        },
+        terminalLinks: false,
+      },
     });
     if (!result.ok) {
-      return { ok: false, error: result.error };
+      const warning = "warning" in result ? result.warning : warnings.join("\n");
+      const warningPrefix = warning ? `${warning} ` : "";
+      if (result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED) {
+        return {
+          ok: false,
+          error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
+        };
+      }
+      return { ok: false, error: `${warningPrefix}${result.error}` };
     }
     await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: result.pluginId,
       install: {
-        source: "clawhub",
+        ...buildClawHubPluginInstallRecordFields(result.clawhub),
         spec: params.raw,
         installPath: result.targetDir,
         version: result.version,
-        integrity: result.clawhub.integrity,
-        resolvedAt: result.clawhub.resolvedAt,
-        clawhubUrl: result.clawhub.clawhubUrl,
-        clawhubPackage: result.clawhub.clawhubPackage,
-        clawhubFamily: result.clawhub.clawhubFamily,
-        clawhubChannel: result.clawhub.clawhubChannel,
       },
     });
-    return { ok: true, pluginId: result.pluginId };
+    return { ok: true, pluginId: result.pluginId, warnings };
   }
 
   const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
@@ -458,7 +472,10 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+        text: [
+          `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+          ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
+        ].join("\n"),
       },
     };
   }

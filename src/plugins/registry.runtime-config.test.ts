@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 function createTestRegistry(runtime: PluginRuntime) {
@@ -20,34 +21,64 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
-  it("runs config helpers with the owning plugin scope", async () => {
-    let currentScope = getPluginRuntimeGatewayRequestScope();
+  it("runs config mutations with the owning plugin scope", async () => {
     let mutateScope = getPluginRuntimeGatewayRequestScope();
     let replaceScope = getPluginRuntimeGatewayRequestScope();
-    const config = {} as OpenClawConfig;
+    let currentScope = getPluginRuntimeGatewayRequestScope();
+    let loadScope = getPluginRuntimeGatewayRequestScope();
+    let writeScope = getPluginRuntimeGatewayRequestScope();
+    const config: OpenClawConfig = {};
+    const snapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw/config.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: config,
+      resolved: config,
+      valid: true,
+      runtimeConfig: config,
+      config,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
     const replaceResult = {
-      path: "/tmp/openclaw.json",
+      path: snapshot.path,
       previousHash: null,
-      persistedHash: "persisted-hash",
-      snapshot: { path: "/tmp/openclaw.json" },
+      snapshot,
       nextConfig: config,
+      persistedHash: "persisted-hash",
       afterWrite: { mode: "auto" },
       followUp: { mode: "auto", requiresRestart: false },
-    } as unknown as Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
-    const mutateConfigFile: PluginRuntime["config"]["mutateConfigFile"] = async () => {
+    } satisfies Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
+    const mutateConfigFile: PluginRuntime["config"]["mutateConfigFile"] = async (params) => {
       mutateScope = getPluginRuntimeGatewayRequestScope();
+      await params.mutate(config, {
+        snapshot,
+        previousHash: replaceResult.previousHash,
+      });
       return {
         ...replaceResult,
+        afterWrite: params.afterWrite,
         result: undefined,
         attempts: 1,
       };
     };
-    const replaceConfigFile: PluginRuntime["config"]["replaceConfigFile"] = async () => {
+    const replaceConfigFile: PluginRuntime["config"]["replaceConfigFile"] = async (params) => {
       replaceScope = getPluginRuntimeGatewayRequestScope();
-      return replaceResult;
+      return {
+        ...replaceResult,
+        nextConfig: params.nextConfig,
+        afterWrite: params.afterWrite,
+      };
     };
-    const loadConfig: PluginRuntime["config"]["loadConfig"] = () => config;
-    const writeConfigFile: PluginRuntime["config"]["writeConfigFile"] = async () => {};
+    const loadConfig: PluginRuntime["config"]["loadConfig"] = () => {
+      loadScope = getPluginRuntimeGatewayRequestScope();
+      return config;
+    };
+    const writeConfigFile: PluginRuntime["config"]["writeConfigFile"] = async () => {
+      writeScope = getPluginRuntimeGatewayRequestScope();
+    };
     const configRuntime = {
       current: vi.fn(() => {
         currentScope = getPluginRuntimeGatewayRequestScope();
@@ -57,10 +88,8 @@ describe("plugin registry runtime config scope", () => {
       replaceConfigFile,
       loadConfig,
       writeConfigFile,
-    } satisfies PluginRuntime["config"];
-    const runtime = createPluginRuntime();
-    runtime.config = configRuntime;
-    const pluginRegistry = createTestRegistry(runtime);
+    };
+    const pluginRegistry = createTestRegistry(createPluginRuntimeMock({ config: configRuntime }));
     const record = createPluginRecord({
       id: "legacy-plugin",
       name: "Legacy Plugin",
@@ -71,25 +100,37 @@ describe("plugin registry runtime config scope", () => {
     });
     const api = pluginRegistry.createApi(record, { config });
 
-    expect(api.runtime.config.current()).toBe(config);
     await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "none", reason: "test" },
-      mutate: () => undefined,
+      mutate: () => "mutated",
     });
     await api.runtime.config.replaceConfigFile({
       nextConfig: config,
-      afterWrite: { mode: "none", reason: "test" },
+      afterWrite: { mode: "restart", reason: "test" },
     });
+    expect(api.runtime.config.current()).toBe(config);
+    const legacyLoadConfig = api.runtime.config["loadConfig"];
+    const legacyWriteConfigFile = api.runtime.config["writeConfigFile"];
+    expect(legacyLoadConfig()).toBe(config);
+    await legacyWriteConfigFile(config);
 
-    expect(currentScope).toMatchObject({
-      pluginId: "legacy-plugin",
-      pluginSource: "/plugins/legacy-plugin/index.js",
-    });
     expect(mutateScope).toMatchObject({
       pluginId: "legacy-plugin",
       pluginSource: "/plugins/legacy-plugin/index.js",
     });
     expect(replaceScope).toMatchObject({
+      pluginId: "legacy-plugin",
+      pluginSource: "/plugins/legacy-plugin/index.js",
+    });
+    expect(currentScope).toMatchObject({
+      pluginId: "legacy-plugin",
+      pluginSource: "/plugins/legacy-plugin/index.js",
+    });
+    expect(loadScope).toMatchObject({
+      pluginId: "legacy-plugin",
+      pluginSource: "/plugins/legacy-plugin/index.js",
+    });
+    expect(writeScope).toMatchObject({
       pluginId: "legacy-plugin",
       pluginSource: "/plugins/legacy-plugin/index.js",
     });

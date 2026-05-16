@@ -32,6 +32,7 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateStatusOptions = {
@@ -45,6 +46,7 @@ export type UpdateFinalizeOptions = {
   timeout?: string;
   yes?: boolean;
   restart?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateWizardOptions = {

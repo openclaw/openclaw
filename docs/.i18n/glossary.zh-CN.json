@@ -700,6 +700,10 @@
     "target": "插件清单"
   },
   {
+    "source": "Plugin bundles",
+    "target": "插件包"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -726,6 +730,10 @@
   {
     "source": "Plugin hooks",
     "target": "插件钩子"
+  },
+  {
+    "source": "Registering tools",
+    "target": "注册工具"
   },
   {
     "source": "Internal hooks",

@@ -343,9 +343,10 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
       env,
     });
+    const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
     return {
       changes: repaired.changes,
-      warnings: repaired.warnings,
+      warnings,
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
     };
@@ -361,9 +362,10 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     env,
   });
   const completed = repaired.warnings.length === 0 && !updateInProgress;
+  const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
   return {
     changes: repaired.changes,
-    warnings: repaired.warnings,
+    warnings,
     completed,
     touchedConfig: completed,
   };

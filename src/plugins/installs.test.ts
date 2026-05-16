@@ -87,4 +87,50 @@ describe("recordPluginInstall", () => {
 
     expectRecordedInstall("demo", next);
   });
+
+  it("clears stale ClawHub trust metadata when a later install omits it", () => {
+    const existing = recordPluginInstall(
+      {},
+      {
+        pluginId: "demo",
+        source: "clawhub",
+        spec: "clawhub:demo@1.0.0",
+        installPath: "/tmp/openclaw/plugins/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubTrustDisposition: "review-required",
+        clawhubTrustScanStatus: "suspicious",
+        clawhubTrustReasons: ["payload_strings"],
+        clawhubTrustPending: true,
+        clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+        clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
+      },
+    );
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "demo",
+      source: "clawhub",
+      spec: "clawhub:demo@1.1.0",
+      installPath: "/tmp/openclaw/plugins/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubTrustDisposition: "clean",
+      clawhubTrustCheckedAt: "2026-05-15T00:00:00.000Z",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+
+    expect(next.plugins?.installs?.demo).toEqual({
+      source: "clawhub",
+      spec: "clawhub:demo@1.1.0",
+      installPath: "/tmp/openclaw/plugins/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubTrustDisposition: "clean",
+      clawhubTrustCheckedAt: "2026-05-15T00:00:00.000Z",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+  });
 });

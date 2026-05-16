@@ -4,6 +4,17 @@ import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/insta
 
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
 
+const CLAWHUB_TRUST_INSTALL_RECORD_FIELDS = [
+  "clawhubTrustDisposition",
+  "clawhubTrustScanStatus",
+  "clawhubTrustModerationState",
+  "clawhubTrustReasons",
+  "clawhubTrustPending",
+  "clawhubTrustStale",
+  "clawhubTrustCheckedAt",
+  "clawhubTrustAcknowledgedAt",
+] as const satisfies readonly (keyof PluginInstallRecord)[];
+
 export function buildNpmResolutionInstallFields(
   resolution?: NpmSpecResolution,
 ): Pick<
@@ -18,10 +29,11 @@ export function recordPluginInstall(
   update: PluginInstallUpdate,
 ): OpenClawConfig {
   const { pluginId, ...record } = update;
+  const previous = clearStaleInstallRecordFields(cfg.plugins?.installs?.[pluginId]);
   const installs = {
     ...cfg.plugins?.installs,
     [pluginId]: {
-      ...cfg.plugins?.installs?.[pluginId],
+      ...previous,
       ...record,
       installedAt: record.installedAt ?? new Date().toISOString(),
     },
@@ -37,4 +49,15 @@ export function recordPluginInstall(
       },
     },
   };
+}
+
+function clearStaleInstallRecordFields(record: PluginInstallRecord | undefined) {
+  if (!record) {
+    return undefined;
+  }
+  const next: PluginInstallRecord = { ...record };
+  for (const field of CLAWHUB_TRUST_INSTALL_RECORD_FIELDS) {
+    delete next[field];
+  }
+  return next;
 }

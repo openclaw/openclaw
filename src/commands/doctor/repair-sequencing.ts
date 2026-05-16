@@ -99,6 +99,10 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
   }
+  const missingConfiguredPluginInstallNotices = missingConfiguredPluginInstallRepair.notices ?? [];
+  if (missingConfiguredPluginInstallNotices.length > 0) {
+    warningNotes.push(sanitizeLines(missingConfiguredPluginInstallNotices));
+  }
   const missingConfiguredPluginInstallFailed =
     missingConfiguredPluginInstallRepair.warnings.length > 0;
   if (!isUpdatePackageSwapInProgress(env) && !missingConfiguredPluginInstallFailed) {
