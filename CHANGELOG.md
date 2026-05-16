@@ -411,6 +411,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI plugin: clarify remote Codex OAuth login copy so tunneled users know sign-in may finish automatically before they paste the redirect URL. (#81301) Thanks @rubencu.
 - SGLang: preserve replayed reasoning history for OpenAI-compatible chat completions, keeping thinking-capable local models from losing prior reasoning turns. (#81091) Thanks @akrimm702.
 - Plugins/install: derive managed peer dependency pins from npm's lockfile planner instead of recursively scanning `node_modules`, while keeping OpenClaw host peers out of managed root ownership and preserving active root-managed runtimes. Thanks @fuller-stack-dev.
+- OC Path: restore YAML/YML/.lobster support through the bundled YAML document parser and add `$first` positional addressing alongside `$last`.
 - Control UI/WebChat: keep short assistant replies clear of in-bubble copy/open action buttons by applying the existing reserved action spacing in the grouped chat renderer. Fixes #79509. (#81244) Thanks @JARVIS-Glasses.
 - Codex harness: make the live test wrapper portable to Windows and defer locked temp cleanup so native Windows and WSL2 live runs complete.
 - Link understanding: fetch page content through the SSRF guard before running configured CLI summarizers, preventing curl/wget-style link fetchers from reaching private redirect or DNS-rebound targets.
