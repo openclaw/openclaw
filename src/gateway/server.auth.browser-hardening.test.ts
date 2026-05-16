@@ -433,6 +433,7 @@ describe("gateway auth browser hardening", () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       gateway: {
+        trustedProxies: ["127.0.0.1"],
         controlUi: {
           allowedOrigins: [],
         },
