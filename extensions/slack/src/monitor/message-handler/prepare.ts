@@ -637,6 +637,11 @@ export async function prepareSlackMessage(params: {
       return null;
     }
   }
+  const directThreadRoutedToDmSession =
+    isDirectMessage &&
+    isThreadReply &&
+    threadTs &&
+    runtimeBinding?.conversation.conversationId !== threadTs;
   let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
   if (
     !isDirectMessage &&
@@ -1039,6 +1044,7 @@ export async function prepareSlackMessage(params: {
     roomLabel,
     storePath,
     sessionKey,
+    forceInitialHistory: Boolean(directThreadRoutedToDmSession),
     allowFromLower: threadContextAllowFromLower,
     allowNameMatching: ctx.allowNameMatching,
     contextVisibilityMode,
@@ -1056,6 +1062,8 @@ export async function prepareSlackMessage(params: {
         })
       : dmHistoryContext.inboundHistory;
   const commandBody = textForCommandDetection.trim();
+  const supplementalThreadHistoryBody =
+    directThreadRoutedToDmSession && !threadHistoryBody ? threadStarterBody : threadHistoryBody;
 
   const ctxPayload = buildChannelTurnContext({
     channel: "slack",
@@ -1075,7 +1083,7 @@ export async function prepareSlackMessage(params: {
       id: message.channel,
       label: envelopeFrom,
       spaceId: ctx.teamId || undefined,
-      threadId: threadContext.messageThreadId,
+      threadId: directThreadRoutedToDmSession ? undefined : threadContext.messageThreadId,
       nativeChannelId: message.channel,
       routePeer: {
         kind: chatType,
@@ -1092,7 +1100,7 @@ export async function prepareSlackMessage(params: {
       to: slackTo,
       originatingTo: slackTo,
       replyToId: threadContext.replyToId,
-      messageThreadId: threadContext.messageThreadId,
+      messageThreadId: directThreadRoutedToDmSession ? undefined : threadContext.messageThreadId,
       nativeChannelId: message.channel,
     },
     message: {
@@ -1125,17 +1133,26 @@ export async function prepareSlackMessage(params: {
     supplemental: {
       thread: {
         // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
-        starterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
-        historyBody: threadHistoryBody,
-        label: threadLabel,
+        starterBody:
+          !directThreadRoutedToDmSession && !threadSessionPreviousTimestamp
+            ? threadStarterBody
+            : undefined,
+        historyBody: supplementalThreadHistoryBody,
+        label: directThreadRoutedToDmSession ? undefined : threadLabel,
       },
       groupSystemPrompt,
     },
     extra: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+      TransportThreadId: directThreadRoutedToDmSession ? threadContext.messageThreadId : undefined,
       IsFirstThreadTurn:
-        isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+        isThreadReply &&
+        threadTs &&
+        !directThreadRoutedToDmSession &&
+        !threadSessionPreviousTimestamp
+          ? true
+          : undefined,
       ...buildSlackMentionContextPayload({
         isRoomish,
         effectiveWasMentioned,
