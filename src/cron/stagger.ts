@@ -6,15 +6,45 @@ function parseCronFields(expr: string) {
   return expr.trim().split(/\s+/).filter(Boolean);
 }
 
+function cronFieldIncludesValue(field: string, value: number): boolean {
+  return field.split(",").some((part) => cronFieldPartIncludesValue(part.trim(), value));
+}
+
+function cronFieldPartIncludesValue(part: string, value: number): boolean {
+  if (!part) {
+    return false;
+  }
+  const [rangePart, stepPart] = part.split("/", 2);
+  if (stepPart !== undefined) {
+    const step = Number(stepPart);
+    if (!Number.isInteger(step) || step <= 0) {
+      return false;
+    }
+  }
+  if (rangePart === "*") {
+    return true;
+  }
+  const rangeMatch = /^(\d+)-(\d+)$/.exec(rangePart);
+  if (rangeMatch) {
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start > end) {
+      return false;
+    }
+    return start <= value && value <= end;
+  }
+  return Number(rangePart) === value;
+}
+
 export function isRecurringTopOfHourCronExpr(expr: string) {
   const fields = parseCronFields(expr);
   if (fields.length === 5) {
     const [minuteField, hourField] = fields;
-    return minuteField === "0" && hourField.includes("*");
+    return cronFieldIncludesValue(minuteField, 0) && hourField.includes("*");
   }
   if (fields.length === 6) {
     const [secondField, minuteField, hourField] = fields;
-    return secondField === "0" && minuteField === "0" && hourField.includes("*");
+    return secondField === "0" && cronFieldIncludesValue(minuteField, 0) && hourField.includes("*");
   }
   return false;
 }

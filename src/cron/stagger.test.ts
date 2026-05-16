@@ -15,6 +15,16 @@ describe("cron stagger helpers", () => {
     expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
   });
 
+  it("detects top-of-hour schedules when the minute field includes zero", () => {
+    expect(isRecurringTopOfHourCronExpr("* * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("*/15 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0,30 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0-30 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0 */15 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("5,30 * * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("5-10 * * * *")).toBe(false);
+  });
+
   it("normalizes explicit stagger values", () => {
     expect(normalizeCronStaggerMs("30000")).toBe(30_000);
     expect(normalizeCronStaggerMs(42.8)).toBe(42);
