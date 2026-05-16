@@ -460,6 +460,7 @@ describe("session store writer queue", () => {
         updatedAt: "definitely-not-a-time",
         sessionFile: { path: "bad.jsonl" },
       },
+      "agent:main:partial": { groupActivation: "always" },
       "agent:main:object-id": { sessionId: { nested: "bad" }, updatedAt: Date.now() },
       "agent:main:unsafe-id": { sessionId: "../etc/passwd", updatedAt: Date.now() },
     } as unknown as Record<string, SessionEntry>);
@@ -469,6 +470,8 @@ describe("session store writer queue", () => {
     expect(store["agent:main:good"]?.sessionId).toBe("s-good");
     expect(store["agent:main:good"]?.updatedAt).toBe(0);
     expect(store["agent:main:good"]?.sessionFile).toBeUndefined();
+    expect(store["agent:main:partial"]?.groupActivation).toBe("always");
+    expect(store["agent:main:partial"]?.sessionId).toBeUndefined();
     expect(store["agent:main:object-id"]).toBeUndefined();
     expect(store["agent:main:unsafe-id"]).toBeUndefined();
   });
