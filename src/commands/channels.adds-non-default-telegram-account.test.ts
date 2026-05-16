@@ -14,7 +14,16 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 
 const runtime = createTestRuntime();
 let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
+const catalogMocks = vi.hoisted(() => ({
+  getChannelPluginCatalogEntry: vi.fn(() => undefined),
+  listChannelPluginCatalogEntries: vi.fn(() => []),
+}));
 const createClackPrompterMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../channels/plugins/catalog.js", () => ({
+  getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
+}));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: createClackPrompterMock,
@@ -325,6 +334,8 @@ describe("channels command", () => {
   });
 
   beforeEach(() => {
+    catalogMocks.getChannelPluginCatalogEntry.mockClear();
+    catalogMocks.listChannelPluginCatalogEntries.mockClear();
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     secretMocks.resolveCommandConfigWithSecrets.mockClear();
