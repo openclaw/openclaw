@@ -16,6 +16,7 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
+import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import {
   resolveThreadBindingIntroText,
@@ -516,6 +517,12 @@ export async function handleAcpSpawnAction(
 
   const acpManager = getAcpSessionManager();
   const sessionKey = `agent:${spawn.agentId}:acp:${randomUUID()}`;
+  const resolvedCwd = resolveSpawnedWorkspaceInheritance({
+    config: params.cfg,
+    targetAgentId: spawn.agentId,
+    requesterSessionKey: params.sessionKey,
+    explicitWorkspaceDir: spawn.cwd,
+  });
 
   let initializedBackend = "";
   let initializedMeta: SessionAcpMeta | undefined;
@@ -526,7 +533,7 @@ export async function handleAcpSpawnAction(
       sessionKey,
       agent: spawn.agentId,
       mode: spawn.mode,
-      cwd: spawn.cwd,
+      cwd: resolvedCwd,
     });
     initializedRuntime = {
       runtime: initialized.runtime,

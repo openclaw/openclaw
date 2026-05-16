@@ -1162,6 +1162,37 @@ describe("/acp command", () => {
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
+  it("inherits the target agent workspace when /acp spawn omits --cwd", async () => {
+    hoisted.ensureSessionMock.mockResolvedValueOnce({
+      sessionKey: "agent:codex:acp:s2",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:s2:runtime",
+      agentSessionId: "codex-inner-2",
+      backendSessionId: "acpx-2",
+    });
+
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "codex",
+            workspace: "/home/bob/codex-workspace",
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expectMockCallFields(hoisted.ensureSessionMock, {
+      agent: "codex",
+      mode: "persistent",
+      cwd: "/home/bob/codex-workspace",
+    });
+  });
+
   it("persists ACP spawn labels without a nested gateway self-call", async () => {
     const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
 
