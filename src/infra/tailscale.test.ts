@@ -104,6 +104,18 @@ describe("tailscale helpers", () => {
     vi.useRealTimers();
   });
 
+  it("does not retry status --json when the tailscale binary is missing", async () => {
+    vi.useFakeTimers();
+    const enoent = Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" });
+    const exec = vi.fn().mockRejectedValue(enoent);
+    const hostPromise = getTailnetHostname(exec, "tailscale");
+    const expectation = expect(hostPromise).rejects.toThrow("spawn tailscale ENOENT");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expectation;
+    expect(exec).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("allows the test binary override in explicit test environments", () => {
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/test-tailscale";
     process.env.NODE_ENV = "test";

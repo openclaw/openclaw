@@ -18,6 +18,21 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isNonRetryableTailscaleStatusError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  if (/command not found/i.test(message)) {
+    return true;
+  }
+  return /ENOENT/i.test(message) && /spawn/i.test(message);
+}
+
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
@@ -131,6 +146,9 @@ async function readTailscaleStatusJson(
       return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
     } catch (err) {
       lastError = err;
+      if (isNonRetryableTailscaleStatusError(err)) {
+        break;
+      }
     }
   }
   throw lastError ?? new Error("tailscale status --json failed");
