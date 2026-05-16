@@ -178,6 +178,7 @@ export type AgentRuntimeReplyPayload = {
   isError?: boolean;
   isReasoning?: boolean;
   isCompactionNotice?: boolean;
+  isFallbackNotice?: boolean;
   channelData?: Record<string, unknown>;
 };
 
@@ -314,7 +315,10 @@ export type AgentRuntimeToolPlan = {
 
 export type AgentRuntimeDeliveryPlan = {
   isSilentPayload(
-    payload: Pick<AgentRuntimeReplyPayload, "text" | "mediaUrl" | "mediaUrls">,
+    payload: Pick<
+      AgentRuntimeReplyPayload,
+      "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData"
+    >,
   ): boolean;
   resolveFollowupRoute(params: {
     payload: AgentRuntimeReplyPayload;

@@ -942,6 +942,14 @@
     box-shadow var(--duration-fast) ease;
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .field input,
+  .field textarea,
+  .field select {
+    font-size: 16px;
+  }
+}
+
 .field input:focus,
 .field textarea:focus,
 .field select:focus {
@@ -3396,7 +3404,8 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
-  max-height: 500px;
+  max-height: calc(100vh - 280px); /* top nav + filter bar + page padding + breathing room */
+  min-height: 200px;
   overflow: auto;
   container-type: inline-size;
 }
@@ -5861,6 +5870,14 @@ td.data-table-key-col {
   color: var(--text-strong);
 }
 
+.ov-card__value .warn {
+  color: var(--warning, #b7791f);
+}
+
+.ov-card__value .danger {
+  color: var(--danger);
+}
+
 .ov-card__hint {
   font-size: 12px;
   color: var(--muted);
@@ -5886,6 +5903,10 @@ td.data-table-key-col {
 
 .ov-cards .ov-card:nth-child(4) {
   animation-delay: 150ms;
+}
+
+.ov-cards .ov-card:nth-child(5) {
+  animation-delay: 200ms;
 }
 
 /* ── Attention items ── */

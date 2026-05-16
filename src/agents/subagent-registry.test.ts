@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => ({
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
   runSubagentAnnounceFlow: vi.fn(async () => true),
   getGlobalHookRunner: vi.fn(() => null),
   ensureRuntimePluginsLoaded: vi.fn(),
@@ -189,6 +190,7 @@ describe("subagent registry seam flow", () => {
       },
     });
     mocks.getGlobalHookRunner.mockReturnValue(null);
+    mocks.cleanupBrowserSessionsForLifecycleEnd.mockResolvedValue(undefined);
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
     });
@@ -206,7 +208,7 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
@@ -223,6 +225,76 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
+  });
+
+  it("lists active and pending-delivery child sessions for maintenance preservation", () => {
+    const now = Date.now();
+    mod.addSubagentRunForTests({
+      runId: "run-active",
+      childSessionKey: "agent:main:subagent:active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "active task",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      createdAt: now,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-pending",
+      childSessionKey: "agent:main:subagent:pending",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "pending delivery task",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      createdAt: now - 2,
+      endedAt: now - 1,
+      pendingFinalDelivery: true,
+      frozenResultText: "child output",
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-complete",
+      childSessionKey: "agent:main:subagent:complete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "already delivered task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      createdAt: now - 4,
+      endedAt: now - 3,
+      completionAnnouncedAt: now - 2,
+      cleanupCompletedAt: now - 1,
+    });
+
+    expect(mod.listSessionMaintenanceProtectedSubagentSessionKeys().toSorted()).toEqual([
+      "agent:main:subagent:active",
+      "agent:main:subagent:pending",
+    ]);
+  });
+
+  it("uses the disk-aware run snapshot for maintenance preservation", () => {
+    const now = Date.now();
+    mocks.getSubagentRunsSnapshotForRead.mockReturnValueOnce(
+      new Map([
+        [
+          "run-restored",
+          {
+            runId: "run-restored",
+            childSessionKey: "agent:main:subagent:restored",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "restored pending task",
+            cleanup: "delete",
+            expectsCompletionMessage: true,
+            createdAt: now,
+          },
+        ],
+      ]),
+    );
+
+    expect(mod.listSessionMaintenanceProtectedSubagentSessionKeys()).toEqual([
+      "agent:main:subagent:restored",
+    ]);
   });
 
   it("schedules orphan recovery instead of terminally failing on recoverable wait transport errors", async () => {
@@ -486,6 +558,64 @@ describe("subagent registry seam flow", () => {
     );
 
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
+  });
+
+  it("continues completion announce cleanup when lifecycle cleanup fails", async () => {
+    mocks.cleanupBrowserSessionsForLifecycleEnd.mockRejectedValueOnce(
+      new Error("browser cleanup unavailable"),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-cleanup-warning",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish despite cleanup warning",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "completion announce"),
+      {
+        childSessionKey: "agent:main:subagent:child",
+        childRunId: "run-cleanup-warning",
+        task: "finish despite cleanup warning",
+      },
+      "completion announce params",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-cleanup-warning");
+    expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("retries completion hooks before resuming ended cleanup", async () => {
+    mocks.ensureRuntimePluginsLoaded.mockRejectedValueOnce(new Error("runtime unavailable"));
+
+    mod.registerSubagentRun({
+      runId: "run-hook-retry",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish after hook retry",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(2);
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-hook-retry");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
   it("suppresses stale timeout announces when the same child run later finishes successfully", async () => {

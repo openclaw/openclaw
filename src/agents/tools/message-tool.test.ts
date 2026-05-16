@@ -111,7 +111,10 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   senderIsOwner?: boolean;
   sessionKey?: string;
+  sourceReplyDeliveryMode?: string;
   toolContext?: {
+    currentChannelId?: string;
+    currentChannelProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
   };
@@ -380,10 +383,10 @@ describe("message tool secret scoping", () => {
     const defaultTool = createMessageTool();
 
     expect(scopedTool.description).toContain(
-      'visible replies to the current source conversation must use action="send"',
+      'use action="send" with message for visible replies to the current source conversation',
     );
     expect(scopedTool.description).toContain("target defaults to the current source conversation");
-    expect(scopedTool.description).toContain("Normal final answers are private");
+    expect(scopedTool.description).toContain("Normal final answers stay private");
     expect(explicitTargetTool.description).toContain("Include target when sending");
     expect(explicitTargetTool.description).not.toContain(
       "target defaults to the current source conversation",
@@ -400,8 +403,24 @@ describe("message tool secret scoping", () => {
     }).find((candidate) => candidate.name === "message");
 
     expect(tool?.description).toContain(
-      'visible replies to the current source conversation must use action="send"',
+      'use action="send" with message for visible replies to the current source conversation',
     );
+  });
+
+  it("passes source reply delivery mode to the outbound runner", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
   it("scopes command-time secret resolution to the selected channel/account", async () => {

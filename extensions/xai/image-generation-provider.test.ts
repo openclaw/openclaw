@@ -93,7 +93,7 @@ describe("xai image generation provider", () => {
     expect(provider.id).toBe("xai");
     expect(provider.label).toBe("xAI");
     expect(provider.defaultModel).toBe("grok-imagine-image");
-    expect(provider.models).toEqual(["grok-imagine-image", "grok-imagine-image-pro"]);
+    expect(provider.models).toEqual(["grok-imagine-image", "grok-imagine-image-quality"]);
     expect(provider.capabilities.generate.maxCount).toBe(4);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.geometry?.aspectRatios).toEqual([
@@ -189,7 +189,7 @@ describe("xai image generation provider", () => {
     const buffer = Buffer.from("fakeimage");
     await provider.generateImage({
       provider: "xai",
-      model: "grok-imagine-image-pro",
+      model: "grok-imagine-image-quality",
       prompt: "Render this as a pencil sketch with detailed shading",
       inputImages: [
         {
@@ -202,7 +202,7 @@ describe("xai image generation provider", () => {
 
     const request = requirePostJsonCall();
     expect(request.url).toContain("/images/edits");
-    expect(request.body?.model).toBe("grok-imagine-image-pro");
+    expect(request.body?.model).toBe("grok-imagine-image-quality");
     expect(request.body?.prompt).toBe("Render this as a pencil sketch with detailed shading");
     const image = request.body?.image as { url?: string; type?: string } | undefined;
     expect(image?.url).toContain("data:image/png;base64,");

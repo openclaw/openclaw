@@ -41,6 +41,7 @@ export type CodexAppServerThreadBinding = {
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
   userMcpServersFingerprint?: string;
+  mcpServersFingerprint?: string;
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
@@ -53,6 +54,14 @@ export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
   engineId: string;
   policyFingerprint: string;
+  projection?: CodexAppServerContextEngineProjectionBinding;
+};
+
+export type CodexAppServerContextEngineProjectionBinding = {
+  schemaVersion: 1;
+  mode: "thread_bootstrap";
+  epoch: string;
+  fingerprint?: string;
 };
 
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
@@ -104,6 +113,8 @@ export async function readCodexAppServerBinding(
         typeof parsed.userMcpServersFingerprint === "string"
           ? parsed.userMcpServersFingerprint
           : undefined,
+      mcpServersFingerprint:
+        typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
       pluginAppsFingerprint:
         typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
       pluginAppsInputFingerprint:
@@ -149,6 +160,7 @@ export async function writeCodexAppServerBinding(
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
     userMcpServersFingerprint: binding.userMcpServersFingerprint,
+    mcpServersFingerprint: binding.mcpServersFingerprint,
     pluginAppsFingerprint: binding.pluginAppsFingerprint,
     pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
     pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -178,6 +190,30 @@ function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBi
     schemaVersion: 1,
     engineId: record.engineId,
     policyFingerprint: record.policyFingerprint,
+    projection: readContextEngineProjectionBinding(record.projection),
+  };
+}
+
+function readContextEngineProjectionBinding(
+  value: unknown,
+): CodexAppServerContextEngineProjectionBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    record.mode !== "thread_bootstrap" ||
+    typeof record.epoch !== "string" ||
+    !record.epoch.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    mode: "thread_bootstrap",
+    epoch: record.epoch,
+    fingerprint: typeof record.fingerprint === "string" ? record.fingerprint : undefined,
   };
 }
 

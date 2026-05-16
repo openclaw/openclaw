@@ -202,6 +202,27 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["codex"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects external web search and ACP runtime plugins from config-only usage", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -374,6 +395,38 @@ describe("configured plugin install release step", () => {
     expect(repairCall.env).toEqual({});
     expect(result).toEqual({
       changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+      completed: true,
+      touchedConfig: false,
+    });
+  });
+
+  it("repairs same-id externalized channel installs from channel config after prior update writes", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured channel plugin "whatsapp".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+      },
+      currentVersion: "2026.5.12",
+      touchedVersion: "2026.5.12",
+      env: {},
+    });
+
+    const repairCall = readOnlyMissingPluginInstallRepairCall();
+    expect(repairCall.pluginIds).toEqual([]);
+    expect(repairCall.channelIds).toEqual(["whatsapp"]);
+    expect(result).toEqual({
+      changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
       completed: true,
       touchedConfig: false,

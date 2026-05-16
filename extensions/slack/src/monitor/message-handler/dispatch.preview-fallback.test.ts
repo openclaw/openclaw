@@ -463,6 +463,25 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   resolveChannelProgressDraftMaxLines: (entry?: {
     streaming?: { progress?: { maxLines?: number } };
   }) => entry?.streaming?.progress?.maxLines ?? 8,
+  mergeChannelProgressDraftLine: <TLine extends string | { id?: string; text: string }>(
+    lines: TLine[],
+    line: TLine,
+    params: { maxLines: number },
+  ) => {
+    const normalized = typeof line === "string" ? line.trim() : line.text.trim();
+    const lineId = typeof line === "object" ? line.id : undefined;
+    if (lineId) {
+      const index = lines.findIndex((entry) => typeof entry === "object" && entry.id === lineId);
+      if (index >= 0) {
+        const next = [...lines];
+        next[index] = line;
+        return next.slice(-params.maxLines);
+      }
+    }
+    const previous = lines.at(-1);
+    const previousText = typeof previous === "string" ? previous.trim() : previous?.text.trim();
+    return previousText === normalized ? lines : [...lines, line].slice(-params.maxLines);
+  },
   resolveChannelProgressDraftRender: (entry?: {
     streaming?: { progress?: { render?: "text" | "rich" } };
   }) => entry?.streaming?.progress?.render ?? "text",
@@ -506,6 +525,9 @@ vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   clearHistoryEntriesIfEnabled: () => {},
+  createChannelHistoryWindow: () => ({
+    clear: () => {},
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
@@ -924,7 +946,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("updates non-main DM last-route metadata on the prepared thread session", async () => {
+  it("updates non-main DM last-route metadata on the prepared direct session", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         cfg: { session: { dmScope: "per-channel-peer" } },
@@ -943,14 +965,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         ctxPayload: {
           MessageThreadId: "500.000",
-          SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+          SessionKey: "agent:main:slack:direct:u1",
         },
       }),
     );
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
       storePath: "/tmp/openclaw-store.json",
-      sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      sessionKey: "agent:main:slack:direct:u1",
       deliveryContext: {
         channel: "slack",
         to: "user:U1",
@@ -959,7 +981,49 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
       ctx: {
         MessageThreadId: "500.000",
-        SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+        SessionKey: "agent:main:slack:direct:u1",
+      },
+    });
+  });
+
+  it("uses DM transport thread metadata for last-route updates", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "701.000",
+          thread_ts: "701.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        ctxPayload: {
+          MessageThreadId: undefined,
+          ReplyToId: "701.000",
+          TransportThreadId: "701.000",
+          SessionKey: "agent:main:main",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "701.000",
+      },
+      ctx: {
+        ReplyToId: "701.000",
+        TransportThreadId: "701.000",
+        SessionKey: "agent:main:main",
       },
     });
   });
@@ -982,7 +1046,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         ctxPayload: {
           MessageThreadId: "600.000",
-          SessionKey: "agent:main:main:thread:600.000",
+          SessionKey: "agent:main:main",
         },
       }),
     );
@@ -998,7 +1062,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
       ctx: {
         MessageThreadId: "600.000",
-        SessionKey: "agent:main:main:thread:600.000",
+        SessionKey: "agent:main:main",
       },
     });
   });
@@ -1025,6 +1089,42 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       text: "✅",
     });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a finalized Slack draft when a later tool warning is delivered", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "answer" } },
+      { kind: "final", payload: { text: "⚠️ Apply Patch failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "answer",
+    });
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([{ text: "⚠️ Apply Patch failed", isError: true }]);
+    expect(draftStream.seal).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 

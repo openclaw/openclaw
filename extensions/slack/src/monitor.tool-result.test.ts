@@ -757,9 +757,9 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(sendMock).not.toHaveBeenCalled();
     expectReactionFlow({
-      startsWith: ["eyes", "scream"],
-      includes: "scream",
-      endsWith: "scream",
+      startsWith: ["eyes", "x"],
+      includes: "x",
+      endsWith: "x",
     });
   });
 
@@ -820,7 +820,7 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = getFirstReplySessionCtx();
-    expect(ctx.SessionKey).toBe("agent:main:main:thread:123");
+    expect(ctx.SessionKey).toBe("agent:main:main");
     expect(ctx.ParentSessionKey).toBeUndefined();
   });
 

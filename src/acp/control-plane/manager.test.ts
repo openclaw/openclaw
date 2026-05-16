@@ -945,6 +945,59 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("re-ensures cached runtime handles when the runtime config changes", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const allowlistCfg = {
+      ...baseCfg,
+      tools: {
+        exec: {
+          security: "allowlist",
+          safeBins: ["git"],
+        },
+      },
+    } satisfies OpenClawConfig;
+    const denyCfg = {
+      ...baseCfg,
+      tools: {
+        exec: {
+          security: "deny",
+          safeBins: ["node"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: allowlistCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+    await manager.runTurn({
+      cfg: denyCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "second",
+      mode: "prompt",
+      requestId: "r2",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      reason: "runtime-handle-replaced",
+    });
+  });
+
   it("re-ensures cached runtime handles when the backend reports the session is dead", async () => {
     const runtimeState = createRuntime();
     runtimeState.getStatus
@@ -1566,10 +1619,12 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
-  function setupFailoverBackends(params: {
-    initialBackend?: "primary-backend" | "fallback-backend";
-    primaryUnavailableError?: Error;
-  } = {}) {
+  function setupFailoverBackends(
+    params: {
+      initialBackend?: "primary-backend" | "fallback-backend";
+      primaryUnavailableError?: Error;
+    } = {},
+  ) {
     const primaryRuntime = createRuntime();
     const fallbackRuntime = createRuntime();
     const sessionKey = "agent:codex:acp:session-1";
@@ -3306,6 +3361,132 @@ describe("AcpSessionManager", () => {
       key: "timeout",
       value: "120",
     });
+  });
+
+  it("continues turns when adapters reject optional timeout config", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "timeout") {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          'Agent rejected session/set_config_option for "timeout": ACP -32602 Invalid params',
+        );
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:opencode:acp:session-1",
+      storeSessionKey: "agent:opencode:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "opencode" }),
+        runtimeOptions: {
+          timeoutSeconds: 120,
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:opencode:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-opencode",
+    });
+
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "timeout",
+      value: "120",
+    });
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails turns when optional timeout config writes hit runtime failures", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "timeout") {
+        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "ACP backend unavailable");
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:opencode:acp:session-1",
+      storeSessionKey: "agent:opencode:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "opencode" }),
+        runtimeOptions: {
+          timeoutSeconds: 120,
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:opencode:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-opencode",
+      }),
+      {
+        code: "ACP_BACKEND_UNAVAILABLE",
+      },
+    );
+
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "timeout",
+      value: "120",
+    });
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("fails turns when adapters reject required runtime config", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "model") {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          'Agent rejected session/set_config_option for "model": ACP -32602 Invalid params',
+        );
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:opencode:acp:session-1",
+      storeSessionKey: "agent:opencode:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "opencode" }),
+        runtimeOptions: {
+          model: "opencode/gpt-5.4",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:opencode:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-opencode",
+      }),
+      {
+        code: "ACP_TURN_FAILED",
+      },
+    );
+
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
   it("maps persisted thinking runtime options to advertised effort config keys before running turns", async () => {

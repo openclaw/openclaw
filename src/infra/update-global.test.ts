@@ -141,6 +141,9 @@ describe("update global helpers", () => {
   it("defaults corepack download prompts off for global install env", async () => {
     const defaultEnv = await createGlobalInstallEnv({});
     expect(defaultEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
+    expect(defaultEnv?.NPM_CONFIG_BEFORE).toBe("");
+    expect(defaultEnv?.npm_config_before).toBe("");
+    expect(defaultEnv?.["npm_config_min-release-age"]).toBe("0");
 
     const explicitEnv = await createGlobalInstallEnv({
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
@@ -327,6 +330,7 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
+          "--min-release-age=0",
         ]);
         expect(globalInstallFallbackArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
           brewNpm,
@@ -337,6 +341,7 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
+          "--min-release-age=0",
         ]);
       });
     } finally {
@@ -364,6 +369,7 @@ describe("update global helpers", () => {
         "--no-fund",
         "--no-audit",
         "--loglevel=error",
+        "--min-release-age=0",
       ]);
     });
   });
@@ -398,6 +404,7 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
+          "--min-release-age=0",
         ]);
       });
     } finally {
@@ -563,6 +570,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
       "pnpm",
@@ -602,6 +610,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
     expect(
@@ -644,6 +653,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     expect(globalInstallFallbackArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
       "npm",
@@ -656,6 +666,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
   });
 

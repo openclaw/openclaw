@@ -17,6 +17,7 @@ import {
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
@@ -252,6 +253,25 @@ describe("scripts/test-extension.mjs", () => {
     );
   });
 
+  it("lists available extension ids from git without reading extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      changed: string[];
+      ids: number;
+    }>(`
+      const { detectChangedExtensionIds, listAvailableExtensionIds } =
+        await import("./scripts/lib/changed-extensions.mjs");
+      const ids = listAvailableExtensionIds();
+      const changed = detectChangedExtensionIds([
+        "extensions/slack/src/channel.ts",
+        "src/line/message.test.ts",
+        "extensions/not-real/package.json",
+      ]);
+      return { changed, ids: ids.length };
+    `);
+    expect(payload.changed).toEqual(["line", "slack"]);
+    expect(payload.ids).toBeGreaterThan(0);
+  });
+
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
       base: "refs/heads/openclaw-test-missing-base",
@@ -422,6 +442,31 @@ describe("scripts/test-extension.mjs", () => {
         roots: [bundledPluginRoot("zalo"), bundledPluginRoot("zalouser")],
       },
     ]);
+  });
+
+  it("counts tracked extension tests without walking extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      batchTests: number;
+      shards: number;
+      shardTests: number;
+    }>(
+      `
+        const { createExtensionTestShards, resolveExtensionBatchPlan } =
+          await import("./scripts/lib/extension-test-plan.mjs");
+        const extensionIds = ["matrix", "openai", "slack", "telegram"];
+        const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
+        const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
+        return {
+          batchTests: batch.testFileCount,
+          shards: shards.length,
+          shardTests: shards.reduce((total, shard) => total + shard.testFileCount, 0),
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+    expect(payload.batchTests).toBeGreaterThan(0);
+    expect(payload.shards).toBe(2);
+    expect(payload.shardTests).toBe(payload.batchTests);
   });
 
   it("balances extension test shards by estimated CI cost", () => {

@@ -108,6 +108,10 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Gateway health",
+    "target": "Gateway 健康"
+  },
+  {
     "source": "Gateway RPC reference",
     "target": "Gateway RPC 参考"
   },
@@ -130,6 +134,10 @@
   {
     "source": "Agent Runtimes",
     "target": "Agent Runtimes"
+  },
+  {
+    "source": "Code mode",
+    "target": "代码模式"
   },
   {
     "source": "Codex harness",
@@ -954,6 +962,10 @@
   {
     "source": "Tool Search",
     "target": "工具搜索"
+  },
+  {
+    "source": "Code execution",
+    "target": "代码执行"
   },
   {
     "source": "Tools and plugins",

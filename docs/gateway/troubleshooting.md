@@ -27,6 +27,30 @@ Expected healthy signals:
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
 
+## After an update
+
+Use this when an update finishes but the Gateway is down, channels are empty, or
+model calls start failing with 401s.
+
+```bash
+openclaw status --all
+openclaw update status --json
+openclaw gateway status --deep
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+Look for:
+
+- `Update restart` in `openclaw status` / `openclaw status --all`. Pending or
+  failed handoffs include the next command to run.
+- `plugin load failed: dependency tree corrupted; run openclaw doctor --fix`
+  under Channels. That means the channel config still exists, but plugin
+  registration failed before the channel could load.
+- provider 401s after re-auth. `openclaw doctor --fix` checks for stale
+  per-agent OAuth auth shadows and removes the old copies so all agents resolve
+  the current shared profile.
+
 ## Split brain installs and newer config guard
 
 Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -351,6 +375,42 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
+## Gateway exits during high memory use
+
+Use this when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.
+
+```bash
+openclaw gateway status --deep
+openclaw logs --follow
+openclaw gateway stability --bundle latest
+openclaw gateway diagnostics export
+```
+
+Look for:
+
+- `Reason: diagnostic.memory.pressure.critical` in the latest stability bundle.
+- `Memory pressure:` with `critical/rss_threshold`, `critical/heap_threshold`, or `critical/rss_growth`.
+- `V8 heap:` values near the heap limit.
+- `Largest session files:` entries such as `agents/<agent>/sessions/<session>.jsonl` or `sessions/<session>.jsonl`.
+- Linux cgroup memory counters when the gateway runs inside a container or memory-limited service.
+
+Common signatures:
+
+- `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
+- `memory pressure: level=critical ... memoryPressureSnapshot=disabled` appears in gateway logs → OpenClaw detected critical memory pressure, but the pre-OOM stability snapshot is off.
+- `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
+- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure, reduce concurrent work, or raise the Node heap limit only after confirming the workload is expected.
+- `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
+- Critical memory pressure appears in logs but no bundle exists → this is the default. Set `diagnostics.memoryPressureSnapshot: true` to capture the pre-OOM stability bundle on future critical memory pressure events.
+
+The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
+
+Related:
+
+- [Gateway health](/gateway/health)
+- [Diagnostics export](/gateway/diagnostics)
+- [Sessions](/cli/sessions)
+
 ## Gateway rejected invalid config
 
 Use this when Gateway startup fails with `Invalid config` or hot reload logs say
@@ -370,6 +430,7 @@ Look for:
 - `Config write rejected: ...`
 - A timestamped `openclaw.json.rejected.*` file beside the active config
 - A timestamped `openclaw.json.clobbered.*` file if `doctor --fix` repaired a broken direct edit
+- OpenClaw keeps the latest 32 `.clobbered.*` files for each config path and rotates older ones
 
 <AccordionGroup>
   <Accordion title="What happened">
@@ -378,6 +439,7 @@ Look for:
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
     - `openclaw doctor --fix` owns repair. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
+    - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
   <Accordion title="Inspect and repair">

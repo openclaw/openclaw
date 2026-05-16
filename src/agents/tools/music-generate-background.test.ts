@@ -136,7 +136,29 @@ describe("music generate background helpers", () => {
     });
 
     expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-    expectReplyInstructionContains("Do not put MEDIA: lines only in your final answer");
+    expectReplyInstructionContains("the media must be sent as message-tool attachments");
+  });
+
+  it("routes failure completion notices through the message tool", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+    const completion = createMediaCompletionFixture({
+      runId: "tool:music_generate:abc",
+      taskLabel: "night-drive synthwave",
+      result: "provider failed",
+    });
+
+    await wakeMusicGenerationTaskCompletion({
+      ...completion,
+      status: "error",
+      statusLabel: "failed",
+    });
+
+    expectReplyInstructionContains("failure summary");
+    expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
+    expectReplyInstructionContains('message tool with action="send"');
   });
 
   it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
@@ -162,7 +184,7 @@ describe("music generate background helpers", () => {
       });
 
       expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-      expectReplyInstructionContains("Do not put MEDIA: lines only in your final answer");
+      expectReplyInstructionContains("the media must be sent as message-tool attachments");
     },
   );
 

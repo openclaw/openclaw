@@ -41,6 +41,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerContextEngineBinding,
+  type CodexAppServerContextEngineProjectionBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
@@ -51,6 +52,12 @@ export type CodexAppServerThreadLifecycle = {
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
+};
+
+export type CodexContextEngineThreadBootstrapProjection = {
+  mode: "thread_bootstrap";
+  epoch: string;
+  fingerprint?: string;
 };
 
 export type CodexPluginThreadConfigProvider = {
@@ -65,19 +72,35 @@ export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": true,
 };
 
+const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
+  project_doc_max_bytes: 0,
+};
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
+  agentId?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  mcpServersFingerprint?: string;
+  mcpServersFingerprintEvaluated?: boolean;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
+  contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const contextEngineBinding = buildContextEngineBinding(params.params);
-  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(params.params.config);
+  const contextEngineBinding = buildContextEngineBinding(
+    params.params,
+    params.contextEngineProjection,
+  );
+  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(
+    params.params.config,
+    {
+      agentId: params.agentId ?? params.params.agentId,
+    },
+  );
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
@@ -98,6 +121,12 @@ export async function startOrResumeThread(params: {
           threadId: binding.threadId,
           engineId: contextEngineBinding?.engineId,
           previousEngineId: binding.contextEngine?.engineId,
+          epoch: contextEngineBinding?.projection?.epoch,
+          previousEpoch: binding.contextEngine?.projection?.epoch,
+          fingerprint: contextEngineBinding?.projection?.fingerprint,
+          previousFingerprint: binding.contextEngine?.projection?.fingerprint,
+          policyFingerprint: contextEngineBinding?.policyFingerprint,
+          previousPolicyFingerprint: binding.contextEngine?.policyFingerprint,
         },
       );
       await clearCodexAppServerBinding(params.params.sessionFile);
@@ -107,6 +136,17 @@ export async function startOrResumeThread(params: {
   }
   if (binding?.threadId && binding.userMcpServersFingerprint !== userMcpServersFingerprint) {
     embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
+      threadId: binding.threadId,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    params.mcpServersFingerprintEvaluated === true &&
+    binding.mcpServersFingerprint !== params.mcpServersFingerprint
+  ) {
+    embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
     await clearCodexAppServerBinding(params.params.sessionFile);
@@ -146,6 +186,17 @@ export async function startOrResumeThread(params: {
       binding = undefined;
     }
   }
+  if (
+    binding?.threadId &&
+    params.mcpServersFingerprintEvaluated === true &&
+    binding.mcpServersFingerprint !== params.mcpServersFingerprint
+  ) {
+    embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
+      threadId: binding.threadId,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
@@ -179,6 +230,7 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const resumeConfig = mergeCodexThreadConfigs(params.config, userMcpServersConfigPatch);
         const response = assertCodexThreadResumeResponse(
           await params.client.request(
             "thread/resume",
@@ -187,7 +239,7 @@ export async function startOrResumeThread(params: {
               authProfileId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
-              config: params.config,
+              config: resumeConfig,
             }),
           ),
         );
@@ -199,6 +251,10 @@ export async function startOrResumeThread(params: {
           agentDir: params.params.agentDir,
           config: params.params.config,
         });
+        const nextMcpServersFingerprint =
+          params.mcpServersFingerprintEvaluated === true
+            ? params.mcpServersFingerprint
+            : binding.mcpServersFingerprint;
         await writeCodexAppServerBinding(
           params.params.sessionFile,
           {
@@ -209,6 +265,7 @@ export async function startOrResumeThread(params: {
             modelProvider: response.modelProvider ?? fallbackModelProvider,
             dynamicToolsFingerprint,
             userMcpServersFingerprint,
+            mcpServersFingerprint: nextMcpServersFingerprint,
             pluginAppsFingerprint: binding.pluginAppsFingerprint,
             pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -221,6 +278,17 @@ export async function startOrResumeThread(params: {
             config: params.params.config,
           },
         );
+        if (contextEngineBinding) {
+          embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+            sessionId: params.params.sessionId,
+            sessionKey: params.params.sessionKey,
+            threadId: response.thread.id,
+            engineId: contextEngineBinding.engineId,
+            epoch: contextEngineBinding.projection?.epoch,
+            fingerprint: contextEngineBinding.projection?.fingerprint,
+            action: "resumed",
+          });
+        }
         return {
           ...binding,
           threadId: response.thread.id,
@@ -230,6 +298,7 @@ export async function startOrResumeThread(params: {
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
+          mcpServersFingerprint: nextMcpServersFingerprint,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -276,6 +345,8 @@ export async function startOrResumeThread(params: {
     config: params.params.config,
   });
   const createdAt = new Date().toISOString();
+  const nextMcpServersFingerprint =
+    params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   if (!preserveExistingBinding) {
     await writeCodexAppServerBinding(
       params.params.sessionFile,
@@ -287,6 +358,7 @@ export async function startOrResumeThread(params: {
         modelProvider: response.modelProvider ?? modelProvider,
         dynamicToolsFingerprint,
         userMcpServersFingerprint,
+        mcpServersFingerprint: nextMcpServersFingerprint,
         pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
         pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
         pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -299,6 +371,17 @@ export async function startOrResumeThread(params: {
         config: params.params.config,
       },
     );
+    if (contextEngineBinding) {
+      embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+        sessionId: params.params.sessionId,
+        sessionKey: params.params.sessionKey,
+        threadId: response.thread.id,
+        engineId: contextEngineBinding.engineId,
+        epoch: contextEngineBinding.projection?.epoch,
+        fingerprint: contextEngineBinding.projection?.fingerprint,
+        action: rotatedContextEngineBinding ? "rotated" : "started",
+      });
+    }
   }
   return {
     schemaVersion: 1,
@@ -310,6 +393,7 @@ export async function startOrResumeThread(params: {
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     userMcpServersFingerprint,
+    mcpServersFingerprint: nextMcpServersFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -323,8 +407,9 @@ export async function startOrResumeThread(params: {
   };
 }
 
-function buildContextEngineBinding(
+export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,
+  projection?: CodexContextEngineThreadBootstrapProjection,
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -351,17 +436,45 @@ function buildContextEngineBinding(
         }),
       }),
     }),
+    projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,
   };
 }
 
-function isContextEngineBindingCompatible(
+function buildContextEngineProjectionBinding(
+  projection: CodexContextEngineThreadBootstrapProjection,
+): CodexAppServerContextEngineProjectionBinding {
+  return {
+    schemaVersion: 1,
+    mode: "thread_bootstrap",
+    epoch: projection.epoch,
+    fingerprint: projection.fingerprint,
+  };
+}
+
+export function isContextEngineBindingCompatible(
   previous: CodexAppServerContextEngineBinding | undefined,
   next: CodexAppServerContextEngineBinding,
 ): boolean {
   return (
     previous?.schemaVersion === next.schemaVersion &&
     previous.engineId === next.engineId &&
-    previous.policyFingerprint === next.policyFingerprint
+    previous.policyFingerprint === next.policyFingerprint &&
+    areContextEngineProjectionBindingsCompatible(previous.projection, next.projection)
+  );
+}
+
+function areContextEngineProjectionBindingsCompatible(
+  previous: CodexAppServerContextEngineProjectionBinding | undefined,
+  next: CodexAppServerContextEngineProjectionBinding | undefined,
+): boolean {
+  if (!next) {
+    return previous === undefined;
+  }
+  return (
+    previous?.schemaVersion === next.schemaVersion &&
+    previous.mode === next.mode &&
+    previous.epoch === next.epoch &&
+    previous.fingerprint === next.fingerprint
   );
 }
 
@@ -437,7 +550,7 @@ export function buildThreadStartParams(
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    config: buildCodexRuntimeThreadConfig(options.config),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
@@ -470,16 +583,31 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    config: buildCodexRuntimeThreadConfig(options.config),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
 }
 
 export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
+  const runtimeConfig = mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
+    ...CODEX_CODE_MODE_THREAD_CONFIG,
+  };
+  return runtimeConfig;
+}
+
+function buildCodexRuntimeThreadConfigForRun(
+  params: EmbeddedRunAttemptParams,
+  config: JsonObject | undefined,
+): JsonObject {
+  const runtimeConfig = buildCodexRuntimeThreadConfig(config);
+  if (params.bootstrapContextMode !== "lightweight") {
+    return runtimeConfig;
+  }
   return (
-    mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
-      ...CODEX_CODE_MODE_THREAD_CONFIG,
+    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
+      ...runtimeConfig,
+      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
     }
   );
 }
@@ -536,7 +664,7 @@ function buildCronCollaborationInstructions(): string {
   return [
     "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
     "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Do not read AGENTS.md, SOUL.md, USER.md, PROJECTS.md, MEMORY.md, day logs, entity summaries, or other workspace memory/bootstrap files unless the cron payload explicitly asks you to inspect them or the requested command fails and the file is needed to diagnose that failure.",
+    "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
 }
