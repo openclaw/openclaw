@@ -134,6 +134,8 @@ export function inferUniqueProviderFromConfiguredModels(
           manifestPlugins: params.manifestPlugins,
         });
         if (
+          modelId === model ||
+          normalizeLowercaseStringOrEmpty(modelId) === normalized ||
           normalizedModelId === model ||
           normalizeLowercaseStringOrEmpty(normalizedModelId) === normalized
         ) {
@@ -604,7 +606,9 @@ export function resolveConfiguredModelRef(
         manifestPlugins: params.manifestPlugins,
       });
       if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
+        return normalizeModelRef(inferredProvider, trimmed, {
+          manifestPlugins: params.manifestPlugins,
+        });
       }
 
       const safeTrimmed = sanitizeModelWarningValue(trimmed);

@@ -20,7 +20,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   isSubagentSessionKey,
@@ -402,11 +401,6 @@ async function prepareAgentCommandExecution(
     config: cfg,
     workspaceDir,
     env: process.env,
-  });
-  setCurrentPluginMetadataSnapshot(manifestMetadataSnapshot, {
-    config: cfg,
-    env: process.env,
-    workspaceDir,
   });
   const manifestPlugins = manifestMetadataSnapshot.plugins;
   const configuredModel = resolveConfiguredModelRef({
