@@ -1788,6 +1788,44 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
     }
 }
 
+public struct SessionOperationEvent: Codable, Sendable {
+    public let operationid: String
+    public let operation: String
+    public let phase: AnyCodable
+    public let sessionkey: String
+    public let ts: Int
+    public let completed: Bool?
+    public let reason: String?
+
+    public init(
+        operationid: String,
+        operation: String,
+        phase: AnyCodable,
+        sessionkey: String,
+        ts: Int,
+        completed: Bool?,
+        reason: String?)
+    {
+        self.operationid = operationid
+        self.operation = operation
+        self.phase = phase
+        self.sessionkey = sessionkey
+        self.ts = ts
+        self.completed = completed
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationid = "operationId"
+        case operation
+        case phase
+        case sessionkey = "sessionKey"
+        case ts
+        case completed
+        case reason
+    }
+}
+
 public struct SessionsCompactionListParams: Codable, Sendable {
     public let key: String
 

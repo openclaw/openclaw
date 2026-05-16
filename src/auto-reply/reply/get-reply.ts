@@ -6,7 +6,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { modelKey, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -253,7 +253,28 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  let hasAppliedImageModelOverride = false;
+  let imageModelFallbacksOverride: string[] | undefined;
+  const modelOverrideRaw = normalizeOptionalString(opts?.modelOverride);
+  if (modelOverrideRaw) {
+    const modelOverrideRef = resolveModelRefFromString({
+      raw: modelOverrideRaw,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (modelOverrideRef) {
+      provider = modelOverrideRef.ref.provider;
+      model = modelOverrideRef.ref.model;
+      hasAppliedImageModelOverride = true;
+      imageModelFallbacksOverride = opts?.modelOverrideFallbacks?.filter(
+        (fallback): fallback is string => normalizeOptionalString(fallback) !== undefined,
+      );
+    } else {
+      defaultRuntime.log?.(
+        `[image-model-switch] Failed to resolve image model override ${modelOverrideRaw}; using default model ${modelKey(defaultProvider, defaultModel)}`,
+      );
+    }
+  } else if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
@@ -530,6 +551,7 @@ export async function getReplyFromConfig(
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
+    !hasAppliedImageModelOverride &&
     !staleHeartbeatAutoFallbackOverride
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
@@ -540,11 +562,32 @@ export async function getReplyFromConfig(
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasEffectiveSessionModelOverride &&
+    !hasAppliedImageModelOverride &&
     resolvedChannelModelOverride
   ) {
     provider = resolvedChannelModelOverride.ref.provider;
     model = resolvedChannelModelOverride.ref.model;
   }
+  const imageModelOverrideBaseProvider = hasAppliedImageModelOverride
+    ? (() => {
+        if (
+          storedModelOverride?.model &&
+          !hasResolvedHeartbeatModelOverride &&
+          !staleHeartbeatAutoFallbackOverride
+        ) {
+          return storedModelOverride.provider ?? defaultProvider;
+        }
+        if (!hasEffectiveSessionModelOverride && resolvedChannelModelOverride) {
+          return resolvedChannelModelOverride.ref.provider;
+        }
+        const runtimeProvider = normalizeOptionalString(sessionEntry.modelProvider);
+        const runtimeModel = normalizeOptionalString(sessionEntry.model);
+        if (runtimeProvider && runtimeModel) {
+          return runtimeProvider;
+        }
+        return defaultProvider;
+      })()
+    : undefined;
 
   if (
     shouldUseReplyFastDirectiveExecution({
@@ -619,6 +662,9 @@ export async function getReplyFromConfig(
         storePath,
         workspaceDir,
         abortedLastRun,
+        hasAppliedImageModelOverride,
+        imageModelOverrideBaseProvider,
+        imageModelFallbacksOverride,
       }),
     );
   }
@@ -649,6 +695,7 @@ export async function getReplyFromConfig(
       aliasIndex,
       provider,
       model,
+      hasOneTurnModelOverride: hasAppliedImageModelOverride,
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: resolvedOpts,
@@ -859,6 +906,9 @@ export async function getReplyFromConfig(
       storePath,
       workspaceDir,
       abortedLastRun,
+      hasAppliedImageModelOverride,
+      imageModelOverrideBaseProvider,
+      imageModelFallbacksOverride,
     }),
   );
 }

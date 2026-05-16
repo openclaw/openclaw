@@ -96,6 +96,8 @@ import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-deli
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
+  isPotentialTruncatedFinal,
+  selectLongerFinalText,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
@@ -1260,6 +1262,13 @@ export const dispatchTelegramMessage = async ({
       answerLane.finalized = true;
       return delivered ? { kind: "sent" } : { kind: "skipped" };
     };
+    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
+      isPotentialTruncatedFinal(text)
+        ? (selectLongerFinalText({
+            finalText: text,
+            candidateTexts: [await resolveCurrentTurnTranscriptFinalText()],
+          }) ?? text)
+        : text;
 
     if (isDmTopic) {
       try {
@@ -1383,13 +1392,14 @@ export const dispatchTelegramMessage = async ({
                       text: string,
                       buttons?: TelegramInlineButtons,
                     ) => {
+                      const finalText = await resolveTranscriptBackedFinalText(text);
                       if (streamMode === "progress") {
-                        return deliverProgressModeFinalAnswer(answerPayload, text);
+                        return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
                       await rotateAnswerLaneAfterToolProgress();
                       return deliverLaneText({
                         laneName: "answer",
-                        text,
+                        text: finalText,
                         payload: answerPayload,
                         infoKind: "final",
                         buttons,

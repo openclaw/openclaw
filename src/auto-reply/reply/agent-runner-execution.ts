@@ -16,7 +16,10 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  listLegacyRuntimeModelProviderAliases,
+  resolveCliRuntimeExecutionProvider,
+} from "../../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
@@ -1099,6 +1102,28 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
+function resolveSessionRuntimeOverrideForProvider(params: {
+  provider: string;
+  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
+}): string | undefined {
+  const provider = normalizeLowercaseStringOrEmpty(params.provider);
+  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
+  if (!runtime || runtime === "auto" || runtime === "default") {
+    return undefined;
+  }
+  if (runtime === "pi") {
+    return "pi";
+  }
+  if (provider === "openai" && runtime === "codex") {
+    return "codex";
+  }
+  return listLegacyRuntimeModelProviderAliases().find(
+    (alias) =>
+      normalizeLowercaseStringOrEmpty(alias.provider) === provider &&
+      normalizeLowercaseStringOrEmpty(alias.runtime) === runtime,
+  )?.runtime;
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1277,6 +1302,9 @@ export async function runAgentTurnWithFallback(params: {
     provider: string,
     model: string,
   ): Promise<(() => Promise<void>) | undefined> => {
+    if (params.followupRun.run.hasOneTurnModelOverride === true) {
+      return undefined;
+    }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
@@ -1501,13 +1529,23 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
+          const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+            provider,
+            entry: params.getActiveSessionEntry(),
+          });
           const cliExecutionProvider =
-            resolveCliRuntimeExecutionProvider({
-              provider,
-              cfg: runtimeConfig,
-              agentId: params.followupRun.run.agentId,
-              modelId: model,
-            }) ?? provider;
+            sessionRuntimeOverride === "pi"
+              ? provider
+              : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+                  ? sessionRuntimeOverride
+                  : undefined) ??
+                resolveCliRuntimeExecutionProvider({
+                  provider,
+                  cfg: runtimeConfig,
+                  agentId: params.followupRun.run.agentId,
+                  modelId: model,
+                }) ??
+                provider);
 
           if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
             const startedAt = Date.now();
@@ -1736,13 +1774,15 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
-          const agentHarnessPolicy = resolveAgentHarnessPolicy({
-            provider,
-            modelId: model,
-            config: runtimeConfig,
-            agentId: params.followupRun.run.agentId,
-            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
-          });
+          const agentHarnessPolicy = sessionRuntimeOverride
+            ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
+            : resolveAgentHarnessPolicy({
+                provider,
+                modelId: model,
+                config: runtimeConfig,
+                agentId: params.followupRun.run.agentId,
+                sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+              });
           const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
             provider,
             harnessRuntime: agentHarnessPolicy.runtime,
@@ -1751,6 +1791,11 @@ export async function runAgentTurnWithFallback(params: {
             config: runtimeConfig,
             workspaceDir: params.followupRun.run.workspaceDir,
           });
+          const embeddedRunHarnessOverride =
+            sessionRuntimeOverride ??
+            (agentHarnessPolicy.runtime === "pi" && embeddedRunProvider !== provider
+              ? "pi"
+              : undefined);
           return (async () => {
             let attemptCompactionCount = 0;
             const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
@@ -1770,6 +1815,8 @@ export async function runAgentTurnWithFallback(params: {
                 ...senderContext,
                 ...runBaseParams,
                 provider: embeddedRunProvider,
+                agentHarnessId: embeddedRunHarnessOverride,
+                agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,

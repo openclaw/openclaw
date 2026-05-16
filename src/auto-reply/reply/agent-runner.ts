@@ -1608,12 +1608,14 @@ export async function runReplyAgent(params: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
+      isHeartbeat,
       modelUsed,
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+      preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {

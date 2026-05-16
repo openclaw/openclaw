@@ -32,8 +32,6 @@ import {
   createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
-  type SessionPatchHookContext,
-  type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -58,6 +56,7 @@ import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
+  type SessionOperationEvent,
   validateSessionsAbortParams,
   validateSessionsCleanupParams,
   validateSessionsCompactParams,
@@ -84,6 +83,7 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
+import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -325,6 +325,25 @@ function emitSessionsChanged(
           }
         : {}),
     },
+    connIds,
+    { dropIfSlow: true },
+  );
+}
+
+function emitSessionOperation(
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
+  payload: Omit<SessionOperationEvent, "ts">,
+) {
+  const connIds = context.getSessionEventSubscriberConnIds();
+  if (connIds.size === 0) {
+    return;
+  }
+  context.broadcastToConnIds(
+    "session.operation",
+    {
+      ...payload,
+      ts: Date.now(),
+    } satisfies SessionOperationEvent,
     connIds,
     { dropIfSlow: true },
   );
@@ -1785,22 +1804,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (hasInternalHookListeners("session", "patch")) {
-      const hookContext: SessionPatchHookContext = structuredClone({
-        sessionEntry: applied.entry,
-        patch: p,
-        cfg,
-      });
-      const hookEvent: SessionPatchHookEvent = {
-        type: "session",
-        action: "patch",
-        sessionKey: target.canonicalKey ?? key,
-        context: hookContext,
-        timestamp: new Date(),
-        messages: [],
-      };
-      void triggerInternalHook(hookEvent);
-    }
+    triggerSessionPatchHook({
+      cfg,
+      sessionEntry: applied.entry,
+      sessionKey: target.canonicalKey ?? key,
+      patch: p,
+    });
 
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
@@ -2153,24 +2162,52 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const workspaceDir =
         normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
         resolveAgentWorkspaceDir(cfg, target.agentId);
-      const result = await compactEmbeddedPiSession({
-        sessionId,
+      const operationId = randomUUID();
+      emitSessionOperation(context, {
+        operationId,
+        operation: "compact",
+        phase: "start",
         sessionKey: target.canonicalKey,
-        allowGatewaySubagentBinding: true,
-        sessionFile: filePath,
-        workspaceDir,
-        config: cfg,
-        provider: resolvedModel.provider,
-        model: resolvedModel.model,
-        agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
-        thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
-        reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        trigger: "manual",
+      });
+      let result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
+      try {
+        result = await compactEmbeddedPiSession({
+          sessionId,
+          sessionKey: target.canonicalKey,
+          allowGatewaySubagentBinding: true,
+          sessionFile: filePath,
+          workspaceDir,
+          config: cfg,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
+          thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+          reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          trigger: "manual",
+        });
+      } catch (err) {
+        emitSessionOperation(context, {
+          operationId,
+          operation: "compact",
+          phase: "end",
+          sessionKey: target.canonicalKey,
+          completed: false,
+          reason: formatErrorMessage(err),
+        });
+        throw err;
+      }
+      emitSessionOperation(context, {
+        operationId,
+        operation: "compact",
+        phase: "end",
+        sessionKey: target.canonicalKey,
+        completed: result.ok && result.compacted,
+        reason: result.reason,
       });
 
       if (result.ok && result.compacted) {

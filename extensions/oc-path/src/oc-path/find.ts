@@ -7,6 +7,7 @@
  * @module @openclaw/oc-path/find
  */
 
+import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
@@ -87,6 +88,11 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
       break;
     case "md":
       walkMd({ kind: "root", ast }, subs, 0, [], onMatch);
+      break;
+    case "yaml":
+      if (ast.doc.contents !== null) {
+        walkYaml(ast.doc.contents, subs, 0, [], onMatch);
+      }
       break;
   }
 
@@ -434,6 +440,14 @@ function topLevelLeafText(value: JsoncValue, key: string): string | null {
 }
 
 function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
+  if (addr === "$first") {
+    for (const l of ast.lines) {
+      if (l.kind === "value") {
+        return l;
+      }
+    }
+    return null;
+  }
   if (addr === "$last") {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
@@ -454,6 +468,140 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
     }
   }
   return null;
+}
+
+// ---------- YAML walker ----------------------------------------------------
+
+function walkYaml(
+  node: Node,
+  subs: readonly PatternSub[],
+  i: number,
+  walked: readonly SlotSub[],
+  onMatch: OnMatch,
+): void {
+  checkDepth(walked);
+  if (i >= subs.length) {
+    onMatch(walked);
+    return;
+  }
+  dispatchSeg(node, yamlOps, subs, i, walked, onMatch);
+}
+
+const yamlOps: WalkOps<Node> = {
+  *enumerate(node) {
+    if (isMap(node)) {
+      for (const p of (node as { items: readonly Pair[] }).items) {
+        const k = isScalar(p.key) ? p.key.value : p.key;
+        if (p.value !== null) {
+          yield { keySub: quoteSeg(String(k)), child: p.value as Node };
+        }
+      }
+    } else if (isSeq(node)) {
+      for (let idx = 0; idx < node.items.length; idx++) {
+        const child = node.items[idx];
+        if (child !== null) {
+          yield { keySub: String(idx), child: child as Node };
+        }
+      }
+    }
+  },
+  lookup(node, key) {
+    if (isMap(node)) {
+      const lookupKey = isQuotedSeg(key) ? unquoteSeg(key) : key;
+      const pair = (node as { items: readonly Pair[] }).items.find((p) => {
+        const k = isScalar(p.key) ? p.key.value : p.key;
+        return String(k) === lookupKey;
+      });
+      return pair?.value === undefined || pair.value === null
+        ? null
+        : { keySub: key, child: pair.value as Node };
+    }
+    if (isSeq(node)) {
+      const idx = Number(key);
+      const child = node.items[idx];
+      if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length || child === null) {
+        return null;
+      }
+      return { keySub: key, child: child as Node };
+    }
+    return null;
+  },
+  positional(node, seg) {
+    const concrete = positionalForYamlNode(node, seg);
+    return concrete === null ? null : yamlOps.lookup(node, concrete);
+  },
+  *predicate(node, pred) {
+    if (isMap(node)) {
+      for (const p of (node as { items: readonly Pair[] }).items) {
+        const k = isScalar(p.key) ? p.key.value : p.key;
+        if (p.value !== null && yamlChildMatchesPredicate(p.value as Node, pred)) {
+          yield { keySub: quoteSeg(String(k)), child: p.value as Node };
+        }
+      }
+    } else if (isSeq(node)) {
+      for (let idx = 0; idx < node.items.length; idx++) {
+        const child = node.items[idx];
+        if (child !== null && yamlChildMatchesPredicate(child as Node, pred)) {
+          yield { keySub: String(idx), child: child as Node };
+        }
+      }
+    }
+  },
+  walk: walkYaml,
+};
+
+function positionalForYamlNode(node: Node, seg: string): string | null {
+  if (isMap(node)) {
+    const keys = (node as { items: readonly Pair[] }).items.map((p) =>
+      String(isScalar(p.key) ? p.key.value : p.key),
+    );
+    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
+  }
+  if (isSeq(node)) {
+    return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
+  }
+  return null;
+}
+
+function yamlChildMatchesPredicate(node: Node, pred: PredicateSpec): boolean {
+  return evaluatePredicate(yamlChildFieldText(node, pred.key), pred);
+}
+
+function yamlChildFieldText(node: Node, key: string): string | null {
+  if (!isMap(node)) {
+    return null;
+  }
+  const pair = (node as { items: readonly Pair[] }).items.find((p) => {
+    const k = isScalar(p.key) ? p.key.value : p.key;
+    return String(k) === key;
+  });
+  if (pair === undefined || pair.value === null) {
+    return null;
+  }
+  return yamlScalarToText(pair.value);
+}
+
+function yamlScalarToText(value: unknown): string | null {
+  if (!isScalar(value)) {
+    return null;
+  }
+  const scalar = value.value;
+  if (typeof scalar === "string") {
+    return scalar;
+  }
+  if (typeof scalar === "number" || typeof scalar === "boolean") {
+    return String(scalar);
+  }
+  if (scalar === null) {
+    return "null";
+  }
+  if (typeof scalar === "bigint" || typeof scalar === "symbol") {
+    return scalar.toString();
+  }
+  if (scalar instanceof Date) {
+    return scalar.toISOString();
+  }
+  return JSON.stringify(scalar) ?? null;
 }
 
 // ---------- Markdown walker -----------------------------------------------
