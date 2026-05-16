@@ -1894,8 +1894,16 @@ export async function loadSessionUsageTimeSeries(params: {
   // Sort by timestamp
   const sortedPoints = points.toSorted((a, b) => a.timestamp - b.timestamp);
 
-  // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
+  // Optionally downsample if too many points. Explicit zero / negative /
+  // non-finite caller-supplied maxPoints values return an empty series rather
+  // than collapsing the entire transcript into one aggregated bucket — the
+  // historic behaviour where `Math.ceil(length / 0) === Infinity` produced a
+  // single all-data point. See #82651.
+  const rawMaxPoints = params.maxPoints;
+  if (rawMaxPoints !== undefined && (!Number.isFinite(rawMaxPoints) || rawMaxPoints <= 0)) {
+    return { sessionId: params.sessionId, points: [] };
+  }
+  const maxPoints = rawMaxPoints ?? 100;
   if (sortedPoints.length > maxPoints) {
     const step = Math.ceil(sortedPoints.length / maxPoints);
     const downsampled: SessionUsageTimePoint[] = [];
@@ -1957,6 +1965,13 @@ export async function loadSessionLogs(params: {
     return null;
   }
 
+  // Reject zero / negative / non-finite caller-supplied limits up front so an
+  // explicit `limit: 0` returns an empty array rather than the full log
+  // history (the historic behaviour of `slice(-0)`, which is identical to
+  // `slice(0)` and returns everything). See #82650.
+  if (params.limit !== undefined && (!Number.isFinite(params.limit) || params.limit <= 0)) {
+    return [];
+  }
   const logs: SessionLogEntry[] = [];
   const limit = params.limit ?? 50;
 

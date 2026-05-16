@@ -1962,4 +1962,80 @@ example
     expect(lastPoint?.cumulativeTokens).toBe(165);
     expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
   });
+
+  it.each([
+    { name: "explicit zero", value: 0 },
+    { name: "negative", value: -5 },
+    { name: "NaN", value: Number.NaN },
+    { name: "Infinity", value: Number.POSITIVE_INFINITY },
+  ])(
+    "loadSessionUsageTimeSeries returns empty points for $name maxPoints (#82651)",
+    async ({ value }) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-maxpoints-"));
+      const sessionFile = path.join(root, "session.jsonl");
+      const entries = [
+        {
+          type: "message",
+          timestamp: "2026-03-15T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: { input: 1, output: 2 },
+          },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-15T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: { input: 3, output: 4 },
+          },
+        },
+      ];
+      await fs.writeFile(
+        sessionFile,
+        entries.map((entry) => JSON.stringify(entry)).join("\n"),
+        "utf-8",
+      );
+
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionFile,
+        maxPoints: value,
+      });
+      expect(timeseries?.points).toEqual([]);
+    },
+  );
+
+  it.each([
+    { name: "explicit zero", value: 0 },
+    { name: "negative", value: -5 },
+    { name: "NaN", value: Number.NaN },
+    { name: "Infinity", value: Number.POSITIVE_INFINITY },
+  ])("loadSessionLogs returns empty array for $name limit (#82650)", async ({ value }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-loglimit-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-15T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-15T00:01:00.000Z",
+        message: { role: "user", content: "world" },
+      },
+    ];
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile, limit: value });
+    expect(logs).toEqual([]);
+  });
 });
