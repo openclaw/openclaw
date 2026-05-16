@@ -4,7 +4,9 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatTokens,
   isCommandMessage,
+  resolveSessionFooterTokenTotal,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
@@ -359,21 +361,21 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("wraps rtl lines with directional isolation marks", () => {
-    const input = "مرحبا بالعالم";
+    const input = "????? ???????";
     const sanitized = sanitizeRenderableText(input);
 
-    expect(sanitized).toBe("\u2067مرحبا بالعالم\u2069");
+    expect(sanitized).toBe("\u2067????? ???????\u2069");
   });
 
   it("only wraps lines that contain rtl script", () => {
-    const input = "hello\nمرحبا";
+    const input = "hello\n?????";
     const sanitized = sanitizeRenderableText(input);
 
-    expect(sanitized).toBe("hello\n\u2067مرحبا\u2069");
+    expect(sanitized).toBe("hello\n\u2067?????\u2069");
   });
 
   it("does not double-wrap lines that already include bidi controls", () => {
-    const input = "\u2067مرحبا\u2069";
+    const input = "\u2067?????\u2069";
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
@@ -471,7 +473,7 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("does not chunk box-drawing horizontal rules used in tables", () => {
-    const input = "─".repeat(60);
+    const input = "?".repeat(60);
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
@@ -506,5 +508,38 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toContain("[binary data omitted]");
+  });
+});
+
+describe("resolveSessionFooterTokenTotal", () => {
+  it("prefers explicit totalTokens", () => {
+    expect(
+      resolveSessionFooterTokenTotal({
+        totalTokens: 42,
+        inputTokens: 10,
+        outputTokens: 5,
+        contextTokens: 200_000,
+      }),
+    ).toBe(42);
+  });
+
+  it("derives total from input and output when totalTokens is missing", () => {
+    expect(
+      resolveSessionFooterTokenTotal({
+        inputTokens: 1200,
+        outputTokens: 300,
+        contextTokens: 200_000,
+      }),
+    ).toBe(1500);
+  });
+
+  it("defaults to zero usage when only context window is known", () => {
+    expect(resolveSessionFooterTokenTotal({ contextTokens: 200_000 })).toBe(0);
+  });
+});
+
+describe("formatTokens", () => {
+  it("shows zero usage against a known context window", () => {
+    expect(formatTokens(0, 200_000)).toBe("tokens 0/200k (0%)");
   });
 });
