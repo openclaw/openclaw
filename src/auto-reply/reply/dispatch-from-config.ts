@@ -1700,6 +1700,7 @@ export async function dispatchReplyFromConfig(
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
               spokenText: accumulatedBlockTtsText,
+              trustedLocalMedia: ttsSyntheticReply.trustedLocalMedia,
             };
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);

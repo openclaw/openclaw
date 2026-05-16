@@ -62,52 +62,62 @@ async function main() {
     },
   };
 
-  const blockText = "WebChat block replies should synthesize audio for auto TTS.";
+  const accumulatedBlockText =
+    "WebChat streams block text; dispatch synthesizes one TTS tail with kind final.";
   const blockResult = await maybeApplyTtsToPayload({
-    payload: { text: blockText },
+    payload: { text: accumulatedBlockText },
     cfg,
     channel: "webchat",
     kind: "block",
   });
   console.log("maybeApplyTtsToPayload(kind=block).mediaUrl =", blockResult.mediaUrl ?? "(none)");
-  console.log(
-    "maybeApplyTtsToPayload(kind=block).trustedLocalMedia =",
-    blockResult.trustedLocalMedia ?? false,
-  );
 
-  const toolResult = await maybeApplyTtsToPayload({
-    payload: { text: "Intermediate tool output should not be spoken." },
+  const tailResult = await maybeApplyTtsToPayload({
+    payload: { text: accumulatedBlockText },
     cfg,
     channel: "webchat",
-    kind: "tool",
+    kind: "final",
   });
-  console.log("maybeApplyTtsToPayload(kind=tool).mediaUrl =", toolResult.mediaUrl ?? "(none)");
-
-  const mediaPath = blockResult.mediaUrl;
-  if (!mediaPath || !fs.existsSync(mediaPath)) {
-    throw new Error("expected block TTS to write a local media file");
-  }
-  const localRoots = [path.dirname(mediaPath)];
-  const trustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
-    [{ mediaUrl: mediaPath, trustedLocalMedia: true }],
-    { localRoots },
+  console.log("maybeApplyTtsToPayload(kind=final).mediaUrl =", tailResult.mediaUrl ?? "(none)");
+  console.log(
+    "maybeApplyTtsToPayload(kind=final).trustedLocalMedia =",
+    tailResult.trustedLocalMedia ?? false,
   );
+
+  const mediaPath = tailResult.mediaUrl;
+  if (!mediaPath || !fs.existsSync(mediaPath)) {
+    throw new Error("expected final-mode tail TTS to write a local media file");
+  }
+
+  const ttsOnlyPayload = {
+    mediaUrl: tailResult.mediaUrl,
+    audioAsVoice: tailResult.audioAsVoice,
+    spokenText: accumulatedBlockText,
+    trustedLocalMedia: tailResult.trustedLocalMedia,
+  };
+  console.log(
+    "dispatch ttsOnlyPayload.trustedLocalMedia =",
+    ttsOnlyPayload.trustedLocalMedia ?? false,
+  );
+
+  const localRoots = [path.dirname(mediaPath)];
+  const trustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([ttsOnlyPayload], {
+    localRoots,
+  });
   const untrustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
     [{ mediaUrl: mediaPath }],
     { localRoots },
   );
   console.log(
-    "buildWebchatAudioContentBlocksFromReplyPayloads(trustedLocalMedia=true).length =",
+    "buildWebchatAudioContentBlocksFromReplyPayloads(ttsOnlyPayload).length =",
     trustedBlocks.length,
   );
   console.log(
-    "buildWebchatAudioContentBlocksFromReplyPayloads(trustedLocalMedia missing).length =",
+    "buildWebchatAudioContentBlocksFromReplyPayloads(untrusted).length =",
     untrustedBlocks.length,
   );
 
-  if (blockResult.mediaUrl) {
-    fs.rmSync(path.dirname(blockResult.mediaUrl), { recursive: true, force: true });
-  }
+  fs.rmSync(path.dirname(mediaPath), { recursive: true, force: true });
   try {
     fs.unlinkSync(prefsPath);
   } catch {
