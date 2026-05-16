@@ -120,6 +120,22 @@ function normalizeReplyTextForComparison(text: string): string {
   return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
 }
 
+function stripTrailingGeneratedEllipsis(text: string): string {
+  return text.replace(/(?:\s*(?:\.\.\.|…))+$/u, "").trimEnd();
+}
+
+function isLikelyIncompleteAssistantTextSnapshot(params: {
+  assistantText: string;
+  finalAnswerText: string;
+}): boolean {
+  const normalizedAssistantText = stripTrailingGeneratedEllipsis(params.assistantText);
+  return (
+    normalizedAssistantText.length > 0 &&
+    params.finalAnswerText.length > normalizedAssistantText.length &&
+    params.finalAnswerText.startsWith(normalizedAssistantText)
+  );
+}
+
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
@@ -418,7 +434,12 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
     : "";
   const shouldUseCanonicalFinalAnswer =
-    nonEmptyAssistantTexts.length > 1 &&
+    (nonEmptyAssistantTexts.length > 1 ||
+      (nonEmptyAssistantTexts.length === 1 &&
+        isLikelyIncompleteAssistantTextSnapshot({
+          assistantText: normalizedAssistantTexts,
+          finalAnswerText: normalizedFallbackAnswerSourceText,
+        }))) &&
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;

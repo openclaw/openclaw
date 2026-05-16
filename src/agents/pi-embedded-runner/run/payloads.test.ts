@@ -113,6 +113,65 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("uses the canonical final answer when one accumulated text snapshot is incomplete", () => {
+    const accumulatedSnapshot =
+      "Mostly I need permission + a couple test surfaces. **Minimum to start now:**\n\n" +
+      "- Permission to create/delete harmless test cron jobs. - Permission to spawn simple subagents. " +
+      "- A Discord guild/channel to test requireMention: false ambient behavior in. Ideally a throwaway test channel so I'm not being weird in a real convo. " +
+      "- You send a few test messages there: casual chatter, direct question without mention, direct mention, links, maybe an attachment...";
+    const finalAnswer =
+      "Mostly I need permission + a couple test surfaces.\n\n" +
+      "**Minimum to start now:**\n\n" +
+      "- Permission to create/delete harmless test cron jobs.\n" +
+      "- Permission to spawn simple subagents.\n" +
+      "- A Discord guild/channel to test requireMention: false ambient behavior in. Ideally a throwaway test channel so I'm not being weird in a real convo.\n" +
+      "- You send a few test messages there: casual chatter, direct question without mention, direct mention, links, maybe an attachment.\n\n" +
+      "For the bigger beta items, I also need permission to run harmless test messages through Discord so I can verify delivery/visibility behavior instead of just reading logs.";
+    const payloads = buildPayloads({
+      assistantTexts: [accumulatedSnapshot],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: finalAnswer,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, finalAnswer);
+  });
+
+  it("keeps one accumulated text when it is not an incomplete final-answer prefix", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Streamed answer."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Different canonical answer.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Streamed answer.");
+  });
+
   it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
     const payloads = buildPayloads({
       assistantTexts: [
