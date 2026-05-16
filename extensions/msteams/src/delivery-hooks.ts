@@ -69,6 +69,11 @@ function buildMSTeamsSentHookContext(params: EmitMSTeamsMessageSentHookParams) {
     channelId: "msteams",
     accountId: params.accountId,
     conversationId: params.conversationId ?? params.to,
+    // Include the session key in the canonical hook context (not just as the
+    // internal-hook routing key) so plugin-SDK consumers reading the
+    // canonical/plugin context object can correlate the sent event with
+    // the originating agent session.
+    sessionKey: params.sessionKeyForInternalHooks,
     messageId: params.messageId,
     isGroup: params.isGroup,
     groupId: params.groupId,
