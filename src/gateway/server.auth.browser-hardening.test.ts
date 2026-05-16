@@ -442,7 +442,7 @@ describe("gateway auth browser hardening", () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, {
-        origin: originForPort(port),
+        origin: "http://localhost:5173",
         "x-forwarded-for": "203.0.113.50",
       });
       try {
