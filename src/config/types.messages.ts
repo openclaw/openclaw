@@ -10,7 +10,9 @@ export type GroupChatConfig = {
    */
   ambientTurns?: "user_request" | "room_event";
   /**
-   * Controls how group/channel turns produce visible room replies.
+   * Controls how group/channel turns produce visible room replies. The
+   * message-tool mode requires explicit message sends for visible room output;
+   * final text stays private when the model misses the tool.
    * Default: "message_tool".
    */
   visibleReplies?: "automatic" | "message_tool";
@@ -105,6 +107,8 @@ export type MessagesConfig = {
    * `groupChat.visibleReplies` when it is set.
    *
    * Default: "automatic" for direct chats, "message_tool" for groups/channels.
+   * In group/channel rooms, "message_tool" keeps final text private unless the
+   * model sends visibly through the message tool.
    */
   visibleReplies?: "automatic" | "message_tool";
   /**
