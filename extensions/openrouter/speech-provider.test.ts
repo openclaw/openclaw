@@ -179,6 +179,11 @@ describe("openrouter speech provider", () => {
       dispatcherPolicy: undefined,
     });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
+    expect(readProviderBinaryResponseMock).toHaveBeenCalledWith(
+      expect.any(Response),
+      "OpenRouter TTS API error",
+      "audio",
+    );
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.voiceCompatible).toBe(true);
