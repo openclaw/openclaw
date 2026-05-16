@@ -206,6 +206,67 @@ Hello`;
 [Thu 2026-03-12 07:00 UTC] what time is it?`;
     expect(stripInboundMetadata(input)).toBe("what time is it?");
   });
+
+  it("strips the single-line message-tool Delivery hint", () => {
+    const input = `Delivery: to send a message, use the \`message\` tool.
+
+What is the weather?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather?");
+  });
+
+  it("strips the chronological Conversation context chat_window block", () => {
+    const input = `Conversation context (untrusted, chronological, selected for current message):
+#1001 Fri 2026-05-15 21:26 UTC Alice: hello team
+#1002 Fri 2026-05-15 21:27 UTC Bob: hi Alice
+#1004 Fri 2026-05-15 21:29 UTC Alice: any updates?
+
+Bob: yes, the build is green`;
+    expect(stripInboundMetadata(input)).toBe("Bob: yes, the build is green");
+  });
+
+  it("strips a chat_window block emitted with a non-default label", () => {
+    // `formatChatWindowStructuredContext` builds the header from the channel-
+    // supplied `entry.label`. Telegram uses "Conversation context"; other
+    // surfaces may use different labels (see inbound-meta.test.ts fixtures).
+    const input = `Current local chat window (untrusted, chronological, before current message):
+#42 Mon 2026-06-01 09:00 UTC Carol: standup in 5
+
+Carol: still on for standup?`;
+    expect(stripInboundMetadata(input)).toBe("Carol: still on for standup?");
+  });
+
+  it("does not strip an unrelated '<x> (untrusted, ...):' line without a chronological follow-up", () => {
+    // Bare headers that happen to match the chat_window shape but are not
+    // followed by a "#<id> ..." entry must be left as user content.
+    const text = `Build status (untrusted, broken):
+the deploy failed on staging`;
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
+
+  it("strips both the Delivery hint and the chat_window block in a current-turn-style envelope", () => {
+    const input = `Delivery: to send a message, use the \`message\` tool.
+
+${CONV_BLOCK}
+
+${SENDER_BLOCK}
+
+Conversation context (untrusted, chronological, selected for current message):
+#5001 Fri 2026-05-15 22:00 UTC Pablo: still around?
+#5002 Fri 2026-05-15 22:01 UTC Pablo: ping
+
+Pablo: actual latest message body`;
+    expect(stripInboundMetadata(input)).toBe("Pablo: actual latest message body");
+  });
+
+  it("does not mangle user text that happens to start with a '#1234'-shaped token", () => {
+    const text = `#1234 is the bug number I want to fix today`;
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
+
+  it("does not strip a stray 'Delivery:' line that is part of user content", () => {
+    const text = `Delivery: please ship by Friday`;
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
 });
 
 describe("extractInboundSenderLabel", () => {

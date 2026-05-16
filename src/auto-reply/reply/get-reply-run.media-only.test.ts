@@ -94,11 +94,15 @@ vi.mock("./groups.js", () => ({
   ),
 }));
 
-vi.mock("./inbound-meta.js", () => ({
-  buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
-  buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
-  resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
-}));
+vi.mock(import("./inbound-meta.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
+    buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
+    resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
+  };
+});
 
 vi.mock("./queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn().mockReturnValue({ mode: "steer" }),
