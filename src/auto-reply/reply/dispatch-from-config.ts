@@ -147,6 +147,29 @@ function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
 }
 
+function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(reply);
+  const text = normalizeOptionalString(reply.text);
+  const textPreview = text ? text.replace(/\s+/g, " ").slice(0, 160) : undefined;
+  const sendableParts = resolveSendableOutboundReplyParts(reply);
+  const richParts = [
+    reply.presentation ? "presentation" : undefined,
+    reply.interactive ? "interactive" : undefined,
+    reply.channelData ? "channelData" : undefined,
+  ].filter(Boolean);
+  return [
+    `textChars=${text?.length ?? 0}`,
+    `media=${sendableParts.mediaCount}`,
+    `rich=${richParts.length ? richParts.join("|") : "none"}`,
+    `error=${reply.isError === true}`,
+    `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
+    `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
+    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
@@ -1611,6 +1634,20 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        if (hasOutboundReplyContent(reply, { trimText: true })) {
+          logVerbose(
+            [
+              `dispatch-from-config: final reply suppressed by ${deliverySuppressionReason || "source delivery policy"}`,
+              `(session=${acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+              `provider=${ctx.Provider ?? "unknown"}`,
+              `surface=${ctx.Surface ?? "unknown"}`,
+              `chatType=${chatType ?? "unknown"}`,
+              `turn=${ctx.InboundTurnKind ?? "unknown"}`,
+              `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+              `${formatSuppressedReplyPayloadForLog(reply)})`,
+            ].join(" "),
+          );
+        }
         continue;
       }
       attemptedFinalDelivery = true;
