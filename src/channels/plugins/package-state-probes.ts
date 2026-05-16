@@ -93,11 +93,20 @@ function resolveSourceBundledPluginRoot(rootDir: string): {
   };
 }
 
+function isBundledSourceOverlayPluginRoot(rootDir: string): boolean {
+  const pluginRoot = path.resolve(rootDir);
+  return (
+    isBundledSourceOverlayPath({ sourcePath: pluginRoot }) ||
+    (path.basename(path.dirname(pluginRoot)) === "extensions" &&
+      isBundledSourceOverlayPath({ sourcePath: path.dirname(pluginRoot) }))
+  );
+}
+
 function listBuiltBundledPackageStateModules(params: {
   rootDir: string;
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
-  if (isBundledSourceOverlayPath({ sourcePath: params.rootDir })) {
+  if (isBundledSourceOverlayPluginRoot(params.rootDir)) {
     return [];
   }
   const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
