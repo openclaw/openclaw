@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { completionRequiresMessageToolDelivery } from "../../auto-reply/reply/completion-delivery-policy.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -229,23 +228,21 @@ function failMediaGenerationTaskRun(params: {
 function buildMediaGenerationReplyInstruction(params: {
   status: "ok" | "error";
   completionLabel: string;
-  requiresMessageToolDelivery: boolean;
 }) {
   if (params.status === "ok") {
-    if (params.requiresMessageToolDelivery) {
-      return [
-        `The ${params.completionLabel} is ready for the original channel/group chat.`,
-        "This route requires message-tool delivery: the user will NOT see your normal assistant final reply.",
-        'Call the message tool with action="send" to the original/current chat, put a short caption in the message, and attach every structured attachment from the internal event.',
-        `After the message tool succeeds, reply only ${SILENT_REPLY_TOKEN}.`,
-        "Do not rely on text-only output; the media must be sent as message-tool attachments.",
-      ].join(" ");
-    }
-    return `Tell the user the ${params.completionLabel} is ready and include every structured attachment. If visible source delivery requires the message tool, send it there with those attachments.`;
+    return [
+      `The ${params.completionLabel} is ready for the original chat.`,
+      "This route requires message-tool delivery: the user will NOT see your normal assistant final reply.",
+      'Call the message tool with action="send" to the original/current chat, put a short caption in the message, and attach every structured attachment from the internal event.',
+      `After the message tool succeeds, reply only ${SILENT_REPLY_TOKEN}.`,
+      "Do not rely on text-only output; the media must be sent as message-tool attachments.",
+    ].join(" ");
   }
   return [
-    `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed.`,
-    "Reply in your normal assistant voice with the failure summary now.",
+    `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
+    "This route requires message-tool delivery: the user will NOT see your normal assistant final reply.",
+    'Call the message tool with action="send" to the original/current chat and put the failure summary in the message.',
+    `After the message tool succeeds, reply only ${SILENT_REPLY_TOKEN}.`,
     "Keep internal task/session details private and do not copy the internal event text verbatim.",
   ].join(" ");
 }
@@ -291,11 +288,6 @@ async function wakeMediaGenerationTaskCompletion(params: {
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
-        requiresMessageToolDelivery: completionRequiresMessageToolDelivery({
-          cfg: params.config ?? {},
-          requesterSessionKey: params.handle.requesterSessionKey,
-          directOrigin: params.handle.requesterOrigin,
-        }),
       }),
     },
   ];

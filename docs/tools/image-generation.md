@@ -9,8 +9,10 @@ sidebarTitle: "Image generation"
 ---
 
 The `image_generate` tool lets the agent create and edit images using your
-configured providers. Generated images are delivered automatically as media
-attachments in the agent's reply.
+configured providers. Generated images are returned as structured media
+attachments. On routes that require the `message` tool for visible replies,
+the agent must send the generated images through `message`; OpenClaw does not
+auto-post a private final reply as a fallback.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -52,7 +54,9 @@ or sign in with OpenAI Codex OAuth.
     _"Generate an image of a friendly robot mascot."_
 
     The agent calls `image_generate` automatically. No tool allow-listing
-    needed - it is enabled by default when a provider is available.
+    needed - it is enabled by default when a provider is available. In
+    message-tool-only channels, the agent then sends the generated attachment
+    through the `message` tool.
 
   </Step>
 </Steps>
