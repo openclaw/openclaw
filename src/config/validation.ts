@@ -98,7 +98,10 @@ function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
 }
 
-function formatMissingOfficialExternalPluginWarning(pluginId: string): string | null {
+function formatMissingOfficialExternalPluginWarning(
+  pluginId: string,
+  opts?: { selectedMissingMemorySlot?: boolean },
+): string | null {
   const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
   if (!catalogEntry) {
     return null;
@@ -110,6 +113,9 @@ function formatMissingOfficialExternalPluginWarning(pluginId: string): string | 
     install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
   if (!installSpec) {
     return null;
+  }
+  if (pluginId === "memory-lancedb" && opts?.selectedMissingMemorySlot) {
+    return `plugin not installed: ${pluginId} — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install ${installSpec}`;
   }
   return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
 }
@@ -1455,7 +1461,7 @@ function validateConfigObjectWithPluginsBase(
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean; officialInstallHint?: boolean },
+    opts?: { warnOnly?: boolean; officialInstallHint?: boolean; missingMessage?: string | null },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1476,7 +1482,8 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     if (opts?.warnOnly && opts.officialInstallHint !== false) {
-      const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
+      const externalInstallWarning =
+        opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
         warnings.push({
           path,
@@ -1557,11 +1564,18 @@ function validateConfigObjectWithPluginsBase(
     memorySlot.trim() &&
     !knownIds.has(memorySlot)
   ) {
-    const isMissingOfficialExternalMemorySlot = Boolean(
-      formatMissingOfficialExternalPluginWarning(memorySlot),
-    );
+    const isMissingOfficialExternalMemorySlot =
+      memorySlot === "memory-lancedb" &&
+      Boolean(
+        formatMissingOfficialExternalPluginWarning(memorySlot, {
+          selectedMissingMemorySlot: true,
+        }),
+      );
     pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
       warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(memorySlot),
+      missingMessage: formatMissingOfficialExternalPluginWarning(memorySlot, {
+        selectedMissingMemorySlot: true,
+      }),
     });
   }
 
