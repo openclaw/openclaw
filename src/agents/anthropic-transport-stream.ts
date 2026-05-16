@@ -386,10 +386,10 @@ function convertAnthropicMessages(
         }
       }
       if (blocks.length > 0) {
-        params.push({
-          role: "assistant",
-          content: blocks,
-        });
+        const assistantMsg: Record<string, unknown> = { role: "assistant", content: blocks };
+        if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0)
+          assistantMsg.reasoning_content = msg.reasoning_content;
+        params.push(assistantMsg);
       }
       continue;
     }
