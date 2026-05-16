@@ -154,10 +154,15 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          // Missing a last-call snapshot (and promptTokens fallback) means
-          // context utilization is stale/unknown.
-          patch.totalTokens = totalTokens;
-          patch.totalTokensFresh = typeof totalTokens === "number";
+          // Only update totalTokens when we have a fresh context snapshot
+          // (lastCallUsage or promptTokens or usageIsContextSnapshot).
+          // Without a snapshot the session keeps its existing totalTokens so
+          // that preflight compaction guards set by incrementCompactionCount
+          // are not corrupted by a stale usage update.
+          if (hasFreshContextSnapshot) {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = true;
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
