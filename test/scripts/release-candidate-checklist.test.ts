@@ -3,6 +3,7 @@ import {
   buildPublishCommand,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  resolveArtifactName,
 } from "../../scripts/release-candidate-checklist.mjs";
 
 describe("release candidate checklist", () => {
@@ -46,5 +47,15 @@ describe("release candidate checklist", () => {
         "https://github.com/openclaw/openclaw/actions/runs/25922042055\n",
       ),
     ).toBe("25922042055");
+  });
+
+  it("falls back to a single compatible artifact from the same run", () => {
+    expect(
+      resolveArtifactName(
+        [{ name: "openclaw-npm-preflight-dba00", expired: false }],
+        "openclaw-npm-preflight-v2026.5.16-beta.2",
+        "openclaw-npm-preflight-",
+      ),
+    ).toBe("openclaw-npm-preflight-dba00");
   });
 });

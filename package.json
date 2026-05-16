@@ -1553,6 +1553,7 @@
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
     "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
+    "release:beta": "node scripts/release-candidate-checklist.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:candidate": "node scripts/release-candidate-checklist.mjs",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",

@@ -76,6 +76,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+      preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
     steps:
       - name: Validate inputs
         env:
@@ -131,14 +132,43 @@ jobs:
           esac
 
       - name: Download OpenClaw npm preflight manifest
+        id: preflight_artifact
         if: ${{ inputs.publish_openclaw_npm }}
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-npm-preflight-${{ inputs.tag }}
-          path: ${{ runner.temp }}/openclaw-npm-preflight-manifest
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.preflight_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
+          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
+          rm -rf "${preflight_dir}"
+          mkdir -p "${preflight_dir}"
+          if gh run download "${PREFLIGHT_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${preferred_name}" \
+            --dir "${preflight_dir}"; then
+            echo "name=${preferred_name}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
+          mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.expired != true) | .name' |
+            grep '^openclaw-npm-preflight-' || true)
+          if [[ "${#matches[@]}" != "1" ]]; then
+            echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
+            printf 'Available preflight candidates:\n' >&2
+            printf -- '- %s\n' "${matches[@]:-<none>}" >&2
+            exit 1
+          fi
+          fallback_name="${matches[0]}"
+          gh run download "${PREFLIGHT_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${fallback_name}" \
+            --dir "${preflight_dir}"
+          echo "name=${fallback_name}" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
         if: ${{ inputs.publish_openclaw_npm }}
@@ -306,6 +336,7 @@ jobs:
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
+          PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
         run: |
           set -euo pipefail
 
@@ -314,7 +345,10 @@ jobs:
             shift
 
             local before_json dispatch_output run_id
-            before_json="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+            before_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -F event=workflow_dispatch \
+              -F per_page=100 \
+              --jq '[.workflow_runs[].id]')"
 
             dispatch_output="$(gh workflow run --repo "$GITHUB_REPOSITORY" "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
             printf '%s\n' "$dispatch_output" >&2
@@ -327,8 +361,10 @@ jobs:
             if [[ -z "$run_id" ]]; then
               for _ in $(seq 1 60); do
                 run_id="$(
-                  BEFORE_IDS="$before_json" gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+                  BEFORE_IDS="$before_json" gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                    -F event=workflow_dispatch \
+                    -F per_page=50 \
+                    --jq '.workflow_runs | map({databaseId:.id, createdAt:.created_at}) | map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
                 )"
                 if [[ -n "$run_id" ]]; then
                   break
@@ -349,6 +385,23 @@ jobs:
             printf '%s\n' "${run_id}"
           }
 
+          print_pending_deployments() {
+            local workflow="$1"
+            local run_id="$2"
+            local pending_json
+
+            pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null || true)"
+            if [[ -z "${pending_json}" ]] || ! printf '%s' "${pending_json}" | jq -e 'length > 0' >/dev/null 2>&1; then
+              return 0
+            fi
+
+            echo "${workflow} pending environment approval:"
+            while IFS=$'\t' read -r env_id env_name can_approve; do
+              echo "- env=${env_name} canApprove=${can_approve}"
+              echo "  approve: gh api -X POST repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments -F 'environment_ids[]=${env_id}' -f state=approved -f comment='Approve release gate'"
+            done < <(printf '%s' "${pending_json}" | jq -r '.[] | [.environment.id, .environment.name, .current_user_can_approve] | @tsv')
+          }
+
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
@@ -366,6 +419,7 @@ jobs:
               state="${status}:${updated_at}"
               if [[ "$state" != "$last_state" ]]; then
                 echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
+                print_pending_deployments "${workflow}" "${run_id}"
                 last_state="$state"
               fi
               sleep 30
@@ -466,17 +520,18 @@ jobs:
           }
 
           upload_dependency_evidence_release_asset() {
-            local release_version download_dir asset_path asset_name
+            local release_version download_dir asset_path asset_name artifact_name
             release_version="${RELEASE_TAG#v}"
             download_dir="${RUNNER_TEMP}/openclaw-release-dependency-evidence-asset"
             asset_name="openclaw-${release_version}-dependency-evidence.zip"
             asset_path="${RUNNER_TEMP}/${asset_name}"
+            artifact_name="${PREFLIGHT_ARTIFACT_NAME:-openclaw-npm-preflight-${RELEASE_TAG}}"
 
             rm -rf "${download_dir}" "${asset_path}"
             mkdir -p "${download_dir}"
             gh run download "${PREFLIGHT_RUN_ID}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --name "openclaw-npm-preflight-${RELEASE_TAG}" \
+              --name "${artifact_name}" \
               --dir "${download_dir}"
 
             if [[ ! -d "${download_dir}/dependency-evidence" ]]; then

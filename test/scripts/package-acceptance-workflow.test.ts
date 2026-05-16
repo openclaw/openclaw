@@ -921,6 +921,9 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:candidate"]).toBe(
       "node scripts/release-candidate-checklist.mjs",
     );
+    expect(packageJson.scripts?.["release:beta"]).toBe(
+      "node scripts/release-candidate-checklist.mjs",
+    );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
