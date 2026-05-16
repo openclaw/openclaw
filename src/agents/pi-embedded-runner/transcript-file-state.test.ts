@@ -1,0 +1,511 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { readTranscriptFileState } from "./transcript-file-state.js";
+
+const roots: string[] = [];
+
+async function makeRoot(prefix: string): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+describe("readTranscriptFileState", () => {
+  it("skips malformed session entries without moving the active leaf", async () => {
+    const root = await makeRoot("openclaw-transcript-state-malformed-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "hello" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "hi" }] },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bash-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:02.500Z",
+          message: {
+            role: "bashExecution",
+            command: "echo ok",
+            output: "ok\n",
+            exitCode: 0,
+            cancelled: false,
+            truncated: false,
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: "bash-1",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: { content: "missing role" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-missing-content",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:03.500Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-unsupported-role",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:03.750Z",
+          message: { role: "system", content: "not an agent message" },
+        }),
+        JSON.stringify({
+          type: "label",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:04.000Z",
+          targetId: "user-1",
+          label: "missing id",
+        }),
+        JSON.stringify({
+          type: "future_poison",
+          id: "unknown-type",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:05.000Z",
+        }),
+        JSON.stringify({
+          type: "model_change",
+          id: "orphan-model-change",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:06.000Z",
+          provider: "openai",
+          modelId: "gpt-5.5",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "orphan-user-child",
+          parentId: "bad-missing-content",
+          timestamp: "2026-05-16T00:00:06.500Z",
+          message: { role: "user", content: "child of malformed user content" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-orphan",
+          parentId: "missing-import-parent",
+          timestamp: "2026-05-16T00:00:07.000Z",
+          message: { role: "user", content: "partial import keeps this row" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-orphan-child",
+          parentId: "legacy-orphan",
+          timestamp: "2026-05-16T00:00:08.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "still reachable from the orphan root" }],
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "bash-1",
+      "orphan-model-change",
+      "orphan-user-child",
+      "legacy-orphan",
+      "legacy-orphan-child",
+    ]);
+    expect(state.getLeafId()).toBe("legacy-orphan-child");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual([
+      "legacy-orphan",
+      "legacy-orphan-child",
+    ]);
+  });
+
+  it("preserves empty compaction summary entries as the active leaf", async () => {
+    const root = await makeRoot("openclaw-transcript-state-empty-compaction-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "fresh question" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "fresh answer" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          summary: "",
+          firstKeptEntryId: "user-1",
+          tokensBefore: 200,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "compact-1",
+    ]);
+    expect(state.getLeafId()).toBe("compact-1");
+  });
+
+  it("skips JSON-valid non-object rows", async () => {
+    const root = await makeRoot("openclaw-transcript-state-null-row-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        "null",
+        "false",
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "still readable" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1"]);
+    expect(state.getLeafId()).toBe("user-1");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
+  });
+
+  it("relinks valid current rows past malformed parents", async () => {
+    const root = await makeRoot("openclaw-transcript-state-current-suffix-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "before malformed row" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-2",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: { role: "user", content: "after malformed row" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1", "user-2"]);
+    expect(state.getLeafId()).toBe("user-2");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1", "user-2"]);
+  });
+
+  it("remaps compaction keep markers past malformed rows", async () => {
+    const root = await makeRoot("openclaw-transcript-state-compaction-marker-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "before malformed row" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "after malformed row" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:04.000Z",
+          summary: "summary",
+          firstKeptEntryId: "bad-message",
+          tokensBefore: 200,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const compaction = state.getEntries().find((entry) => entry.type === "compaction");
+
+    expect(compaction).toMatchObject({ firstKeptEntryId: "user-1" });
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary" },
+      { role: "user", content: "before malformed row" },
+      { role: "assistant", content: [{ type: "text", text: "after malformed row" }] },
+    ]);
+  });
+
+  it("keeps valid suffixes when a compaction marker points at a malformed root", async () => {
+    const root = await makeRoot("openclaw-transcript-state-compaction-root-marker-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user", content: "first valid kept turn" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "valid reply" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:04.000Z",
+          summary: "summary",
+          firstKeptEntryId: "bad-message",
+          tokensBefore: 200,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const compaction = state.getEntries().find((entry) => entry.type === "compaction");
+
+    expect(compaction).toMatchObject({ firstKeptEntryId: "user-1" });
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary" },
+      { role: "user", content: "first valid kept turn" },
+      { role: "assistant", content: [{ type: "text", text: "valid reply" }] },
+    ]);
+  });
+
+  it("does not hang on rejected parent cycles", async () => {
+    const root = await makeRoot("openclaw-transcript-state-rejected-cycle-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user", content: "kept after cycle" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual(
+      [{ id: "user-1", parentId: null }],
+    );
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
+  });
+
+  it("keeps legacy roots that are missing tree metadata", async () => {
+    const root = await makeRoot("openclaw-transcript-state-legacy-root-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-root",
+          message: { role: "user", content: "legacy prompt" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "tree-child",
+          parentId: "legacy-root",
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "tree reply" }] },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual(["legacy-root", "tree-child"]);
+    expect(state.getLeafId()).toBe("tree-child");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["legacy-root", "tree-child"]);
+  });
+
+  it("relinks migrated legacy suffixes past malformed rows", async () => {
+    const root = await makeRoot("openclaw-transcript-state-legacy-suffix-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "before malformed row" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { content: "missing role" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: { role: "user", content: "after malformed row" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    const branchText = state.getBranch().map((entry) => {
+      const message = entry.type === "message" ? entry.message : null;
+      if (!message || message.role !== "user" || typeof message.content !== "string") {
+        throw new Error("expected string message branch");
+      }
+      return message.content;
+    });
+    expect(branchText).toEqual(["before malformed row", "after malformed row"]);
+  });
+});
