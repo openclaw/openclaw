@@ -2253,9 +2253,13 @@ describe("capability cli", () => {
     });
 
     const resolutionCall = mocks.resolveCommandConfigWithSecrets.mock.calls.at(0)?.[0] as
-      | { config?: { tools?: { web?: { search?: { provider?: unknown } } } } }
+      | {
+          config?: { tools?: { web?: { search?: { provider?: unknown } } } };
+          targetIds?: Set<string>;
+        }
       | undefined;
     expect(resolutionCall?.config?.tools?.web?.search?.provider).toBe("exa");
+    expect(resolutionCall?.targetIds?.has("models.providers.google.apiKey")).toBe(false);
     expect(rawConfig.tools.web.search.provider).toBe("google");
     expect(vi.mocked(webSearchRuntime.runWebSearch)).toHaveBeenCalledWith(
       expect.objectContaining({

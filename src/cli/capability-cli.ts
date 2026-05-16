@@ -1534,7 +1534,10 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: commandConfig,
     commandName: "web.search",
-    targetIds: getWebSearchCommandSecretTargetIds(),
+    targetIds: getWebSearchCommandSecretTargetIds({
+      config: commandConfig,
+      provider: params.provider,
+    }),
     runtime: defaultRuntime,
   });
   const result = await runWebSearch({

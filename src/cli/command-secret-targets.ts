@@ -6,7 +6,10 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -34,11 +37,9 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "tools.web.search.apiKey",
   "tools.web.search.*.apiKey",
 ] as const;
-const STATIC_WEB_SEARCH_TARGET_IDS = [
-  "models.providers.google.apiKey",
-  "tools.web.search.apiKey",
-  "tools.web.search.*.apiKey",
-] as const;
+const GOOGLE_WEB_SEARCH_FALLBACK_TARGET_ID = "models.providers.google.apiKey";
+const GOOGLE_WEB_SEARCH_PROVIDER_IDS = new Set(["gemini", "google"]);
+const STATIC_WEB_SEARCH_TARGET_IDS = ["tools.web.search.apiKey", "tools.web.search.*.apiKey"];
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
@@ -88,6 +89,20 @@ function isPluginWebSearchCredentialTargetId(id: string): boolean {
     return false;
   }
   return segments[4] === "webSearch";
+}
+
+function resolveWebSearchCommandProviderId(params?: {
+  config?: OpenClawConfig;
+  provider?: string | null;
+}): string | null {
+  const overrideProvider = normalizeLowercaseStringOrEmpty(params?.provider);
+  if (overrideProvider) {
+    return overrideProvider;
+  }
+  const configuredProvider = normalizeLowercaseStringOrEmpty(
+    params?.config?.tools?.web?.search?.provider,
+  );
+  return configuredProvider || null;
 }
 
 function getAgentRuntimeBaseTargetIds(): string[] {
@@ -250,9 +265,16 @@ export function getModelsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_MODEL_TARGET_IDS);
 }
 
-export function getWebSearchCommandSecretTargetIds(): Set<string> {
+export function getWebSearchCommandSecretTargetIds(params?: {
+  config?: OpenClawConfig;
+  provider?: string | null;
+}): Set<string> {
+  const providerId = resolveWebSearchCommandProviderId(params);
   return toTargetIdSet([
     ...STATIC_WEB_SEARCH_TARGET_IDS,
+    ...(providerId === null || GOOGLE_WEB_SEARCH_PROVIDER_IDS.has(providerId)
+      ? [GOOGLE_WEB_SEARCH_FALLBACK_TARGET_ID]
+      : []),
     ...listSecretTargetRegistryEntries()
       .map((entry) => entry.id)
       .filter(isPluginWebSearchCredentialTargetId)

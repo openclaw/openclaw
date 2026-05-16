@@ -87,10 +87,9 @@ describe("command secret target ids", () => {
   });
 
   it("scopes web search command targets to search credentials only", () => {
-    const ids = getWebSearchCommandSecretTargetIds();
+    const ids = getWebSearchCommandSecretTargetIds({ provider: "exa" });
     expect(ids).toEqual(
       new Set([
-        "models.providers.google.apiKey",
         "plugins.entries.exa.config.webSearch.apiKey",
         "plugins.entries.searxng.config.webSearch.baseUrl",
         "tools.web.search.*.apiKey",
@@ -99,6 +98,27 @@ describe("command secret target ids", () => {
     );
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
     expect(ids.has("models.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("models.providers.google.apiKey")).toBe(false);
+  });
+
+  it("includes the Google model fallback only for Gemini web search", () => {
+    const ids = getWebSearchCommandSecretTargetIds({
+      config: { tools: { web: { search: { provider: "gemini" } } } } as never,
+    });
+    expect(ids.has("models.providers.google.apiKey")).toBe(true);
+  });
+
+  it("keeps the Google model fallback when web search can auto-detect providers", () => {
+    const ids = getWebSearchCommandSecretTargetIds();
+    expect(ids.has("models.providers.google.apiKey")).toBe(true);
+  });
+
+  it("lets the explicit web search provider override narrow configured Google targets", () => {
+    const ids = getWebSearchCommandSecretTargetIds({
+      config: { tools: { web: { search: { provider: "gemini" } } } } as never,
+      provider: "exa",
+    });
+    expect(ids.has("models.providers.google.apiKey")).toBe(false);
   });
 
   it("includes channel targets for agent runtime when delivery needs them", () => {
