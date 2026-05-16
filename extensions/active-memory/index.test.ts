@@ -469,6 +469,52 @@ describe("active-memory plugin", () => {
     expect(statusResult.text).toBe("Active Memory: off for this session.");
   });
 
+  it("falls back to the default agent for slash toggles when agents allowlist is empty (#82528)", async () => {
+    // The natural shape from `openclaw onboard` with a single default `main`
+    // agent leaves `config.agents` unset/empty. The per-turn path already
+    // falls back to DEFAULT_AGENT_ID; the slash command path must mirror
+    // that so /active-memory status|on|off don't short-circuit to
+    // "off for this session" on every single-agent setup.
+    api.pluginConfig = {
+      // Note: no `agents` field — matches the bug-report config shape.
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const sessionKey = "agent:main:active-memory-fallback";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-active-memory-fallback",
+      updatedAt: 0,
+    };
+    const command = registeredCommands["active-memory"];
+
+    const onResult = await command.handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "on",
+      commandBody: "/active-memory on",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+    expect(onResult.text).toContain("on for this session");
+
+    const statusResult = await command.handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "status",
+      commandBody: "/active-memory status",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+    expect(statusResult.text).toBe("Active Memory: on for this session.");
+  });
+
   it("supports an explicit global active-memory config toggle", async () => {
     const command = registeredCommands["active-memory"];
 

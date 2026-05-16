@@ -1149,7 +1149,13 @@ function isEnabledForAgent(
   if (!agentId) {
     return false;
   }
-  return config.agents.includes(agentId);
+  // Mirror the per-turn fallback at line ~810: when no `agents` allowlist is
+  // configured (the natural shape from `openclaw onboard` with a single
+  // default `main` agent), the plugin runs for the default agent. Without
+  // this, the slash commands short-circuit to "off for this session" for
+  // every single-agent setup even though per-turn execution is active.
+  const allowedAgents = config.agents.length > 0 ? config.agents : [DEFAULT_AGENT_ID];
+  return allowedAgents.includes(agentId);
 }
 
 function isEligibleInteractiveSession(ctx: {
