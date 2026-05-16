@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { debugLog, sanitizeDebugLogValue } from "./log.js";
+import { debugLog, debugWarn, sanitizeDebugLogValue } from "./log.js";
 
 const originalDebug = process.env.QQBOT_DEBUG;
 
@@ -24,5 +24,23 @@ describe("QQBot debug logging", () => {
     debugLog("prefix", "line one\nline two");
 
     expect(logSpy).toHaveBeenCalledWith("prefix line one line two");
+  });
+
+  it.each(["0", "false", "off", "no", ""])("does not log when QQBOT_DEBUG=%j", (value) => {
+    process.env.QQBOT_DEBUG = value;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    debugWarn("private message text");
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["1", "true", "yes", "on"])("logs when QQBOT_DEBUG=%j", (value) => {
+    process.env.QQBOT_DEBUG = value;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    debugLog("debug enabled");
+
+    expect(logSpy).toHaveBeenCalledWith("debug enabled");
   });
 });
