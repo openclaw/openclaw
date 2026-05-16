@@ -51,9 +51,7 @@ async function defaultGatherStatus(params: {
 }): Promise<DaemonStatus> {
   const { gatherDaemonStatus } = await daemonStatusModuleLoader.load();
   return gatherDaemonStatus({
-    rpc: {
-      ...(params.probeUrl ? { url: params.probeUrl } : {}),
-    },
+    rpc: params.probeUrl ? { url: params.probeUrl } : {},
     probe: true,
     requireRpc: params.requireRpc,
     deep: false,
@@ -67,10 +65,10 @@ function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
         try {
           return Number(new URL(probeUrl).port);
         } catch {
-          return NaN;
+          return Number.NaN;
         }
       })()
-    : NaN;
+    : Number.NaN;
   if (Number.isFinite(probePort) && status.portCli?.port === probePort) {
     return status.portCli;
   }
