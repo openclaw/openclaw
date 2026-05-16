@@ -572,6 +572,31 @@ describe("createWebhookHandler", () => {
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
+  it("preserves full text when trigger word equals entire message", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "trigger-eq-text-" + Date.now() }),
+      deliver,
+      log,
+    });
+
+    const body = makeFormBody({
+      token: "valid-token",
+      user_id: "123",
+      username: "testuser",
+      text: "!bot",
+      trigger_word: "!bot",
+    });
+
+    const req = makeReq("POST", body);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    // when the entire message is the trigger word, deliver the full text rather than dropping it
+    expect(deliveredMessage(deliver).body).toBe("!bot");
+  });
+
   it("responds 204 immediately and delivers async", async () => {
     const { deliver, res } = await runValidReply({ accountIdSuffix: "async-test" });
     expect(res._body).toBe("");
