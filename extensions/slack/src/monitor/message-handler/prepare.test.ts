@@ -208,7 +208,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       createSlackAccount({ replyToMode: "all" }),
       createSlackMessage({
         ts: "10.100",
-        thread_ts: "10.000",
         parent_user_id: "B1",
         text: "assistant thread message",
         assistant_thread: {
@@ -225,11 +224,207 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared);
     const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
     expect(prepared.forcedReplyThreadTs).toBe("10.000");
     expect(payload.SlackAssistantThread).toBe(true);
     expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
     expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
     expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
+  });
+
+  it("prefers Slack assistant message context over stale lifecycle cache", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.saveSlackAssistantThreadContext({
+      assistantChannelId: "D123",
+      threadTs: "10.000",
+      userId: "U1",
+      channelId: "C_OLD",
+      teamId: "T_OLD",
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "B1",
+        text: "assistant thread after context update",
+        assistant_thread: {
+          channel_id: "D123",
+          thread_ts: "10.000",
+          user_id: "U1",
+          context: {
+            channel_id: "C_NEW",
+            team_id: "T_NEW",
+          },
+        },
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C_NEW");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T_NEW");
+    expect(ctx.getSlackAssistantThreadContext("D123", "10.000")).toMatchObject({
+      channelId: "C_NEW",
+      teamId: "T_NEW",
+    });
+  });
+
+  it("preserves cached Slack assistant context when the message marker is partial", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.saveSlackAssistantThreadContext({
+      assistantChannelId: "D123",
+      threadTs: "10.000",
+      userId: "U1",
+      channelId: "C_CACHED",
+      teamId: "T_CACHED",
+      enterpriseId: "E_CACHED",
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "B1",
+        text: "assistant thread marker without context",
+        assistant_thread: {
+          channel_id: "D123",
+          thread_ts: "10.000",
+          user_id: "U1",
+        },
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C_CACHED");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T_CACHED");
+    expect(payload.SlackAssistantThreadContextEnterpriseId).toBe("E_CACHED");
+    expect(prepared.slackMessageMetadata).toEqual({
+      event_type: "assistant_thread_context",
+      event_payload: {
+        channel_id: "C_CACHED",
+        team_id: "T_CACHED",
+        enterprise_id: "E_CACHED",
+      },
+    });
+  });
+
+  it("restores Slack assistant DM thread context from Slack message metadata", async () => {
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          user: "B1",
+          metadata: {
+            event_type: "assistant_thread_context",
+            event_payload: {
+              channel_id: "C999",
+              team_id: "T1",
+              enterprise_id: "E1",
+            },
+          },
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "B1",
+        text: "assistant thread after restart",
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(replies).toHaveBeenCalledWith({
+      channel: "D123",
+      ts: "10.000",
+      oldest: "10.000",
+      include_all_metadata: true,
+      limit: 4,
+    });
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+    expect(prepared.slackMessageMetadata).toEqual({
+      event_type: "assistant_thread_context",
+      event_payload: {
+        channel_id: "C999",
+        team_id: "T1",
+        enterprise_id: "E1",
+      },
+    });
+    expect(payload.SlackAssistantThread).toBe(true);
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
+    expect(payload.SlackAssistantThreadContextEnterpriseId).toBe("E1");
+    expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
+  });
+
+  it("restores Slack assistant metadata from the updated anchor message", async () => {
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          user: "B1",
+          metadata: {
+            event_type: "assistant_thread_context",
+            event_payload: { channel_id: "C_NEW", team_id: "T_NEW" },
+          },
+        },
+        {
+          user: "B1",
+          metadata: {
+            event_type: "assistant_thread_context",
+            event_payload: { channel_id: "C_OLD", team_id: "T_OLD" },
+          },
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        ts: "10.200",
+        thread_ts: "10.000",
+        parent_user_id: "B1",
+        text: "assistant thread after another context change",
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C_NEW");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T_NEW");
+    expect(prepared.slackMessageMetadata).toEqual({
+      event_type: "assistant_thread_context",
+      event_payload: {
+        channel_id: "C_NEW",
+        team_id: "T_NEW",
+      },
+    });
   });
 
   function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {

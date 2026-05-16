@@ -397,6 +397,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyToMode: prepared.replyToMode,
   });
   const forcedReplyThreadTs = prepared.forcedReplyThreadTs;
+  const slackMessageMetadata = prepared.slackMessageMetadata;
   const statusThreadTs = forcedReplyThreadTs ?? threadTargets.statusThreadTs;
   const isThreadReply = threadTargets.isThreadReply;
   const replyDeliveryMode = forcedReplyThreadTs ? "off" : prepared.replyToMode;
@@ -631,6 +632,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         replyThreadTs: session.threadTs,
         replyToMode: replyDeliveryMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
+        ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
       });
       markSlackStreamFallbackDelivered(session);
       observedReplyDelivery = true;
@@ -676,6 +678,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyThreadTs,
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
+      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
     });
     observedReplyDelivery = true;
     const deliveredThreadTs = resolveDeliveredSlackReplyThreadTs({
@@ -982,6 +985,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         token: ctx.botToken,
         accountId: account.accountId,
         identity: slackIdentity,
+        ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {
           const ts = replyPlan.peekThreadTs();
@@ -1328,7 +1332,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
     try {
-      await stopSlackStream({ session: finalStream });
+      await stopSlackStream({
+        session: finalStream,
+        ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+      });
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);

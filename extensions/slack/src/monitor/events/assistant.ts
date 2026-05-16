@@ -1,6 +1,12 @@
+import type { Block, KnownBlock } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { SlackMonitorContext, SlackAssistantSuggestedPrompt } from "../context.js";
+import { buildSlackAssistantThreadMetadata } from "../context.js";
+import type {
+  SlackMonitorContext,
+  SlackAssistantSuggestedPrompt,
+  SlackAssistantThreadContext,
+} from "../context.js";
 
 type SlackAssistantThreadPayload = {
   user_id?: string;
@@ -50,6 +56,7 @@ const DEFAULT_ASSISTANT_PROMPTS: SlackAssistantSuggestedPrompt[] = [
 
 function normalizeAssistantThread(
   event: SlackAssistantThreadStartedEvent | SlackAssistantThreadContextChangedEvent,
+  getPrevious?: (channelId: string, threadTs: string) => SlackAssistantThreadContext | undefined,
 ) {
   const thread = event.assistant_thread;
   if (!thread) {
@@ -60,14 +67,77 @@ function normalizeAssistantThread(
   if (!channelId || !threadTs) {
     return null;
   }
+  const previous = getPrevious?.(channelId, threadTs);
+  const threadContext = thread.context;
+  const eventContext = event.context;
+  const resolveContextString = (
+    key: keyof Pick<SlackAssistantThreadContextPayload, "channel_id" | "team_id">,
+    previousValue: string | undefined,
+  ) => threadContext?.[key]?.trim() || eventContext?.[key]?.trim() || previousValue;
+  const enterpriseId = (() => {
+    if (threadContext && "enterprise_id" in threadContext) {
+      return threadContext.enterprise_id === null
+        ? null
+        : threadContext.enterprise_id?.trim() || previous?.enterpriseId;
+    }
+    if (eventContext && "enterprise_id" in eventContext) {
+      return eventContext.enterprise_id === null
+        ? null
+        : eventContext.enterprise_id?.trim() || previous?.enterpriseId;
+    }
+    return previous?.enterpriseId;
+  })();
   return {
     assistantChannelId: channelId,
     threadTs,
-    userId: thread.user_id?.trim() || undefined,
-    channelId: (thread.context ?? event.context)?.channel_id?.trim() || undefined,
-    teamId: (thread.context ?? event.context)?.team_id?.trim() || undefined,
-    enterpriseId: (thread.context ?? event.context)?.enterprise_id ?? undefined,
+    userId: thread.user_id?.trim() || previous?.userId,
+    channelId: resolveContextString("channel_id", previous?.channelId),
+    teamId: resolveContextString("team_id", previous?.teamId),
+    enterpriseId,
   };
+}
+
+async function persistAssistantThreadMetadata(params: {
+  ctx: SlackMonitorContext;
+  assistantThread: Omit<SlackAssistantThreadContext, "updatedAt">;
+}) {
+  const { ctx, assistantThread } = params;
+  try {
+    const response = (await ctx.app.client.conversations.replies({
+      token: ctx.botToken,
+      channel: assistantThread.assistantChannelId,
+      ts: assistantThread.threadTs,
+      oldest: assistantThread.threadTs,
+      include_all_metadata: true,
+      limit: 4,
+    })) as {
+      messages?: Array<{
+        subtype?: string;
+        user?: string;
+        ts?: string;
+        text?: string;
+        blocks?: (Block | KnownBlock)[];
+      }>;
+    };
+    const initialMessage = (response.messages ?? []).find(
+      (message) => !message.subtype && message.user === ctx.botUserId && message.ts,
+    );
+    if (!initialMessage?.ts) {
+      return;
+    }
+    await ctx.app.client.chat.update({
+      token: ctx.botToken,
+      channel: assistantThread.assistantChannelId,
+      ts: initialMessage.ts,
+      text: initialMessage.text ?? "",
+      blocks: Array.isArray(initialMessage.blocks) ? initialMessage.blocks : [],
+      metadata: buildSlackAssistantThreadMetadata(assistantThread),
+    });
+  } catch (err) {
+    logVerbose(
+      `slack assistant thread metadata persist failed for channel ${assistantThread.assistantChannelId}: ${formatErrorMessage(err)}`,
+    );
+  }
 }
 
 export function registerSlackAssistantEvents(params: {
@@ -84,7 +154,7 @@ export function registerSlackAssistantEvents(params: {
         return;
       }
       trackEvent?.();
-      const assistantThread = normalizeAssistantThread(event);
+      const assistantThread = normalizeAssistantThread(event, ctx.getSlackAssistantThreadContext);
       if (!assistantThread) {
         logVerbose(
           "slack assistant_thread_started dropped: missing assistant thread channel/thread",
@@ -111,7 +181,7 @@ export function registerSlackAssistantEvents(params: {
         return;
       }
       trackEvent?.();
-      const assistantThread = normalizeAssistantThread(event);
+      const assistantThread = normalizeAssistantThread(event, ctx.getSlackAssistantThreadContext);
       if (!assistantThread) {
         logVerbose(
           "slack assistant_thread_context_changed dropped: missing assistant thread channel/thread",
@@ -119,6 +189,7 @@ export function registerSlackAssistantEvents(params: {
         return;
       }
       ctx.saveSlackAssistantThreadContext(assistantThread);
+      await persistAssistantThreadMetadata({ ctx, assistantThread });
     } catch (err) {
       ctx.runtime.error?.(
         danger(`slack assistant_thread_context_changed handler failed: ${formatErrorMessage(err)}`),

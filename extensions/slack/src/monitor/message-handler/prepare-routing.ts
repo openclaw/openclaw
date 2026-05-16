@@ -156,7 +156,7 @@ export function resolveSlackRoutingContext(params: {
   isRoom: boolean;
   isRoomish: boolean;
   seedTopLevelRoomThread?: boolean;
-  isAssistantThread?: boolean;
+  assistantThreadTs?: string;
 }): SlackRoutingContext {
   const {
     ctx,
@@ -167,7 +167,7 @@ export function resolveSlackRoutingContext(params: {
     isRoom,
     isRoomish,
     seedTopLevelRoomThread,
-    isAssistantThread,
+    assistantThreadTs,
   } = params;
   let route = resolveSlackInitialAgentRoute({
     ctx,
@@ -205,7 +205,7 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const assistantThreadId = isAssistantThread ? (threadTs ?? threadContext.messageTs) : undefined;
+  const assistantThreadId = assistantThreadTs;
   // DM threads are a UI affordance, not a session boundary. Route all DM
   // messages, including thread replies, to the user's main DM session so
   // the agent sees them as part of the existing conversation. Slack assistant
