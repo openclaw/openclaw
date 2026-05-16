@@ -99,10 +99,15 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
   }
-  const missingConfiguredPluginInstallFailed =
-    missingConfiguredPluginInstallRepair.warnings.length > 0;
-  if (!isUpdatePackageSwapInProgress(env) && !missingConfiguredPluginInstallFailed) {
-    applyMutation(maybeRepairStalePluginConfig(state.candidate, env));
+  const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
+  const hasUnscopedInstallRepairWarnings =
+    missingConfiguredPluginInstallRepair.warnings.length > 0 && failedPluginIds.length === 0;
+  if (!isUpdatePackageSwapInProgress(env) && !hasUnscopedInstallRepairWarnings) {
+    applyMutation(
+      maybeRepairStalePluginConfig(state.candidate, env, {
+        preservePluginIds: failedPluginIds,
+      }),
+    );
   }
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));

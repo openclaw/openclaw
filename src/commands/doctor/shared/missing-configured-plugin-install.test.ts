@@ -2537,6 +2537,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       warnings: [
         `Failed to install missing configured plugin "brave" from ${expectedNpmInstallSpec("@openclaw/brave-plugin")}: network unavailable`,
       ],
+      failedPluginIds: ["brave"],
       records,
     });
   });
