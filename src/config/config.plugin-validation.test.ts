@@ -357,6 +357,53 @@ describe("config plugin validation", () => {
     expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", message);
   });
 
+  it("keeps blocked official external memory slot plugins fatal", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "memory-lancedb",
+                message: "blocked plugin candidate: fixture safety block",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.issues,
+      "plugins.slots.memory",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.memory-lancedb",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expect(
+      res.warnings?.some((warning) =>
+        warning.message.includes("plugin not installed: memory-lancedb"),
+      ),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "reports configured blocked plugins without stale not-found wording",
     async () => {
