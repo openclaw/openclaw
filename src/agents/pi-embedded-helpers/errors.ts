@@ -787,8 +787,13 @@ function isOpenRouterKeyBudgetLimitExceededError(raw: string, provider?: string)
 }
 
 function isExactUnknownNoDetailsError(raw: string): boolean {
+  // Tolerate the optional " (status=… id=… model=…)" diagnostic suffix added
+  // by the openai-transport-stream `response.failed` handler (#82558) so the
+  // classifier still routes those events to `no_error_details`.
+  const normalized = normalizeOptionalLowercaseString(raw)?.trim() ?? "";
   return (
-    normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
+    normalized === "unknown error (no error details in response)" ||
+    normalized.startsWith("unknown error (no error details in response) (")
   );
 }
 

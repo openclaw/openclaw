@@ -963,16 +963,32 @@ async function processResponsesStream(
     } else if (type === "response.failed") {
       const response = event.response as
         | {
+            id?: string;
+            status?: string;
+            model?: string;
             error?: { code?: string; message?: string };
             incomplete_details?: { reason?: string };
           }
         | undefined;
-      const msg = response?.error
-        ? `${response.error.code || "unknown"}: ${response.error.message || "no message"}`
-        : response?.incomplete_details?.reason
-          ? `incomplete: ${response.incomplete_details.reason}`
-          : "Unknown error (no error details in response)";
-      throw new Error(msg);
+      if (response?.error) {
+        throw new Error(
+          `${response.error.code || "unknown"}: ${response.error.message || "no message"}`,
+        );
+      }
+      if (response?.incomplete_details?.reason) {
+        throw new Error(`incomplete: ${response.incomplete_details.reason}`);
+      }
+      // Surface whatever identifiers the upstream did include so operators can
+      // correlate the failure with provider/LiteLLM logs instead of seeing a
+      // bare "Unknown error". Documented by #82558 against detail-less
+      // response.failed events from gpt-4.1 / gpt-5.3-codex through LiteLLM.
+      const idHints = [
+        response?.status ? `status=${response.status}` : null,
+        response?.id ? `id=${response.id}` : null,
+        response?.model ? `model=${response.model}` : null,
+      ].filter((entry): entry is string => entry !== null);
+      const detailSuffix = idHints.length > 0 ? ` (${idHints.join(" ")})` : "";
+      throw new Error(`Unknown error (no error details in response)${detailSuffix}`);
     }
     await cooperativeScheduler.afterEvent();
   }

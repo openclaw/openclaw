@@ -1541,6 +1541,23 @@ describe("classifyProviderRuntimeFailureKind", () => {
     );
   });
 
+  it("routes detail-less response.failed with diagnostic suffix to no_error_details (#82558)", () => {
+    // The openai-transport-stream `response.failed` handler appends a
+    // " (status=… id=… model=…)" suffix so operators can correlate the
+    // failure with provider/LiteLLM logs. The classifier must still route
+    // those events to `no_error_details` rather than `unclassified`.
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "Unknown error (no error details in response) (status=failed id=resp_abc model=gpt-5.3-codex)",
+      ),
+    ).toBe("no_error_details");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "Unknown error (no error details in response) (status=failed)",
+      ),
+    ).toBe("no_error_details");
+  });
+
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {
     expect(
       classifyProviderRuntimeFailureKind(
