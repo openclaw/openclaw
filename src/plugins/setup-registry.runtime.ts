@@ -60,7 +60,7 @@ function resolveMetadataSnapshotForSetupCliBackends(
   const current = getCurrentPluginMetadataSnapshot({
     config: params.config,
     env,
-    ...(workspaceDir !== undefined ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
+    workspaceDir,
   });
   if (current) {
     return { snapshot: current, cacheable: true };
