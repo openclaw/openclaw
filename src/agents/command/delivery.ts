@@ -286,12 +286,12 @@ function routeMatchesExplicitMessageSend(params: {
   }
   const sendAccountId = normalizeRoutePart(params.send.accountId);
   const accountId = normalizeRoutePart(params.accountId);
-  if (sendAccountId && accountId && sendAccountId !== accountId) {
+  if (sendAccountId !== accountId) {
     return false;
   }
   const sendThreadId = normalizeRoutePart(params.send.threadId);
   const threadId = normalizeRoutePart(params.threadId);
-  if (sendThreadId && threadId && sendThreadId !== threadId) {
+  if (sendThreadId !== threadId) {
     return false;
   }
   return true;
