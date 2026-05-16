@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/Gateway: route targeted Telegram `/stop@bot` messages onto the control lane without cached bot metadata and match gateway stop requests across raw/canonical session aliases. (#82298) Thanks @VACInc.
 - MS Teams/media: sniff inline `data:image/*` attachment bytes before staging them, skipping payloads that are not actually images.
 - Update: let package-swap `doctor --fix` persist core config repairs while plugin schemas are still converging, preventing update failures on externalized channel configs.
+- Update: carry plugin-validation bypasses into config mutation pre-write reads, so package update doctor repairs can finish while externalized plugin schemas are converging.
 - Agents/subagents: warn and continue completion announce cleanup when lifecycle cleanup fails, preventing ended subagent runs from becoming silent ghosts. Fixes #82306. Thanks @SebTardif.
 - Telegram: let authorized text `/stop` commands use the fast-abort path before queued agent work, so active turns stop immediately instead of processing the abort after the turn finishes; foreign-bot `/stop@otherbot` mentions now stay on the regular topic lane instead of being routed into our control lane. Fixes #82162. Thanks @civiltox.
 - Agents/timeouts: clarify model idle-timeout errors and docs so provider `timeoutSeconds` is shown as bounded by the whole agent/run timeout ceiling.
@@ -41,6 +42,10 @@ Docs: https://docs.openclaw.ai
 - Providers: reject malformed successful Runway, BytePlus, and Ollama embedding responses with provider-owned errors instead of raw parser/type failures, silent bad vectors, or long bogus polling.
 - Providers/images: reject malformed successful OpenAI-compatible, OpenAI, Google, fal, and OpenRouter image responses with provider-owned errors instead of raw shape failures, silent invalid base64 skips, or empty image results.
 - Providers/videos: reject malformed successful xAI, OpenRouter, and fal video create, poll, and result responses with provider-owned errors instead of raw parser failures or long bogus polling.
+- Providers/audio: reject malformed successful OpenAI-compatible, ElevenLabs, and Deepgram speech responses with provider-owned errors instead of raw parser failures, wrong-shaped transcripts, or JSON/text bodies treated as audio.
+- Providers/embeddings: reject malformed successful OpenAI-compatible, Google Gemini, and Amazon Bedrock embedding responses instead of silently returning empty or coerced vectors.
+- Providers/catalogs: reject malformed successful LM Studio, GitHub Copilot, DeepInfra, Vercel AI Gateway, and Kilocode model-list responses with provider-owned errors instead of raw parser/type failures or silent fallback catalogs.
+- Providers/polling: reject array, null, or scalar successful operation status responses with provider-owned malformed JSON errors instead of waiting until timeout.
 - Trajectory export: skip and report malformed session/runtime JSONL rows in `manifest.json` instead of letting wrong-shaped session rows crash support bundle export.
 - Voice calls: persist rejected inbound-call replay keys so duplicate carrier webhook retries stay ignored after a Gateway restart.
 - Config/doctor: copy fallback-enabled channel `allowFrom` entries into explicit `groupAllowFrom` allowlists during `openclaw doctor --fix`, preserving current group access without adding runtime fallback-transition flags.

@@ -1825,7 +1825,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   assertConfigWriteAllowedInCurrentMode();
 
   const root = await resolveUpdateRoot();
-  let configSnapshot = await readConfigFileSnapshot();
+  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
@@ -1927,6 +1927,7 @@ async function persistRequestedUpdateChannel(params: {
   const requestedChannel = params.requestedChannel;
 
   const mutation = await mutateConfigFileWithRetry({
+    writeOptions: { skipPluginValidation: true },
     mutate: (draft) => {
       draft.update = {
         ...draft.update,
@@ -2337,7 +2338,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot();
+  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,

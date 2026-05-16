@@ -10,6 +10,12 @@ const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   note: vi.fn(),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
+  readConfigFileSnapshot: vi.fn().mockResolvedValue({
+    exists: true,
+    valid: true,
+    config: {},
+    issues: [],
+  }),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   shortenHomePath: vi.fn((p: string) => p),
@@ -31,6 +37,7 @@ vi.mock("../version.js", () => ({
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
   replaceConfigFile: mocks.replaceConfigFile,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -80,6 +87,13 @@ describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.note.mockReset();
+    mocks.readConfigFileSnapshot.mockReset();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
   });
 
   afterEach(() => {
@@ -278,6 +292,44 @@ describe("doctor health contributions", () => {
       expect(ctx.runtime.log).toHaveBeenCalledWith(
         "Update changed config; pre-update backup: /tmp/fake-openclaw.json.pre-update",
       );
+    });
+
+    it("skips plugin schema validation for final validation during update doctor runs", async () => {
+      const contribution = requireDoctorContribution("doctor:final-config-validation");
+
+      await contribution.run({
+        cfg: {},
+        configResult: { cfg: {} },
+        sourceConfigValid: true,
+        prompter: buildDoctorPrompter(true),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: {},
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        },
+      } as Parameters<(typeof contribution)["run"]>[0]);
+
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
+        skipPluginValidation: true,
+      });
+    });
+
+    it("keeps plugin schema validation for ordinary doctor final validation", async () => {
+      const contribution = requireDoctorContribution("doctor:final-config-validation");
+
+      await contribution.run({
+        cfg: {},
+        configResult: { cfg: {} },
+        sourceConfigValid: true,
+        prompter: buildDoctorPrompter(true),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: {},
+        env: {},
+      } as Parameters<(typeof contribution)["run"]>[0]);
+
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
+        skipPluginValidation: false,
+      });
     });
 
     it("allows allowConfigSizeDrop when not in update", async () => {

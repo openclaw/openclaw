@@ -736,6 +736,14 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
+  it("reads the initial update config without plugin schema validation", async () => {
+    await updateCommand({ yes: true, restart: false });
+
+    expect(vi.mocked(readConfigFileSnapshot).mock.calls[0]?.[0]).toEqual({
+      skipPluginValidation: true,
+    });
+  });
+
   it("bounds completion cache refresh during update follow-up", async () => {
     const root = createCaseDir("openclaw-completion-timeout");
     pathExists.mockResolvedValue(true);
@@ -1158,6 +1166,11 @@ describe("update-cli", () => {
       },
       baseHash: "stable-hash",
     });
+    expect(mutateConfigFileWithRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: { skipPluginValidation: true },
+      }),
+    );
     expect(syncPluginCall()?.channel).toBe("dev");
     expect(syncPluginCall()?.config?.update?.channel).toBe("dev");
   });
