@@ -108,22 +108,38 @@ function isToolCallContent(value: unknown): boolean {
   );
 }
 
+function isPersistedContentBlock(value: unknown): boolean {
+  if (!isRecord(value) || !isString(value.type)) {
+    return false;
+  }
+  switch (value.type) {
+    case "text":
+      return isTextContent(value);
+    case "thinking":
+      return isThinkingContent(value);
+    case "image":
+      return isImageContent(value);
+    default:
+      if (repairableToolCallContentTypes.has(value.type)) {
+        return isToolCallContent(value);
+      }
+      return true;
+  }
+}
+
 function isUserContent(value: unknown): boolean {
   return (
     typeof value === "string" ||
-    (Array.isArray(value) && value.every((item) => isTextContent(item) || isImageContent(item)))
+    (Array.isArray(value) && value.every((item) => isPersistedContentBlock(item)))
   );
 }
 
 function isAssistantContent(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.every((item) => isTextContent(item) || isThinkingContent(item) || isToolCallContent(item))
-  );
+  return Array.isArray(value) && value.every((item) => isPersistedContentBlock(item));
 }
 
 function isToolResultContent(value: unknown): boolean {
-  return Array.isArray(value) && value.every((item) => isTextContent(item) || isImageContent(item));
+  return Array.isArray(value) && value.every((item) => isPersistedContentBlock(item));
 }
 
 function isOptionalBoolean(value: unknown): boolean {

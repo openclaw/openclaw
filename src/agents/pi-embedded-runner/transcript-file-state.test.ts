@@ -217,6 +217,78 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("preserves OpenClaw-authored non-model content blocks", async () => {
+    const root = await makeRoot("openclaw-transcript-state-openclaw-blocks-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "read the injected blocks" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-audio",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "voice reply" },
+              { type: "audio", data: "UklGRg==", mimeType: "audio/wav" },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "tool-result",
+          parentId: "assistant-audio",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "codex_progress",
+            content: [
+              {
+                type: "toolResult",
+                id: "call-1",
+                toolUseId: "call-1",
+                content: "progress payload",
+                text: "progress payload",
+              },
+            ],
+            isError: false,
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const messages = state.buildSessionContext().messages;
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual([
+      "user-1",
+      "assistant-audio",
+      "tool-result",
+    ]);
+    expect(state.getLeafId()).toBe("tool-result");
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
+    expect(messages[1]).toMatchObject({ content: [{ type: "text" }, { type: "audio" }] });
+    expect(messages[2]).toMatchObject({ content: [{ type: "toolResult" }] });
+  });
+
   it("preserves empty compaction summary entries as the active leaf", async () => {
     const root = await makeRoot("openclaw-transcript-state-empty-compaction-");
     const sessionFile = path.join(root, "session.jsonl");
