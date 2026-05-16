@@ -635,6 +635,10 @@ describe("runGatewayLoop", () => {
           () => markGatewaySigusr1RestartHandled.mock.calls.length > 0,
           "expected SIGUSR1 handler to consume the restart before startup returned",
         );
+        await waitForLoopCondition(
+          () => markGatewayDraining.mock.calls.length > 0,
+          "expected queued startup restart to mark gateway draining before startup returned",
+        );
         return { close: closeFirst };
       });
       start.mockImplementationOnce(async () => {
@@ -673,6 +677,51 @@ describe("runGatewayLoop", () => {
         await expect(exited).resolves.toBe(0);
       }
     });
+  });
+
+  it("exits if a queued startup restart never reaches a close handle", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    vi.useFakeTimers();
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const close = vi.fn(async () => {});
+        const startupNeverReturns = new Promise<void>(() => {});
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        const start = vi.fn(async () => {
+          await startupNeverReturns;
+          return { close };
+        });
+
+        const { runGatewayLoop } = await import("./run-loop.js");
+        void runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        sigusr1();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+        expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+        expect(runtime.exit).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(24_999);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+
+        await expect(exited).resolves.toBe(1);
+        expect(close).not.toHaveBeenCalled();
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(gatewayLog.error).toHaveBeenCalledWith(
+          "startup restart request timed out before gateway returned a close handle; exiting for supervisor recovery",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("processes SIGINT immediately before startup returns a server", async () => {
@@ -736,7 +785,7 @@ describe("runGatewayLoop", () => {
 
       await expect(exited).resolves.toBe(0);
       expect(close).not.toHaveBeenCalled();
-      expect(markGatewayDraining).not.toHaveBeenCalled();
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalledTimes(1);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(1);
       expect(gatewayLog.info).toHaveBeenCalledWith(
