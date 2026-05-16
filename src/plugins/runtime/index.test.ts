@@ -327,6 +327,16 @@ describe("plugin runtime command execution", () => {
         ]);
       },
     },
+    {
+      name: "exposes runtime.llm completion helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expect(runtime.llm).toMatchObject({
+          complete: expect.any(Function),
+          completeStructured: expect.any(Function),
+        });
+        expectFunctionKeys(runtime.llm, ["complete", "completeStructured"]);
+      },
+    },
   ] as const)("$name", ({ assert }) => {
     expectRuntimeShape(assert);
   });

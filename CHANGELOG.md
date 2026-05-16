@@ -414,6 +414,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: remove the owner-specific `provider-auth-login` public subpath after moving Chutes, GitHub Copilot, and OpenAI Codex auth flows back to provider-owned modules.
 - Plugin SDK: remove provider-specific model, stream, and xAI compatibility helpers from public exports after moving bundled callers to provider-owned modules.
 - Plugin SDK: expose runtime-supplied active model metadata to native plugin tool factories for diagnostics and plugin-owned policy decisions. Fixes #77857. Thanks @jamiezigelbaum.
+- Plugin SDK/runtime: add `api.runtime.llm.completeStructured(...)` for host-owned structured plugin inference with optional image inputs, JSON/schema validation, auth-profile selection, and the same model/agent override trust gates as `api.runtime.llm.complete`.
 - QA/Mantis: add Telegram live PR evidence automation with Convex-leased credentials, Crabbox transcript capture, motion GIF previews, and inline PR comments.
 - QA/Mantis: add a Telegram desktop scenario builder that leases Crabbox, installs native Telegram Desktop, configures an OpenClaw Telegram gateway with leased bot credentials, and records VNC screenshot/video artifacts.
 - Discord/voice: add realtime voice diagnostics for speaker turns, playback resets, barge-in detection, and audio cutoff analysis.

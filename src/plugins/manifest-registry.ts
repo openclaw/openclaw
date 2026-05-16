@@ -747,6 +747,8 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
+  const resolvedCandidateRoot = resolveUserPath(params.candidate.rootDir, params.env);
+  const candidateRoot = safeRealpathSync(resolvedCandidateRoot) ?? resolvedCandidateRoot;
   const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
   const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
   const trackedPaths = [record.installPath, record.sourcePath]
@@ -759,7 +761,12 @@ function matchesInstalledPluginRecord(params: {
     return false;
   }
   return trackedPaths.some((trackedPath) => {
-    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
+    return (
+      candidateRoot === trackedPath ||
+      candidateSource === trackedPath ||
+      isPathInside(trackedPath, candidateRoot) ||
+      isPathInside(trackedPath, candidateSource)
+    );
   });
 }
 

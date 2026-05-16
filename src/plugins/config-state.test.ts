@@ -154,6 +154,7 @@ describe("normalizePluginsConfig", () => {
           allowModelOverride: true,
           allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
           allowAgentIdOverride: false,
+          allowProfileOverride: true,
         },
       })?.llm,
     ).toEqual({
@@ -161,6 +162,7 @@ describe("normalizePluginsConfig", () => {
       hasAllowedModelsConfig: true,
       allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
       allowAgentIdOverride: false,
+      allowProfileOverride: true,
     });
   });
 

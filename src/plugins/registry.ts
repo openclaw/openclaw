@@ -2425,6 +2425,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           return {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
+            completeStructured: (params) =>
+              withPluginRuntimePluginIdScope(pluginId, () => llm.completeStructured(params)),
           } satisfies PluginRuntime["llm"];
         }
         if (prop !== "subagent") {

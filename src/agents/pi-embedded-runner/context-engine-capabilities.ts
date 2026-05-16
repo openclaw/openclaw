@@ -80,6 +80,22 @@ export function resolveContextEngineCapabilities(
           },
         }).complete(request);
       },
+      completeStructured: async (request) => {
+        const { createRuntimeLlm } = await import("../../plugins/runtime/runtime-llm.runtime.js");
+        return await createRuntimeLlm({
+          getConfig: () => params.config,
+          authority: {
+            caller: { kind: "context-engine", id: params.purpose },
+            requiresBoundAgent: true,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
+            ...(contextEnginePluginId ? { pluginIdForPolicy: contextEnginePluginId } : {}),
+            allowAgentIdOverride: false,
+            allowModelOverride: false,
+            allowComplete: true,
+          },
+        }).completeStructured(request);
+      },
     },
   };
 }

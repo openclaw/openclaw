@@ -108,6 +108,22 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
+export type LlmCompleteStructuredTextInput = {
+  type: "text";
+  text: string;
+};
+
+export type LlmCompleteStructuredImageInput = {
+  type: "image";
+  buffer: Buffer;
+  mimeType?: string;
+  fileName?: string;
+};
+
+export type LlmCompleteStructuredInput =
+  | LlmCompleteStructuredTextInput
+  | LlmCompleteStructuredImageInput;
+
 export type LlmCompleteParams = {
   messages: LlmCompleteMessage[];
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
@@ -122,6 +138,30 @@ export type LlmCompleteParams = {
   agentId?: string;
 };
 
+export type LlmCompleteStructuredParams = {
+  input: LlmCompleteStructuredInput[];
+  instructions: string;
+  /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  systemPrompt?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** Human-readable reason for audit/debug output. */
+  purpose?: string;
+  /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
+  agentId?: string;
+  /**
+   * Preferred auth profile id when the selected provider supports profile-backed auth.
+   * Requires host trust via plugins.entries.<id>.llm.allowProfileOverride or an equivalent authority policy.
+   */
+  profile?: string;
+  schemaName?: string;
+  jsonSchema?: unknown;
+  jsonMode?: boolean;
+};
+
 export type LlmCompleteResult = {
   text: string;
   provider: string;
@@ -133,6 +173,11 @@ export type LlmCompleteResult = {
     purpose?: string;
     sessionKey?: string;
   };
+};
+
+export type LlmCompleteStructuredResult = LlmCompleteResult & {
+  parsed?: unknown;
+  contentType: "json" | "text";
 };
 
 type RuntimeRunEmbeddedPiAgent = (
@@ -313,6 +358,9 @@ export type PluginRuntimeCore = {
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    completeStructured: (
+      params: LlmCompleteStructuredParams,
+    ) => Promise<LlmCompleteStructuredResult>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
