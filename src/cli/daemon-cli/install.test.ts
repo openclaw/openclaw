@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonActionResponse } from "./response.js";
@@ -21,7 +22,7 @@ const hasConfiguredSecretInputMock = vi.hoisted(() =>
   }),
 );
 const resolveGatewayAuthMock = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<() => ResolvedGatewayAuth>(() => ({
     mode: "token",
     token: undefined,
     password: undefined,
