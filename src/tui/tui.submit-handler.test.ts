@@ -46,6 +46,36 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("hello");
   });
 
+  it("preserves normal message drafts when chat is busy", () => {
+    const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
+      createSubmitHarness({
+        canSubmitMessage: () => false,
+      });
+
+    onSubmit("  wait, use c++ instead  ");
+
+    expect(editor.setText).not.toHaveBeenCalled();
+    expect(editor.addToHistory).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+  });
+
+  it("continues to route slash commands while chat is busy", () => {
+    const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
+      createSubmitHarness({
+        canSubmitMessage: () => false,
+      });
+
+    onSubmit("/abort");
+
+    expect(editor.setText).toHaveBeenCalledWith("");
+    expect(handleCommand).toHaveBeenCalledWith("/abort");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).not.toHaveBeenCalled();
+  });
+
   it("preserves internal newlines for multiline messages", () => {
     const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
 
