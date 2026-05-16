@@ -219,6 +219,39 @@ description: test skill
     }
   });
 
+  it("excludes test files when scanning plugin source for code-safety (#82469)", async () => {
+    const scanSpy = vi
+      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .mockImplementation(async () => ({
+        scannedFiles: 0,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        truncated: false,
+        findings: [],
+      }));
+
+    try {
+      const tmpDir = await makeTmpDir("audit-scanner-test-files");
+      const pluginDir = path.join(tmpDir, "extensions", "with-tests");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
+      await fs.writeFile(path.join(pluginDir, "index.test.ts"), "// vitest spec");
+
+      await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+
+      // Every scanner invocation for plugin source must request test-file
+      // exclusion, otherwise *.test.ts files in bundled plugins reach the
+      // env-harvesting rule and produce false-positive critical findings.
+      for (const call of scanSpy.mock.calls) {
+        const [, opts] = call;
+        expect(opts).toMatchObject({ excludeTestFiles: true });
+      }
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
   it("surfaces manifest_parse_error finding when plugin package.json is malformed JSON", async () => {
     const tmpDir = await makeTmpDir("audit-manifest-parse-error");
     const pluginDir = path.join(tmpDir, "extensions", "broken-plugin");

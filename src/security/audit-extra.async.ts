@@ -243,6 +243,17 @@ async function getCodeSafetySummary(params: {
     dirPath: params.dirPath,
     includeFiles: params.includeFiles,
   });
+  // Plugin/skill audits run against installed plugin source trees that often
+  // ship Vitest specs alongside production code. Test files never load at
+  // runtime (only the manifest `entry` does), but they routinely touch
+  // `process.env` and `fetch()` in fixture setup — which is exactly what the
+  // `env-harvesting` rule flags as critical. Exclude `*.test.ts`, `*.spec.ts`,
+  // and `*.mock.ts` from the scan so legitimate test fixtures stop producing
+  // false-positive credential-harvesting findings on bundled plugins.
+  const scanOptions = {
+    includeFiles: params.includeFiles,
+    excludeTestFiles: true,
+  };
   const cache = params.summaryCache;
   if (cache) {
     const hit = cache.get(cacheKey);
@@ -250,16 +261,12 @@ async function getCodeSafetySummary(params: {
       return (await hit) as SkillScanSummary;
     }
     const skillScanner = await loadSkillScannerModule();
-    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
-      includeFiles: params.includeFiles,
-    });
+    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, scanOptions);
     cache.set(cacheKey, pending);
     return await pending;
   }
   const skillScanner = await loadSkillScannerModule();
-  return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
-    includeFiles: params.includeFiles,
-  });
+  return await skillScanner.scanDirectoryWithSummary(params.dirPath, scanOptions);
 }
 
 // --------------------------------------------------------------------------
