@@ -8,6 +8,11 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import {
+  CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+  CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+  CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+} from "./bundle-manifest.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -19,6 +24,7 @@ import {
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
 import {
   resolvePluginControlPlaneFingerprint,
   resolvePluginDiscoveryContext,
@@ -50,6 +56,21 @@ type PersistedRegistryMemoState = {
 const PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES = 8;
 const pluginMetadataSnapshotMemo = new Map<string, PluginMetadataSnapshotMemo>();
 const pluginMetadataSnapshotRegistryStateMemo = new Map<string, PersistedRegistryMemoState>();
+const PLUGIN_DISCOVERY_CANDIDATE_MARKER_PATHS = [
+  "package.json",
+  PLUGIN_MANIFEST_FILENAME,
+  ...DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+  CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+  CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+  "skills",
+  "commands",
+  "agents",
+  path.join("hooks", "hooks.json"),
+  ".mcp.json",
+  ".lsp.json",
+  "settings.json",
+] as const;
 
 export function clearLoadPluginMetadataSnapshotMemo(): void {
   pluginMetadataSnapshotMemo.clear();
@@ -88,6 +109,14 @@ function fileFingerprint(filePath: string): unknown {
     return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
   } catch {
     return [filePath, "missing"];
+  }
+}
+
+function safeStat(filePath: string): fs.Stats | null {
+  try {
+    return fs.statSync(filePath);
+  } catch {
+    return null;
   }
 }
 
@@ -958,12 +987,53 @@ function resolvePluginDiscoveryWatchPaths(params: {
     env: params.env,
     workspaceDir: params.params.workspaceDir,
   });
-  return [
+  const watchedFiles = new Set<string>();
+  for (const filePath of [
     discovery.roots.stock,
     discovery.roots.global,
     discovery.roots.workspace,
     ...discovery.loadPaths,
-  ].filter((filePath): filePath is string => typeof filePath === "string" && filePath.length > 0);
+  ]) {
+    addPluginDiscoveryWatchPath(watchedFiles, filePath);
+  }
+  return [...watchedFiles].toSorted();
+}
+
+function addPluginDiscoveryWatchPath(
+  watchedFiles: Set<string>,
+  filePath: string | undefined,
+): void {
+  if (!filePath) {
+    return;
+  }
+  watchedFiles.add(filePath);
+  const stat = safeStat(filePath);
+  if (!stat?.isDirectory()) {
+    return;
+  }
+  addPluginDiscoveryCandidateMarkerWatchPaths(watchedFiles, filePath);
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(filePath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const childPath = path.join(filePath, entry.name);
+    if (entry.isDirectory() || (entry.isSymbolicLink() && safeStat(childPath)?.isDirectory())) {
+      watchedFiles.add(childPath);
+      addPluginDiscoveryCandidateMarkerWatchPaths(watchedFiles, childPath);
+    }
+  }
+}
+
+function addPluginDiscoveryCandidateMarkerWatchPaths(
+  watchedFiles: Set<string>,
+  candidateRoot: string,
+): void {
+  for (const markerPath of PLUGIN_DISCOVERY_CANDIDATE_MARKER_PATHS) {
+    watchedFiles.add(path.join(candidateRoot, markerPath));
+  }
 }
 
 function canMemoizePluginMetadataSnapshotResult(result: {

@@ -423,6 +423,64 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
 
+  it("invalidates source-stale memo entries when existing discovery children gain plugin files", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    const pluginDir = path.join(loadPath, "new-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "new-plugin",
+      openclaw: { extensions: ["index.js"] },
+    });
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates source-stale memo entries when discovery child marker files change", () => {
+    const stateDir = tempStateDir();
+    const loadPath = path.join(stateDir, "configured-plugins");
+    const pluginDir = path.join(loadPath, "new-plugin");
+    writeJson(path.join(pluginDir, "package.json"), { name: "new-plugin" });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+    const config = { plugins: { load: { paths: [loadPath] } } };
+
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "new-plugin",
+      openclaw: { extensions: ["index.js"] },
+    });
+    loadPluginMetadataSnapshot({ config, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts the least recently used snapshot memo entry after the cap", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
