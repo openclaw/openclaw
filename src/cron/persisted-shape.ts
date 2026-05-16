@@ -5,7 +5,8 @@ export type InvalidPersistedCronJobReason =
   | "missing-schedule"
   | "invalid-schedule"
   | "missing-payload"
-  | "invalid-payload";
+  | "invalid-payload"
+  | "missing-payload-text";
 
 export function getInvalidPersistedCronJobReason(
   candidate: Record<string, unknown>,
@@ -51,15 +52,13 @@ export function getInvalidPersistedCronJobReason(
     return "invalid-payload";
   }
   if (payloadKind === "systemEvent") {
-    const text = payloadRecord.text;
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return "invalid-payload";
+    if (typeof payloadRecord.text !== "string") {
+      return "missing-payload-text";
     }
   }
   if (payloadKind === "agentTurn") {
-    const message = payloadRecord.message;
-    if (typeof message !== "string" || message.trim().length === 0) {
-      return "invalid-payload";
+    if (typeof payloadRecord.message !== "string") {
+      return "missing-payload-text";
     }
   }
   return null;
