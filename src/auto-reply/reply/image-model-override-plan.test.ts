@@ -56,6 +56,31 @@ describe("resolveImageModelOverridePlan", () => {
     });
   });
 
+  it("resolves providerless image models independently of the active session provider", async () => {
+    const modelSupportsImages = vi.fn(async (ref: { provider: string; model: string }) => {
+      return ref.provider === "openai" && ref.model === "gpt-4o";
+    });
+
+    const plan = await resolveImageModelOverridePlan({
+      cfg: buildConfig({ imageModel: "gpt-4o" }),
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      hasImageAttachments: true,
+      sessionModelSupportsImages: false,
+      modelSupportsImages,
+    });
+
+    expect(plan).toEqual({
+      kind: "inline-image-model",
+      modelOverride: "openai/gpt-4o",
+      modelOverrideFallbacks: [],
+    });
+    expect(modelSupportsImages).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-4o",
+    });
+  });
+
   it("selects the first vision-capable image model and carries later image fallbacks", async () => {
     const modelSupportsImages = vi.fn(async (ref: { provider: string; model: string }) => {
       return ref.model !== "gpt-4o-blocked";
