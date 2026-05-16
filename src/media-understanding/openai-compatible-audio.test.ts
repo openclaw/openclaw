@@ -193,6 +193,28 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     ).rejects.toThrow(/requires a JSON response_format/);
   });
 
+  it("rejects prompts for the OpenAI diarized transcription model", async () => {
+    const fetchFn = vi.fn<typeof fetch>();
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "meeting.wav",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe-diarize",
+        prompt: "Focus on named speakers",
+        query: {
+          response_format: "diarized_json",
+        },
+      }),
+    ).rejects.toThrow(/does not support prompt/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("omits segments when the provider returns no usable segment text", async () => {
     const { fetchFn } = createRequestCaptureJsonFetch({
       text: "transcript only",
