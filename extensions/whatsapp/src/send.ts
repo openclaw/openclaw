@@ -27,6 +27,10 @@ import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
+function supportsForcedDocumentDelivery(kind: "image" | "audio" | "video" | "document"): boolean {
+  return kind === "image" || kind === "video";
+}
+
 function resolveOutboundWhatsAppAccountId(params: {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -119,10 +123,12 @@ export async function sendMessageWhatsApp(
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
     let visibleTextAfterVoice: string | undefined;
+    let forceDocumentDelivery = false;
     if (primaryMediaUrl) {
       const media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),
+          optimizeImages: options.forceDocument ? false : undefined,
           mediaAccess: options.mediaAccess,
           mediaLocalRoots: options.mediaLocalRoots,
           mediaReadFile: options.mediaReadFile,
@@ -132,7 +138,10 @@ export async function sendMessageWhatsApp(
       const caption = text || undefined;
       mediaBuffer = media.buffer;
       mediaType = media.mimetype;
-      if (media.kind === "audio" && caption && !options.forceDocument) {
+      forceDocumentDelivery = Boolean(
+        options.forceDocument && supportsForcedDocumentDelivery(media.kind),
+      );
+      if (media.kind === "audio" && caption) {
         visibleTextAfterVoice = caption;
         text = "";
       } else if (media.kind === "document") {
@@ -141,7 +150,7 @@ export async function sendMessageWhatsApp(
       } else {
         text = caption ?? "";
       }
-      if (options.forceDocument) {
+      if (forceDocumentDelivery) {
         documentFileName ??= media.fileName ?? "file";
       }
     }
@@ -154,13 +163,13 @@ export async function sendMessageWhatsApp(
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
       options.gifPlayback ||
-      options.forceDocument ||
+      forceDocumentDelivery ||
       accountId ||
       documentFileName ||
       options.quotedMessageKey
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
-            ...(options.forceDocument ? { asDocument: true } : {}),
+            ...(forceDocumentDelivery ? { asDocument: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
             ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,

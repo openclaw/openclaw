@@ -107,6 +107,7 @@ describe("web outbound", () => {
           };
           mediaLocalRoots?: readonly string[];
           mediaReadFile?: (filePath: string) => Promise<Buffer>;
+          optimizeImages?: boolean;
         },
       ) =>
         await loadWebMediaMock(mediaUrl, {
@@ -469,6 +470,30 @@ describe("web outbound", () => {
       asDocument: true,
       fileName: "promo.jpg",
     });
+    expect(hoisted.loadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "/tmp/pic.jpg",
+      expect.objectContaining({ optimizeImages: false }),
+    );
+  });
+
+  it("forces document branch when forceDocument is true with video media", async () => {
+    const buf = Buffer.from("video");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "video/mp4",
+      kind: "video",
+      fileName: "clip.mp4",
+    });
+    await sendMessageWhatsApp("+1555", "watch", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/clip.mp4",
+      forceDocument: true,
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "watch", buf, "video/mp4", {
+      asDocument: true,
+      fileName: "clip.mp4",
+    });
   });
 
   it("falls back to a default filename when forceDocument media has no fileName", async () => {
@@ -488,6 +513,26 @@ describe("web outbound", () => {
       asDocument: true,
       fileName: "file",
     });
+  });
+
+  it("keeps audio on the voice-note path when forceDocument is true", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/ogg",
+      kind: "audio",
+      fileName: "voice.ogg",
+    });
+
+    await sendMessageWhatsApp("+1555", "voice note", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/voice.ogg",
+      forceDocument: true,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {

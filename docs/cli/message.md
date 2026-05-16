@@ -302,7 +302,7 @@ openclaw message send --channel msteams \
   --presentation '{"title":"Status update","blocks":[{"type":"text","text":"Build completed"}]}'
 ```
 
-Send a Telegram image as a document to avoid compression:
+Send a Telegram or WhatsApp image as a document to avoid compression:
 
 ```bash
 openclaw message send --channel telegram --target @mychat \
