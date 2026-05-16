@@ -28,6 +28,9 @@ export type YamlEditResult =
     };
 
 export function setYamlOcPath(ast: YamlAst, path: OcPath, newValue: unknown): YamlEditResult {
+  if (hasYamlParseErrors(ast)) {
+    return { ok: false, reason: "parse-error" };
+  }
   if (ast.doc.contents === null) {
     return { ok: false, reason: "no-root" };
   }
@@ -58,6 +61,9 @@ export function insertYamlOcPath(
   marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number },
   newValue: unknown,
 ): YamlEditResult {
+  if (hasYamlParseErrors(ast)) {
+    return { ok: false, reason: "parse-error" };
+  }
   if (ast.doc.contents === null) {
     return { ok: false, reason: "no-root" };
   }
@@ -194,6 +200,10 @@ function guardYamlSentinel(value: unknown, ocPath: string): void {
       guardYamlSentinel(child, `${ocPath}/${key}`);
     }
   }
+}
+
+function hasYamlParseErrors(ast: YamlAst): boolean {
+  return ast.doc.errors.length > 0;
 }
 
 function cloneDoc(doc: Document.Parsed): { doc: Document.Parsed; lineCounter: LineCounter } {

@@ -660,6 +660,9 @@ function setJsonlInsertion(ast: JsonlAst, info: InsertionInfo, value: string): S
 }
 
 function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
+  if (ast.doc.errors.length > 0) {
+    return { ok: false, reason: "parse-error" };
+  }
   const existing = resolveYamlOcPath(ast, path);
   if (existing === null) {
     return { ok: false, reason: "unresolved" };
@@ -681,6 +684,9 @@ function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
 }
 
 function setYamlInsertion(ast: YamlAst, info: InsertionInfo, value: string): SetResult {
+  if (ast.doc.errors.length > 0) {
+    return { ok: false, reason: "parse-error" };
+  }
   const r = insertYamlOcPath(ast, info.parentPath, info.marker, parseYamlInput(value));
   return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
 }

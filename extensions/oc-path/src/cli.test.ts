@@ -289,6 +289,23 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(2);
       expect(stderrText(rt)).toContain("requires");
     });
+
+    it("CLI-S05 malformed yaml returns structured parse-error", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "key: value\n  bad indent: oops\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://workflow.yaml/key",
+        "new-value",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out).toMatchObject({ ok: false, reason: "parse-error" });
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
   });
 
   describe("find", () => {

@@ -3,7 +3,7 @@ import { inferKind } from "../../dispatch.js";
 import { parseOcPath } from "../../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 import { resolveOcPath, setOcPath } from "../../universal.js";
-import { setYamlOcPath } from "../../yaml/edit.js";
+import { insertYamlOcPath, setYamlOcPath } from "../../yaml/edit.js";
 import { emitYaml } from "../../yaml/emit.js";
 import { parseYaml } from "../../yaml/parse.js";
 import { resolveYamlOcPath } from "../../yaml/resolve.js";
@@ -99,6 +99,29 @@ describe("setYamlOcPath — direct", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe("unresolved");
+    }
+  });
+
+  it("returns parse-error before editing a malformed document", () => {
+    const { ast } = parseYaml("key: value\n  bad indent: oops\n");
+    const r = setYamlOcPath(ast, parseOcPath("oc://workflow.yaml/key"), "new-value");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("parse-error");
+    }
+  });
+
+  it("returns parse-error before inserting into a malformed document", () => {
+    const { ast } = parseYaml("key: value\n  bad indent: oops\n");
+    const r = insertYamlOcPath(
+      ast,
+      parseOcPath("oc://workflow.yaml"),
+      { kind: "keyed", key: "next" },
+      "x",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("parse-error");
     }
   });
 });
