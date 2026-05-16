@@ -145,6 +145,10 @@ earlier conversations. This is opt-in via
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
 
+**Remote embeddings fail before an HTTP status?** The error includes the
+guarded-fetch context and the sanitized endpoint origin/path; check that
+message for DNS, TLS, proxy, or socket failures without exposing credentials.
+
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
 inline batch timeout by default. If the host is simply slow, set
 `agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun

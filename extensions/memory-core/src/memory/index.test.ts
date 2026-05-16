@@ -28,6 +28,14 @@ afterAll(() => {
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
+let embedBatchActive = 0;
+let embedBatchMaxActive = 0;
+let embedBatchDelayMs = 0;
+let batchEmbedCalls = 0;
+let batchEmbedActive = 0;
+let batchEmbedMaxActive = 0;
+let batchEmbedDelayMs = 0;
+let enableBatchRuntime = false;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 
@@ -39,6 +47,11 @@ vi.mock("./embeddings.js", () => {
     const image = lower.split("image").length - 1;
     const audio = lower.split("audio").length - 1;
     return [alpha, beta, image, audio];
+  };
+  const wait = async (delayMs: number) => {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   };
   return {
     createEmbeddingProvider: async (options: {
@@ -68,7 +81,14 @@ vi.mock("./embeddings.js", () => {
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
-            return texts.map(embedText);
+            embedBatchActive += 1;
+            embedBatchMaxActive = Math.max(embedBatchMaxActive, embedBatchActive);
+            try {
+              await wait(embedBatchDelayMs);
+              return texts.map(embedText);
+            } finally {
+              embedBatchActive -= 1;
+            }
           },
           ...(providerId === "gemini"
             ? {
@@ -101,20 +121,38 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "gemini"
+        ...(enableBatchRuntime
           ? {
               runtime: {
-                id: "gemini",
-                cacheKeyData: {
-                  provider: "gemini",
-                  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                  model,
-                  outputDimensionality: options.outputDimensionality,
-                  headers: [],
+                id: providerId,
+                cacheKeyData: { provider: providerId, model },
+                batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                  batchEmbedCalls += 1;
+                  batchEmbedActive += 1;
+                  batchEmbedMaxActive = Math.max(batchEmbedMaxActive, batchEmbedActive);
+                  try {
+                    await wait(batchEmbedDelayMs);
+                    return batch.chunks.map((chunk) => embedText(chunk.text));
+                  } finally {
+                    batchEmbedActive -= 1;
+                  }
                 },
               },
             }
-          : {}),
+          : providerId === "gemini"
+            ? {
+                runtime: {
+                  id: "gemini",
+                  cacheKeyData: {
+                    provider: "gemini",
+                    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                    model,
+                    outputDimensionality: options.outputDimensionality,
+                    headers: [],
+                  },
+                },
+              }
+            : {}),
       };
     },
   };
@@ -188,6 +226,14 @@ describe("memory index", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
+    embedBatchActive = 0;
+    embedBatchMaxActive = 0;
+    embedBatchDelayMs = 0;
+    batchEmbedCalls = 0;
+    batchEmbedActive = 0;
+    batchEmbedMaxActive = 0;
+    batchEmbedDelayMs = 0;
+    enableBatchRuntime = false;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -240,6 +286,10 @@ describe("memory index", () => {
     cacheEnabled?: boolean;
     minScore?: number;
     onSearch?: boolean;
+    remote?: {
+      nonBatchConcurrency?: number;
+      batch?: { enabled?: boolean; concurrency?: number };
+    };
     hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
   }): TestCfg {
     return {
@@ -258,6 +308,7 @@ describe("memory index", () => {
               minScore: params.minScore ?? 0,
               hybrid: params.hybrid ?? { enabled: false },
             },
+            remote: params.remote,
             cache: params.cacheEnabled ? { enabled: true } : undefined,
             extraPaths: params.extraPaths,
             multimodal: params.multimodal,
@@ -408,6 +459,51 @@ describe("memory index", () => {
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBe(available);
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("uses configured remote non-batch concurrency for indexing", async () => {
+    embedBatchDelayMs = 20;
+    await Promise.all(
+      [13, 14, 15, 16].map(async (day) => {
+        await fs.writeFile(
+          path.join(memoryDir, `2026-01-${day}.md`),
+          `# Log\nAlpha remote concurrency ${day}.`,
+        );
+      }),
+    );
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-remote-non-batch-concurrency.sqlite"),
+      remote: { nonBatchConcurrency: 2 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test", force: true });
+
+    expect(embedBatchMaxActive).toBe(2);
+    expect(batchEmbedCalls).toBe(0);
+  });
+
+  it("uses batch concurrency independently of remote non-batch concurrency", async () => {
+    enableBatchRuntime = true;
+    batchEmbedDelayMs = 20;
+    await Promise.all(
+      [13, 14, 15, 16, 17].map(async (day) => {
+        await fs.writeFile(
+          path.join(memoryDir, `2026-01-${day}.md`),
+          `# Log\nAlpha batch concurrency ${day}.`,
+        );
+      }),
+    );
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-batch-concurrency.sqlite"),
+      remote: { nonBatchConcurrency: 1, batch: { enabled: true, concurrency: 3 } },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test", force: true });
+
+    expect(batchEmbedMaxActive).toBe(3);
+    expect(embedBatchCalls).toBe(0);
   });
 
   it("probes sqlite vector store availability without initializing embeddings", async () => {

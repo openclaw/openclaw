@@ -147,6 +147,9 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 <ParamField path="remote.headers" type="object">
   Extra HTTP headers (merged with provider defaults).
 </ParamField>
+<ParamField path="remote.nonBatchConcurrency" type="number">
+  Parallel non-batch `/embeddings` requests.
+</ParamField>
 
 ```json5
 {

@@ -27,6 +27,12 @@ export type MemorySyncProgressUpdate = {
   label?: string;
 };
 
+export type MemoryBatchDisabledReason =
+  | "configured_off"
+  | "provider_unavailable"
+  | "provider_unsupported"
+  | "failure_limit";
+
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
   configuredMode?: string;
@@ -70,6 +76,7 @@ export type MemoryProviderStatus = {
   };
   batch?: {
     enabled: boolean;
+    disabledReason?: MemoryBatchDisabledReason;
     failures: number;
     limit: number;
     wait: boolean;

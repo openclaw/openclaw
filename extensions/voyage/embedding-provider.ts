@@ -1,5 +1,6 @@
 import {
   fetchRemoteEmbeddingVectors,
+  joinRemoteEndpoint,
   normalizeEmbeddingModelWithPrefixes,
   resolveRemoteEmbeddingBearerClient,
   type MemoryEmbeddingProvider,
@@ -34,7 +35,7 @@ export async function createVoyageEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: VoyageEmbeddingClient }> {
   const client = await resolveVoyageEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = joinRemoteEndpoint(client.baseUrl, "/embeddings");
 
   const embed = async (input: string[], input_type?: "query" | "document"): Promise<number[][]> => {
     if (input.length === 0) {

@@ -43,4 +43,46 @@ describe("package withRemoteHttpResponse", () => {
     expect(deps.calls).toHaveLength(1);
     expect(deps.calls[0]).not.toHaveProperty("mode");
   });
+
+  it("wraps transport failures with sanitized request context", async () => {
+    const original = new TypeError(
+      "fetch failed https://memory.example/v1/embeddings?api_key=secret Bearer sk-test",
+    ) as TypeError & { cause?: unknown };
+    original.cause = Object.assign(
+      new Error("socket closed https://memory.example/v1/embeddings?token=secret"),
+      {
+        name: "SocketError",
+        code: "UND_ERR_SOCKET",
+      },
+    );
+
+    let caught: unknown;
+    try {
+      await withRemoteHttpResponse({
+        url: "https://memory.example/v1/embeddings?api_key=secret",
+        init: { headers: { Authorization: "Bearer sk-test" } },
+        auditContext: "memory-remote",
+        fetchWithSsrFGuardImpl: async () => {
+          throw original;
+        },
+        shouldUseEnvHttpProxyForUrlImpl: () => false,
+        onResponse: async () => undefined,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const err = caught as Error & { cause?: unknown };
+    expect(err.cause).toBe(original);
+    expect(err.message).toContain("memory-remote");
+    expect(err.message).toContain("https://memory.example/v1/embeddings");
+    expect(err.message).toContain("fetch failed");
+    expect(err.message).toContain("SocketError");
+    expect(err.message).toContain("UND_ERR_SOCKET");
+    expect(err.message).not.toContain("api_key");
+    expect(err.message).not.toContain("secret");
+    expect(err.message).not.toContain("Authorization");
+    expect(err.message).not.toContain("sk-test");
+  });
 });

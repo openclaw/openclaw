@@ -37,6 +37,18 @@ export const AgentRunRetriesConfigSchema = z
     { message: "max must be greater than or equal to min", path: ["max"] },
   );
 
+const MemoryRemoteBaseUrlSchema = z
+  .string()
+  .refine((value) => {
+    try {
+      const parsed = new URL(value.trim());
+      return !parsed.search && !parsed.hash;
+    } catch {
+      return true;
+    }
+  }, "memorySearch.remote.baseUrl must not include a query string or fragment")
+  .optional();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -771,7 +783,7 @@ export const MemorySearchSchema = z
     provider: z.string().optional(),
     remote: z
       .object({
-        baseUrl: z.string().optional(),
+        baseUrl: MemoryRemoteBaseUrlSchema,
         apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         nonBatchConcurrency: z.number().int().positive().optional(),
