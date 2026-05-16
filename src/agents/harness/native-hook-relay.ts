@@ -1714,6 +1714,7 @@ export const __testing = {
   getNativeHookRelayInvocationsForTests(): NativeHookRelayInvocation[] {
     return [...invocations];
   },
+  invokeNativeHookRelayForTests: invokeNativeHookRelay,
   getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined {
     return relays.get(relayId);
   },

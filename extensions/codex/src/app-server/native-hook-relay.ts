@@ -11,8 +11,17 @@ export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "permission_request",
   "before_agent_finalize",
 ] as const;
+export const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
+  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
+type CodexCommandHookConfig = {
+  type: "command";
+  command: string;
+  timeout: number;
+  async: boolean;
+  statusMessage: string;
+};
 
 const CODEX_HOOK_EVENT_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, CodexHookEventName> = {
   pre_tool_use: "PreToolUse",
@@ -47,17 +56,16 @@ export function buildCodexNativeHookRelayConfig(params: {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
     const command = params.relay.commandForEvent(event);
     const timeout = normalizeHookTimeoutSec(params.hookTimeoutSec);
+    const hook: CodexCommandHookConfig = {
+      type: "command",
+      command,
+      timeout,
+      async: false,
+      statusMessage: "OpenClaw native hook relay",
+    };
     config[`hooks.${codexEvent}`] = [
       {
-        hooks: [
-          {
-            type: "command",
-            command,
-            timeout,
-            async: false,
-            statusMessage: "OpenClaw native hook relay",
-          },
-        ],
+        hooks: [hook],
       },
     ] satisfies JsonValue;
     const state = {
@@ -81,11 +89,33 @@ export function buildCodexNativeHookRelayConfig(params: {
 export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
   return {
     "features.hooks": false,
+    "hooks.state": {},
     "hooks.PreToolUse": [],
     "hooks.PostToolUse": [],
     "hooks.PermissionRequest": [],
     "hooks.Stop": [],
   };
+}
+
+export function buildCodexNativeHookRelayId(params: {
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+  scope?: string;
+}): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:native-hook-relay:v1");
+  hash.update("\0");
+  const scope = params.scope?.trim();
+  if (scope) {
+    hash.update("scope:");
+    hash.update(scope);
+    hash.update("\0");
+  }
+  hash.update(params.agentId?.trim() || "");
+  hash.update("\0");
+  hash.update(params.sessionKey?.trim() || params.sessionId);
+  return `codex-${hash.digest("hex").slice(0, 40)}`;
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {

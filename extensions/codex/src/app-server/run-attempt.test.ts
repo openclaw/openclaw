@@ -3110,16 +3110,46 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps implicit Codex yolo approval policy when untrusted approvals are disallowed", () => {
-    const appServer = resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null });
-
-    const resolved = __testing.resolveCodexAppServerForOpenClawToolPolicy({
-      appServer,
-      pluginConfig: readCodexPluginConfig({}),
+    const appServer = resolveCodexAppServerRuntimeOptions({
       env: {},
-      shouldPromote: true,
-      canUseUntrustedApprovalPolicy: false,
+      requirementsToml: 'allowed_approval_policies = ["never"]\n',
     });
 
+    const resolved = __testing.withCodexPreToolUseApprovalFallback(appServer, {
+      pluginConfig: readCodexPluginConfig({}),
+      hasBeforeToolCallHooks: true,
+      env: {},
+    });
+
+    expect(resolved).toBe(appServer);
+    expect(resolved.approvalPolicy).toBe("never");
+  });
+
+  it("does not promote implicit Codex yolo policy without native pre_tool_use coverage", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: {} });
+
+    const resolved = __testing.withCodexPreToolUseApprovalFallback(appServer, {
+      pluginConfig: readCodexPluginConfig({}),
+      nativeHookRelay: { events: ["post_tool_use"] },
+      hasBeforeToolCallHooks: true,
+      env: {},
+    });
+
+    expect(resolved).toBe(appServer);
+    expect(resolved.approvalPolicy).toBe("never");
+  });
+
+  it("does not promote implicit Codex yolo policy when native relay is disabled", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: {} });
+
+    const resolved = __testing.withCodexPreToolUseApprovalFallback(appServer, {
+      pluginConfig: readCodexPluginConfig({}),
+      nativeHookRelay: { enabled: false },
+      hasBeforeToolCallHooks: true,
+      env: {},
+    });
+
+    expect(resolved).toBe(appServer);
     expect(resolved.approvalPolicy).toBe("never");
   });
 
@@ -3249,6 +3279,132 @@ describe("runCodexAppServerAttempt", () => {
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
     ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("keeps native PreToolUse when implicit approvals are promoted for policy coverage", async () => {
+    const beforeToolCall = vi.fn(async () => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.PostToolUse"])).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.Stop"])).toBe(true);
+    expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
+    ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.approvalPolicy).toBe("untrusted");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("routes run-created Codex PreToolUse relay invocations through before_tool_call denial", async () => {
+    const beforeToolCall = vi.fn(async (_event: unknown, _ctx: unknown) => ({
+      block: true,
+      reason: "blocked by run-created relay",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const response = await nativeHookRelayTesting.invokeNativeHookRelayForTests({
+      provider: "codex",
+      relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "bash",
+        tool_use_id: "native-shell-1",
+        tool_input: { command: "touch /tmp/blocked" },
+      },
+    });
+
+    expect(response.exitCode).toBe(0);
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Tool call blocked by plugin hook",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    const event = beforeToolCall.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(event).toMatchObject({
+      toolName: "exec",
+      params: { command: "touch /tmp/blocked" },
+      toolCallId: "native-shell-1",
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("allows run-created Codex PreToolUse relay invocations when before_tool_call allows", async () => {
+    const beforeToolCall = vi.fn(async (_event: unknown, _ctx: unknown) => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.approvalPolicy).toBe("untrusted");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const response = await nativeHookRelayTesting.invokeNativeHookRelayForTests({
+      provider: "codex",
+      relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "bash",
+        tool_use_id: "native-shell-allow-1",
+        tool_input: { command: "printf allowed" },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    const event = beforeToolCall.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(event).toMatchObject({
+      toolName: "exec",
+      params: { command: "printf allowed" },
+      toolCallId: "native-shell-allow-1",
+    });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -6216,6 +6372,132 @@ describe("runCodexAppServerAttempt", () => {
         { enabled: true } as never,
       ).sandbox,
     ).toBe("read-only");
+  });
+
+  it("promotes implicit yolo approval policy when before_tool_call needs native pre-tool coverage", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: {} });
+
+    const guarded = __testing.withCodexPreToolUseApprovalFallback(appServer, {
+      pluginConfig: readCodexPluginConfig({}),
+      hasBeforeToolCallHooks: true,
+      env: {},
+    });
+
+    expect(guarded).not.toBe(appServer);
+    expect(guarded.approvalPolicy).toBe("untrusted");
+    expect(guarded.sandbox).toBe("danger-full-access");
+
+    const invalidEnvGuarded = __testing.withCodexPreToolUseApprovalFallback(appServer, {
+      pluginConfig: readCodexPluginConfig({}),
+      hasBeforeToolCallHooks: true,
+      env: {
+        OPENCLAW_CODEX_APP_SERVER_MODE: "typo",
+        OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "typo",
+      },
+    });
+    expect(invalidEnvGuarded.approvalPolicy).toBe("untrusted");
+  });
+
+  it("does not promote explicit yolo or disabled native pre-tool relay", () => {
+    const explicitYoloConfig = readCodexPluginConfig({ appServer: { mode: "yolo" } });
+    const explicitYolo = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: explicitYoloConfig,
+    });
+    expect(
+      __testing.withCodexPreToolUseApprovalFallback(explicitYolo, {
+        pluginConfig: explicitYoloConfig,
+        hasBeforeToolCallHooks: true,
+        env: {},
+      }),
+    ).toBe(explicitYolo);
+
+    const explicitNeverConfig = readCodexPluginConfig({ appServer: { approvalPolicy: "never" } });
+    const explicitNever = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: explicitNeverConfig,
+    });
+    expect(
+      __testing.withCodexPreToolUseApprovalFallback(explicitNever, {
+        pluginConfig: explicitNeverConfig,
+        hasBeforeToolCallHooks: true,
+        env: {},
+      }),
+    ).toBe(explicitNever);
+
+    const envExplicit = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig({}),
+      env: { OPENCLAW_CODEX_APP_SERVER_MODE: "yolo" },
+    });
+    expect(
+      __testing.withCodexPreToolUseApprovalFallback(envExplicit, {
+        pluginConfig: readCodexPluginConfig({}),
+        hasBeforeToolCallHooks: true,
+        env: { OPENCLAW_CODEX_APP_SERVER_MODE: "yolo" },
+      }),
+    ).toBe(envExplicit);
+
+    const requirementsConstrainedNever = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: {},
+      requirementsToml: 'allowed_approval_policies = ["never"]\n',
+    });
+    expect(requirementsConstrainedNever.allowedApprovalPolicies).toEqual(["never"]);
+    expect(
+      __testing.withCodexPreToolUseApprovalFallback(requirementsConstrainedNever, {
+        pluginConfig: readCodexPluginConfig({}),
+        hasBeforeToolCallHooks: true,
+        env: {},
+      }),
+    ).toBe(requirementsConstrainedNever);
+
+    const requirementsConstrainedWithoutUntrusted = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: {},
+      requirementsToml: 'allowed_approval_policies = ["never", "on-request"]\n',
+    });
+    expect(requirementsConstrainedWithoutUntrusted.allowedApprovalPolicies).toEqual([
+      "never",
+      "on-request",
+    ]);
+    expect(
+      __testing.withCodexPreToolUseApprovalFallback(requirementsConstrainedWithoutUntrusted, {
+        pluginConfig: readCodexPluginConfig({}),
+        hasBeforeToolCallHooks: true,
+        env: {},
+      }),
+    ).toBe(requirementsConstrainedWithoutUntrusted);
+
+    const implicitYolo = resolveCodexAppServerRuntimeOptions({ pluginConfig: {} });
+    expect(
+      __testing.withCodexPreToolUseApprovalFallback(implicitYolo, {
+        pluginConfig: readCodexPluginConfig({}),
+        nativeHookRelay: { enabled: false },
+        hasBeforeToolCallHooks: true,
+        env: {},
+      }),
+    ).toBe(implicitYolo);
+  });
+
+  it("keeps native pre_tool_use relay while implicit approvals are promoted", () => {
+    const appServer = __testing.withCodexPreToolUseApprovalFallback(
+      resolveCodexAppServerRuntimeOptions({ pluginConfig: {} }),
+      {
+        pluginConfig: readCodexPluginConfig({}),
+        hasBeforeToolCallHooks: true,
+        env: {},
+      },
+    );
+
+    expect(
+      __testing.resolveCodexNativeHookRelayEvents({
+        appServer,
+      }),
+    ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
+    expect(
+      __testing.resolveCodexNativeHookRelayEvents({
+        configuredEvents: ["pre_tool_use"],
+        appServer,
+      }),
+    ).toEqual(["pre_tool_use"]);
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {

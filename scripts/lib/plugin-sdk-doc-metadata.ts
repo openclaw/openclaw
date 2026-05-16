@@ -98,6 +98,12 @@ export const pluginSdkDocMetadata = {
   "agent-runtime": {
     category: "runtime",
   },
+  "agent-harness": {
+    category: "runtime",
+  },
+  "agent-harness-runtime": {
+    category: "runtime",
+  },
   "speech-core": {
     category: "provider",
   },

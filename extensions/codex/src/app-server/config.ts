@@ -15,6 +15,7 @@ type CodexAppServerDefaultPolicy = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
+  allowedApprovalPolicies?: readonly CodexAppServerApprovalPolicy[];
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerEffectiveApprovalPolicy =
@@ -103,6 +104,7 @@ export type CodexAppServerRuntimeOptions = {
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
+  allowedApprovalPolicies?: readonly CodexAppServerApprovalPolicy[];
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
@@ -278,6 +280,19 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
 }
 
+export function hasExplicitCodexAppServerPolicy(
+  pluginConfig: CodexPluginConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const appServer = pluginConfig.appServer;
+  return (
+    isCodexAppServerPolicyMode(appServer?.mode) ||
+    isCodexAppServerApprovalPolicy(appServer?.approvalPolicy) ||
+    isCodexAppServerPolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ||
+    isCodexAppServerApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY)
+  );
+}
+
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
   const configured = config !== undefined;
@@ -376,6 +391,9 @@ export function resolveCodexAppServerRuntimeOptions(
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
       defaultPolicy?.approvalPolicy ??
       (policyMode === "guardian" ? "on-request" : "never"),
+    ...(defaultPolicy?.allowedApprovalPolicies
+      ? { allowedApprovalPolicies: defaultPolicy.allowedApprovalPolicies }
+      : {}),
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -541,7 +559,7 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
 }
 
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
-  return value === "guardian" || value === "yolo" ? value : undefined;
+  return isCodexAppServerPolicyMode(value) ? value : undefined;
 }
 
 function resolveDefaultCodexAppServerPolicy(params: {
@@ -573,11 +591,19 @@ function resolveDefaultCodexAppServerPolicy(params: {
   const yoloReviewerAllowed =
     allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user");
   if (yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {
-    return { mode: "yolo" };
+    return {
+      mode: "yolo",
+      ...(allowedApprovalPolicies
+        ? { allowedApprovalPolicies: orderApprovalPolicies(allowedApprovalPolicies) }
+        : {}),
+    };
   }
   return {
     mode: "guardian",
     approvalPolicy: selectGuardianApprovalPolicy(allowedApprovalPolicies),
+    ...(allowedApprovalPolicies
+      ? { allowedApprovalPolicies: orderApprovalPolicies(allowedApprovalPolicies) }
+      : {}),
     approvalsReviewer: selectGuardianApprovalsReviewer(allowedApprovalsReviewers),
     sandbox: selectGuardianSandbox(allowedSandboxModes),
   };
@@ -841,6 +867,18 @@ function selectGuardianApprovalPolicy(
   return "on-request";
 }
 
+function orderApprovalPolicies(
+  allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy>,
+): CodexAppServerApprovalPolicy[] {
+  const order: readonly CodexAppServerApprovalPolicy[] = [
+    "never",
+    "on-request",
+    "on-failure",
+    "untrusted",
+  ];
+  return order.filter((policy) => allowedApprovalPolicies.has(policy));
+}
+
 function selectGuardianApprovalsReviewer(
   allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
 ): CodexAppServerApprovalsReviewer {
@@ -872,12 +910,15 @@ function selectGuardianSandbox(
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
-  return value === "on-request" ||
-    value === "on-failure" ||
-    value === "untrusted" ||
-    value === "never"
-    ? value
-    : undefined;
+  return isCodexAppServerApprovalPolicy(value) ? value : undefined;
+}
+
+function isCodexAppServerApprovalPolicy(value: unknown): value is CodexAppServerApprovalPolicy {
+  return codexAppServerApprovalPolicySchema.safeParse(value).success;
+}
+
+function isCodexAppServerPolicyMode(value: unknown): value is CodexAppServerPolicyMode {
+  return codexAppServerPolicyModeSchema.safeParse(value).success;
 }
 
 function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {

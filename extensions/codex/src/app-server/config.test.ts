@@ -6,6 +6,7 @@ import {
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
+  hasExplicitCodexAppServerPolicy,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -252,6 +253,7 @@ describe("Codex app-server config", () => {
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });
+    expect(runtime.allowedApprovalPolicies).toEqual(["never"]);
   });
 
   it("defaults native Codex approvals to guardian when requirements disallow user reviewer", () => {
@@ -708,6 +710,27 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });
+  });
+
+  it("detects explicit app-server policies through the parsed policy schema", () => {
+    expect(
+      hasExplicitCodexAppServerPolicy(readCodexPluginConfig({ appServer: { mode: "guardian" } })),
+    ).toBe(true);
+    expect(
+      hasExplicitCodexAppServerPolicy(
+        readCodexPluginConfig({ appServer: { approvalPolicy: "untrusted" } }),
+      ),
+    ).toBe(true);
+    expect(
+      hasExplicitCodexAppServerPolicy(readCodexPluginConfig({}), {
+        OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "on-request",
+      }),
+    ).toBe(true);
+    expect(
+      hasExplicitCodexAppServerPolicy(readCodexPluginConfig({}), {
+        OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "typo",
+      }),
+    ).toBe(false);
   });
 
   it("derives distinct shared-client keys for distinct auth tokens without exposing them", () => {

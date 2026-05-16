@@ -163,6 +163,7 @@ describe("Codex native hook relay config", () => {
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
       "features.hooks": false,
+      "hooks.state": {},
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],

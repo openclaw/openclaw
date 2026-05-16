@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -65,11 +64,12 @@ import {
 } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
-  isCodexAppServerApprovalPolicyAllowedByRequirements,
+  hasExplicitCodexAppServerPolicy,
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
   withMcpElicitationsApprovalPolicy,
+  type CodexAppServerApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
@@ -85,7 +85,9 @@ import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
+  buildCodexNativeHookRelayId,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
+  CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS,
 } from "./native-hook-relay.js";
 import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import {
@@ -168,8 +170,6 @@ const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
-const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
-  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
@@ -431,43 +431,70 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
   };
 }
 
-function resolveCodexAppServerForOpenClawToolPolicy(params: {
-  appServer: CodexAppServerRuntimeOptions;
-  pluginConfig: CodexPluginConfig;
-  env: NodeJS.ProcessEnv;
-  shouldPromote: boolean;
-  canUseUntrustedApprovalPolicy: boolean;
-}): CodexAppServerRuntimeOptions {
-  if (
-    !params.shouldPromote ||
-    !params.canUseUntrustedApprovalPolicy ||
-    params.appServer.approvalPolicy !== "never"
-  ) {
-    return params.appServer;
-  }
-  const explicitMode =
-    params.pluginConfig.appServer?.mode !== undefined ||
-    isCodexAppServerPolicyMode(params.env.OPENCLAW_CODEX_APP_SERVER_MODE);
-  const explicitApprovalPolicy =
-    params.pluginConfig.appServer?.approvalPolicy !== undefined ||
-    isCodexAppServerApprovalPolicy(params.env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
-  if (explicitMode || explicitApprovalPolicy) {
-    return params.appServer;
+function withCodexPreToolUseApprovalFallback(
+  appServer: CodexAppServerRuntimeOptions,
+  params: {
+    pluginConfig: CodexPluginConfig;
+    nativeHookRelay?: {
+      enabled?: boolean;
+      events?: readonly NativeHookRelayEvent[];
+    };
+    hasBeforeToolCallHooks: boolean;
+    env?: NodeJS.ProcessEnv;
+  },
+): CodexAppServerRuntimeOptions {
+  if (!shouldUseCodexPreToolUseApprovalFallback(appServer, params)) {
+    return appServer;
   }
   return {
-    ...params.appServer,
+    ...appServer,
     approvalPolicy: "untrusted",
   };
 }
 
-function isCodexAppServerPolicyMode(value: unknown): boolean {
-  return value === "guardian" || value === "yolo";
+function shouldUseCodexPreToolUseApprovalFallback(
+  appServer: CodexAppServerRuntimeOptions,
+  params: {
+    pluginConfig: CodexPluginConfig;
+    nativeHookRelay?: {
+      enabled?: boolean;
+      events?: readonly NativeHookRelayEvent[];
+    };
+    hasBeforeToolCallHooks: boolean;
+    env?: NodeJS.ProcessEnv;
+  },
+): boolean {
+  return (
+    appServer.approvalPolicy === "never" &&
+    params.hasBeforeToolCallHooks &&
+    nativeHookRelayIncludesPreToolUse(params.nativeHookRelay) &&
+    codexAppServerAllowsApprovalPolicy(appServer, "untrusted") &&
+    !hasExplicitCodexAppServerPolicy(params.pluginConfig, params.env ?? process.env)
+  );
 }
 
-function isCodexAppServerApprovalPolicy(value: unknown): boolean {
+function codexAppServerAllowsApprovalPolicy(
+  appServer: Pick<CodexAppServerRuntimeOptions, "allowedApprovalPolicies">,
+  approvalPolicy: string,
+): boolean {
   return (
-    value === "never" || value === "on-request" || value === "on-failure" || value === "untrusted"
+    !appServer.allowedApprovalPolicies?.length ||
+    appServer.allowedApprovalPolicies.includes(approvalPolicy as CodexAppServerApprovalPolicy)
   );
+}
+
+function nativeHookRelayIncludesPreToolUse(
+  nativeHookRelay:
+    | {
+        enabled?: boolean;
+        events?: readonly NativeHookRelayEvent[];
+      }
+    | undefined,
+): boolean {
+  if (nativeHookRelay?.enabled === false) {
+    return false;
+  }
+  return !nativeHookRelay?.events?.length || nativeHookRelay.events.includes("pre_tool_use");
 }
 
 export async function runCodexAppServerAttempt(
@@ -475,6 +502,7 @@ export async function runCodexAppServerAttempt(
   options: {
     pluginConfig?: unknown;
     startupTimeoutFloorMs?: number;
+    /** Native relay is enabled by default; set enabled:false to opt out. */
     nativeHookRelay?: {
       enabled?: boolean;
       events?: readonly NativeHookRelayEvent[];
@@ -507,15 +535,21 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const appServer = resolveCodexAppServerForOpenClawToolPolicy({
-    appServer: restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox),
+  const restrictedAppServer = restrictCodexAppServerSandboxForOpenClawSandbox(
+    configuredAppServer,
+    sandbox,
+  );
+  const hasOpenClawToolPolicy = hasBeforeToolCallPolicy();
+  const preToolUseApprovalFallbackParams = {
     pluginConfig,
+    nativeHookRelay: options.nativeHookRelay,
+    hasBeforeToolCallHooks: hasOpenClawToolPolicy,
     env: process.env,
-    shouldPromote: hasBeforeToolCallPolicy(),
-    canUseUntrustedApprovalPolicy:
-      configuredAppServer.start.transport !== "stdio" ||
-      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
-  });
+  };
+  const appServer = withCodexPreToolUseApprovalFallback(
+    restrictedAppServer,
+    preToolUseApprovalFallbackParams,
+  );
   let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -843,19 +877,22 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
-    nativeHookRelay = createCodexNativeHookRelay({
-      options: options.nativeHookRelay,
-      events: nativeHookRelayEvents,
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
-      config: params.config,
-      runId: params.runId,
-      attemptTimeoutMs: params.timeoutMs,
-      startupTimeoutMs,
-      turnStartTimeoutMs: params.timeoutMs,
-      signal: runAbortController.signal,
-    });
+    nativeHookRelay =
+      nativeHookRelayEvents.length > 0
+        ? createCodexNativeHookRelay({
+            options: options.nativeHookRelay,
+            events: nativeHookRelayEvents,
+            agentId: sessionAgentId,
+            sessionId: params.sessionId,
+            sessionKey: sandboxSessionKey,
+            config: params.config,
+            runId: params.runId,
+            attemptTimeoutMs: params.timeoutMs,
+            startupTimeoutMs,
+            turnStartTimeoutMs: params.timeoutMs,
+            signal: runAbortController.signal,
+          })
+        : undefined;
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
           relay: nativeHookRelay,
@@ -2376,16 +2413,16 @@ function resolveCodexNativeHookRelayEvents(params: {
   configuredEvents?: readonly NativeHookRelayEvent[];
   appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
 }): readonly NativeHookRelayEvent[] {
-  if (params.configuredEvents?.length) {
-    return params.configuredEvents;
-  }
   // Codex emits PermissionRequest before the app-server approval reviewer has
   // resolved the command. In native approval modes, let Codex's app-server
   // approval bridge own the real escalation instead of surfacing a stale
   // pre-guardian OpenClaw plugin approval prompt.
-  return params.appServer.approvalPolicy === "never"
-    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
-    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+  const events = params.configuredEvents?.length
+    ? params.configuredEvents
+    : params.appServer.approvalPolicy === "never"
+      ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+      : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+  return events;
 }
 
 function resolveCodexNativeHookRelayTtlMs(params: {
@@ -2403,20 +2440,6 @@ function resolveCodexNativeHookRelayTtlMs(params: {
     params.turnStartTimeoutMs +
     CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
   return Math.max(CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
-}
-
-function buildCodexNativeHookRelayId(params: {
-  agentId: string | undefined;
-  sessionId: string;
-  sessionKey: string | undefined;
-}): string {
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:native-hook-relay:v1");
-  hash.update("\0");
-  hash.update(params.agentId?.trim() || "");
-  hash.update("\0");
-  hash.update(params.sessionKey?.trim() || params.sessionId);
-  return `codex-${hash.digest("hex").slice(0, 40)}`;
 }
 
 function interruptCodexTurnBestEffort(
@@ -3592,8 +3615,10 @@ export const __testing = {
   handleDynamicToolCallWithTimeout,
   remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
+  resolveCodexNativeHookRelayEvents,
   restrictCodexAppServerSandboxForOpenClawSandbox,
-  resolveCodexAppServerForOpenClawToolPolicy,
+  shouldUseCodexPreToolUseApprovalFallback,
+  withCodexPreToolUseApprovalFallback,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

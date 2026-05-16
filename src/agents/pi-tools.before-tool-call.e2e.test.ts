@@ -12,6 +12,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
@@ -933,6 +934,26 @@ describe("before_tool_call requireApproval handling", () => {
       }),
     ).resolves.toEqual({ blocked: false, params });
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
+  it("reports trusted tool policies as before-tool policy handlers", () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-policy",
+        pluginName: "Trusted Policy",
+        source: "test",
+        policy: {
+          id: "trusted",
+          description: "trusted",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasBeforeToolCallPolicy()).toBe(true);
   });
 
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {

@@ -343,6 +343,27 @@ Local stdio app-server sessions default to the trusted local operator posture:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
 `sandbox: "danger-full-access"`. If local Codex requirements disallow that
 implicit YOLO posture, OpenClaw selects allowed guardian permissions instead.
+
+When OpenClaw before-tool policy handlers are registered and the Codex native
+`pre_tool_use` relay is enabled, OpenClaw promotes only the unconstrained
+implicit YOLO approval policy to Codex `untrusted` mode while keeping the
+native `PreToolUse` relay installed. The relay remains the synchronous
+pre-execution policy point for Codex-native shell and file tools; Codex
+app-server approvals still handle unsafe native operations after Codex's own
+review. Explicit `appServer.mode: "yolo"`, explicit
+`appServer.approvalPolicy: "never"`, or Codex local requirements that only
+allow `never` preserve the native Codex approval policy instead of promoting it
+to `untrusted`. The native relay remains enabled unless the harness caller
+disables it.
+
+Codex side conversations use the same native hook relay config when the public
+harness forks an app-server side thread.
+
+When updating the bundled `@openai/codex` runtime, verify that the native hook
+relay's trusted `hooks.state` hash still matches Codex's command-hook trust
+envelope. A mismatch can turn trusted OpenClaw relay hooks into native Codex
+startup prompts.
+
 When an OpenClaw sandbox is active for the session, OpenClaw narrows Codex
 `danger-full-access` to Codex `workspace-write` so native Codex code-mode turns
 stay inside the sandboxed workspace.
