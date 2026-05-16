@@ -359,6 +359,42 @@ export class FeishuStreamingSession {
     }
   }
 
+  private async replaceCardContent(
+    text: string,
+    onError?: (error: unknown) => void,
+  ): Promise<boolean> {
+    if (!this.state) {
+      return false;
+    }
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    try {
+      const { release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content`,
+        init: {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+            "User-Agent": getFeishuUserAgent(),
+          },
+          body: JSON.stringify({
+            element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }),
+            sequence: this.state.sequence,
+            uuid: `r_${this.state.cardId}_${this.state.sequence}`,
+          }),
+        },
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.replace",
+      });
+      await release();
+      return true;
+    } catch (error) {
+      onError?.(error);
+      return false;
+    }
+  }
+
   private clearFlushTimer(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -464,14 +500,14 @@ export class FeishuStreamingSession {
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
+    const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
     // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.sentText) {
-      const sent = await this.updateCardContent(
-        resolveStreamingCardAppendContent(this.state.sentText, text),
-      );
+      const sent = text.startsWith(this.state.sentText)
+        ? await this.updateCardContent(resolveStreamingCardAppendContent(this.state.sentText, text))
+        : await this.replaceCardContent(text);
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;

@@ -56,6 +56,7 @@ describe("FeishuStreamingSession", () => {
   function mockFetches(
     updateBodies: string[],
     failedContentUpdateIndexes: ReadonlySet<number> = new Set<number>(),
+    replaceBodies: string[] = [],
   ): void {
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
@@ -80,6 +81,8 @@ describe("FeishuStreamingSession", () => {
           if (failedContentUpdateIndexes.has(updateIndex)) {
             throw new Error(`content update ${updateIndex} failed`);
           }
+        } else if (url.includes("/elements/content")) {
+          replaceBodies.push(init?.body ?? "");
         }
         return {
           response: {
@@ -194,6 +197,52 @@ describe("FeishuStreamingSession", () => {
       content: " world!",
       sequence: 3,
       uuid: "s_card_3_3",
+    });
+  });
+
+  it("replaces content when final text removes transient streamed status", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_000);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), replaceBodies);
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_final_rewrite",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_4",
+        messageId: "om_4",
+        sequence: 1,
+        currentText: "🔎 Web Search\n\nfinal answer",
+        sentText: "🔎 Web Search\n\nfinal answer",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await session.close("final answer");
+
+    expect(updateBodies).toHaveLength(0);
+    expect(replaceBodies).toHaveLength(1);
+    const replacePayload = JSON.parse(replaceBodies[0] ?? "{}") as {
+      element?: string;
+      sequence?: number;
+      uuid?: string;
+    };
+    expect({
+      ...replacePayload,
+      element: JSON.parse(replacePayload.element ?? "{}"),
+    }).toEqual({
+      element: {
+        tag: "markdown",
+        content: "final answer",
+        element_id: "content",
+      },
+      sequence: 2,
+      uuid: "r_card_4_2",
     });
   });
 });
