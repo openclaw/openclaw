@@ -817,7 +817,7 @@ describe("runCodexAppServerAttempt", () => {
     } satisfies EmbeddedRunAttemptParams["authProfileStore"];
     params.disableTools = false;
     params.authProfileStore = authProfileStore;
-
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
     __testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
@@ -864,7 +864,6 @@ describe("runCodexAppServerAttempt", () => {
         harnessId: "codex",
       },
     };
-
     const factoryOptions: unknown[] = [];
     __testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
