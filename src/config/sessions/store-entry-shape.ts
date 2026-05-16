@@ -25,14 +25,19 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
 }
 
 export function normalizePersistedSessionEntryShape(value: unknown): SessionEntry | undefined {
-  if (!isRecord(value) || !isSafeSessionId(value.sessionId)) {
+  if (!isRecord(value)) {
     return undefined;
   }
 
   let next = value as unknown as SessionEntry;
-  const sessionId = value.sessionId.trim();
-  if (sessionId !== value.sessionId) {
-    next = { ...next, sessionId };
+  if (value.sessionId !== undefined) {
+    if (!isSafeSessionId(value.sessionId)) {
+      return undefined;
+    }
+    const sessionId = value.sessionId.trim();
+    if (sessionId !== value.sessionId) {
+      next = { ...next, sessionId };
+    }
   }
 
   if (value.sessionFile !== undefined && typeof value.sessionFile !== "string") {
