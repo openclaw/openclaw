@@ -229,8 +229,11 @@ export async function runCodexAppServerSideQuestion(
           sessionKey: params.sessionKey,
           config: params.cfg,
           runId: sideRunParams.runId,
-          ...(params.messageChannel || params.messageProvider
-            ? { channelId: params.messageChannel ?? params.messageProvider }
+          ...(params.currentChannelId || params.messageChannel || params.messageProvider
+            ? {
+                channelId:
+                  params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
+              }
             : {}),
           requestTimeoutMs: appServer.requestTimeoutMs,
           completionTimeoutMs: Math.max(
@@ -533,8 +536,15 @@ async function createCodexSideToolBridge(input: {
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
-      ...(input.params.messageChannel || input.params.messageProvider
-        ? { channelId: input.params.messageChannel ?? input.params.messageProvider }
+      ...(input.params.currentChannelId ||
+      input.params.messageChannel ||
+      input.params.messageProvider
+        ? {
+            channelId:
+              input.params.currentChannelId ??
+              input.params.messageChannel ??
+              input.params.messageProvider,
+          }
         : {}),
     },
   });

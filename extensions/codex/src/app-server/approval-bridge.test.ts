@@ -156,7 +156,7 @@ describe("Codex app-server approval bridge", () => {
       ctx: {
         agentId: "main",
         sessionKey: "agent:main:session-1",
-        channelId: "telegram",
+        channelId: "chat-1",
       },
     });
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });

@@ -336,8 +336,15 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       ...(params.paramsForRun.sessionKey ? { sessionKey: params.paramsForRun.sessionKey } : {}),
       ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
       ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
-      ...(params.paramsForRun.messageChannel || params.paramsForRun.messageProvider
-        ? { channelId: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider }
+      ...(params.paramsForRun.currentChannelId ||
+      params.paramsForRun.messageChannel ||
+      params.paramsForRun.messageProvider
+        ? {
+            channelId:
+              params.paramsForRun.currentChannelId ??
+              params.paramsForRun.messageChannel ??
+              params.paramsForRun.messageProvider,
+          }
         : {}),
     },
   });

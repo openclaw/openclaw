@@ -436,7 +436,7 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionId: "session-1",
           sessionKey: "agent:main:session-1",
           runId: "run-side-1",
-          channelId: "discord",
+          channelId: "voice-room",
           allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
         });
         return threadResult("side-thread");
@@ -464,6 +464,7 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
+          currentChannelId: "voice-room",
           opts: { runId: "run-side-1" },
         }),
         { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },

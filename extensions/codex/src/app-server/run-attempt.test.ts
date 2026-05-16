@@ -3769,8 +3769,11 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.messageChannel = "discord";
+    params.currentChannelId = "channel:target";
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -3811,6 +3814,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId,
       allowedEvents: expect.arrayContaining(["pre_tool_use"]),
+    });
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      channelId: "channel:target",
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
