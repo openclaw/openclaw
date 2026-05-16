@@ -6,6 +6,8 @@ import {
   formatCoreHarnessSummary,
   isIsolatedCodexHome,
   noteCoreHarnessSummary,
+  resolveCoreHarnessHome,
+  resolveCoreHarnessJsonExitCode,
 } from "./doctor-core-harness.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -55,6 +57,47 @@ describe("Core Harness doctor summary", () => {
         severity: "error",
         what_to_do_now: expect.stringContaining("OPENCLAW_HOME"),
       }),
+    );
+  });
+
+  it("uses HOME as the effective home when OPENCLAW_HOME is not set", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: {
+        commands: {
+          ownerAllowFrom: ["discord:123"],
+        },
+      } as OpenClawConfig,
+      configPath: "/Users/kitahara/.openclaw/openclaw.json",
+      env: { HOME: "/Users/kitahara" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      existsSync: (candidate) => candidate === "/Users/kitahara/.local/bin/oc-wrapper-lib",
+      readFileSync: () => "openclaw-setup resolve_openclaw_home OPENCLAW_HOME",
+    });
+
+    expect(summary.effectiveHome).toMatchObject({
+      path: "/Users/kitahara",
+      source: "home",
+    });
+    expect(summary.wrappers).toEqual({
+      openclawSetupAlias: true,
+      homeResolver: true,
+    });
+  });
+
+  it("tracks whether effective home came from OPENCLAW_HOME, USERPROFILE, or os.homedir", () => {
+    expect(
+      resolveCoreHarnessHome({
+        HOME: "/Users/ignored",
+        OPENCLAW_HOME: "~/openclaw-home",
+      } as NodeJS.ProcessEnv).source,
+    ).toBe("env");
+    expect(
+      resolveCoreHarnessHome({
+        USERPROFILE: "/Users/profile",
+      } as NodeJS.ProcessEnv).source,
+    ).toBe("userprofile");
+    expect(resolveCoreHarnessHome({} as NodeJS.ProcessEnv, () => "/Users/os-home").source).toBe(
+      "os-homedir",
     );
   });
 
@@ -120,5 +163,65 @@ describe("Core Harness doctor summary", () => {
       "Core Harness Summary",
     );
     expect(formatCoreHarnessSummary(summary)).toContain("Warnings:");
+  });
+
+  it("maps Core Harness JSON exit codes from config validity and warning severity", () => {
+    expect(
+      resolveCoreHarnessJsonExitCode({
+        sourceConfigValid: false,
+        summary: { warnings: [] },
+      }),
+    ).toBe(2);
+    expect(
+      resolveCoreHarnessJsonExitCode({
+        sourceConfigValid: true,
+        summary: {
+          warnings: [
+            {
+              code: "core-harness.home.isolated",
+              severity: "error",
+              category: "new",
+              summary: "isolated",
+              what_to_do_now: "fix",
+              safe_to_ignore_today: false,
+            },
+          ],
+        },
+      }),
+    ).toBe(3);
+    expect(
+      resolveCoreHarnessJsonExitCode({
+        sourceConfigValid: true,
+        summary: {
+          warnings: [
+            {
+              code: "core-harness.exec-approvals.drift",
+              severity: "warn",
+              category: "existing-consolidate",
+              summary: "drift",
+              what_to_do_now: "review",
+              safe_to_ignore_today: false,
+            },
+          ],
+        },
+      }),
+    ).toBe(1);
+    expect(
+      resolveCoreHarnessJsonExitCode({
+        sourceConfigValid: true,
+        summary: {
+          warnings: [
+            {
+              code: "core-harness.sandbox-explain.resolver-followup",
+              severity: "info",
+              category: "resolver-bug-followup",
+              summary: "follow-up",
+              what_to_do_now: "later",
+              safe_to_ignore_today: true,
+            },
+          ],
+        },
+      }),
+    ).toBe(0);
   });
 });

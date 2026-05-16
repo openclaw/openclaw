@@ -7,9 +7,11 @@ const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? messa
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
 async function runCoreHarnessJson(runtime: RuntimeEnv): Promise<void> {
+  let exitCode: 0 | 1 | 2 | 3 = 2;
   try {
     const { readConfigFileSnapshot } = await import("../config/config.js");
-    const { buildCoreHarnessSummary } = await import("../commands/doctor-core-harness.js");
+    const { buildCoreHarnessSummary, resolveCoreHarnessJsonExitCode } =
+      await import("../commands/doctor-core-harness.js");
     const { writeRuntimeJson } = await import("../runtime.js");
     const snapshot = await readConfigFileSnapshot();
     const summary = buildCoreHarnessSummary({
@@ -20,13 +22,16 @@ async function runCoreHarnessJson(runtime: RuntimeEnv): Promise<void> {
       env: process.env,
     });
     writeRuntimeJson(runtime, summary);
-    if (!snapshot.valid) {
-      runtime.exit(2);
-    }
+    exitCode = resolveCoreHarnessJsonExitCode({
+      summary,
+      sourceConfigValid: snapshot.valid,
+    });
   } catch (err) {
     runtime.error(`Core Harness Summary failed: ${(err as Error).message}`);
     runtime.exit(2);
+    return;
   }
+  runtime.exit(exitCode);
 }
 
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {

@@ -25,9 +25,10 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
-    .option("--json", "Print the Core Harness Summary as JSON", false)
+    .option("--json", "Print only the Core Harness Summary as JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const json = Boolean(opts.json);
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
@@ -36,8 +37,11 @@ export function registerMaintenanceCommands(program: Command) {
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
-          json: Boolean(opts.json),
+          json,
         });
+        if (json) {
+          return;
+        }
         defaultRuntime.exit(0);
       });
     });

@@ -87,6 +87,20 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.repair).toBe(true);
   });
 
+  it("lets doctor --json own the exit code", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        json: true,
+      }),
+    );
+    expect(runtime.exit).not.toHaveBeenCalledWith(0);
+  });
+
   it("passes noOpen to dashboard command", async () => {
     dashboardCommand.mockResolvedValue(undefined);
 

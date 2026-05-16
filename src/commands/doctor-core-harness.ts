@@ -4,10 +4,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
+import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
 import { note } from "../terminal/note.js";
 
-const DEFAULT_OPENCLAW_HOME = "/Users/hide_aibo";
-const WRAPPER_LIB_PATH = "/Users/hide_aibo/.local/bin/oc-wrapper-lib";
+const WRAPPER_LIB_RELATIVE_PATH = ".local/bin/oc-wrapper-lib";
 
 export type CoreHarnessWarning = {
   code: string;
@@ -21,7 +21,7 @@ export type CoreHarnessWarning = {
 export type CoreHarnessSummary = {
   effectiveHome: {
     path: string;
-    source: "env" | "fallback";
+    source: "env" | "home" | "userprofile" | "os-homedir" | "cwd";
     processHome: string | null;
     isolatedProcessHome: boolean;
   };
@@ -62,12 +62,31 @@ function normalizeNonEmptyString(value: unknown): string | null {
 
 export function resolveCoreHarnessHome(
   env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
 ): CoreHarnessSummary["effectiveHome"] {
   const envHome = normalizeNonEmptyString(env.OPENCLAW_HOME);
+  const processHome = normalizeNonEmptyString(env.HOME);
+  const userProfileHome = normalizeNonEmptyString(env.USERPROFILE);
+  const osHome = (() => {
+    try {
+      return normalizeNonEmptyString(homedir());
+    } catch {
+      return null;
+    }
+  })();
+  const source = envHome
+    ? "env"
+    : processHome
+      ? "home"
+      : userProfileHome
+        ? "userprofile"
+        : osHome
+          ? "os-homedir"
+          : "cwd";
   return {
-    path: envHome ?? DEFAULT_OPENCLAW_HOME,
-    source: envHome ? "env" : "fallback",
-    processHome: normalizeNonEmptyString(env.HOME),
+    path: resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd()),
+    source,
+    processHome,
     isolatedProcessHome: isIsolatedCodexHome(env.HOME),
   };
 }
@@ -132,20 +151,37 @@ function summarizeApprovals(file: ExecApprovalsFile): CoreHarnessSummary["approv
 }
 
 function inspectWrapperCoverage(params: {
+  wrapperPath: string;
   existsSync: (path: string) => boolean;
   readFileSync: (path: string, encoding: BufferEncoding) => string;
 }): CoreHarnessSummary["wrappers"] {
-  if (!params.existsSync(WRAPPER_LIB_PATH)) {
+  if (!params.existsSync(params.wrapperPath)) {
     return {
       openclawSetupAlias: false,
       homeResolver: false,
     };
   }
-  const body = params.readFileSync(WRAPPER_LIB_PATH, "utf8");
+  const body = params.readFileSync(params.wrapperPath, "utf8");
   return {
     openclawSetupAlias: body.includes("openclaw-setup"),
     homeResolver: body.includes("resolve_openclaw_home") && body.includes("OPENCLAW_HOME"),
   };
+}
+
+export function resolveCoreHarnessJsonExitCode(params: {
+  summary: Pick<CoreHarnessSummary, "warnings">;
+  sourceConfigValid: boolean;
+}): 0 | 1 | 2 | 3 {
+  if (!params.sourceConfigValid) {
+    return 2;
+  }
+  if (params.summary.warnings.some((warning) => warning.severity === "error")) {
+    return 3;
+  }
+  if (params.summary.warnings.some((warning) => warning.severity === "warn")) {
+    return 1;
+  }
+  return 0;
 }
 
 function addWarning(
@@ -170,11 +206,14 @@ export function buildCoreHarnessSummary(params: {
   approvals?: ExecApprovalsFile;
   existsSync?: (path: string) => boolean;
   readFileSync?: (path: string, encoding: BufferEncoding) => string;
+  wrapperPath?: string;
 }): CoreHarnessSummary {
   const env = params.env ?? process.env;
   const home = resolveCoreHarnessHome(env);
   const approvals = summarizeApprovals(params.approvals ?? loadExecApprovals());
+  const wrapperPath = params.wrapperPath ?? path.join(home.path, WRAPPER_LIB_RELATIVE_PATH);
   const wrappers = inspectWrapperCoverage({
+    wrapperPath,
     existsSync: params.existsSync ?? fs.existsSync,
     readFileSync: params.readFileSync ?? fs.readFileSync,
   });
