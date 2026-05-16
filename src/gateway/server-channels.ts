@@ -544,25 +544,26 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             if (abort.signal.aborted || manuallyStopped.has(rKey)) {
               return;
             }
-            let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
-              startAccountTask = startAccount({
-                cfg,
-                accountId: id,
-                account,
-                runtime,
-                abortSignal: abort.signal,
-                log,
-                getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
-                ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-              }),
-            ),
-          );
-          let immediateStartResult:
-            | { status: "pending" }
-            | { status: "resolved" }
-            | { status: "rejected"; error: unknown } = { status: "pending" };
+                void startAccount({
+                  cfg,
+                  accountId: id,
+                  account,
+                  runtime,
+                  abortSignal: abort.signal,
+                  log,
+                  getStatus: () => getRuntime(channelId, id),
+                  setStatus: (next) => setRuntime(channelId, id, next),
+                  ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                });
+              });
+            });
+          type ImmediateStartResult =
+              | { status: "pending" }
+              | { status: "resolved" }
+              | { status: "rejected"; error: unknown };
+
+            let immediateStartResult = { status: "pending" } as ImmediateStartResult;
           task.then(
             () => {
               if (immediateStartResult.status === "pending") {

@@ -76,7 +76,6 @@ import {
 } from "./plugin-channel-reload-targets.js";
 import {
   collectGatewayProcessMemoryUsageMb,
-  finishGatewayRestartTrace,
   recordGatewayRestartTraceDetail,
   recordGatewayRestartTraceSpan,
   resumeGatewayRestartTraceFromEnv,
