@@ -42,6 +42,7 @@ export interface PathCommandOptions {
   readonly cwd?: string;
   readonly file?: string;
   readonly dryRun?: boolean;
+  readonly diff?: boolean;
 }
 
 type OutputMode = "human" | "json";
@@ -202,6 +203,63 @@ function formatMatchHuman(match: OcMatch): string {
   return `root @ L${match.line}`;
 }
 
+function splitDiffLines(s: string): readonly string[] {
+  return s === "" ? [] : s.split("\n");
+}
+
+export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
+  if (oldBytes === newBytes) {
+    return "";
+  }
+  const oldLines = splitDiffLines(oldBytes);
+  const newLines = splitDiffLines(newBytes);
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix++;
+  }
+
+  let oldSuffix = oldLines.length - 1;
+  let newSuffix = newLines.length - 1;
+  while (
+    oldSuffix >= prefix &&
+    newSuffix >= prefix &&
+    oldLines[oldSuffix] === newLines[newSuffix]
+  ) {
+    oldSuffix--;
+    newSuffix--;
+  }
+
+  const context = 3;
+  const hunkStart = Math.max(0, prefix - context);
+  const hunkOldEnd = Math.min(oldLines.length - 1, oldSuffix + context);
+  const hunkNewEnd = Math.min(newLines.length - 1, newSuffix + context);
+  const oldCount = Math.max(0, hunkOldEnd - hunkStart + 1);
+  const newCount = Math.max(0, hunkNewEnd - hunkStart + 1);
+  const lines = [
+    `--- ${fsPath}`,
+    `+++ ${fsPath}`,
+    `@@ -${hunkStart + 1},${oldCount} +${hunkStart + 1},${newCount} @@`,
+  ];
+
+  for (let i = hunkStart; i < prefix; i++) {
+    lines.push(` ${oldLines[i] ?? ""}`);
+  }
+  for (let i = prefix; i <= oldSuffix; i++) {
+    lines.push(`-${oldLines[i] ?? ""}`);
+  }
+  for (let i = prefix; i <= newSuffix; i++) {
+    lines.push(`+${newLines[i] ?? ""}`);
+  }
+  for (let i = Math.max(oldSuffix + 1, prefix); i <= hunkOldEnd; i++) {
+    lines.push(` ${oldLines[i] ?? ""}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 // ---------- Commands -----------------------------------------------------
 
 export async function pathResolveCommand(
@@ -251,11 +309,22 @@ export async function pathSetCommand(
   if (!requireArg(value, "set: requires <oc-path> <value>", runtime, mode)) {
     return;
   }
+  if (options.diff === true && options.dryRun !== true) {
+    emit(
+      runtime,
+      mode,
+      { ok: false, reason: "--diff requires --dry-run" },
+      () => "set failed: --diff requires --dry-run",
+    );
+    runtime.exit(1);
+    return;
+  }
   const ocPath = tryParse(pathStr, runtime, mode);
   if (ocPath === null) {
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
+  const oldBytes = await fs.readFile(fsPath, "utf-8");
   const ast = await loadAst(fsPath, ocPath.file);
 
   const result = catchSentinel("set", runtime, mode, () => setOcPath(ast, ocPath, value));
@@ -280,11 +349,15 @@ export async function pathSetCommand(
   }
 
   if (options.dryRun === true) {
+    const diff = options.diff === true ? formatUnifiedDiff(oldBytes, newBytes, fsPath) : undefined;
     emit(
       runtime,
       mode,
-      { ok: true, dryRun: true, bytes: newBytes },
-      () => `--dry-run: would write ${newBytes.length} bytes to ${fsPath}\n${newBytes}`,
+      { ok: true, dryRun: true, bytes: newBytes, ...(diff !== undefined ? { diff } : {}) },
+      () =>
+        diff !== undefined
+          ? diff || `--dry-run: no byte changes for ${fsPath}`
+          : `--dry-run: would write ${newBytes.length} bytes to ${fsPath}\n${newBytes}`,
     );
     return;
   }
@@ -473,7 +546,8 @@ export function registerPathCli(program: Command): void {
       .description("Write a leaf value at an oc:// path")
       .argument("<oc-path>", "oc:// path to write")
       .argument("<value>", "string value to write")
-      .option("--dry-run", "Print bytes without writing"),
+      .option("--dry-run", "Print bytes without writing")
+      .option("--diff", "With --dry-run, print a unified diff instead of full bytes"),
   ).action(async (pathStr: string, value: string, opts: PathCommandOptions) => {
     await pathSetCommand(pathStr, value, opts, defaultRuntime);
   });
