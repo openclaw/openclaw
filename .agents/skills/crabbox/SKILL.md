@@ -78,6 +78,22 @@ Use these only when the task needs an existing non-Linux host. OpenClaw broad
 Linux validation uses the repo Crabbox config unless a provider is explicitly
 requested.
 
+When the user explicitly asks for brokered macOS runners, use Crabbox AWS
+macOS only after confirming the deployed coordinator supports EC2 Mac host
+lifecycle/image routes and the operator has AWS EC2 Mac Dedicated Host quota
+and IAM. Prefer `CRABBOX_HOST_ID` for a known Crabbox-managed Dedicated Host,
+or run the no-spend preflight first:
+
+```sh
+crabbox admin hosts quota --provider aws --target macos --region eu-west-1 --type mac2.metal --json
+crabbox admin hosts allocate --provider aws --target macos --region eu-west-1 --type mac2.metal --dry-run --json
+CRABBOX_MACOS_TYPES=all scripts/macos-host-region-preflight.sh
+```
+
+Do not silently substitute AWS macOS for normal OpenClaw Linux proof. Report
+paid-host blockers as quota, IAM, coordinator deployment, or host availability
+instead of falling back to local macOS.
+
 Crabbox supports static SSH targets:
 
 ```sh

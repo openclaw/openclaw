@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
@@ -194,18 +195,12 @@ describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
 
   it("lists source bundled plugin roots without in-process directory scans", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const roots = listSourceBundledPluginRoots();
 
       expect(roots.length).toBeGreaterThan(0);
-      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(
-        true,
-      );
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(true);
+    });
   });
 
   it("treats missing bundled discovery results as empty", async () => {

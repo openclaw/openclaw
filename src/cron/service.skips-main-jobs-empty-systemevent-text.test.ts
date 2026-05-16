@@ -114,7 +114,9 @@ describe("CronService", () => {
 
       const job = await waitForFirstJob(cron, (current) => current?.state.lastStatus === "skipped");
       expect(job?.enabled).toBe(false);
+      expect(job?.state.lastStatus).toBe("skipped");
       expect(job?.state.lastError).toMatch(/non-empty/i);
+      expect(job?.state.nextRunAtMs).toBeUndefined();
     });
   });
 
