@@ -429,6 +429,8 @@ export function isCommandMessage(message: unknown): boolean {
 export function resolveSessionFooterTokenTotal(session: {
   totalTokens?: number | null;
   contextTokens?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
 }): number | null {
   if (typeof session.totalTokens === "number") {
     return session.totalTokens;
