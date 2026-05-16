@@ -619,9 +619,16 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
     return true;
   }
+  const normalizedModelApi = normalizeLowercaseStringOrEmpty(params.modelApi ?? "");
   if (
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions" ||
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages"
+    normalizedModelApi === "openai-completions" ||
+    normalizedModelApi === "anthropic-messages" ||
+    // Amazon Bedrock Converse streams non-Anthropic models (e.g.
+    // openai.gpt-oss-120b-1:0) that can return `stopReason: "stop"` with a
+    // thinking-only content array and no visible text or tool call. Without
+    // the guard the turn is recorded as a successful no-content run and the
+    // user sees the generic "Something went wrong" fallback. See #82394.
+    normalizedModelApi === "bedrock-converse-stream"
   ) {
     return true;
   }

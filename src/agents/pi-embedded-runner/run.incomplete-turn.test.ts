@@ -1323,6 +1323,39 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("detects reasoning-only Bedrock turns from signed thinking blocks (#82394)", () => {
+    // Amazon Bedrock Converse streams non-Anthropic models (e.g.
+    // openai.gpt-oss-120b-1:0) that can return a thinking-only assistant
+    // turn with stopReason: "stop" and no visible text. Without the
+    // bedrock-converse-stream entry in shouldApplyNonVisibleTurnRetryGuard,
+    // the turn was misclassified as a successful no-content run.
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "amazon-bedrock",
+      modelId: "openai.gpt-oss-120b-1:0",
+      modelApi: "bedrock-converse-stream",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "amazon-bedrock",
+          model: "openai.gpt-oss-120b-1:0",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning about calling web_search",
+              thinkingSignature: JSON.stringify({ id: "bedrock_rs", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it("detects reasoning-only Gemini turns from signed thinking blocks", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
       provider: "google",
