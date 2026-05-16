@@ -2021,6 +2021,9 @@ example
     await expect(
       loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.NaN }),
     ).resolves.toEqual({ sessionId: undefined, points: [] });
+    await expect(
+      loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.POSITIVE_INFINITY }),
+    ).resolves.toEqual({ sessionId: undefined, points: [] });
   });
 
   it("returns empty logs for zero, negative, and non-finite limits", async () => {
@@ -2048,5 +2051,8 @@ example
     await expect(loadSessionLogs({ sessionFile, limit: 0 })).resolves.toEqual([]);
     await expect(loadSessionLogs({ sessionFile, limit: -1 })).resolves.toEqual([]);
     await expect(loadSessionLogs({ sessionFile, limit: Number.NaN })).resolves.toEqual([]);
+    await expect(
+      loadSessionLogs({ sessionFile, limit: Number.POSITIVE_INFINITY }),
+    ).resolves.toEqual([]);
   });
 });
