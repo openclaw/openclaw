@@ -116,6 +116,17 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
   );
 }
 
+function resolveExplicitFinalAnswerText(lastAssistant: AssistantMessage | undefined): string {
+  if (!lastAssistant) {
+    return "";
+  }
+  return (
+    normalizeOptionalString(
+      extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" }),
+    ) ?? ""
+  );
+}
+
 function normalizeReplyTextForComparison(text: string): string {
   return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
 }
@@ -359,6 +370,7 @@ export function buildEmbeddedRunPayloads(params: {
   const fallbackAnswerText = params.lastAssistant
     ? extractAssistantVisibleText(params.lastAssistant)
     : "";
+  const explicitFinalAnswerText = resolveExplicitFinalAnswerText(params.lastAssistant);
   const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantNeedsErrorSurface) {
@@ -433,13 +445,17 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
     ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
     : "";
+  const hasExplicitFinalAnswerText =
+    explicitFinalAnswerText.length > 0 &&
+    normalizeReplyTextForComparison(explicitFinalAnswerText).length > 0;
   const shouldUseCanonicalFinalAnswer =
     (nonEmptyAssistantTexts.length > 1 ||
       (nonEmptyAssistantTexts.length === 1 &&
-        isLikelyIncompleteAssistantTextSnapshot({
-          assistantText: normalizedAssistantTexts,
-          finalAnswerText: normalizedFallbackAnswerSourceText,
-        }))) &&
+        (hasExplicitFinalAnswerText ||
+          isLikelyIncompleteAssistantTextSnapshot({
+            assistantText: normalizedAssistantTexts,
+            finalAnswerText: normalizedFallbackAnswerSourceText,
+          })))) &&
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;

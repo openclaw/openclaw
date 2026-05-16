@@ -149,7 +149,39 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, finalAnswer);
   });
 
-  it("keeps one accumulated text when it is not an incomplete final-answer prefix", () => {
+  it("uses the canonical final answer when one accumulated text contains commentary plus final text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Need inspect.\n\nDone."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("keeps one accumulated text when there is no explicit final answer", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Streamed answer."],
       lastAssistant: {
@@ -159,11 +191,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
           {
             type: "text",
             text: "Different canonical answer.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
           },
         ],
       } as AssistantMessage,
