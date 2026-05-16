@@ -199,6 +199,7 @@ export function buildEmbeddedRunPayloads(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
   runId?: string;
+  runAborted?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
@@ -263,9 +264,13 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
-  const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
+  const lastAssistantStopReason = params.lastAssistant?.stopReason;
+  const lastAssistantErrored = lastAssistantStopReason === "error";
+  const lastAssistantAborted = lastAssistantStopReason === "aborted";
+  const runAborted = params.runAborted === true || lastAssistantAborted;
+  const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
   const errorText =
-    params.lastAssistant && lastAssistantErrored
+    params.lastAssistant && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
         : formatAssistantErrorText(params.lastAssistant, {
@@ -275,7 +280,7 @@ export function buildEmbeddedRunPayloads(params: {
             model: params.model,
           })
       : undefined;
-  const rawErrorMessage = lastAssistantErrored
+  const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(params.lastAssistant?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
@@ -325,11 +330,12 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText = suppressAssistantArtifacts
-    ? ""
-    : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-      ? extractAssistantThinking(params.lastAssistant)
-      : "";
+  const reasoningText =
+    suppressAssistantArtifacts || runAborted
+      ? ""
+      : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
+        ? extractAssistantThinking(params.lastAssistant)
+        : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
@@ -339,7 +345,7 @@ export function buildEmbeddedRunPayloads(params: {
     : "";
   const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
   const shouldSuppressRawErrorText = (text: string) => {
-    if (!lastAssistantErrored) {
+    if (!lastAssistantNeedsErrorSurface) {
       return false;
     }
     const trimmed = text.trim();
@@ -416,18 +422,19 @@ export function buildEmbeddedRunPayloads(params: {
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
-  const answerTexts = suppressAssistantArtifacts
-    ? []
-    : (shouldUseCanonicalFinalAnswer
-        ? [fallbackAnswerSourceText]
-        : shouldPreferRawAnswerText && fallbackRawAnswerText
-          ? [fallbackRawAnswerText]
-          : hasAssistantTextPayload
-            ? nonEmptyAssistantTexts
-            : fallbackAnswerText
-              ? [fallbackAnswerText]
-              : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts =
+    suppressAssistantArtifacts || runAborted
+      ? []
+      : (shouldUseCanonicalFinalAnswer
+          ? [fallbackAnswerSourceText]
+          : shouldPreferRawAnswerText && fallbackRawAnswerText
+            ? [fallbackRawAnswerText]
+            : hasAssistantTextPayload
+              ? nonEmptyAssistantTexts
+              : fallbackAnswerText
+                ? [fallbackAnswerText]
+                : []
+        ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = hasSourceReplyPayload;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);

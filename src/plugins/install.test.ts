@@ -1157,6 +1157,32 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("rejects package installs when openclaw.extensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "blank-extension-entry-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js", " "] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.extensions[1]");
+      expect(result.error).toContain("non-empty string");
+    }
+  });
+
   it("rejects package installs when a TypeScript extension entry has no compiled runtime output", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });

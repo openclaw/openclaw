@@ -7,6 +7,10 @@ const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
   Record<string, SessionEntry | undefined>
 >;
 
+function isSessionEntryRecord(value: unknown): value is SessionEntry {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {
@@ -15,7 +19,10 @@ export function readSessionStoreReadOnly(
     if (!raw.trim()) {
       return {};
     }
-    return safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
+    const parsed = safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, entry]) => isSessionEntryRecord(entry)),
+    );
   } catch {
     return {};
   }

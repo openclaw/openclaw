@@ -348,13 +348,6 @@ function hasCodexOAuthProfileConfigured(req: {
   return Boolean(store && listProfilesForProvider(store, "openai-codex").length > 0);
 }
 
-type OpenAIImageApiResponse = {
-  data?: Array<{
-    b64_json?: string;
-    revised_prompt?: string;
-  }>;
-};
-
 type OpenAICodexImageGenerationEvent = {
   type?: string;
   item?: {
@@ -877,11 +870,14 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
-        const data = (await response.json()) as OpenAIImageApiResponse;
+        const data = await response.json();
         const output = resolveOutputMime(req.outputFormat);
         const images = (
           await parseOpenAiCompatibleImageResponseAsync(data, {
             defaultMimeType: output.mimeType,
+            malformedResponseError: isEdit
+              ? "OpenAI image edit response malformed"
+              : "OpenAI image generation response malformed",
             timeoutMs,
             ssrfPolicy: req.ssrfPolicy,
             allowPrivateNetwork,
@@ -893,6 +889,13 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             fileName: `image-${index + 1}.${output.extension}`,
           }),
         );
+        if (images.length === 0) {
+          throw new Error(
+            isEdit
+              ? "OpenAI image edit response missing image data"
+              : "OpenAI image generation response missing image data",
+          );
+        }
 
         return {
           images,

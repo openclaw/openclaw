@@ -5,6 +5,11 @@ export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
   /**
+   * Controls how unmentioned always-on group chatter is submitted.
+   * Default: "user_request".
+   */
+  ambientTurns?: "user_request" | "room_event";
+  /**
    * Controls how group/channel turns produce visible room replies.
    * Default: "message_tool".
    */
@@ -59,6 +64,9 @@ export type StatusReactionsEmojiConfig = {
   tool?: string;
   coding?: string;
   web?: string;
+  deploy?: string;
+  build?: string;
+  concierge?: string;
   done?: string;
   error?: string;
   stallSoft?: string;

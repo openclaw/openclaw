@@ -1,5 +1,6 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import type { BufferedAgentEvent } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -11,6 +12,8 @@ export type ChatAbortControllerEntry = {
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  providerId?: string;
+  authProviderId?: string;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -75,6 +78,8 @@ export function registerChatAbortController(params: {
   timeoutMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  providerId?: string;
+  authProviderId?: string;
   kind?: ChatAbortControllerEntry["kind"];
   now?: number;
   expiresAtMs?: number;
@@ -101,10 +106,17 @@ export function registerChatAbortController(params: {
       params.expiresAtMs ?? resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
     ownerConnId: params.ownerConnId,
     ownerDeviceId: params.ownerDeviceId,
+    providerId: normalizeProviderIdForActiveRun(params.providerId),
+    authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
     kind: params.kind,
   };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };
+}
+
+function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
+  const trimmed = providerId?.trim().toLowerCase();
+  return trimmed || undefined;
 }
 
 export type ChatAbortOps = {
@@ -113,6 +125,8 @@ export type ChatAbortOps = {
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   chatDeltaLastBroadcastText: Map<string, string>;
+  agentDeltaSentAt: Map<string, number>;
+  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (
     sessionId: string,
@@ -178,6 +192,12 @@ export function abortChatRunById(
   ops.chatDeltaSentAt.delete(runId);
   ops.chatDeltaLastBroadcastLen.delete(runId);
   ops.chatDeltaLastBroadcastText.delete(runId);
+  ops.agentDeltaSentAt.delete(runId);
+  ops.agentDeltaSentAt.delete(`${runId}:assistant`);
+  ops.agentDeltaSentAt.delete(`${runId}:thinking`);
+  ops.bufferedAgentEvents.delete(runId);
+  ops.bufferedAgentEvents.delete(`${runId}:assistant`);
+  ops.bufferedAgentEvents.delete(`${runId}:thinking`);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   emitAgentEvent({
@@ -198,4 +218,51 @@ export function abortChatRunById(
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
+}
+
+export function updateChatRunProvider(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+  params: {
+    runId: string;
+    providerId?: string;
+    authProviderId?: string;
+  },
+): boolean {
+  const entry = chatAbortControllers.get(params.runId);
+  if (!entry) {
+    return false;
+  }
+  entry.providerId = normalizeProviderIdForActiveRun(params.providerId);
+  entry.authProviderId = normalizeProviderIdForActiveRun(params.authProviderId);
+  return true;
+}
+
+export function abortChatRunsForProvider(
+  ops: ChatAbortOps,
+  params: {
+    providerId: string;
+    stopReason?: string;
+  },
+): { runIds: string[] } {
+  const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  if (!providerId) {
+    return { runIds: [] };
+  }
+  const matches = [...ops.chatAbortControllers.entries()].filter(
+    ([, entry]) =>
+      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
+  );
+  const runIds: string[] = [];
+  for (const [runId, entry] of matches) {
+    const result = abortChatRunById(ops, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: params.stopReason,
+    });
+    if (result.aborted) {
+      runIds.push(runId);
+    }
+  }
+  return { runIds };
 }

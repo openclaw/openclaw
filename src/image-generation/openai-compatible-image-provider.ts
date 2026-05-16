@@ -264,6 +264,10 @@ export function createOpenAiCompatibleImageGenerationProvider(
           (await response.json()) as OpenAiCompatibleImageResponsePayload,
           {
             ...options.response,
+            malformedResponseError:
+              mode === "edit"
+                ? `${options.label} image edit response malformed`
+                : `${options.label} image generation response malformed`,
             timeoutMs,
             ssrfPolicy: req.ssrfPolicy,
             allowPrivateNetwork: resolvedAllowPrivateNetwork,
@@ -271,8 +275,13 @@ export function createOpenAiCompatibleImageGenerationProvider(
             auditContext: `${options.id}.image-url-download`,
           },
         );
-        if (options.emptyResponseError && images.length === 0) {
-          throw new Error(options.emptyResponseError);
+        if (images.length === 0) {
+          throw new Error(
+            options.emptyResponseError ??
+              (mode === "edit"
+                ? `${options.label} image edit response missing image data`
+                : `${options.label} image generation response missing image data`),
+          );
         }
         return { images, model };
       } finally {

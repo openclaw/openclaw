@@ -1,5 +1,6 @@
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithTimeoutGuarded } from "../media-understanding/shared.js";
+import { canonicalizeBase64 } from "../media/base64.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -22,8 +23,19 @@ export type OpenAiCompatibleImageResponseEntry = {
 };
 
 export type OpenAiCompatibleImageResponsePayload = {
-  data?: OpenAiCompatibleImageResponseEntry[];
+  data?: unknown;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function throwMalformedImageResponse(message: string | undefined): never | undefined {
+  if (message) {
+    throw new Error(message);
+  }
+  return undefined;
+}
 
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
@@ -96,7 +108,11 @@ export function parseImageDataUrl(
   if (!mimeType || !base64) {
     return undefined;
   }
-  return { mimeType, base64 };
+  const canonicalBase64 = canonicalizeBase64(base64);
+  if (!canonicalBase64) {
+    return undefined;
+  }
+  return { mimeType, base64: canonicalBase64 };
 }
 
 export function generatedImageAssetFromBase64(params: {
@@ -109,10 +125,11 @@ export function generatedImageAssetFromBase64(params: {
   sniffMimeType?: boolean;
 }): GeneratedImageAsset | undefined {
   const base64 = normalizeOptionalString(params.base64);
-  if (!base64) {
+  const canonicalBase64 = base64 ? canonicalizeBase64(base64) : undefined;
+  if (!canonicalBase64) {
     return undefined;
   }
-  const buffer = Buffer.from(base64, "base64");
+  const buffer = Buffer.from(canonicalBase64, "base64");
   const explicitMimeType = normalizeOptionalString(params.mimeType);
   const defaultMimeType =
     normalizeOptionalString(params.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
@@ -250,16 +267,41 @@ async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
 }
 
 export function parseOpenAiCompatibleImageResponse(
-  payload: OpenAiCompatibleImageResponsePayload,
+  payload: unknown,
   options: {
     defaultMimeType?: string;
     fileNamePrefix?: string;
+    malformedResponseError?: string;
     sniffMimeType?: boolean;
   } = {},
 ): GeneratedImageAsset[] {
-  return (payload.data ?? [])
-    .map((entry, index) => generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options))
-    .filter((entry): entry is GeneratedImageAsset => entry !== undefined);
+  if (!isRecord(payload)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+  const data = payload.data;
+  if (data === undefined || data === null) {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+
+  const images: GeneratedImageAsset[] = [];
+  for (const [index, entry] of data.entries()) {
+    if (!isRecord(entry)) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
+    if (!image) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return images;
 }
 
 export async function parseOpenAiCompatibleImageResponseAsync(
@@ -274,14 +316,36 @@ export async function parseOpenAiCompatibleImageResponseAsync(
     allowPrivateNetwork?: boolean;
     dispatcherPolicy?: PinnedDispatcherPolicy;
     auditContext?: string;
+    malformedResponseError?: string;
   } = {},
 ): Promise<GeneratedImageAsset[]> {
-  const images = await Promise.all(
-    (payload.data ?? []).map((entry, index) =>
-      generatedImageAssetFromOpenAiCompatibleEntryAsync(entry, index, options),
-    ),
-  );
-  return images.filter((entry): entry is GeneratedImageAsset => entry !== undefined);
+  if (!isRecord(payload)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+  const data = payload.data;
+  if (data === undefined || data === null) {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+
+  const images: GeneratedImageAsset[] = [];
+  for (const [index, entry] of data.entries()) {
+    if (!isRecord(entry)) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    const image = await generatedImageAssetFromOpenAiCompatibleEntryAsync(entry, index, options);
+    if (!image) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return images;
 }
 
 export function imageSourceUploadFileName(params: {
