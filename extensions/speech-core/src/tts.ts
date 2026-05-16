@@ -556,7 +556,7 @@ export function buildTtsSystemPromptHint(
     persona
       ? `Active TTS persona: ${persona.label ?? persona.id}${persona.description ? ` - ${persona.description}` : ""}.`
       : undefined,
-    `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
+    `Keep spoken text 鈮?{maxLength} chars to avoid auto-summary (summary ${summarize}).`,
     "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
   ]
     .filter(Boolean)
@@ -1193,7 +1193,7 @@ async function maybePreTranscodeForVoiceDelivery(params: {
       // "platform-unsupported", "invalid-extension") are by-design skips and
       // would just be log noise. This is the line that tells you "the channel
       // asked for a pre-encode, the host had a recipe for it, and it failed"
-      // — i.e. the case where #72506 silently regresses.
+      // 鈥?i.e. the case where #72506 silently regresses.
       logVerbose(
         `TTS: pre-transcode ${sourceExt}->${preferred} for channel=${params.channel ?? "?"} failed: ${outcome.detail ?? "unknown"}`,
       );
@@ -1759,7 +1759,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const mode = config.mode ?? "final";
-  if (mode === "final" && params.kind && params.kind !== "final") {
+  if (mode === "final" && params.kind && params.kind !== "final" && params.kind !== "block") {
     return nextPayload;
   }
 
@@ -1849,6 +1849,7 @@ export async function maybeApplyTtsToPayload(params: {
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
+      trustedLocalMedia: true,
     };
   }
 
