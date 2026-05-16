@@ -46,7 +46,11 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  resolveOpenAiCompatError,
+  resolveUnregisteredHarnessError,
+  validateOpenAiSamplingParams,
+} from "./openai-compat-errors.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -1036,6 +1040,11 @@ export async function handleOpenAiHttpRequest(
         });
         return true;
       }
+      const unregisteredHarness = resolveUnregisteredHarnessError(err);
+      if (unregisteredHarness) {
+        sendJson(res, unregisteredHarness.status, { error: unregisteredHarness.error });
+        return true;
+      }
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
         sendJson(res, mapped.status, { error: mapped.error });
@@ -1212,6 +1221,27 @@ export async function handleOpenAiHttpRequest(
         writeSse(res, {
           error: { message: "invalid tool configuration", type: "invalid_request_error" },
         });
+        writeDone(res);
+        res.end();
+        return;
+      }
+      const unregisteredHarness = resolveUnregisteredHarnessError(err);
+      if (unregisteredHarness) {
+        closed = true;
+        stopWatchingDisconnect();
+        unsubscribe();
+        if (!wroteRole) {
+          wroteRole = true;
+          writeAssistantRoleChunk(res, { runId, model });
+        }
+        writeAssistantContentChunk(res, {
+          runId,
+          model,
+          content: unregisteredHarness.error.message,
+          finishReason: "stop",
+        });
+        wroteStopChunk = true;
+        writeSse(res, { error: unregisteredHarness.error });
         writeDone(res);
         res.end();
         return;

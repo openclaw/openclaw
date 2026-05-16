@@ -50,6 +50,36 @@ function messageForReason(params: {
   return params.rawError?.trim() || params.message.trim() || "request failed";
 }
 
+// Matches the error thrown by src/agents/harness/selection.ts when a forced runtime
+// (e.g. `agents.defaults.agentRuntime.id` or a per-request override) names a
+// harness plugin that isn't registered. Surfacing this as a generic 500 hides the
+// actionable cause from clients; map it to 503 service_unavailable with a message
+// that points operators at the relevant config knobs. (See issue #82437.)
+const HARNESS_NOT_REGISTERED_RE = /Requested agent harness "([^"]+)" is not registered\./;
+
+export function resolveUnregisteredHarnessError(err: unknown): OpenAiCompatError | undefined {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+  if (!message) {
+    return undefined;
+  }
+  const match = HARNESS_NOT_REGISTERED_RE.exec(message);
+  if (!match) {
+    return undefined;
+  }
+  const harnessId = match[1];
+  return {
+    status: 503,
+    error: {
+      message:
+        `Requested agent harness "${harnessId}" is not registered. ` +
+        `Ensure the harness plugin is installed and enabled ` +
+        `(e.g. \`plugins.entries.${harnessId}.enabled = true\`), ` +
+        `or set \`agents.defaults.agentRuntime.id\` to a registered harness.`,
+      type: "service_unavailable",
+    },
+  };
+}
+
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   const described = describeFailoverError(err);
   const reason = described.reason;

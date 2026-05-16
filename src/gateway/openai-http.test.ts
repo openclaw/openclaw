@@ -1435,6 +1435,77 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("maps unregistered-harness errors to 503 with actionable message (#82437)", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(
+      new Error('Requested agent harness "codex" is not registered.') as never,
+    );
+
+    const res = await postChatCompletions(port, {
+      stream: false,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(503);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error?.type).toBe("service_unavailable");
+    expect(json.error?.message).toContain('Requested agent harness "codex" is not registered');
+    expect(json.error?.message).toContain("plugins.entries.codex.enabled");
+    expect(json.error?.message).toContain("agents.defaults.agentRuntime.id");
+  });
+
+  it("emits actionable unregistered-harness message in SSE stream and finishes cleanly (#82437)", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(
+      new Error('Requested agent harness "codex" is not registered.') as never,
+    );
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const dataLines = parseSseDataLines(text);
+    expect(dataLines[dataLines.length - 1]).toBe("[DONE]");
+
+    const chunks = dataLines
+      .filter((d) => d !== "[DONE]")
+      .map((d) => JSON.parse(d) as Record<string, unknown>);
+
+    const protocolError = chunks.find(
+      (chunk) =>
+        typeof chunk.error === "object" &&
+        ((chunk.error as { type?: unknown }).type ?? "") === "service_unavailable",
+    );
+    if (!protocolError) {
+      throw new Error("expected service_unavailable protocol error in stream");
+    }
+    const protocolMessage = String((protocolError.error as { message?: unknown }).message ?? "");
+    expect(protocolMessage).toContain('Requested agent harness "codex" is not registered');
+    expect(protocolMessage).toContain("plugins.entries.codex.enabled");
+
+    const contentDelta = chunks
+      .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .find((content): content is string => typeof content === "string" && content.length > 0);
+    expect(contentDelta).toBeDefined();
+    expect(contentDelta).toContain('Requested agent harness "codex" is not registered');
+    expect(contentDelta).toContain("plugins.entries.codex.enabled");
+
+    // Stream must close cleanly with finish_reason=stop, not just dangle.
+    const stopChoice = chunks
+      .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .find((choice) => choice.finish_reason === "stop");
+    expect(stopChoice).toBeDefined();
+  });
+
   it("forwards response_format into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
