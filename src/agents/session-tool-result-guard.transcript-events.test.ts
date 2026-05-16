@@ -166,7 +166,59 @@ describe("guardSessionManager transcript updates", () => {
     } as AgentMessage);
 
     expect(getBranchSpy).toHaveBeenCalledTimes(1);
-    expect(updates.map((update) => update.messageSeq)).toEqual([2, 4]);
+    expect(updates.map((update) => update.messageSeq)).toEqual([2, 3, 4]);
+    expect(updates.map((update) => (update.message as { role?: string }).role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
     getBranchSpy.mockRestore();
+  });
+
+  it("broadcasts synthetic tool result messages flushed before assistant text", () => {
+    const updates: SessionTranscriptUpdate[] = [];
+    listeners.push(onSessionTranscriptUpdate((update) => updates.push(update)));
+
+    const sm = SessionManager.inMemory();
+    const sessionFile = "/tmp/openclaw-session-message-events.jsonl";
+    Object.assign(sm, {
+      getSessionFile: () => sessionFile,
+    });
+
+    const guarded = guardSessionManager(sm, {
+      agentId: "main",
+      sessionKey: "agent:main:worker",
+    });
+    const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
+      message: AgentMessage,
+    ) => void;
+
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_missing", name: "read", arguments: {} }],
+      timestamp: Date.now(),
+    } as AgentMessage);
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "final after missing result" }],
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    expect(updates.map((update) => (update.message as { role?: string }).role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(updates[1]).toMatchObject({
+      sessionFile,
+      sessionKey: "agent:main:worker",
+      message: {
+        role: "toolResult",
+        toolCallId: "call_missing",
+        toolName: "read",
+      },
+      messageId: expect.any(String),
+      messageSeq: 2,
+    });
   });
 });
