@@ -26,6 +26,7 @@ function queueActiveRunMessageForTest(
 }
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -941,7 +942,13 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
     ]);
-    const harness = createStartedThreadHarness();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return turnStartResult();
+      }
+      return undefined;
+    });
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -1380,7 +1387,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onExecutionPhase = onExecutionPhase;
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await harness.waitForMethod("thread/start");
 
     const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
@@ -1666,6 +1673,52 @@ describe("runCodexAppServerAttempt", () => {
       method: "account/nonTurnRefresh",
       params: {},
     });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const warnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    const warnData = warnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(warnData?.timeoutMs).toBe(100);
+    expect(warnData?.lastActivityReason).toBe("turn:start");
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
+  });
+
+  it("keeps the turn attempt timeout armed while non-turn requests are pending", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    vi.spyOn(authBridge, "refreshCodexAppServerAuthTokens").mockImplementation(
+      async () => await new Promise<never>(() => undefined),
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 100;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    void harness.handleServerRequest({
+      id: "request-auth-refresh",
+      method: "account/chatgptAuthTokens/refresh",
+      params: {},
+    });
+    await vi.waitFor(() =>
+      expect(authBridge.refreshCodexAppServerAuthTokens).toHaveBeenCalledTimes(1),
+    );
 
     const result = await run;
     expect(result.aborted).toBe(true);
@@ -3763,6 +3816,68 @@ describe("runCodexAppServerAttempt", () => {
     }
     expect(registration.expiresAtMs - startedAtMs).toBeGreaterThanOrEqual(relayFloorMs);
     expect(registration.expiresAtMs - startedAtMs).toBeLessThan(relayFloorMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("throttles default native hook relay renewal on current-turn progress", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    if (!registration) {
+      throw new Error("Expected native hook relay registration");
+    }
+    const firstExpiresAtMs = registration.expiresAtMs;
+
+    for (const id of ["raw-progress-1", "raw-progress-2"]) {
+      await harness.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "message",
+            id,
+            role: "assistant",
+            content: [{ type: "output_text", text: "Still working." }],
+          },
+        },
+      });
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.expiresAtMs,
+      ).toBe(firstExpiresAtMs);
+    }
+
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "foreign-thread",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "foreign-progress",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Wrong thread." }],
+        },
+      },
+    });
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.expiresAtMs,
+    ).toBe(firstExpiresAtMs);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;

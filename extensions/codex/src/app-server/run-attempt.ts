@@ -165,6 +165,7 @@ const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
+const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
@@ -1071,6 +1072,7 @@ export async function runCodexAppServerAttempt(
   let turnAttemptLastProgressAt = Date.now();
   let turnAttemptLastProgressReason = "startup";
   let turnAttemptLastProgressDetails: Record<string, unknown> | undefined;
+  let nativeHookRelayLastRenewedAt = 0;
   let activeAppServerTurnRequests = 0;
   const activeOpenClawDynamicToolCallIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
@@ -1149,12 +1151,7 @@ export async function runCodexAppServerAttempt(
   };
 
   const fireTurnAttemptIdleTimeout = () => {
-    if (
-      completed ||
-      runAbortController.signal.aborted ||
-      !turnAttemptIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
-    ) {
+    if (completed || runAbortController.signal.aborted || !turnAttemptIdleWatchArmed) {
       return;
     }
     const idleMs = Math.max(0, Date.now() - turnAttemptLastProgressAt);
@@ -1291,12 +1288,7 @@ export async function runCodexAppServerAttempt(
 
   function scheduleTurnAttemptIdleWatch() {
     clearTurnAttemptIdleTimer();
-    if (
-      completed ||
-      runAbortController.signal.aborted ||
-      !turnAttemptIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
-    ) {
+    if (completed || runAbortController.signal.aborted || !turnAttemptIdleWatchArmed) {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - turnAttemptLastProgressAt);
@@ -1327,6 +1319,28 @@ export async function runCodexAppServerAttempt(
     scheduleTurnTerminalIdleWatch();
   }
 
+  const renewNativeHookRelayForTurnProgress = () => {
+    if (!nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
+      return;
+    }
+    const now = Date.now();
+    const renewsRecently =
+      now - nativeHookRelayLastRenewedAt < CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS;
+    const expiresSoon = now >= nativeHookRelay.expiresAtMs - CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
+    if (renewsRecently && !expiresSoon) {
+      return;
+    }
+    nativeHookRelayLastRenewedAt = now;
+    nativeHookRelay.renew(
+      resolveCodexNativeHookRelayTtlMs({
+        explicitTtlMs: undefined,
+        attemptTimeoutMs: turnAttemptIdleTimeoutMs,
+        startupTimeoutMs,
+        turnStartTimeoutMs: params.timeoutMs,
+      }),
+    );
+  };
+
   const touchTurnCompletionActivity = (
     reason: string,
     options?: { arm?: boolean; details?: Record<string, unknown>; attemptProgress?: boolean },
@@ -1338,6 +1352,7 @@ export async function runCodexAppServerAttempt(
       turnAttemptLastProgressAt = turnCompletionLastActivityAt;
       turnAttemptLastProgressReason = reason;
       turnAttemptLastProgressDetails = options.details;
+      renewNativeHookRelayForTurnProgress();
     }
     emitTrustedDiagnosticEvent({
       type: "run.progress",
@@ -1579,11 +1594,17 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
-    activeAppServerTurnRequests += 1;
-    clearTurnCompletionIdleTimer();
-    disarmTurnAssistantCompletionIdleWatch();
     let armCompletionWatchOnResponse = false;
     let requestCountsAsTurnActivity = false;
+    const markCurrentTurnRequestProgress = () => {
+      activeAppServerTurnRequests += 1;
+      clearTurnCompletionIdleTimer();
+      disarmTurnAssistantCompletionIdleWatch();
+      requestCountsAsTurnActivity = true;
+      touchTurnCompletionActivity(`request:${request.method}:start`, {
+        attemptProgress: true,
+      });
+    };
     try {
       if (request.method === "account/chatgptAuthTokens/refresh") {
         return refreshCodexAppServerAuthTokens({
@@ -1598,7 +1619,7 @@ export async function runCodexAppServerAttempt(
       if (request.method === "mcpServer/elicitation/request") {
         if (isCurrentThreadOptionalTurnRequestParams(request.params, thread.threadId, turnId)) {
           armCompletionWatchOnResponse = true;
-          requestCountsAsTurnActivity = true;
+          markCurrentTurnRequestProgress();
         }
         return handleCodexAppServerElicitationRequest({
           requestParams: request.params,
@@ -1612,7 +1633,7 @@ export async function runCodexAppServerAttempt(
       if (request.method === "item/tool/requestUserInput") {
         if (isCurrentThreadTurnRequestParams(request.params, thread.threadId, turnId)) {
           armCompletionWatchOnResponse = true;
-          requestCountsAsTurnActivity = true;
+          markCurrentTurnRequestProgress();
         }
         return userInputBridge?.handleRequest({
           id: request.id,
@@ -1623,7 +1644,7 @@ export async function runCodexAppServerAttempt(
         if (isCodexAppServerApprovalRequest(request.method)) {
           if (isCurrentApprovalTurnRequestParams(request.params, thread.threadId, turnId)) {
             armCompletionWatchOnResponse = true;
-            requestCountsAsTurnActivity = true;
+            markCurrentTurnRequestProgress();
           }
           return handleApprovalRequest({
             method: request.method,
@@ -1641,7 +1662,7 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       armCompletionWatchOnResponse = true;
-      requestCountsAsTurnActivity = true;
+      markCurrentTurnRequestProgress();
       turnCrossedToolHandoff = true;
       activeOpenClawDynamicToolCallIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
@@ -1720,8 +1741,8 @@ export async function runCodexAppServerAttempt(
       });
       return response as JsonValue;
     } finally {
-      activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
       if (requestCountsAsTurnActivity) {
+        activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
         touchTurnCompletionActivity(`request:${request.method}:response`, {
           arm: armCompletionWatchOnResponse,
           attemptProgress: true,
