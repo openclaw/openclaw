@@ -542,9 +542,9 @@ export async function launchOpenClawChrome(
         const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
           .then(formatChromeCdpDiagnostic)
           .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
-        const stderrOutput = redactSensitiveText(
-          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "",
-        );
+        const stderrOutput =
+          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+        const redactedStderrOutput = redactSensitiveText(stderrOutput);
         if (
           allowSingletonRecovery &&
           CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
@@ -556,8 +556,8 @@ export async function launchOpenClawChrome(
           await terminateChromeForRetry(proc, userDataDir);
           return await launchOnceAndWait(false);
         }
-        const stderrHint = stderrOutput
-          ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+        const stderrHint = redactedStderrOutput
+          ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
           : "";
         const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
         try {

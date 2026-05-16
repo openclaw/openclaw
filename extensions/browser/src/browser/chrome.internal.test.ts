@@ -517,6 +517,16 @@ describe("chrome.ts internal", () => {
     });
 
     it("clears stale singleton locks and retries once after profile-in-use launch failure", async () => {
+      const configPath = path.join(tmpDir, "openclaw.json");
+      await fsp.writeFile(
+        configPath,
+        JSON.stringify({
+          logging: {
+            redactPatterns: ["profile appears to be in use by another Chromium process"],
+          },
+        }),
+      );
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       let cdpReachable = false;
       vi.stubGlobal(
         "fetch",
