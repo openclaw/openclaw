@@ -1225,6 +1225,32 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("cleans up synthetic manual compaction run sequence tracking when compaction ends", () => {
+    const { agentRunSeq, clearAgentRunContext, handler } = createHarness({
+      resolveSessionKeyForRun: () => "agent:main:main",
+    });
+
+    handler({
+      runId: "session-compact-cleanup",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      data: { phase: "start", trigger: "manual" },
+    });
+    expect(agentRunSeq.get("session-compact-cleanup")).toBe(1);
+
+    handler({
+      runId: "session-compact-cleanup",
+      seq: 2,
+      stream: "compaction",
+      ts: Date.now(),
+      data: { phase: "end", trigger: "manual", completed: true },
+    });
+
+    expect(clearAgentRunContext).toHaveBeenCalledWith("session-compact-cleanup");
+    expect(agentRunSeq.has("session-compact-cleanup")).toBe(false);
+  });
+
   it("drops stale events that arrive after lifecycle completion", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_500,

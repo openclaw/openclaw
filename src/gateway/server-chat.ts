@@ -455,6 +455,19 @@ export function createAgentEventHandler({
     }
   };
 
+  const cleanupTerminalManualSessionCompactionEvent = (evt: AgentEventPayload) => {
+    if (
+      evt.stream !== "compaction" ||
+      !evt.runId.startsWith("session-compact-") ||
+      evt.data?.phase !== "end" ||
+      evt.data?.trigger !== "manual"
+    ) {
+      return;
+    }
+    clearAgentRunContext(evt.runId);
+    agentRunSeq.delete(evt.runId);
+  };
+
   const scheduleTerminalLifecycleError = (
     evt: AgentEventPayload,
     opts?: { skipChatErrorFinal?: boolean },
@@ -959,6 +972,8 @@ export function createAgentEventHandler({
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       }
     }
+
+    cleanupTerminalManualSessionCompactionEvent(evt);
 
     if (lifecyclePhase === "error") {
       clearBufferedChatState(clientRunId);
