@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
@@ -176,6 +177,7 @@ export function createGatewayCloseHandler(params: {
   channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
+  postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
   disposeSessionMcpRuntimes?: () => Promise<void>;
   disposeBundleLspRuntimes?: () => Promise<void>;
   cron: { stop: () => void };
@@ -310,6 +312,7 @@ export function createGatewayCloseHandler(params: {
         await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings);
       }
       await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
+      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       await shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings);
       params.cron.stop();
       params.heartbeatRunner.stop();
@@ -359,7 +362,6 @@ export function createGatewayCloseHandler(params: {
         recordShutdownWarning(warnings, "ws-clients");
       }
       params.clients.clear();
-      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       const wsClients = params.wss.clients ?? new Set();
       const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const websocketGraceTimeout = createTimeoutRace(

@@ -16,6 +16,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram: persist polling updates through restart replay so queued same-topic messages resume in order instead of losing context after a gateway restart. (#82256) Thanks @VACInc.
+- Gateway/Gmail: abort in-flight Gmail watcher startup and hot-reload restarts before shutdown so reloads cannot spawn `gog serve` after the Gateway is closing. Thanks @frankekn.
 - MCP plugin tools: forward host MCP `tools/call` `AbortSignal` through `createPluginToolsMcpHandlers().callTool` into plugin `tool.execute`, so host cancellation actually cancels in-flight plugin tool calls instead of letting them run to completion. Fixes #82424. (#82443) Thanks @joshavant.
 - Media: ignore image MIME and filename hints when bytes sniff as generic containers, so zip/octet-stream payloads mislabeled as images do not become local image media or keep image file extensions when staged.
 - Update/doctor: avoid materializing `groupAllowFrom` for channel schemas that reject it, so package-swap doctor repairs do not fail on externalized Slack configs.
@@ -59,12 +61,14 @@ Docs: https://docs.openclaw.ai
 - Providers/embeddings: reject malformed successful OpenAI-compatible, Google Gemini, and Amazon Bedrock embedding responses instead of silently returning empty or coerced vectors.
 - Providers/catalogs: reject malformed successful LM Studio, GitHub Copilot, DeepInfra, Vercel AI Gateway, and Kilocode model-list responses with provider-owned errors instead of raw parser/type failures or silent fallback catalogs.
 - Providers/polling: reject array, null, or scalar successful operation status responses with provider-owned malformed JSON errors instead of waiting until timeout.
+- ACPX/Codex: reap plugin-local Codex ACP adapter orphans on startup after wrapper crashes while keeping direct adapter commands out of launch-lease injection. Fixes #82364. (#82459) Thanks @joshavant.
 - Telegram: send presentation-only payloads by rendering fallback text and inline buttons instead of treating them as empty. Fixes #82404. (#82449) Thanks @joshavant.
 - Trajectory export: skip and report malformed session/runtime JSONL rows in `manifest.json` instead of letting wrong-shaped session rows crash support bundle export.
 - Voice calls: persist rejected inbound-call replay keys so duplicate carrier webhook retries stay ignored after a Gateway restart.
 - Config/doctor: copy fallback-enabled channel `allowFrom` entries into explicit `groupAllowFrom` allowlists during `openclaw doctor --fix`, preserving current group access without adding runtime fallback-transition flags.
 - Config/doctor: replace source-only official Brave and Slack plugin installs from trusted catalog metadata during `openclaw doctor --fix`, unblocking externalized stock plugin recovery after upgrade. (#82425) Thanks @joshavant.
 - Agents/bootstrap: ignore stale completed root `BOOTSTRAP.md` context after workspace setup cleanup fails, preventing channel agent turns from treating it as a directory. (#82463) Thanks @joshavant.
+- Update/doctor: re-enable the Codex plugin during `openclaw doctor --fix` when configured OpenAI agent models require the Codex runtime, preventing upgraded configs from failing with an unregistered Codex harness. Fixes #82368. (#82502) Thanks @joshavant.
 - Configure: show one OpenAI provider entry with ChatGPT/Codex sign-in and API key choices, and keep browsed Codex models in the saved `/model` picker allowlist.
 - Agents/model fallback: preserve auto fallback chains across deferred config reloads when session fallback provenance survives but `modelOverrideSource` is missing. Fixes #81982. Thanks @joshavant.
 - Hooks: raise bounded gateway lifecycle hook wait budgets to 5 seconds for shutdown and 10 seconds for pre-restart, giving short restart notification handlers time to finish before shutdown continues. (#82273) Thanks @bryanbaer.
@@ -82,6 +86,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: drain queued outbound deliveries after polling reconnect confirms fresh `getUpdates` activity, so stale-socket and network recovery do not leave failed replies stranded. Fixes #50040. Refs #82175. Thanks @dmitriiforpost-commits and @shellyrocklobster.
 - Gateway/model auth: abort active provider runs when saved auth is removed through the Gateway control plane, refresh live runtime auth snapshots, and surface `stopReason: "auth-revoked"` to clients. Fixes #81987. (#82346) Thanks @joshavant.
 - Codex app-server: keep the raw tool-output idle watchdog armed after `custom_tool_call_output` notifications, so post-tool stream silence fails fast instead of waiting for the terminal idle timeout. Fixes #82274. (#82378) Thanks @joshavant.
+- Codex app-server: enforce OpenClaw `before_tool_call` policy for Codex-native app-server shell and approval paths, preventing native tool execution from bypassing plugin policy. Fixes #82372. (#82496) Thanks @joshavant.
 - Telegram: mark isolated polling ingress unhealthy when a spooled inbound backlog stalls while Bot API polling still succeeds, so gateway/channel health no longer stays green after Telegram DM processing wedges. Fixes #82175. Thanks @shellyrocklobster.
 - Telegram: drop expired approval callbacks from isolated polling after approval id expiry so stale inline-button updates do not retry forever across restarts. Fixes #82347. (#82455) Thanks @joshavant.
 - Agents: strip Gemini/Gemma `<final>` tags with attributes or self-closing syntax from delivered replies, including strict final-tag streaming enforcement. Fixes #65867. Thanks @grizdum.
@@ -124,6 +129,7 @@ Docs: https://docs.openclaw.ai
 - Memory search: stop using chokidar write-stability polling for memory and QMD watchers so large Markdown extraPath trees no longer build up regular file descriptors; changed files now settle through the existing debounced sync queue. Fixes #77327 and #78224. (#81802) Thanks @frankekn, @loyur, and @JanPlessow.
 - Message tool: rename the Discord channel-create schema field exposed to models from `type` to `channelType`, avoiding NVIDIA NIM JSON Schema parser failures while still accepting legacy `type` tool calls. (#78920) Thanks @YashSaliya.
 - Feishu: send CardKit streaming cards as delivered deltas and retry failed updates, preventing duplicated or dropped streamed text. Fixes #82417. (#82419) Thanks @hclsys.
+- Gateway/Gmail: stop queued post-ready Gmail sidecars before hot reload and abort stale Tailscale setup, so cancelled watcher restarts cannot rewrite an old public hook target or report abort-killed commands as success. (#82395) Thanks @samzong.
 
 ## 2026.5.14
 

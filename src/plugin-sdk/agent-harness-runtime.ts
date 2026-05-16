@@ -165,7 +165,9 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
