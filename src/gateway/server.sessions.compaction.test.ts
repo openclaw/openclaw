@@ -387,8 +387,9 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
 });
 
 test("sessions.compaction.* discovers checkpoint transcript files when store metadata is missing", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  const { SessionManager } = await getSessionManagerModule();
   const checkpointId = randomUUID();
   const checkpointFile = path.join(
     dir,
@@ -470,6 +471,41 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
         sessionFile: expectedSessionFile,
       },
     });
+
+    const restored = await rpcReq<{
+      ok: true;
+      key: string;
+      sessionId: string;
+      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+    }>(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId,
+    });
+    expect(restored.ok).toBe(true);
+    expect(restored.payload?.key).toBe("agent:main:main");
+    expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
+    expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
+    expect(restored.payload?.entry.compactionCheckpoints?.[0]).toMatchObject({
+      checkpointId,
+      preCompaction: {
+        sessionFile: checkpointFile,
+      },
+    });
+    const restoredSessionFile = restored.payload?.entry.sessionFile;
+    if (!restoredSessionFile) {
+      throw new Error("expected restored disk checkpoint session file");
+    }
+    const restoredSession = SessionManager.open(restoredSessionFile, dir);
+    expect(restoredSession.getEntries()).toHaveLength(
+      fixture.preCompactionSession.getEntries().length,
+    );
+
+    const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { compactionCheckpoints?: unknown[]; sessionId?: string }
+    >;
+    expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
+    expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
   } finally {
     ws.close();
   }

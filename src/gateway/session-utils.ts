@@ -383,7 +383,9 @@ function discoverDiskCompactionCheckpointPreviewsSync(params: {
   const sessionDir = path.dirname(sessionFile);
   const checkpointTranscriptBase = path.parse(sessionFile).name;
   const knownIds = new Set(
-    (params.entry.compactionCheckpoints ?? []).map((checkpoint) => checkpoint.checkpointId),
+    resolveProjectableCompactionCheckpoints(params.entry).map(
+      (checkpoint) => checkpoint.checkpointId,
+    ),
   );
   let fileNames: string[];
   const cachedFileNames = params.checkpointFileNamesByDir?.get(sessionDir);
