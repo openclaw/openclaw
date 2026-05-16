@@ -444,24 +444,74 @@ function isInterSessionOrphanedUserMessage(message: { provenance?: unknown }): b
   );
 }
 
+function stripLeadingQueuedInterSessionBlocks(prompt: string): string {
+  let remaining = prompt.replace(/\r\n/g, "\n");
+  let changed = false;
+
+  for (;;) {
+    const trimmedStart = remaining.trimStart();
+    const leadingWhitespaceLength = remaining.length - trimmedStart.length;
+    remaining = trimmedStart;
+
+    if (!remaining.startsWith(QUEUED_USER_MESSAGE_MARKER)) {
+      if (leadingWhitespaceLength > 0 && changed) {
+        remaining = remaining.trimStart();
+      }
+      break;
+    }
+
+    let cursor = 0;
+    while (remaining.startsWith(QUEUED_USER_MESSAGE_MARKER, cursor)) {
+      cursor += QUEUED_USER_MESSAGE_MARKER.length;
+      if (remaining[cursor] === "\r" && remaining[cursor + 1] === "\n") {
+        cursor += 2;
+      } else if (remaining[cursor] === "\n") {
+        cursor += 1;
+      }
+    }
+
+    const afterMarkers = remaining.slice(cursor).trimStart();
+    if (!afterMarkers.startsWith("[Inter-session message]")) {
+      break;
+    }
+
+    const endMarker = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const endIndex = afterMarkers.indexOf(endMarker);
+    if (endIndex < 0) {
+      break;
+    }
+
+    const afterBlock = afterMarkers.slice(endIndex + endMarker.length).trimStart();
+    if (!afterBlock) {
+      break;
+    }
+
+    remaining = afterBlock;
+    changed = true;
+  }
+
+  return changed ? remaining : prompt;
+}
+
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
+  const prompt = stripLeadingQueuedInterSessionBlocks(params.prompt);
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
+    return { prompt, merged: false, removeLeaf: true };
   }
-  if (params.prompt.trim().length > 0 && isInterSessionOrphanedUserMessage(params.leafMessage)) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  if (prompt.trim().length > 0 && isInterSessionOrphanedUserMessage(params.leafMessage)) {
+    return { prompt, merged: false, removeLeaf: true };
   }
-  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  if (promptAlreadyIncludesQueuedUserMessage(prompt, orphanText)) {
+    return { prompt, merged: false, removeLeaf: true };
   }
 
   return {
-    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
+    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", prompt].join("\n"),
     merged: true,
     removeLeaf: true,
   };

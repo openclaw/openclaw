@@ -65,6 +65,47 @@ describe("Pi transcript repair runtime contract", () => {
     });
   });
 
+  it("strips already-merged queued inter-session blocks from fresh prompts", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt:
+        `${QUEUED_USER_MESSAGE_MARKER}\n` +
+        `${QUEUED_USER_MESSAGE_MARKER}\n` +
+        `[Inter-session message] sourceTool=subagent_announce\n` +
+        `Action: reply ONLY with NO_REPLY.\n` +
+        `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n\n` +
+        `List Patricio's current projects.`,
+      trigger: "user",
+      leafMessage: textOrphanLeaf("already represented elsewhere"),
+    });
+
+    expect(result.prompt).not.toContain("subagent_announce");
+    expect(result.prompt).not.toContain("NO_REPLY");
+    expect(result).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        `${QUEUED_USER_MESSAGE_MARKER}\n` +
+        `already represented elsewhere\n\n` +
+        `List Patricio's current projects.`,
+    });
+  });
+
+  it("preserves queued inter-session delivery prompts when no fresh prompt remains", () => {
+    const prompt =
+      `${QUEUED_USER_MESSAGE_MARKER}\n` +
+      `[Inter-session message] sourceTool=subagent_announce\n` +
+      `Result: child task complete\n` +
+      `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt,
+      trigger: "user",
+      leafMessage: textOrphanLeaf("older active-turn message"),
+    });
+
+    expect(result.prompt).toContain("subagent_announce");
+  });
+
   it("preserves structured text and media references before removing the leaf", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
