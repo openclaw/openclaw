@@ -292,9 +292,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     replies: ReturnType<typeof vi.fn>,
     starterText: string,
     followUpText: string,
+    options?: { expectStarterBody?: boolean },
   ) {
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.ThreadStarterBody).toBe(starterText);
+    if (options?.expectStarterBody === false) {
+      expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
+    } else {
+      expect(prepared.ctxPayload.ThreadStarterBody).toBe(starterText);
+    }
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain(starterText);
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain(followUpText);
     expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
@@ -1345,6 +1350,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       replies,
       "starter from open dm",
       "dm follow-up",
+      { expectStarterBody: false },
     );
   });
 
@@ -1502,7 +1508,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.MessageThreadId).toBe("500.000");
   });
 
-  it("records non-main DM last-route metadata on the prepared thread session", async () => {
+  it("records non-main DM thread replies on the prepared direct session", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -1525,7 +1531,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.route.sessionKey).toBe("agent:main:slack:direct:u1");
-    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1:thread:500.000");
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1");
+    expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadLabel).toBeUndefined();
+    expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared.ctxPayload.ReplyToId).toBe("500.000");
+    expect(prepared.ctxPayload.TransportThreadId).toBe("500.000");
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
     ).toEqual({
@@ -1538,7 +1550,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
   });
 
-  it("keeps default main-scope DM last-route metadata on the main session", async () => {
+  it("keeps default main-scope DM thread replies on the main session", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true, replyToMode: "all" } },
@@ -1558,7 +1570,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:600.000");
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main");
+    expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadLabel).toBeUndefined();
+    expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared.ctxPayload.ReplyToId).toBe("600.000");
+    expect(prepared.ctxPayload.TransportThreadId).toBe("600.000");
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
     ).toEqual({
@@ -1569,6 +1587,91 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       threadId: "600.000",
       mainDmOwnerPin: undefined,
     });
+  });
+
+  it("preserves Slack thread history when an existing DM session receives a thread reply", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": { updatedAt: Date.now() },
+          "agent:main:main:thread:650.000": { updatedAt: Date.now() },
+        },
+        null,
+        2,
+      ),
+    );
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter topic", user: "U1", ts: "650.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter topic", user: "U1", ts: "650.000" },
+          { text: "assistant reply", bot_id: "B1", ts: "650.500" },
+          { text: "user follow-up", user: "U1", ts: "650.800" },
+          { text: "current message", user: "U1", ts: "651.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all", thread: { initialHistoryLimit: 20 } }),
+      createSlackMessage({
+        text: "current message",
+        ts: "651.000",
+        thread_ts: "650.000",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main");
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("starter topic");
+    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("user follow-up");
+    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
+    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps transport thread metadata for DM parent_user_id replies with self thread_ts", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        text: "thread reply",
+        ts: "701.000",
+        thread_ts: "701.000",
+        parent_user_id: "B1",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main");
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.ReplyToId).toBe("701.000");
+    expect(prepared.ctxPayload.TransportThreadId).toBe("701.000");
   });
 
   it("routes Slack thread replies through runtime conversation bindings", async () => {

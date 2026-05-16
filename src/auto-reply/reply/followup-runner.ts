@@ -405,6 +405,7 @@ export function createFollowupRunner(params: {
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
+          isHeartbeat: opts?.isHeartbeat === true,
           modelUsed,
           providerUsed,
           contextTokensUsed,

@@ -16,7 +16,7 @@ Default behavior:
 
 - Groups are restricted (`groupPolicy: "allowlist"`).
 - Replies require a mention unless you explicitly disable mention gating.
-- Normal final replies in groups/channels are private by default. Visible room output uses the `message` tool.
+- Visible replies in groups/channels use the `message` tool by default.
 
 Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
@@ -43,15 +43,16 @@ always-on group chatter -> user request, or room event when configured
 
 For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
 `openclaw doctor --fix` writes this default into configured-channel configs that omit it.
-That means the agent still processes the turn and can update memory/session state, but its normal final answer is not automatically posted back into the room. To speak visibly, the agent uses `message(action=send)`.
+That means the agent still processes the turn and can update memory/session state, and it should speak visibly with `message(action=send)` when it has a room reply. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
 
 This default depends on a model/runtime that reliably calls tools. If logs show
 assistant text but `didSendViaMessagingTool: false`, the model answered
-privately instead of calling the message tool. That is not a
-Discord/Slack/Telegram send failure. Use a tool-call-reliable model for
-group/channel sessions, or set
-`messages.groupChat.visibleReplies: "automatic"` to restore legacy visible
-final replies for group requests.
+privately instead of calling the message tool. The room stays silent, and the
+gateway verbose log records the suppressed final payload metadata. That is not
+a Discord/Slack/Telegram send failure, but a tool-discipline signal. Use a
+tool-call-reliable model for group/channel sessions, or set
+`messages.groupChat.visibleReplies: "automatic"` when you want all visible group
+replies to use the legacy final-reply path.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
@@ -61,7 +62,7 @@ For direct chats and any other source turn, use `messages.visibleReplies: "messa
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
-Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay quiet unless the agent calls the message tool.
+Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
 To submit always-on ambient group chatter as quiet room context instead of legacy user requests:
 
