@@ -536,7 +536,7 @@ export async function handleAcpSpawnAction(
     return stopWithText(
       collectAcpErrorText({
         error,
-        fallbackCode: "cwd_resolution_failed",
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not resolve ACP session workspace.",
       }),
     );

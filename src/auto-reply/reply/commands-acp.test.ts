@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -1193,7 +1195,7 @@ describe("/acp command", () => {
       backendSessionId: "acpx-2",
     });
 
-    const workspace = await fs.mkdtemp("/tmp/openclaw-codex-");
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-"));
     try {
       const cfg = {
         ...baseCfg,
