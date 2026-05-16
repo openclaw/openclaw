@@ -401,6 +401,7 @@ describe("handleCompactCommand", () => {
     );
 
     expect(requireCompactEmbeddedPiSessionCall().contextTokenBudget).toBe(258_000);
+    expect(requireCompactEmbeddedPiSessionCall().callerContextTokenBudget).toBe(258_000);
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
   });
 });
