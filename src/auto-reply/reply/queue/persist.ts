@@ -31,6 +31,8 @@ type PersistedFollowupRun = Pick<
   | "messageId"
   | "summaryLine"
   | "enqueuedAt"
+  | "images"
+  | "imageOrder"
   | "originatingChannel"
   | "originatingTo"
   | "originatingAccountId"
@@ -58,6 +60,8 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
     ...(item.messageId !== undefined ? { messageId: item.messageId } : {}),
     ...(item.summaryLine !== undefined ? { summaryLine: item.summaryLine } : {}),
     enqueuedAt: item.enqueuedAt,
+    ...(item.images !== undefined ? { images: item.images } : {}),
+    ...(item.imageOrder !== undefined ? { imageOrder: item.imageOrder } : {}),
     ...(item.originatingChannel !== undefined
       ? { originatingChannel: item.originatingChannel }
       : {}),
@@ -154,6 +158,12 @@ export function restoreFollowupQueues(): void {
         lastRun: data.lastRun,
       };
       FOLLOWUP_QUEUES.set(key, restored);
+      // Note: drain callbacks (FOLLOWUP_RUN_CALLBACKS) are empty after a full
+      // process restart, so kicking them here would be a no-op. Items in
+      // restored queues will be delivered when the next enqueueFollowupRun call
+      // re-registers the channel callback and kicks the drain. For immediate
+      // delivery on startup, channel handlers would need to register their
+      // runFollowup callbacks before any queue restore.
     }
   } catch (err) {
     defaultRuntime.error?.(`failed to restore followup queues: ${String(err)}`);

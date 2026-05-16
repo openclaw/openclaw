@@ -33,6 +33,8 @@ function makeRun(): FollowupRun["run"] {
     config: {} as FollowupRun["run"]["config"],
     provider: "anthropic",
     model: "claude",
+    timeoutMs: 30000,
+    blockReplyBreak: "message_end",
   };
 }
 
