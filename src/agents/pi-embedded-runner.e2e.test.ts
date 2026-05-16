@@ -345,8 +345,17 @@ describe("runEmbeddedPiAgent", () => {
 
   it("resolves explicit OpenAI PI runs through Codex when auth order starts with Codex OAuth", async () => {
     const sessionFile = nextSessionFile();
+    const baseConfig = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     const cfg = {
-      ...createEmbeddedPiRunnerOpenAiConfig(["mock-1"]),
+      ...baseConfig,
+      models: {
+        providers: {
+          openai: {
+            ...baseConfig.models?.providers?.openai,
+            baseUrl: "https://api.openai.com/v1",
+          },
+        },
+      },
       agents: {
         defaults: {
           models: {
