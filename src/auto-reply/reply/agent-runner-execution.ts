@@ -4,6 +4,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -15,7 +16,10 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  listLegacyRuntimeModelProviderAliases,
+  resolveCliRuntimeExecutionProvider,
+} from "../../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
@@ -252,7 +256,11 @@ function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: Foll
   provider: string;
   model: string;
 } {
-  if (params.entry.modelOverrideSource === "auto") {
+  if (
+    params.entry.modelOverrideSource === "auto" ||
+    (params.entry.modelOverrideSource === undefined &&
+      hasSessionAutoModelFallbackProvenance(params.entry))
+  ) {
     const persistedOriginProvider = normalizeOptionalString(
       params.entry.modelOverrideFallbackOriginProvider,
     );
@@ -1094,6 +1102,28 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
+function resolveSessionRuntimeOverrideForProvider(params: {
+  provider: string;
+  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
+}): string | undefined {
+  const provider = normalizeLowercaseStringOrEmpty(params.provider);
+  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
+  if (!runtime || runtime === "auto" || runtime === "default") {
+    return undefined;
+  }
+  if (runtime === "pi") {
+    return "pi";
+  }
+  if (provider === "openai" && runtime === "codex") {
+    return "codex";
+  }
+  return listLegacyRuntimeModelProviderAliases().find(
+    (alias) =>
+      normalizeLowercaseStringOrEmpty(alias.provider) === provider &&
+      normalizeLowercaseStringOrEmpty(alias.runtime) === runtime,
+  )?.runtime;
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1272,6 +1302,9 @@ export async function runAgentTurnWithFallback(params: {
     provider: string,
     model: string,
   ): Promise<(() => Promise<void>) | undefined> => {
+    if (params.followupRun.run.hasOneTurnModelOverride === true) {
+      return undefined;
+    }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
@@ -1301,7 +1334,8 @@ export async function runAgentTurnWithFallback(params: {
     const isUserModelOverride =
       activeSessionEntry.modelOverrideSource === "user" ||
       (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
+        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)) &&
+        !hasSessionAutoModelFallbackProvenance(activeSessionEntry));
     if (isUserModelOverride) {
       return undefined;
     }
@@ -1495,13 +1529,23 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
+          const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+            provider,
+            entry: params.getActiveSessionEntry(),
+          });
           const cliExecutionProvider =
-            resolveCliRuntimeExecutionProvider({
-              provider,
-              cfg: runtimeConfig,
-              agentId: params.followupRun.run.agentId,
-              modelId: model,
-            }) ?? provider;
+            sessionRuntimeOverride === "pi"
+              ? provider
+              : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+                  ? sessionRuntimeOverride
+                  : undefined) ??
+                resolveCliRuntimeExecutionProvider({
+                  provider,
+                  cfg: runtimeConfig,
+                  agentId: params.followupRun.run.agentId,
+                  modelId: model,
+                }) ??
+                provider);
 
           if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
             const startedAt = Date.now();
@@ -1514,10 +1558,10 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              cliExecutionProvider,
-            );
+            const isRoomEventCliTurn = params.followupRun.currentTurnKind === "room_event";
+            const cliSessionBinding = isRoomEventCliTurn
+              ? undefined
+              : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
             const authProfile = resolveRunAuthProfile(
               params.followupRun.run,
               cliExecutionProvider,
@@ -1579,7 +1623,7 @@ export async function runAgentTurnWithFallback(params: {
                   })
                 : noopBridge;
               try {
-                const result = await runCliAgent({
+                const rawResult = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
@@ -1589,6 +1633,7 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                   prompt: params.commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
+                  currentTurnKind: params.followupRun.currentTurnKind,
                   currentTurnContext: params.followupRun.currentTurnContext,
                   inputProvenance: params.followupRun.run.inputProvenance,
                   provider: cliExecutionProvider,
@@ -1621,6 +1666,23 @@ export async function runAgentTurnWithFallback(params: {
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
+                const result: EmbeddedAgentRunResult =
+                  isRoomEventCliTurn && rawResult.meta.agentMeta
+                    ? (() => {
+                        const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                          rawResult.meta.agentMeta;
+                        return {
+                          ...rawResult,
+                          meta: {
+                            ...rawResult.meta,
+                            agentMeta: {
+                              ...agentMeta,
+                              sessionId: "",
+                            },
+                          },
+                        };
+                      })()
+                    : rawResult;
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
@@ -1712,13 +1774,15 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
-          const agentHarnessPolicy = resolveAgentHarnessPolicy({
-            provider,
-            modelId: model,
-            config: runtimeConfig,
-            agentId: params.followupRun.run.agentId,
-            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
-          });
+          const agentHarnessPolicy = sessionRuntimeOverride
+            ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
+            : resolveAgentHarnessPolicy({
+                provider,
+                modelId: model,
+                config: runtimeConfig,
+                agentId: params.followupRun.run.agentId,
+                sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+              });
           const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
             provider,
             harnessRuntime: agentHarnessPolicy.runtime,
@@ -1727,6 +1791,11 @@ export async function runAgentTurnWithFallback(params: {
             config: runtimeConfig,
             workspaceDir: params.followupRun.run.workspaceDir,
           });
+          const embeddedRunHarnessOverride =
+            sessionRuntimeOverride ??
+            (agentHarnessPolicy.runtime === "pi" && embeddedRunProvider !== provider
+              ? "pi"
+              : undefined);
           return (async () => {
             let attemptCompactionCount = 0;
             const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
@@ -1746,15 +1815,22 @@ export async function runAgentTurnWithFallback(params: {
                 ...senderContext,
                 ...runBaseParams,
                 provider: embeddedRunProvider,
+                agentHarnessId: embeddedRunHarnessOverride,
+                agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                currentTurnKind: params.followupRun.currentTurnKind,
                 currentTurnContext: params.followupRun.currentTurnContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                suppressNextUserMessagePersistence:
+                  params.followupRun.run.suppressNextUserMessagePersistence,
+                suppressTranscriptOnlyAssistantPersistence:
+                  params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,

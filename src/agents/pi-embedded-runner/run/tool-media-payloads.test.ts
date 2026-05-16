@@ -70,4 +70,23 @@ describe("mergeAttemptToolMediaPayloads", () => {
       deliverDespiteSourceReplySuppression: true,
     });
   });
+
+  it("preserves trusted local media provenance when merging tool media", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+      }),
+    ).toEqual([
+      {
+        text: "done",
+        mediaUrls: ["/tmp/reply.opus"],
+        mediaUrl: "/tmp/reply.opus",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
 });

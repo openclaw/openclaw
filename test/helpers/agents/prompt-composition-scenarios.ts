@@ -7,6 +7,7 @@ import {
   buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
+import { buildCurrentTurnPrompt } from "../../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
 import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
@@ -22,7 +23,6 @@ import {
 import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
-import { buildCurrentTurnPrompt } from "../../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
 
@@ -146,9 +146,6 @@ function buildAutoReplySystemPrompt(params: {
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "disallow",
-          silentReplyRewrite: true,
         })
       : "",
     params.includeGroupChatContext
@@ -471,7 +468,8 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
   };
   return {
     scenario: "auto-reply-discord-boundary",
-    focus: "Discord inbound body remains one user turn while supplemental context is structured metadata",
+    focus:
+      "Discord inbound body remains one user turn while supplemental context is structured metadata",
     expectedStableSystemAfterTurnIds: [],
     turns: [
       {

@@ -574,6 +574,39 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
+  it("keeps the full catalog cold until browsing when no provider is preferred", async () => {
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "fleet-router/qwen3.6:latest",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      browseCatalogOnDemand: true,
+      loadCatalog: true,
+    });
+
+    expect(result).toStrictEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    const params = pickerParams(select as MockCallSource);
+    expect(params.searchable).toBe(false);
+    expect(params.initialValue).toBe("__keep__");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__keep__",
+      "__manual__",
+      "__browse__",
+    ]);
+  });
+
   it("loads the full model catalog when the user chooses to browse", async () => {
     loadModelCatalog.mockResolvedValue([
       {

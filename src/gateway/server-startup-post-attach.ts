@@ -46,6 +46,22 @@ type GatewayMemoryStartupPolicy =
   | { mode: "immediate" }
   | { mode: "idle"; delayMs: number };
 
+export type GatewayPostReadySidecarHandle = {
+  stop: () => void;
+};
+
+export function stopPostReadySidecarsAfterCloseStarted(params: {
+  postReadySidecars: readonly GatewayPostReadySidecarHandle[];
+  closeStarted: boolean;
+}): void {
+  if (!params.closeStarted) {
+    return;
+  }
+  for (const postReadySidecar of params.postReadySidecars) {
+    postReadySidecar.stop();
+  }
+}
+
 async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,
@@ -135,14 +151,29 @@ function schedulePostReadySidecarTask(params: {
   startupTrace?: GatewayStartupTrace;
   name: string;
   log: { warn: (msg: string) => void };
-  run: () => Awaitable<void>;
-}): void {
+  run: (isStopped: () => boolean, signal: AbortSignal) => Awaitable<void>;
+}): GatewayPostReadySidecarHandle {
+  let stopped = false;
+  const abortController = new AbortController();
+  const isStopped = () => stopped;
   const handle = setImmediate(() => {
-    void measureStartup(params.startupTrace, params.name, params.run).catch((err) => {
+    if (isStopped()) {
+      return;
+    }
+    void measureStartup(params.startupTrace, params.name, () =>
+      params.run(isStopped, abortController.signal),
+    ).catch((err) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
   });
   handle.unref?.();
+  return {
+    stop: () => {
+      stopped = true;
+      abortController.abort();
+      clearImmediate(handle);
+    },
+  };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -393,59 +424,7 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
 }) {
-  await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
-    if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
-      const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
-      await startGmailWatcherWithLogs({
-        cfg: params.cfg,
-        log: params.logHooks,
-      });
-    }
-  });
-
-  await measureStartup(params.startupTrace, "sidecars.gmail-model", async () => {
-    if (params.cfg.hooks?.gmail?.model) {
-      const [
-        { DEFAULT_MODEL, DEFAULT_PROVIDER },
-        { loadModelCatalog },
-        { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
-      ] = await Promise.all([
-        import("../agents/defaults.js"),
-        import("../agents/model-catalog.js"),
-        import("../agents/model-selection.js"),
-      ]);
-      const hooksModelRef = resolveHooksGmailModel({
-        cfg: params.cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      if (hooksModelRef) {
-        const { provider: resolvedDefaultProvider, model: defaultModel } =
-          resolveConfiguredModelRef({
-            cfg: params.cfg,
-            defaultProvider: DEFAULT_PROVIDER,
-            defaultModel: DEFAULT_MODEL,
-          });
-        const catalog = await loadModelCatalog({ config: params.cfg });
-        const status = getModelRefStatus({
-          cfg: params.cfg,
-          catalog,
-          ref: hooksModelRef,
-          defaultProvider: resolvedDefaultProvider,
-          defaultModel,
-        });
-        if (!status.allowed) {
-          params.logHooks.warn(
-            `hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
-          );
-        }
-        if (!status.inCatalog) {
-          params.logHooks.warn(
-            `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
-          );
-        }
-      }
-    }
-  });
+  const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
@@ -915,4 +894,5 @@ export const __testing = {
   resolveGatewayMemoryStartupPolicy,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,
+  stopPostReadySidecarsAfterCloseStarted,
 };

@@ -24,6 +24,7 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -73,6 +74,9 @@ const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
+const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -91,6 +95,42 @@ type BaseStreamOptions = {
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
 };
+
+type ModelStreamCooperativeScheduler = {
+  afterEvent: () => Promise<void>;
+};
+
+function throwIfModelStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+}
+
+function createModelStreamCooperativeScheduler(
+  signal?: AbortSignal,
+): ModelStreamCooperativeScheduler {
+  let lastYieldedAt = Date.now();
+  let eventsSinceYield = 0;
+  return {
+    async afterEvent() {
+      throwIfModelStreamAborted(signal);
+      eventsSinceYield += 1;
+      const now = Date.now();
+      if (
+        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+      ) {
+        return;
+      }
+      eventsSinceYield = 0;
+      lastYieldedAt = now;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      throwIfModelStreamAborted(signal);
+    },
+  };
+}
 
 type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
@@ -332,6 +372,208 @@ function stringifyRedactedPayload(value: unknown): string {
 function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
   return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
+}
+
+function readRecordString(record: Record<string, unknown> | undefined, key: string): string {
+  return stringifyUnknown(record?.[key]);
+}
+
+function isResponseFailedIdentifierKey(key: string): boolean {
+  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
+  return (
+    normalized === "requestid" ||
+    normalized === "xrequestid" ||
+    normalized === "providerrequestid" ||
+    normalized === "providerresponseid" ||
+    normalized === "litellmrequestid" ||
+    (normalized.includes("request") && normalized.endsWith("id")) ||
+    (normalized.includes("provider") && normalized.endsWith("id"))
+  );
+}
+
+function collectResponseFailedIdentifierHashes(
+  value: unknown,
+  opts: {
+    path?: string;
+    depth?: number;
+    identifierKey?: string;
+    out?: string[];
+    seen?: WeakSet<object>;
+  } = {},
+): string[] {
+  const path = opts.path ?? "";
+  const depth = opts.depth ?? 0;
+  const identifierKey = opts.identifierKey ?? "";
+  const out = opts.out ?? [];
+  const seen = opts.seen ?? new WeakSet<object>();
+  if (out.length >= 12 || depth > 4 || !value || typeof value !== "object") {
+    return out;
+  }
+  if (seen.has(value)) {
+    return out;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      if (index >= 8 || out.length >= 12) {
+        break;
+      }
+      const itemString =
+        typeof item === "string" || typeof item === "number" ? String(item).trim() : "";
+      if (identifierKey && isResponseFailedIdentifierKey(identifierKey) && itemString) {
+        out.push(`${path}[${index}]=${redactIdentifier(itemString, { len: 12 })}`);
+        continue;
+      }
+      collectResponseFailedIdentifierHashes(item, {
+        path: `${path}[${index}]`,
+        depth: depth + 1,
+        identifierKey,
+        out,
+        seen,
+      });
+    }
+    return out;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (out.length >= 12) {
+      break;
+    }
+    const childPath = path ? `${path}.${key}` : key;
+    const childString =
+      typeof child === "string" || typeof child === "number" ? String(child).trim() : "";
+    if (isResponseFailedIdentifierKey(key) && childString) {
+      out.push(`${childPath}=${redactIdentifier(childString, { len: 12 })}`);
+      continue;
+    }
+    collectResponseFailedIdentifierHashes(child, {
+      path: childPath,
+      depth: depth + 1,
+      identifierKey: isResponseFailedIdentifierKey(key) ? key : undefined,
+      out,
+      seen,
+    });
+  }
+  return out;
+}
+
+function redactResponseFailedIdentifierFields(
+  value: unknown,
+  opts: {
+    key?: string;
+    depth?: number;
+    seen?: WeakSet<object>;
+  } = {},
+): unknown {
+  const key = opts.key ?? "";
+  const depth = opts.depth ?? 0;
+  if (typeof value === "string" || typeof value === "number") {
+    return key && isResponseFailedIdentifierKey(key)
+      ? redactIdentifier(String(value), { len: 12 })
+      : value;
+  }
+  if (depth > 6 || !value || typeof value !== "object") {
+    return value;
+  }
+  const seen = opts.seen ?? new WeakSet<object>();
+  if (seen.has(value)) {
+    return "<circular>";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.slice(0, 16).map((item) =>
+      redactResponseFailedIdentifierFields(item, {
+        key,
+        depth: depth + 1,
+        seen,
+      }),
+    );
+  }
+  const out: Record<string, unknown> = {};
+  for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+    out[childKey] = redactResponseFailedIdentifierFields(child, {
+      key: childKey,
+      depth: depth + 1,
+      seen,
+    });
+  }
+  return out;
+}
+
+function buildResponsesFailedFailureFields(response: Record<string, unknown> | undefined) {
+  if (!response) {
+    return {};
+  }
+  const fields: Record<string, unknown> = {};
+  for (const key of [
+    "error",
+    "incomplete_details",
+    "status_details",
+    "failure_reason",
+    "last_error",
+    "provider_error",
+    "error_details",
+  ]) {
+    if (response[key] !== undefined && response[key] !== null) {
+      fields[key] = response[key];
+    }
+  }
+  return fields;
+}
+
+function buildResponsesFailedNoDetailsObservation(
+  event: Record<string, unknown>,
+  model: Model<Api>,
+) {
+  const response = isRecord(event.response) ? event.response : undefined;
+  const failureFields = redactResponseFailedIdentifierFields(
+    buildResponsesFailedFailureFields(response),
+  ) as Record<string, unknown>;
+  const responsePreview = {
+    id: readRecordString(response, "id"),
+    status: readRecordString(response, "status"),
+    model: readRecordString(response, "model"),
+    object: readRecordString(response, "object"),
+    failureFields,
+    metadataKeys: isRecord(response?.metadata)
+      ? Object.keys(response.metadata).toSorted().join(",")
+      : "",
+  };
+  return {
+    event: "openai_responses_response_failed_without_details",
+    provider: model.provider,
+    api: model.api,
+    transportModel: model.id,
+    providerRuntimeFailureKind: "no_error_details",
+    responseId: responsePreview.id,
+    responseStatus: responsePreview.status,
+    responseModel: responsePreview.model,
+    requestIdHashes: collectResponseFailedIdentifierHashes(event),
+    failureFieldsPreview: stringifyRedactedEvent(failureFields),
+    responsePreview: stringifyRedactedEvent(responsePreview),
+  };
+}
+
+function summarizeResponsesFailedNoDetailsObservation(
+  observation: ReturnType<typeof buildResponsesFailedNoDetailsObservation>,
+): string {
+  const requestIds = observation.requestIdHashes.join(",");
+  return (
+    `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
+    `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
+    `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
+    `requestIds=${requestIds || "none"} response=${observation.responsePreview}`
+  );
+}
+
+function responseFailedErrorMessage(
+  error: { code?: unknown; message?: unknown } | null | undefined,
+): string | undefined {
+  const code = stringifyUnknown(error?.code).trim();
+  const message = stringifyUnknown(error?.message).trim();
+  if (!code && !message) {
+    return undefined;
+  }
+  return `${code || "unknown"}: ${message || "no message"}`;
 }
 
 function summarizeResponsesPayload(params: unknown): string {
@@ -722,6 +964,7 @@ async function processResponsesStream(
       serviceTier?: ResponseCreateParamsStreaming["service_tier"],
     ) => void;
     firstEventTimeoutMs?: number;
+    signal?: AbortSignal;
   },
 ) {
   let currentItem: Record<string, unknown> | null = null;
@@ -736,7 +979,9 @@ async function processResponsesStream(
     model,
     options?.firstEventTimeoutMs,
   );
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawEvent of guardedStream) {
+    throwIfModelStreamAborted(options?.signal);
     const event = rawEvent as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
     eventCount += 1;
@@ -922,17 +1167,31 @@ async function processResponsesStream(
     } else if (type === "response.failed") {
       const response = event.response as
         | {
-            error?: { code?: string; message?: string };
+            id?: string;
+            error?: { code?: unknown; message?: unknown } | null;
             incomplete_details?: { reason?: string };
           }
         | undefined;
-      const msg = response?.error
-        ? `${response.error.code || "unknown"}: ${response.error.message || "no message"}`
+      if (typeof response?.id === "string") {
+        output.responseId = response.id;
+      }
+      const detailedErrorMessage = responseFailedErrorMessage(response?.error);
+      const msg = detailedErrorMessage
+        ? detailedErrorMessage
         : response?.incomplete_details?.reason
           ? `incomplete: ${response.incomplete_details.reason}`
-          : "Unknown error (no error details in response)";
+          : RESPONSE_FAILED_NO_DETAILS_MESSAGE;
+      if (msg === RESPONSE_FAILED_NO_DETAILS_MESSAGE) {
+        const observation = buildResponsesFailedNoDetailsObservation(event, model);
+        log.warn(
+          `[responses] response.failed missing error details provider=${model.provider} api=${model.api} model=${model.id} ` +
+            summarizeResponsesFailedNoDetailsObservation(observation),
+          observation,
+        );
+      }
       throw new Error(msg);
     }
+    await cooperativeScheduler.afterEvent();
   }
   const eventTypeSummary = [...eventTypes.entries()]
     .slice(0, 12)
@@ -1141,6 +1400,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
           applyServiceTierPricing,
+          signal: options?.signal,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -1538,6 +1798,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
           firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+          signal: options?.signal,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -1738,7 +1999,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
-        await processOpenAICompletionsStream(responseStream, output, model, stream);
+        await processOpenAICompletionsStream(responseStream, output, model, stream, {
+          signal: options?.signal,
+        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -1760,6 +2023,7 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model<Api>,
   stream: { push(event: unknown): void },
+  options?: { signal?: AbortSignal },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -1907,8 +2171,11 @@ async function processOpenAICompletionsStream(
       appendVisibleTextDelta(part);
     }
   };
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    throwIfModelStreamAborted(options?.signal);
     if (!rawChunk || typeof rawChunk !== "object") {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     const chunk = rawChunk as ChatCompletionChunk;
@@ -1918,6 +2185,7 @@ async function processOpenAICompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
@@ -1935,6 +2203,7 @@ async function processOpenAICompletionsStream(
       choice.delta ??
       (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
     if (!choiceDelta) {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     if (choiceDelta.content) {
@@ -2026,6 +2295,7 @@ async function processOpenAICompletionsStream(
       }
     }
     flushPendingPostToolCallDeltas();
+    await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
   finishCurrentBlock();
@@ -2499,6 +2769,7 @@ function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): 
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "deepseek-v4-flash",
   "deepseek-v4-pro",
+  "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",
   "kimi-k2-thinking",
@@ -2510,16 +2781,22 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 
-function normalizeReasoningContentReplayModelId(modelId: unknown): string | undefined {
+function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] {
   if (typeof modelId !== "string") {
-    return undefined;
+    return [];
   }
-  const normalized = modelId.trim().toLowerCase().split(":", 1)[0];
+  const normalized = modelId.trim().toLowerCase();
   if (!normalized) {
-    return undefined;
+    return [];
   }
   const parts = normalized.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? normalized;
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  const candidates = [finalPart];
+  const colonParts = finalPart.split(":").filter(Boolean);
+  if (colonParts.length > 1) {
+    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  return [...new Set(candidates.filter(Boolean))];
 }
 
 function shouldPreserveReasoningContentReplay(
@@ -2533,9 +2810,8 @@ function shouldPreserveReasoningContentReplay(
   ) {
     return true;
   }
-  const normalizedModelId = normalizeReasoningContentReplayModelId(model.id);
-  return (
-    normalizedModelId !== undefined && REASONING_CONTENT_REPLAY_MODEL_IDS.has(normalizedModelId)
+  return getReasoningContentReplayModelIdCandidates(model.id).some((modelId) =>
+    REASONING_CONTENT_REPLAY_MODEL_IDS.has(modelId),
   );
 }
 
@@ -2736,6 +3012,8 @@ export const __testing = {
   processOpenAICompletionsStream,
   processResponsesStream,
   formatModelTransportDebugBaseUrl,
+  buildResponsesFailedNoDetailsObservation,
+  summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
   withResponsesFirstEventTimeout,

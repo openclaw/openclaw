@@ -9,7 +9,9 @@ import {
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -37,6 +39,7 @@ import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
+  hasSessionAutoModelFallbackProvenance,
   listAgentIds,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
@@ -44,6 +47,7 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -58,7 +62,7 @@ import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "./harness/selection.js";
+import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -746,6 +750,8 @@ async function agentCommandInternal(
     let storedModelOverrideSource = hasStoredOverride
       ? sessionEntry?.modelOverrideSource
       : undefined;
+    const hasStoredAutoFallbackProvenance =
+      hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -862,6 +868,15 @@ async function agentCommandInternal(
     model = allowedInitialSelection.model;
     providerForAuthProfileValidation = provider;
 
+    await ensureSelectedAgentHarnessPlugin({
+      config: cfg,
+      provider,
+      modelId: model,
+      agentId: sessionAgentId,
+      sessionKey,
+      workspaceDir,
+    });
+
     let sessionEntryForAttempt = sessionEntry;
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
@@ -869,10 +884,7 @@ async function agentCommandInternal(
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        const profileAuthProvider = profile
-          ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
-          : undefined;
-        const validationHarnessPolicy = resolveAgentHarnessPolicy({
+        const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
           provider: providerForAuthProfileValidation,
           modelId: model,
           config: cfg,
@@ -882,10 +894,20 @@ async function agentCommandInternal(
         const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
           provider: providerForAuthProfileValidation,
           harnessRuntime: validationHarnessPolicy.runtime,
+          config: cfg,
         }).map((candidateProvider) =>
           resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
         );
-        if (!profile || !acceptedAuthProviders.includes(profileAuthProvider ?? "")) {
+        const profileMatchesRuntime =
+          profile &&
+          acceptedAuthProviders.some((candidateProvider) =>
+            isStoredCredentialCompatibleWithAuthProvider({
+              cfg,
+              provider: candidateProvider,
+              credential: profile,
+            }),
+          );
+        if (!profileMatchesRuntime) {
           if (hasExplicitRunOverride) {
             sessionEntryForAttempt = {
               ...entry,
@@ -961,14 +983,6 @@ async function agentCommandInternal(
         }
       }
     }
-    await ensureSelectedAgentHarnessPlugin({
-      config: cfg,
-      provider,
-      modelId: model,
-      agentId: sessionAgentId,
-      sessionKey,
-      workspaceDir,
-    });
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
@@ -1030,6 +1044,9 @@ async function agentCommandInternal(
           hasSessionModelOverride:
             hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+          hasAutoFallbackProvenance: hasExplicitRunOverride
+            ? false
+            : hasStoredAutoFallbackProvenance,
         });
 
         let fallbackAttemptIndex = 0;
@@ -1053,6 +1070,10 @@ async function agentCommandInternal(
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
+            opts.onActiveModelSelected?.({
+              provider: providerOverride,
+              model: modelOverride,
+            });
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1397,18 +1418,26 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  return await agentCommandInternal(
+  const resolvedDeps = await resolveAgentCommandDeps(deps);
+  return await withLocalGatewayRequestScope(
     {
-      ...opts,
-      // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
-      // Ingress callers must opt into owner semantics explicitly via
-      // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
-      senderIsOwner: opts.senderIsOwner ?? true,
-      // Local/CLI callers are trusted by default for per-run model overrides.
-      allowModelOverride: opts.allowModelOverride ?? true,
+      deps: resolvedDeps,
+      getRuntimeConfig,
     },
-    runtime,
-    deps,
+    async () =>
+      await agentCommandInternal(
+        {
+          ...opts,
+          // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+          // Ingress callers must opt into owner semantics explicitly via
+          // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
+          senderIsOwner: opts.senderIsOwner ?? true,
+          // Local/CLI callers are trusted by default for per-run model overrides.
+          allowModelOverride: opts.allowModelOverride ?? true,
+        },
+        runtime,
+        resolvedDeps,
+      ),
   );
 }
 

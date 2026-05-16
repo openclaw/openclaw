@@ -81,6 +81,16 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
       `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
     );
   }
+  if (issues.invalidSchedule) {
+    lines.push(
+      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
+    );
+  }
+  if (issues.invalidPayload) {
+    lines.push(
+      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
+    );
+  }
   return lines;
 }
 

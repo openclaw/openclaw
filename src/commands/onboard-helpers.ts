@@ -20,6 +20,8 @@ import { detectBinary } from "../infra/detect-binary.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { visibleWidth } from "../terminal/ansi.js";
+import { decorativeEmoji, supportsDecorativeEmoji } from "../terminal/decorative-emoji.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -97,13 +99,18 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {
+  const bannerWidth = 54;
+  const icon = decorativeEmoji("🦞");
+  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
+  const pad = Math.max(0, bannerWidth - visibleWidth(title));
+  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
   const header = [
     "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
     "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
     "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
     "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
     "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    "                  🦞 OPENCLAW 🦞                    ",
+    titleLine,
     " ",
   ].join("\n");
   runtime.log(header);
