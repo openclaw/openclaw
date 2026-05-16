@@ -16,14 +16,14 @@ import {
 } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
-import { isWhatsAppNewsletterJid } from "./normalize.js";
 import {
   normalizeWhatsAppPayloadText,
   prepareWhatsAppOutboundMedia,
   resolveWhatsAppOutboundMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
-import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
+import { requireWhatsAppTargetFacts } from "./target-facts.js";
+import { markdownToWhatsApp } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -82,7 +82,8 @@ export async function sendMessageWhatsApp(
   },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
-  const jid = toWhatsappJid(to);
+  const targetFacts = requireWhatsAppTargetFacts({ target: to });
+  const jid = targetFacts.wireDelivery.jid;
   const mediaUrls = resolveWhatsAppOutboundMediaUrls(options);
   const primaryMediaUrl = mediaUrls[0];
   if (!text && !primaryMediaUrl) {
@@ -143,7 +144,7 @@ export async function sendMessageWhatsApp(
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
-    if (!isWhatsAppNewsletterJid(jid)) {
+    if (targetFacts.wireDelivery.shouldSendComposingPresence) {
       await active.sendComposingTo(to);
     }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
@@ -195,7 +196,8 @@ export async function sendTypingWhatsApp(
     cfg,
     accountId: options.accountId,
   });
-  if (!isWhatsAppNewsletterJid(toWhatsappJid(to))) {
+  const targetFacts = requireWhatsAppTargetFacts({ target: to });
+  if (targetFacts.wireDelivery.shouldSendComposingPresence) {
     await active.sendComposingTo(to);
   }
 }
@@ -226,7 +228,7 @@ export async function sendReactionWhatsApp(
     messageId,
   });
   try {
-    const jid = toWhatsappJid(chatJid);
+    const jid = requireWhatsAppTargetFacts({ target: chatJid }).wireDelivery.jid;
     const redactedJid = redactIdentifier(jid);
     outboundLog.info(`Sending reaction "${emoji}" -> message ${messageId}`);
     logger.info({ chatJid: redactedJid, messageId, emoji }, "sending reaction");
@@ -267,7 +269,7 @@ export async function sendPollWhatsApp(
     to: redactedTo,
   });
   try {
-    const jid = toWhatsappJid(to);
+    const jid = requireWhatsAppTargetFacts({ target: to }).wireDelivery.jid;
     const redactedJid = redactIdentifier(jid);
     const normalized = normalizePollInput(poll, { maxOptions: 12 });
     outboundLog.info(`Sending poll -> ${redactedJid}`);

@@ -153,6 +153,15 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
   });
 
+  describe("formed direct JID handling", () => {
+    it.each(["277038292303944:4@lid", "789@hosted.lid", "1555000:2@hosted"])(
+      "returns %s as the authorized outbound target",
+      (to) => {
+        expectResolutionOk({ to, allowFrom: [], mode: "implicit" }, to);
+      },
+    );
+  });
+
   describe("implicit/heartbeat mode with allowList", () => {
     it("allows message when wildcard is present", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);

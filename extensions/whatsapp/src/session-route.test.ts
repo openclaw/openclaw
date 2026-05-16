@@ -41,4 +41,24 @@ describe("resolveWhatsAppOutboundSessionRoute", () => {
       to: "+15551234567",
     });
   });
+
+  it.each(["277038292303944:4@lid", "789@hosted.lid", "1555000:2@hosted"])(
+    "preserves formed direct %s JIDs in stored route targets",
+    (target) => {
+      const route = resolveWhatsAppOutboundSessionRoute({
+        cfg: { session: { dmScope: "per-channel-peer" } },
+        agentId: "main",
+        target,
+      });
+
+      expect(route).toMatchObject({
+        peer: {
+          kind: "direct",
+        },
+        chatType: "direct",
+        from: target,
+        to: target,
+      });
+    },
+  );
 });

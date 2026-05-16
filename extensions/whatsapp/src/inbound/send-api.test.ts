@@ -323,8 +323,42 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("preserves LID participants in reaction keys", async () => {
-    await api.sendReaction("12345@g.us", "msg-2", "👍", false, "123@lid");
+  it.each(["277038292303944:4@lid", "789@hosted.lid", "1555000:2@hosted"])(
+    "accepts formed direct %s reaction chat JIDs",
+    async (chatJid) => {
+      await api.sendReaction(chatJid, "msg-2", "👍", false);
+
+      expectFirstSendJid(chatJid);
+      const react = requireRecord(requireSendContent().react, "reaction content");
+      expectRecordFields(requireRecord(react.key, "reaction key"), {
+        remoteJid: chatJid,
+        id: "msg-2",
+        fromMe: false,
+        participant: undefined,
+      });
+    },
+  );
+
+  it.each(["123@lid", "277038292303944:4@lid", "277038292303944:99@hosted.lid"])(
+    "preserves %s participants in reaction keys",
+    async (participant) => {
+      await api.sendReaction("12345@g.us", "msg-2", "👍", false, participant);
+
+      expectFirstSendJid("12345@g.us");
+      const react = requireRecord(requireSendContent().react, "reaction content");
+      expect(react.text).toBe("👍");
+      expectRecordFields(requireRecord(react.key, "reaction key"), {
+        remoteJid: "12345@g.us",
+        id: "msg-2",
+        fromMe: false,
+        participant,
+      });
+    },
+  );
+
+  it("normalizes phone-number reaction participants", async () => {
+    await api.sendReaction("12345@g.us", "msg-2", "👍", false, "+1999");
+
     expectFirstSendJid("12345@g.us");
     const react = requireRecord(requireSendContent().react, "reaction content");
     expect(react.text).toBe("👍");
@@ -332,7 +366,7 @@ describe("createWebSendApi", () => {
       remoteJid: "12345@g.us",
       id: "msg-2",
       fromMe: false,
-      participant: "123@lid",
+      participant: "1999@s.whatsapp.net",
     });
   });
 

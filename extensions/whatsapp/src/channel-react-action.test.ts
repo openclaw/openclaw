@@ -26,17 +26,25 @@ vi.mock("./channel-react-action.runtime.js", async () => {
       }
       return undefined;
     },
-    isWhatsAppGroupJid: (value?: string | null) => (value ?? "").trim().endsWith("@g.us"),
-    normalizeWhatsAppTarget: (value?: string | null) => {
-      const raw = (value ?? "").trim();
+    resolveWhatsAppTargetFacts: ({ target }: { target?: string | null }) => {
+      const raw = (target ?? "").trim();
       if (!raw) {
-        return null;
+        return { ok: false, error: new Error("missing target") };
       }
       const stripped = raw.replace(/^whatsapp:/, "");
-      if (stripped.endsWith("@g.us")) {
-        return stripped;
-      }
-      return stripped.startsWith("+") ? stripped : `+${stripped.replace(/^\+/, "")}`;
+      const normalizedTarget = stripped.endsWith("@g.us")
+        ? stripped
+        : stripped.startsWith("+")
+          ? stripped
+          : `+${stripped.replace(/^\+/, "")}`;
+      const chatType = stripped.endsWith("@g.us") ? "group" : "direct";
+      return {
+        ok: true,
+        facts: {
+          normalizedTarget,
+          chatType,
+        },
+      };
     },
     readStringParam: (
       params: Record<string, unknown>,

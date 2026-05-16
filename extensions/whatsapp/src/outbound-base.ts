@@ -17,7 +17,7 @@ import {
 } from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
-import { toWhatsappJid } from "./text-runtime.js";
+import { requireWhatsAppTargetFacts } from "./target-facts.js";
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
 type WhatsAppSendTextOptions = {
@@ -129,7 +129,7 @@ export function createWhatsAppOutboundBase({
     if (!replyToId) {
       return undefined;
     }
-    const targetJid = toWhatsappJid(params.to);
+    const targetJid = requireWhatsAppTargetFacts({ target: params.to }).wireDelivery.jid;
     const cachedMeta = lookupInboundMessageMetaForTarget(params.accountId, targetJid, replyToId);
     return {
       id: replyToId,
