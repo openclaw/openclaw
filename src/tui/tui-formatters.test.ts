@@ -524,14 +524,14 @@ describe("resolveSessionFooterTokenTotal", () => {
     ).toBe(42);
   });
 
-  it("derives total from input and output when totalTokens is missing", () => {
+  it("defaults to zero when context is known but total is stale or missing", () => {
     expect(
       resolveSessionFooterTokenTotal({
         inputTokens: 1200,
         outputTokens: 300,
         contextTokens: 200_000,
       }),
-    ).toBe(1500);
+    ).toBe(0);
   });
 
   it("defaults to zero usage when only context window is known", () => {

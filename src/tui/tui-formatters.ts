@@ -428,15 +428,10 @@ export function isCommandMessage(message: unknown): boolean {
 
 export function resolveSessionFooterTokenTotal(session: {
   totalTokens?: number | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
   contextTokens?: number | null;
 }): number | null {
   if (typeof session.totalTokens === "number") {
     return session.totalTokens;
-  }
-  if (session.inputTokens != null || session.outputTokens != null) {
-    return (session.inputTokens ?? 0) + (session.outputTokens ?? 0);
   }
   if (typeof session.contextTokens === "number") {
     return 0;

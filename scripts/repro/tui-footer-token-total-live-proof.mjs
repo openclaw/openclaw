@@ -17,7 +17,7 @@ const cases = [
     session: { totalTokens: 42_000, contextTokens },
   },
   {
-    label: "input + output fallback",
+    label: "stale cumulative counters without total (show 0, not sum)",
     session: { inputTokens: 10_000, outputTokens: 5_000, contextTokens },
   },
 ];
