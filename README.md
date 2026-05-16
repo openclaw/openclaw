@@ -1,5 +1,5 @@
 # 🦞 OpenClaw — Personal AI Assistant
-
+Agent for [ThangKao Channel](https://www.youtube.com/@ThangKao-g3l/playlists)
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
