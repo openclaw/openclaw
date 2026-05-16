@@ -1614,6 +1614,7 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+      preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
