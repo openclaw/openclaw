@@ -473,8 +473,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
   and use `deltaText` as the replacement text.
-- `session.message` and `session.tool`: transcript/event-stream updates for a
-  subscribed session.
+- `session.message`, `session.operation`, and `session.tool`: transcript,
+  in-flight session operation, and event-stream updates for a subscribed
+  session.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive / liveness event.
