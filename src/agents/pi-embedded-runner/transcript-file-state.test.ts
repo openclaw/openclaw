@@ -146,6 +146,46 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("keeps assistant rows with legacy string content", async () => {
+    const root = await makeRoot("openclaw-transcript-state-assistant-string-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "prompt" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-string",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "assistant", content: "legacy reply" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1", "assistant-string"]);
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "prompt" },
+      { role: "assistant", content: "legacy reply" },
+    ]);
+  });
+
   it("preserves repair-supported assistant tool call payload shapes", async () => {
     const root = await makeRoot("openclaw-transcript-state-tool-input-");
     const sessionFile = path.join(root, "session.jsonl");

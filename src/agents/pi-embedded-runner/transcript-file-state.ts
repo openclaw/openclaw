@@ -139,7 +139,10 @@ function isUserContent(value: unknown): boolean {
 }
 
 function isAssistantContent(value: unknown): boolean {
-  return Array.isArray(value) && value.every((item) => isPersistedContentBlock(item));
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) && value.every((item) => isPersistedContentBlock(item)))
+  );
 }
 
 function isToolResultContent(value: unknown): boolean {
