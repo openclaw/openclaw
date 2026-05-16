@@ -950,6 +950,26 @@ describe("config cli", () => {
 
       expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
     });
+
+    it("prints materialized subagent archive default", async () => {
+      const resolved: OpenClawConfig = {};
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            maxConcurrent: 4,
+            subagents: {
+              maxConcurrent: 8,
+              archiveAfterMinutes: 60,
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, config);
+
+      await runConfigCommand(["config", "get", "agents.defaults.subagents.archiveAfterMinutes"]);
+
+      expect(mockLog).toHaveBeenCalledWith("60");
+    });
   });
 
   describe("config validate", () => {
