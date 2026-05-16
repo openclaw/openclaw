@@ -370,12 +370,17 @@ function buildModelRows(params: {
             modelIndex: params.pendingModelIndex,
             userId: params.userId,
           }),
-          options: runtimeChoices.map((choice) => ({
-            label: choice.label,
-            value: choice.id,
-            default: choice.id === selectedRuntime,
-            ...(choice.description ? { description: choice.description } : {}),
-          })),
+          options: runtimeChoices.map((choice) => {
+            const option: APISelectMenuOption = {
+              label: choice.label,
+              value: choice.id,
+              default: choice.id === selectedRuntime,
+            };
+            if (choice.description) {
+              option.description = choice.description;
+            }
+            return option;
+          }),
           placeholder: "Select runtime",
         }),
       ]),
