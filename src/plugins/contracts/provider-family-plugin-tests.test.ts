@@ -67,6 +67,7 @@ function listGitFiles(dir: string): string[] | null {
   return files
     .filter((line) => !shouldSkipScannedPath(line))
     .map((line) => resolve(REPO_ROOT, line))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 

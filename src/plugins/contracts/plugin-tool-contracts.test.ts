@@ -58,6 +58,7 @@ function listGitFiles(dir: string): string[] | null {
   return files
     .filter((line) => !isSkippedRepoPath(line))
     .map((line) => path.join(process.cwd(), ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 
@@ -73,6 +74,7 @@ function listGitPluginManifestPaths(extensionsDir: string): string[] | null {
   return files
     .filter((line) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(line))
     .map((line) => path.join(process.cwd(), ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 

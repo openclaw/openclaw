@@ -37,6 +37,7 @@ function listTrackedSourceFiles(dir: string): string[] | null {
   return files
     .filter((line) => line.length > 0 && line.endsWith(".ts") && !line.includes("/plugin-sdk/"))
     .map((line) => path.join(repoRoot, ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 

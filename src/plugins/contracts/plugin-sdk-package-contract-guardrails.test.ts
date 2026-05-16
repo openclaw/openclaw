@@ -94,6 +94,7 @@ function listTrackedFiles(root: string): string[] | null {
   const files = trackedFiles
     .filter((line) => line.length > 0 && !isSkippedTrackedPath(line))
     .map((line) => resolve(REPO_ROOT, line))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
   trackedFilesByRoot.set(relativeRoot, files);
   return [...files];

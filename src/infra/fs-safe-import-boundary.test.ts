@@ -34,6 +34,7 @@ function listGitSourceFiles(repoPath: string): string[] | null {
   }
   return files
     .map((filePath) => path.join(REPO_ROOT, filePath))
+    .filter((filePath) => fs.existsSync(filePath))
     .filter(isSourceFile)
     .toSorted();
 }

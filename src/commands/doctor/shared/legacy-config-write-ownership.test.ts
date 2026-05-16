@@ -37,6 +37,7 @@ function listGitSourceFiles(dir: string): string[] | null {
   }
   return files
     .map((file) => path.join(REPO_ROOT, file))
+    .filter((filePath) => fs.existsSync(filePath))
     .filter(isOwnedSourceFile)
     .toSorted();
 }

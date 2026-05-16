@@ -183,6 +183,7 @@ function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): st
     .filter((line) => line.endsWith(".ts"))
     .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
     .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
+    .filter((line) => fs.existsSync(resolve(REPO_ROOT, line)))
     .toSorted();
 }
 

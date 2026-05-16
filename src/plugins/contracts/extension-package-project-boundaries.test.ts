@@ -89,6 +89,7 @@ function listTrackedCodeFiles(relativeDir: string): string[] | null {
   }
   const files = trackedFiles
     .filter((line) => line.length > 0 && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(line))
+    .filter((line) => fs.existsSync(resolve(REPO_ROOT, line)))
     .toSorted();
   trackedCodeFilesByRoot.set(relativeDir, files);
   return [...files];

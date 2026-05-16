@@ -57,6 +57,7 @@ function listGitProductionToolModuleFiles(): string[] | null {
     .filter((line) => line.startsWith("src/tools/"))
     .map((line) => line.slice("src/tools/".length))
     .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+    .filter((name) => fs.existsSync(new URL(name, toolsDir)))
     .toSorted();
 }
 

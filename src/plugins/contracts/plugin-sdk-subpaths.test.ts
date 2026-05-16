@@ -342,6 +342,7 @@ function listTrackedRepoTsFiles(dir: string): string[] | null {
         line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
     )
     .map((line) => resolve(REPO_ROOT, ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 
