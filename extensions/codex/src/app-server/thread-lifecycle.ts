@@ -73,6 +73,11 @@ export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": true,
 };
 
+export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
+  "features.code_mode": false,
+  "features.code_mode_only": false,
+};
+
 const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
 };
@@ -87,6 +92,7 @@ export async function startOrResumeThread(params: {
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
+  nativeCodeModeEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
@@ -246,6 +252,7 @@ export async function startOrResumeThread(params: {
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
               config: resumeConfig,
+              nativeCodeModeEnabled: params.nativeCodeModeEnabled,
             }),
           ),
         );
@@ -341,6 +348,7 @@ export async function startOrResumeThread(params: {
         appServer: params.appServer,
         developerInstructions: params.developerInstructions,
         config,
+        nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       }),
     ),
   );
@@ -539,6 +547,7 @@ export function buildThreadStartParams(
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
     config?: JsonObject;
+    nativeCodeModeEnabled?: boolean;
   },
 ): CodexThreadStartParams {
   const modelProvider = resolveCodexAppServerModelProvider({
@@ -557,7 +566,9 @@ export function buildThreadStartParams(
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
+      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+    }),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
@@ -573,6 +584,7 @@ export function buildThreadResumeParams(
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
     config?: JsonObject;
+    nativeCodeModeEnabled?: boolean;
   },
 ): CodexThreadResumeParams {
   const modelProvider = resolveCodexAppServerModelProvider({
@@ -590,15 +602,24 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
+      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+    }),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
 }
 
-export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
-  const runtimeConfig = mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
-    ...CODEX_CODE_MODE_THREAD_CONFIG,
+export function buildCodexRuntimeThreadConfig(
+  config: JsonObject | undefined,
+  options: { nativeCodeModeEnabled?: boolean } = {},
+): JsonObject {
+  const codeModeConfig =
+    options.nativeCodeModeEnabled === false
+      ? CODEX_CODE_MODE_DISABLED_THREAD_CONFIG
+      : CODEX_CODE_MODE_THREAD_CONFIG;
+  const runtimeConfig = mergeCodexThreadConfigs(config, codeModeConfig) ?? {
+    ...codeModeConfig,
   };
   return runtimeConfig;
 }
@@ -606,8 +627,9 @@ export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): J
 function buildCodexRuntimeThreadConfigForRun(
   params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
+  options: { nativeCodeModeEnabled?: boolean } = {},
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config);
+  const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
   }
