@@ -394,20 +394,24 @@ function isPinnedRegistrySpec(spec: string): boolean {
 function buildCodeSafetySummaryCacheKey(params: {
   dirPath: string;
   includeFiles?: string[];
+  excludeTestFiles?: boolean;
 }): string {
   const includeFiles = (params.includeFiles ?? []).map((entry) => entry.trim()).filter(Boolean);
   const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
-  return `${params.dirPath}\u0000${includeKey}`;
+  const excludeTestKey = params.excludeTestFiles ? "1" : "0";
+  return `${params.dirPath}\u0000${includeKey}\u0000excl-test:${excludeTestKey}`;
 }
 
 async function getCodeSafetySummary(params: {
   dirPath: string;
   includeFiles?: string[];
+  excludeTestFiles?: boolean;
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>> {
   const cacheKey = buildCodeSafetySummaryCacheKey({
     dirPath: params.dirPath,
     includeFiles: params.includeFiles,
+    excludeTestFiles: params.excludeTestFiles,
   });
   const cache = params.summaryCache;
   if (cache) {
@@ -417,12 +421,14 @@ async function getCodeSafetySummary(params: {
     }
     const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
+      excludeTestFiles: params.excludeTestFiles,
     });
     cache.set(cacheKey, pending);
     return await pending;
   }
   return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
     includeFiles: params.includeFiles,
+    excludeTestFiles: params.excludeTestFiles,
   });
 }
 
@@ -1383,6 +1389,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
     const summary = await getCodeSafetySummary({
       dirPath: pluginPath,
       includeFiles: forcedScanEntries,
+      excludeTestFiles: true,
       summaryCache: params.summaryCache,
     }).catch((err) => {
       findings.push({
@@ -1459,6 +1466,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       const skillName = entry.skill.name;
       const summary = await getCodeSafetySummary({
         dirPath: skillDir,
+        excludeTestFiles: true,
         summaryCache: params.summaryCache,
       }).catch((err) => {
         findings.push({

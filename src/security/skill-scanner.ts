@@ -30,6 +30,13 @@ export type SkillScanOptions = {
   includeFiles?: string[];
   maxFiles?: number;
   maxFileBytes?: number;
+  /**
+   * When true, files whose names match TEST_FILE_NAME_PATTERN
+   * (*.test.ts, *.spec.ts, *.mock.ts, etc.) are excluded from the scan.
+   * Use this when scanning plugin code to avoid false-positive findings
+   * on dev-time test fixtures that are never loaded at runtime.
+   */
+  excludeTestFiles?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -73,6 +80,17 @@ const DIR_ENTRY_CACHE = new Map<string, DirEntryCacheEntry>();
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+/**
+ * Matches test, spec, and mock file names that should be excluded from
+ * production code-safety scans. These files are never loaded as the plugin
+ * runtime entry and should not produce credential-harvesting findings.
+ */
+export const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test)\.[^.]+$/i;
+
+export function isTestFile(filePath: string): boolean {
+  return TEST_FILE_NAME_PATTERN.test(path.basename(filePath));
 }
 
 function getCachedFileScanResult(params: {
@@ -318,10 +336,15 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
+    excludeTestFiles: opts?.excludeTestFiles ?? false,
   };
 }
 
-async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
+async function walkDirWithLimit(
+  dirPath: string,
+  maxFiles: number,
+  excludeTestFiles = false,
+): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
@@ -345,6 +368,9 @@ async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<stri
       if (entry.kind === "dir") {
         stack.push(fullPath);
       } else if (entry.kind === "file" && isScannable(entry.name)) {
+        if (excludeTestFiles && isTestFile(entry.name)) {
+          continue;
+        }
         files.push(fullPath);
       }
     }
@@ -440,7 +466,7 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
     return forcedFiles.slice(0, opts.maxFiles);
   }
 
-  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles);
+  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles, opts.excludeTestFiles);
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
   for (const walkedFile of walkedFiles) {
