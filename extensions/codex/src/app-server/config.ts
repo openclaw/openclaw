@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
@@ -324,10 +325,6 @@ export function resolveCodexAppServerRuntimeOptions(
     requirementsToml?: string | null;
     requirementsPath?: string;
     readRequirementsFile?: (path: string) => string | undefined;
-    userCodexConfigToml?: string | null;
-    userCodexConfigPath?: string;
-    readUserCodexConfigFile?: (filePath: string) => string | undefined;
-    userCodexHooksEnabled?: boolean;
     platform?: NodeJS.Platform;
     hostName?: string;
   } = {},
@@ -369,40 +366,11 @@ export function resolveCodexAppServerRuntimeOptions(
     );
   }
 
-  const resolvedApprovalPolicy: CodexAppServerApprovalPolicy =
+  const approvalPolicy: CodexAppServerApprovalPolicy =
     resolveApprovalPolicy(config.approvalPolicy) ??
     resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
     defaultPolicy?.approvalPolicy ??
     (policyMode === "guardian" ? "on-request" : "never");
-
-  // Non-"never" approval policies route exec approvals through the Codex
-  // native hook relay (see resolveCodexNativeHookRelayEvents in run-attempt).
-  // If the user's persistent Codex config disables `features.hooks`, that
-  // path is a no-op and every exec sits in pending-approval state until the
-  // app-server marks it declined. Downgrade to "never" so commands can run,
-  // and surface the downgrade on the runtime options so the call site can
-  // emit a one-shot warning and so the OpenClaw-tool promotion path knows
-  // not to re-promote this back to "untrusted".
-  const userCodexHooksEnabled =
-    params.userCodexHooksEnabled ??
-    readUserCodexHooksFeature({
-      env,
-      configToml: params.userCodexConfigToml,
-      configPath: params.userCodexConfigPath,
-      readConfigFile: params.readUserCodexConfigFile,
-      platform: params.platform,
-    });
-  const approvalPolicyDowngrade: CodexApprovalPolicyDowngrade | undefined =
-    userCodexHooksEnabled === false && resolvedApprovalPolicy !== "never"
-      ? {
-          from: resolvedApprovalPolicy,
-          to: "never",
-          reason: "user-codex-features-hooks-disabled",
-        }
-      : undefined;
-  const approvalPolicy: CodexAppServerApprovalPolicy = approvalPolicyDowngrade
-    ? approvalPolicyDowngrade.to
-    : resolvedApprovalPolicy;
 
   return {
     start: {
@@ -421,7 +389,6 @@ export function resolveCodexAppServerRuntimeOptions(
       60_000,
     ),
     approvalPolicy,
-    ...(approvalPolicyDowngrade ? { approvalPolicyDowngrade } : {}),
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -1069,27 +1036,90 @@ function splitShellWords(value: string): string[] {
   return words;
 }
 
-// Returns true/false when the user's persistent Codex config explicitly sets
-// `features.hooks` (or the legacy `features.codex_hooks` alias), or undefined
-// when the file is unreadable or the key is absent. Absent means "default",
-// which Codex 0.130+ treats as enabled, so absence does not trigger downgrade.
-function readUserCodexHooksFeature(params: {
-  env: NodeJS.ProcessEnv;
+/**
+ * Apply an approval-policy downgrade when the Codex `features.hooks` flag is
+ * disabled in the codex home the app-server will actually read at spawn time.
+ *
+ * Why post-bridge: `bridgeCodexAppServerStartOptions` may inject an agent-owned
+ * `CODEX_HOME` into `startOptions.env`, so the user-config layer Codex reads is
+ * NOT the host process's `~/.codex/config.toml`. Detection must run after the
+ * bridge so it inspects the same `config.toml` the spawned Codex will load.
+ *
+ * Returns the runtime options unchanged when:
+ *   - transport is not stdio (websocket/remote codex owns its own config),
+ *   - approvalPolicy is already "never",
+ *   - the resolved codex-home `config.toml` is unreadable or absent,
+ *   - the `features.hooks` (and legacy `features.codex_hooks`) flag is absent
+ *     or explicitly true.
+ *
+ * When the flag is explicitly false and approvalPolicy is non-"never", the
+ * returned options have `approvalPolicy: "never"` plus an
+ * `approvalPolicyDowngrade` descriptor so the OpenClaw-tool promotion path
+ * (resolveCodexAppServerForOpenClawToolPolicy) leaves the downgrade in place.
+ */
+export function applyCodexHomeApprovalPolicyDowngrade(
+  runtimeOptions: CodexAppServerRuntimeOptions,
+  params: {
+    agentDir?: string;
+    bridgedCodexHome?: string;
+    configToml?: string | null;
+    readConfigFile?: (filePath: string) => string | undefined;
+    hooksEnabled?: boolean;
+  } = {},
+): CodexAppServerRuntimeOptions {
+  if (runtimeOptions.start.transport !== "stdio") {
+    return runtimeOptions;
+  }
+  if (runtimeOptions.approvalPolicy === "never") {
+    return runtimeOptions;
+  }
+  const hooksEnabled =
+    params.hooksEnabled ??
+    readCodexHomeHooksFeature({
+      bridgedCodexHome: params.bridgedCodexHome,
+      agentDir: params.agentDir,
+      explicitCodexHome: readNonEmptyString(runtimeOptions.start.env?.CODEX_HOME) ?? undefined,
+      configToml: params.configToml,
+      readConfigFile: params.readConfigFile,
+    });
+  if (hooksEnabled !== false) {
+    return runtimeOptions;
+  }
+  const downgrade: CodexApprovalPolicyDowngrade = {
+    from: runtimeOptions.approvalPolicy as CodexAppServerApprovalPolicy,
+    to: "never",
+    reason: "user-codex-features-hooks-disabled",
+  };
+  return {
+    ...runtimeOptions,
+    approvalPolicy: "never",
+    approvalPolicyDowngrade: downgrade,
+  };
+}
+
+// Reads `features.hooks` (or legacy `features.codex_hooks`) from the
+// app-server's effective Codex home `config.toml`. The home preference order
+// matches withAgentCodexHomeEnvironment in auth-bridge.ts: explicit
+// `startOptions.env.CODEX_HOME` first, then the agent-owned `codex-home`.
+function readCodexHomeHooksFeature(params: {
+  bridgedCodexHome?: string;
+  agentDir?: string;
+  explicitCodexHome?: string;
   configToml?: string | null;
-  configPath?: string;
   readConfigFile?: (filePath: string) => string | undefined;
-  platform?: NodeJS.Platform;
 }): boolean | undefined {
   let content: string | undefined;
   if (params.configToml !== undefined) {
     content = params.configToml ?? undefined;
   } else {
-    const filePath =
-      readNonEmptyString(params.configPath) ??
-      resolveUserCodexConfigPath(params.env, params.platform ?? process.platform);
-    if (!filePath) {
+    const codexHome =
+      readNonEmptyString(params.bridgedCodexHome) ??
+      readNonEmptyString(params.explicitCodexHome) ??
+      (params.agentDir ? resolveCodexAppServerHomeDir(params.agentDir) : undefined);
+    if (!codexHome) {
       return undefined;
     }
+    const filePath = path.join(codexHome, "config.toml");
     try {
       content = params.readConfigFile
         ? params.readConfigFile(filePath)
@@ -1108,40 +1138,6 @@ function readUserCodexHooksFeature(params: {
     parseTomlBooleanInTable(stripped, "features", "hooks") ??
     parseTomlBooleanInTable(stripped, "features", "codex_hooks")
   );
-}
-
-function resolveUserCodexConfigPath(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): string | undefined {
-  const codexHome = readNonEmptyString(env.CODEX_HOME);
-  if (codexHome) {
-    return path.join(codexHome, "config.toml");
-  }
-  const home = resolveHomeDir(env, platform);
-  if (!home) {
-    return undefined;
-  }
-  return path.join(home, ".codex", "config.toml");
-}
-
-function resolveHomeDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
-  const home = readNonEmptyString(env.HOME);
-  if (home) {
-    return home;
-  }
-  const userProfile = readNonEmptyString(env.USERPROFILE);
-  if (userProfile) {
-    return userProfile;
-  }
-  if (platform === "win32") {
-    const homeDrive = readNonEmptyString(env.HOMEDRIVE);
-    const homePath = readNonEmptyString(env.HOMEPATH);
-    if (homeDrive && homePath) {
-      return `${homeDrive}${homePath}`;
-    }
-  }
-  return undefined;
 }
 
 function parseTomlBooleanInTable(

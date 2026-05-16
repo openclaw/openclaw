@@ -65,6 +65,7 @@ import {
 } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  applyCodexHomeApprovalPolicyDowngrade,
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
@@ -541,8 +542,23 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
+  // The Codex app-server reads its user-config layer from the bridged
+  // CODEX_HOME (set by withAgentCodexHomeEnvironment to <agentDir>/codex-home
+  // unless start options already provide one). Inspect that file - not the
+  // host process's ~/.codex/config.toml - so `features.hooks=false` only
+  // downgrades approvals when the spawned Codex actually has hooks off.
+  const sandboxConstrainedAppServer = applyCodexHomeApprovalPolicyDowngrade(
+    restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox),
+    { agentDir },
+  );
   const appServer = resolveCodexAppServerForOpenClawToolPolicy({
-    appServer: restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox),
+    appServer: sandboxConstrainedAppServer,
     pluginConfig,
     env: process.env,
     shouldPromote: hasBeforeToolCallPolicy(),
@@ -567,12 +583,6 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
 
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??

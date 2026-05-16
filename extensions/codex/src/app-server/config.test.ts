@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  applyCodexHomeApprovalPolicyDowngrade,
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_COMPUTER_USE_CONFIG_KEYS,
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
@@ -854,18 +855,18 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
   });
 
-  describe("user Codex features.hooks downgrade", () => {
-    it("downgrades resolved approval policy to 'never' when user Codex config disables features.hooks", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: {
-          appServer: {
-            mode: "guardian",
-            approvalPolicy: "on-request",
-            sandbox: "workspace-write",
-            approvalsReviewer: "auto_review",
-          },
-        },
-        userCodexConfigToml: "[features]\nhooks = false\n",
+  describe("applyCodexHomeApprovalPolicyDowngrade", () => {
+    function runtimeWithPolicy(approvalPolicy: string, overrides: Record<string, unknown> = {}) {
+      const base = resolveRuntimeForTest({
+        pluginConfig: { appServer: { approvalPolicy } },
+      });
+      return { ...base, ...overrides };
+    }
+
+    it("downgrades non-never approvalPolicy to never when bridged codex_home has features.hooks=false", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        bridgedCodexHome: "/agent/codex-home",
+        readConfigFile: () => "[features]\nhooks = false\n",
       });
 
       expect(runtime.approvalPolicy).toBe("never");
@@ -876,10 +877,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       });
     });
 
-    it("also honors the legacy [features].codex_hooks key", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: "[features]\ncodex_hooks = false\n",
+    it("honors the legacy [features].codex_hooks alias", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: "[features]\ncodex_hooks = false\n",
       });
 
       expect(runtime.approvalPolicy).toBe("never");
@@ -887,9 +887,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     it("supports the dotted features.hooks key form", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-failure" } },
-        userCodexConfigToml: 'features.hooks = false\n[mcp_servers.foo]\ncommand = "bar"\n',
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-failure"), {
+        configToml: 'features.hooks = false\n[mcp_servers.foo]\ncommand = "bar"\n',
       });
 
       expect(runtime.approvalPolicy).toBe("never");
@@ -897,59 +896,53 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     it("supports the dotted form with whitespace around the dot separator", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: "features . hooks = false\n",
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: "features . hooks = false\n",
       });
 
       expect(runtime.approvalPolicy).toBe("never");
     });
 
     it("modern features.hooks wins over the legacy codex_hooks alias", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: "[features]\nhooks = true\ncodex_hooks = false\n",
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: "[features]\nhooks = true\ncodex_hooks = false\n",
       });
 
       expect(runtime.approvalPolicy).toBe("on-request");
       expect(runtime.approvalPolicyDowngrade).toBeUndefined();
     });
 
-    it("does not downgrade when user Codex config explicitly enables features.hooks", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: "[features]\nhooks = true\n",
+    it("does not downgrade when features.hooks is explicitly true", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: "[features]\nhooks = true\n",
       });
 
       expect(runtime.approvalPolicy).toBe("on-request");
       expect(runtime.approvalPolicyDowngrade).toBeUndefined();
     });
 
-    it("does not downgrade when features.hooks is absent (Codex default treats absent as enabled)", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: 'model = "gpt-5.5"\n[features]\ngoals = true\n',
+    it("does not downgrade when features.hooks is absent (Codex default = enabled)", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: 'model = "gpt-5.5"\n[features]\ngoals = true\n',
       });
 
       expect(runtime.approvalPolicy).toBe("on-request");
       expect(runtime.approvalPolicyDowngrade).toBeUndefined();
     });
 
-    it("does not downgrade when resolved policy is already 'never'", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "never" } },
-        userCodexConfigToml: "[features]\nhooks = false\n",
+    it("does not downgrade when approvalPolicy is already 'never'", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("never"), {
+        configToml: "[features]\nhooks = false\n",
       });
 
       expect(runtime.approvalPolicy).toBe("never");
       expect(runtime.approvalPolicyDowngrade).toBeUndefined();
     });
 
-    it("treats unreadable user Codex config as absent (no downgrade)", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigPath: "/nonexistent/codex/config.toml",
-        readUserCodexConfigFile: () => {
+    it("treats unreadable bridged codex_home config as absent (no downgrade)", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        bridgedCodexHome: "/nonexistent/codex-home",
+        readConfigFile: () => {
           throw new Error("ENOENT");
         },
       });
@@ -958,12 +951,18 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       expect(runtime.approvalPolicyDowngrade).toBeUndefined();
     });
 
-    it("accepts userCodexHooksEnabled override without reading config file", () => {
+    it("returns undefined hooks state when no codex_home information is provided", () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"));
+
+      expect(runtime.approvalPolicy).toBe("on-request");
+      expect(runtime.approvalPolicyDowngrade).toBeUndefined();
+    });
+
+    it("accepts hooksEnabled override without reading config file", () => {
       let readCalled = false;
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexHooksEnabled: false,
-        readUserCodexConfigFile: () => {
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        hooksEnabled: false,
+        readConfigFile: () => {
           readCalled = true;
           return undefined;
         },
@@ -975,9 +974,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     it("ignores hooks setting under unrelated TOML tables", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml:
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml:
           'model = "gpt-5.5"\n[mcp_servers.example]\nhooks = false\n[features]\ngoals = true\n',
       });
 
@@ -986,9 +984,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     it("ignores commented-out hooks declarations", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: "[features]\n# hooks = false\nhooks = true\n",
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: "[features]\n# hooks = false\nhooks = true\n",
       });
 
       expect(runtime.approvalPolicy).toBe("on-request");
@@ -996,59 +993,66 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     it("accepts whitespace-tolerant inline boolean values", () => {
-      const runtime = resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        userCodexConfigToml: "[features]\nhooks=false\n",
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        configToml: "[features]\nhooks=false\n",
       });
 
       expect(runtime.approvalPolicy).toBe("never");
     });
 
-    it("reads user codex config from CODEX_HOME on POSIX when set", () => {
+    it("resolves the codex_home from agentDir when no explicit bridgedCodexHome is given", () => {
       const reads: string[] = [];
-      resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        env: { CODEX_HOME: "/opt/codex-data" },
-        platform: "linux",
-        readUserCodexConfigFile: (filePath: string) => {
-          reads.push(filePath);
-          return undefined;
-        },
-      });
-
-      expect(reads).toEqual(["/opt/codex-data/config.toml"]);
-    });
-
-    it("reads user codex config under USERPROFILE on Windows when set", () => {
-      const reads: string[] = [];
-      resolveRuntimeForTest({
-        pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        env: { USERPROFILE: "C:\\Users\\solo" },
-        platform: "win32",
-        readUserCodexConfigFile: (filePath: string) => {
+      applyCodexHomeApprovalPolicyDowngrade(runtimeWithPolicy("on-request"), {
+        agentDir: "/srv/agent",
+        readConfigFile: (filePath: string) => {
           reads.push(filePath);
           return undefined;
         },
       });
 
       expect(reads.length).toBe(1);
-      expect(reads[0]).toMatch(/^C:\\Users\\solo[\\/]\.codex[\\/]config\.toml$/);
+      expect(reads[0]).toMatch(/\/srv\/agent[\\/]codex-home[\\/]config\.toml$/);
     });
 
-    it("falls back to HOMEDRIVE + HOMEPATH on Windows when USERPROFILE is missing", () => {
-      const reads: string[] = [];
-      resolveRuntimeForTest({
+    it("prefers explicit CODEX_HOME from runtime start.env over the agent-owned home", () => {
+      const baseRuntime = resolveRuntimeForTest({
         pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-        env: { HOMEDRIVE: "C:", HOMEPATH: "\\Users\\solo" },
-        platform: "win32",
-        readUserCodexConfigFile: (filePath: string) => {
+      });
+      const runtimeWithExplicitCodexHome = {
+        ...baseRuntime,
+        start: { ...baseRuntime.start, env: { CODEX_HOME: "/etc/openclaw/codex-home" } },
+      };
+      const reads: string[] = [];
+
+      applyCodexHomeApprovalPolicyDowngrade(runtimeWithExplicitCodexHome, {
+        agentDir: "/srv/agent",
+        readConfigFile: (filePath: string) => {
           reads.push(filePath);
           return undefined;
         },
       });
 
       expect(reads.length).toBe(1);
-      expect(reads[0]).toMatch(/^C:\\Users\\solo[\\/]\.codex[\\/]config\.toml$/);
+      expect(reads[0]).toMatch(/\/etc\/openclaw\/codex-home[\\/]config\.toml$/);
+    });
+
+    it("returns runtime options unchanged for websocket transport", () => {
+      const baseRuntime = resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+            approvalPolicy: "on-request",
+          },
+        },
+      });
+
+      const runtime = applyCodexHomeApprovalPolicyDowngrade(baseRuntime, {
+        configToml: "[features]\nhooks = false\n",
+      });
+
+      expect(runtime.approvalPolicy).toBe("on-request");
+      expect(runtime.approvalPolicyDowngrade).toBeUndefined();
     });
   });
 });

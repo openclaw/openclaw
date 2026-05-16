@@ -29,8 +29,15 @@ import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
+import {
+  applyCodexHomeApprovalPolicyDowngrade,
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+} from "./config.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import {
   buildCodexPluginAppCacheKey,
@@ -3733,12 +3740,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(resolved.approvalPolicy).toBe("never");
   });
 
-  it("skips promotion when the resolver downgraded approvalPolicy because user Codex hooks are disabled", () => {
-    const appServer = resolveCodexAppServerRuntimeOptions({
+  it("skips promotion when the bridged codex_home downgrade marked approvalPolicy as never", () => {
+    const baseAppServer = resolveCodexAppServerRuntimeOptions({
       env: {},
       requirementsToml: null,
       pluginConfig: { appServer: { approvalPolicy: "on-request" } },
-      userCodexConfigToml: "[features]\nhooks = false\n",
+    });
+    const appServer = applyCodexHomeApprovalPolicyDowngrade(baseAppServer, {
+      configToml: "[features]\nhooks = false\n",
     });
 
     expect(appServer.approvalPolicy).toBe("never");
