@@ -5,7 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-const SEARCH_TOOL = "https://docs.openclaw.ai/mcp.SearchOpenClaw";
+const SEARCH_TOOL = "https://docs.openclaw.ai/mcp.search_open_claw";
 const SEARCH_TIMEOUT_MS = 30_000;
 const DEFAULT_SNIPPET_MAX = 220;
 
@@ -83,6 +83,17 @@ function firstParagraph(text: string): string {
       .map((chunk) => chunk.trim())
       .find(Boolean) ?? ""
   );
+}
+
+function formatDocsSearchToolFailure(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^MCP error\b/i.test(trimmed)) {
+    return trimmed.split("\n")[0]?.trim() || trimmed;
+  }
+  return undefined;
 }
 
 function parseSearchOutput(raw: string): DocResult[] {
@@ -184,6 +195,14 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
   if (res.code !== 0) {
     const err = res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`;
     runtime.error(`Docs search failed: ${err}`);
+    runtime.exit(1);
+    return;
+  }
+
+  const toolFailure =
+    formatDocsSearchToolFailure(res.stdout) ?? formatDocsSearchToolFailure(res.stderr);
+  if (toolFailure) {
+    runtime.error(`Docs search failed: ${toolFailure}`);
     runtime.exit(1);
     return;
   }
