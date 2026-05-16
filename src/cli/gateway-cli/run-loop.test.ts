@@ -72,6 +72,12 @@ const abortEmbeddedPiRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
+const listActiveEmbeddedRunSessionIds = vi.fn(() => [] as string[]);
+const listActiveEmbeddedRunSessionKeys = vi.fn(() => [] as string[]);
+const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
+  marked: 1,
+  skipped: 0,
+}));
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
@@ -147,7 +153,13 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
   abortEmbeddedPiRun: (sessionId?: string, opts?: { mode?: "all" | "compacting" }) =>
     abortEmbeddedPiRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
+  listActiveEmbeddedRunSessionIds: () => listActiveEmbeddedRunSessionIds(),
+  listActiveEmbeddedRunSessionKeys: () => listActiveEmbeddedRunSessionKeys(),
   waitForActiveEmbeddedRuns: (timeoutMs?: number) => waitForActiveEmbeddedRuns(timeoutMs),
+}));
+
+vi.mock("../../agents/main-session-restart-recovery.js", () => ({
+  markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -423,11 +435,14 @@ describe("runGatewayLoop", () => {
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
     getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
     getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-embedded-timeout"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:embedded-timeout"]);
     waitForActiveTasks.mockResolvedValueOnce({ drained: false });
     waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: false });
+    markRestartAbortedMainSessions.mockRejectedValueOnce(new Error("store read-only"));
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const { start, exited } = await createSignaledLoopHarness();
+      const { close, start, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
       const sigint = captureSignal("SIGINT");
 
@@ -443,6 +458,25 @@ describe("runGatewayLoop", () => {
         "active embedded run drain grace reached; aborting active run(s) before restart",
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: {
+            reload: {
+              deferralTimeoutMs: 90_000,
+            },
+          },
+        },
+        sessionIds: new Set(["session-embedded-timeout"]),
+        sessionKeys: new Set(["agent:main:embedded-timeout"]),
+        reason: "gateway restart drain timeout",
+      });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
+      );
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -455,15 +489,21 @@ describe("runGatewayLoop", () => {
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ force: true });
     getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
     getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
-    getInspectableActiveTaskRestartBlockers.mockReturnValueOnce([
+    listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-forced-task"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:forced-task"]);
+    const forceTaskBlockers = [
       {
         taskId: "task-force",
         runId: "run-force",
-        status: "running",
-        runtime: "cron",
+        status: "running" as const,
+        runtime: "cron" as const,
         label: "forced",
       },
-    ]);
+    ];
+    getInspectableActiveTaskRestartBlockers
+      .mockReturnValueOnce(forceTaskBlockers)
+      .mockReturnValueOnce(forceTaskBlockers)
+      .mockReturnValueOnce(forceTaskBlockers);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { start, exited } = await createSignaledLoopHarness();
@@ -477,6 +517,18 @@ describe("runGatewayLoop", () => {
       expect(waitForActiveTasks).not.toHaveBeenCalled();
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: {
+            reload: {
+              deferralTimeoutMs: 90_000,
+            },
+          },
+        },
+        sessionIds: new Set(["session-forced-task"]),
+        sessionKeys: new Set(["agent:main:forced-task"]),
+        reason: "forced gateway restart",
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
       );
@@ -509,6 +561,8 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
       getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValueOnce(0);
+      listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-issue-82433"]);
+      listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:issue-82433"]);
       waitForActiveTasks.mockResolvedValueOnce({ drained: false });
       waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
 
@@ -571,6 +625,18 @@ describe("runGatewayLoop", () => {
       expect(waitForActiveTasks).toHaveBeenCalledWith(1_234);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(1_234);
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: {
+            reload: {
+              deferralTimeoutMs: 1_234,
+            },
+          },
+        },
+        sessionIds: new Set(["session-issue-82433"]),
+        sessionKeys: new Set(["agent:main:issue-82433"]),
+        reason: "gateway restart drain timeout",
+      });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(closeFirst).toHaveBeenCalledWith({

@@ -25,6 +25,8 @@ import {
   EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
   type EmbeddedPiQueueMessageOptions,
@@ -34,6 +36,8 @@ import {
 
 export {
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
   type EmbeddedPiQueueMessageOptions,
