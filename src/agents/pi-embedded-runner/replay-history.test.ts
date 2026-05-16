@@ -147,6 +147,21 @@ describe("normalizeAssistantReplayContent", () => {
     expect(wrapped.content).toEqual([{ type: "text", text: "plain string content" }]);
   });
 
+  it("wraps legacy object assistant content as a single block (regression)", () => {
+    const block = { type: "text", text: "plain object content" };
+    const messages = [userMessage("hi"), bedrockAssistant(block, "stop")];
+    const out = normalizeAssistantReplayContent(messages);
+    const wrapped = out[1] as AgentMessage & { content: unknown[] };
+    expect(wrapped.content).toEqual([block]);
+  });
+
+  it("normalizes null assistant content to an empty block array (regression)", () => {
+    const messages = [userMessage("hi"), bedrockAssistant(null, "toolUse")];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([]);
+  });
+
   it("drops metadata-only legacy string assistant content from replay", () => {
     const messages = [
       userMessage("first"),
