@@ -167,3 +167,61 @@ package.json
 - Validate `.github/workflows/*` vs Polytropos release steps
 - Smoke-test Discord + Telegram runtime approvals
 - Smoke-test browser tools (browser-cloud) end-to-end
+
+---
+
+## Blog-topic mapping → code evidence (v2026.4.1 → v2026.5.12)
+
+This section maps claims/themes from the OpenClaw blog posts to concrete evidence in the upstream repo (CHANGELOG entries and representative file paths).
+
+### 1) “Security in public” / “Where security is heading” → fs-safe + audits + policy docs
+
+**Changelog evidence (examples):**
+
+- `Security/fs-safe write hardening ...` (atomic rename + revalidation)
+- `Browser/Security output boundary hardening ... shared fs-safe write flows`
+- `Security: expanded openclaw security audit (+ --fix) ... SECURITY.md reporting policy`
+
+**Code evidence (paths):**
+
+- `src/infra/fs-safe.ts` (+ tests)
+- `src/media/*` (uses fs-safe helpers)
+- `extensions/browser/src/browser/*` (routes output/download paths through fs-safe)
+- `src/node-host/exec-policy.*` (exec approval/policy surface)
+- `.github/CODEOWNERS` includes `/SECURITY.md` ownership
+
+### 2) “Rough week” → plugin dependency repair, registry, and externalization
+
+**Changelog evidence (examples):**
+
+- `Plugin startup and install paths move to the cold persisted registry ...`
+- `Plugins/registry: recover managed-npm external plugins ...`
+- `Plugins/install: harden official plugin install, uninstall, update ...`
+- `Dependencies: ... move @openclaw/fs-safe ... to published npm package`
+- `Amazon Bedrock: externalize ...` and other “externalize heavy deps” entries
+
+**Code evidence (paths):**
+
+- `src/plugins/*` (install/runtime/registry)
+- `docs/cli/plugins.md` (persisted registry description)
+- `src/plugins/install.runtime.ts`
+
+### 3) “OpenAI models done right” → models auth + Codex runtime boundary
+
+**Changelog evidence (examples):**
+
+- `Models/OpenAI CLI auth: openclaw models auth login --provider openai ...`
+- `OpenAI Codex OAuth/login parity ...`
+- `Models/auth: merge provider-owned default-model additions ...`
+
+**Code evidence (paths):**
+
+- `src/commands/models/auth.ts`
+- `extensions/openai/*` (codex provider integration)
+
+---
+
+Notes:
+
+- This mapping is evidence-driven: if it is not present in CHANGELOG or code paths, we do not treat it as shipped.
+- Some blog claims refer to “in flight” items; we should treat those as roadmap, not part of the v2026.5.12 update scope.
