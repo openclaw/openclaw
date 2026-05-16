@@ -228,7 +228,10 @@ import {
   validateReplayTurns,
 } from "../replay-history.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
-import { createEmbeddedPiResourceLoader } from "../resource-loader.js";
+import {
+  createEmbeddedPiResourceLoader,
+  markResourceLoaderReloaded,
+} from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -1840,6 +1843,7 @@ export async function runEmbeddedAttempt(
         extensionFactories,
       });
       await resourceLoader.reload();
+      markResourceLoaderReloaded(resolvedWorkspace, agentDir);
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
       // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
       // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
