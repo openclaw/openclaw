@@ -160,4 +160,53 @@ describe("channel package-state probes", () => {
       }),
     ).toBe(true);
   });
+
+  it("tries dist-runtime package-state probes before falling back to source", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-runtime-"));
+    tempDirs.push(root);
+    const sourceRoot = path.join(root, "extensions", "matrix");
+    const builtRoot = path.join(root, "dist", "extensions", "matrix");
+    const runtimeRoot = path.join(root, "dist-runtime", "extensions", "matrix");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.mkdirSync(builtRoot, { recursive: true });
+    fs.mkdirSync(runtimeRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceRoot, "auth-presence.js"),
+      "throw new Error('source probe should not load');\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(builtRoot, "auth-presence.js"),
+      "module.exports.stale = () => false;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeRoot, "auth-presence.js"),
+      "module.exports.hasAnyMatrixAuth = () => true;\n",
+      "utf8",
+    );
+
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "matrix",
+        origin: "bundled",
+        rootDir: sourceRoot,
+        channel: {
+          id: "matrix",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasAnyMatrixAuth",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "persistedAuthState",
+        channelId: "matrix",
+        cfg: {},
+      }),
+    ).toBe(true);
+  });
 });
