@@ -210,6 +210,33 @@ describe("openai transport stream", () => {
     expect(output.responseId).toBe("resp_failed_runtime");
   });
 
+  it("treats empty Responses error objects as detail-less failures", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      __testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_empty_error",
+              status: "failed",
+              model: "gpt-5.4-pro",
+              error: { code: null, message: null },
+              provider_request_id: "provider_req_empty_error",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Unknown error (no error details in response)");
+
+    expect(output.responseId).toBe("resp_failed_empty_error");
+  });
+
   it("clamps Responses cached prompt usage at zero", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

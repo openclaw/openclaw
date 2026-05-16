@@ -565,6 +565,17 @@ function summarizeResponsesFailedNoDetailsObservation(
   );
 }
 
+function responseFailedErrorMessage(
+  error: { code?: unknown; message?: unknown } | null | undefined,
+): string | undefined {
+  const code = stringifyUnknown(error?.code).trim();
+  const message = stringifyUnknown(error?.message).trim();
+  if (!code && !message) {
+    return undefined;
+  }
+  return `${code || "unknown"}: ${message || "no message"}`;
+}
+
 function summarizeResponsesPayload(params: unknown): string {
   if (!params || typeof params !== "object") {
     return "payload=non-object";
@@ -1157,15 +1168,16 @@ async function processResponsesStream(
       const response = event.response as
         | {
             id?: string;
-            error?: { code?: string; message?: string };
+            error?: { code?: unknown; message?: unknown } | null;
             incomplete_details?: { reason?: string };
           }
         | undefined;
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
-      const msg = response?.error
-        ? `${response.error.code || "unknown"}: ${response.error.message || "no message"}`
+      const detailedErrorMessage = responseFailedErrorMessage(response?.error);
+      const msg = detailedErrorMessage
+        ? detailedErrorMessage
         : response?.incomplete_details?.reason
           ? `incomplete: ${response.incomplete_details.reason}`
           : RESPONSE_FAILED_NO_DETAILS_MESSAGE;
