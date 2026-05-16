@@ -153,6 +153,40 @@ describe("OAuthManagerRefreshError", () => {
     expect(serialized).not.toContain("store-access");
     expect(serialized).not.toContain("store-refresh");
   });
+
+  it("redacts credential secrets from the refresh error message", () => {
+    const refreshedStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": createCredential({
+          access: "store-access",
+          refresh: "store-refresh",
+          idToken: "store-id-token",
+        }),
+      },
+    };
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({
+        access: "error-access",
+        refresh: "error-refresh",
+        idToken: "error-id-token",
+      }),
+      profileId: "openai-codex:default",
+      refreshedStore,
+      cause: new Error(
+        "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
+      ),
+    });
+
+    expect(error.message).toContain("refresh rejected");
+    expect(error.message).not.toContain("error-access");
+    expect(error.message).not.toContain("error-refresh");
+    expect(error.message).not.toContain("error-id-token");
+    expect(error.message).not.toContain("store-access");
+    expect(error.message).not.toContain("store-refresh");
+    expect(error.message).not.toContain("store-id-token");
+    expect(error.message.match(/\[redacted\]/g)?.length).toBe(6);
+  });
 });
 
 describe("createOAuthManager", () => {

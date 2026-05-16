@@ -80,10 +80,17 @@ export class OAuthManagerRefreshError extends Error {
       structuredCause?.code === "refresh_contention" && structuredCause.cause
         ? structuredCause.cause
         : params.cause;
-    super(
-      `OAuth token refresh failed for ${params.credential.provider}: ${formatErrorMessage(params.cause)}`,
-      { cause: delegatedCause },
+    const storedCredential = params.refreshedStore.profiles[params.profileId];
+    const causeMessage = redactOAuthCredentialSecrets(
+      formatErrorMessage(params.cause),
+      collectOAuthCredentialSecrets(
+        params.credential,
+        storedCredential?.type === "oauth" ? storedCredential : undefined,
+      ),
     );
+    super(`OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`, {
+      cause: delegatedCause,
+    });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;
     this.profileId = params.profileId;
@@ -152,6 +159,28 @@ function canReuseOAuthCredentialAfterRefreshFailure(params: {
   candidate: OAuthCredential;
 }): boolean {
   return !params.forceRefresh || hasOAuthCredentialChanged(params.attempted, params.candidate);
+}
+
+function collectOAuthCredentialSecrets(
+  ...credentials: Array<OAuthCredential | undefined>
+): string[] {
+  const secrets = new Set<string>();
+  for (const credential of credentials) {
+    for (const secret of [credential?.access, credential?.refresh, credential?.idToken]) {
+      if (secret) {
+        secrets.add(secret);
+      }
+    }
+  }
+  return Array.from(secrets);
+}
+
+function redactOAuthCredentialSecrets(message: string, secrets: string[]): string {
+  let redacted = message;
+  for (const secret of secrets) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  return redacted;
 }
 
 async function loadFreshStoredOAuthCredential(params: {
