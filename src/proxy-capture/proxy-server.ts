@@ -209,7 +209,23 @@ export async function startDebugProxyServer(params: {
         path: req.url ?? "",
         errorText: error.message,
       });
-      clientSocket.end();
+      clientSocket.destroy();
+    });
+    clientSocket.on("error", (error) => {
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: error.message,
+      });
+      upstreamSocket.destroy();
     });
   });
 
