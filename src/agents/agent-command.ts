@@ -20,6 +20,8 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -36,6 +38,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -339,27 +342,6 @@ async function prepareAgentCommandExecution(
     }
   }
   const agentCfg = cfg.agents?.defaults;
-  const configuredModel = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const configuredThinkingCatalog = buildConfiguredModelCatalog({ cfg });
-  const thinkingLevelsHint = formatThinkingLevels(
-    configuredModel.provider,
-    configuredModel.model,
-    ", ",
-    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
-  );
-
-  const thinkOverride = normalizeThinkLevel(opts.thinking);
-  const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
-  if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
-  }
-  if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
-  }
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
@@ -414,13 +396,49 @@ async function prepareAgentCommandExecution(
   // Internal callers (for example subagent spawns) may pin workspace inheritance.
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const workspaceDir = resolveUserPath(workspaceDirRaw);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const workspace = await ensureAgentWorkspace({
+  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  setCurrentPluginMetadataSnapshot(manifestMetadataSnapshot, {
+    config: cfg,
+    env: process.env,
+    workspaceDir,
+  });
+  const manifestPlugins = manifestMetadataSnapshot.plugins;
+  const configuredModel = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+    manifestPlugins,
+  });
+  const configuredThinkingCatalog = buildConfiguredModelCatalog({
+    cfg,
+    workspaceDir,
+    manifestPlugins,
+  });
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+    ", ",
+    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
+  );
+  const thinkOverride = normalizeThinkLevel(opts.thinking);
+  const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
+  if (opts.thinking && !thinkOverride) {
+    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
+  }
+  if (opts.thinkingOnce && !thinkOnce) {
+    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
+  }
+  await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
     skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
   });
-  const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
@@ -460,6 +478,7 @@ async function prepareAgentCommandExecution(
     outboundSession,
     workspaceDir,
     agentDir,
+    manifestPlugins,
     runId,
     acpManager,
     acpResolution,
@@ -499,6 +518,7 @@ async function agentCommandInternal(
     runId,
     acpManager,
     acpResolution,
+    manifestPlugins,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
 
@@ -750,10 +770,12 @@ async function agentCommandInternal(
     const configuredDefaultRef = resolveDefaultModelForAgent({
       cfg,
       agentId: sessionAgentId,
+      manifestPlugins,
     });
     const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
       configuredDefaultRef.provider,
       configuredDefaultRef.model,
+      { manifestPlugins },
     );
     let provider = defaultProvider;
     let model = defaultModel;
@@ -786,6 +808,7 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      manifestPlugins,
     });
 
     if (needsModelCatalog) {
@@ -796,6 +819,7 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        manifestPlugins,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
     }
@@ -818,7 +842,9 @@ async function agentCommandInternal(
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
+        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel, {
+          manifestPlugins,
+        });
         const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
         if (!visibilityPolicy.allowsKey(key)) {
           const { updated } = applyModelOverrideToSessionEntry({
@@ -841,7 +867,9 @@ async function agentCommandInternal(
     let storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
+      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride, {
+        manifestPlugins,
+      });
       const key = modelKey(normalizedStored.provider, normalizedStored.model);
       if (visibilityPolicy.allowsKey(key)) {
         provider = normalizedStored.provider;
@@ -867,10 +895,10 @@ async function agentCommandInternal(
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
         ? explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride)
-          : parseModelRef(explicitModelOverride, provider)
+          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride, { manifestPlugins })
+          : parseModelRef(explicitModelOverride, provider, { manifestPlugins })
         : explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, model)
+          ? normalizeModelRef(explicitProviderOverride, model, { manifestPlugins })
           : null;
       if (!explicitRef) {
         throw new Error("Invalid model override.");
@@ -1085,6 +1113,7 @@ async function agentCommandInternal(
           cfg,
           provider,
           model,
+          manifestPlugins,
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
@@ -1276,7 +1305,7 @@ async function agentCommandInternal(
               { cause: err },
             );
           }
-          const switchRef = normalizeModelRef(err.provider, err.model);
+          const switchRef = normalizeModelRef(err.provider, err.model, { manifestPlugins });
           const switchKey = modelKey(switchRef.provider, switchRef.model);
           if (!visibilityPolicy.allowsKey(switchKey)) {
             log.info(
