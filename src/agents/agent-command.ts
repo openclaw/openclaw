@@ -699,6 +699,9 @@ async function agentCommandInternal(
         sessionStartedAt: current.sessionStartedAt ?? now,
         skillsSnapshot,
       };
+      if (current.sessionId !== sessionId) {
+        delete next.exhaustedModels;
+      }
       await persistSessionEntry({
         sessionStore,
         sessionKey,
@@ -720,6 +723,9 @@ async function agentCommandInternal(
         sessionStartedAt: entry.sessionStartedAt ?? now,
         lastInteractionAt: now,
       };
+      if (entry.sessionId !== sessionId) {
+        delete next.exhaustedModels;
+      }
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
       }
@@ -1056,6 +1062,8 @@ async function agentCommandInternal(
           provider,
           model,
           runId,
+          sessionId,
+          sessionAgentId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
           onFallbackStep: (step) => {

@@ -1,7 +1,10 @@
+import path from "node:path";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { updateSessionStoreEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,6 +16,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -206,6 +210,94 @@ function buildFallbackSuccess<T>(params: {
     model: params.model,
     attempts: params.attempts,
   };
+}
+
+const DEFAULT_MODEL_EXHAUSTION_RETRY_MINUTES = 10;
+
+function resolveModelExhaustionRetryMs(cfg: OpenClawConfig | undefined): number {
+  const raw = Number((cfg as any)?.agents?.defaults?.modelExhaustionRetryMinutes);
+  const minutes = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_MODEL_EXHAUSTION_RETRY_MINUTES;
+  return minutes * 60_000;
+}
+
+function resolveSessionModelExhaustionState(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionId?: string;
+  sessionAgentId?: string;
+  agentDir?: string;
+}): { sessionKey: string; storePath: string; exhaustedModels: Record<string, number> } | null {
+  if (!params.cfg || !params.sessionId) {
+    return null;
+  }
+
+  const { sessionKey, sessionStore, storePath } = resolveStoredSessionKeyForSessionId({
+    cfg: params.cfg,
+    sessionId: params.sessionId,
+    agentId:
+      params.sessionAgentId ??
+      (params.agentDir ? path.basename(path.dirname(params.agentDir)) : undefined),
+  });
+
+  if (!sessionKey) {
+    return null;
+  }
+
+  return {
+    sessionKey,
+    storePath,
+    exhaustedModels: { ...(sessionStore[sessionKey]?.exhaustedModels ?? {}) },
+  };
+}
+
+function isModelSessionCooldownActive(params: {
+  exhaustedModels: Record<string, number>;
+  provider: string;
+  model: string;
+  now: number;
+}): boolean {
+  const expiresAt = params.exhaustedModels[modelKey(params.provider, params.model)];
+  return typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt > params.now;
+}
+
+async function persistSessionModelExhaustion(params: {
+  cfg: OpenClawConfig | undefined;
+  state: { sessionKey: string; storePath: string; exhaustedModels: Record<string, number> };
+  provider: string;
+  model: string;
+  clear?: boolean;
+}): Promise<void> {
+  const key = modelKey(params.provider, params.model);
+  const now = Date.now();
+
+  try {
+    const persisted = await updateSessionStoreEntry({
+      storePath: params.state.storePath,
+      sessionKey: params.state.sessionKey,
+      update: async (entry: SessionEntry) => {
+        const nextExhaustedModels = { ...(entry.exhaustedModels ?? {}) };
+        if (params.clear) {
+          delete nextExhaustedModels[key];
+        } else {
+          nextExhaustedModels[key] = now + resolveModelExhaustionRetryMs(params.cfg);
+        }
+        return { exhaustedModels: nextExhaustedModels };
+      },
+    });
+
+    if (persisted?.exhaustedModels) {
+      params.state.exhaustedModels = { ...persisted.exhaustedModels };
+    } else if (params.clear) {
+      delete params.state.exhaustedModels[key];
+    } else {
+      params.state.exhaustedModels[key] = now + resolveModelExhaustionRetryMs(params.cfg);
+    }
+  } catch (err) {
+    log.warn("failed to persist session model exhaustion", {
+      provider: params.provider,
+      model: params.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function runFallbackCandidate<T>(params: {
@@ -820,6 +912,7 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   runId?: string;
   sessionId?: string;
+  sessionAgentId?: string;
   lane?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -847,6 +940,12 @@ export async function runWithModelFallback<T>(params: {
         }),
       })
     : null;
+  const sessionModelExhaustionState = resolveSessionModelExhaustionState({
+    cfg: params.cfg,
+    sessionId: params.sessionId,
+    sessionAgentId: params.sessionAgentId,
+    agentDir: params.agentDir,
+  });
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
@@ -881,6 +980,43 @@ export async function runWithModelFallback<T>(params: {
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
       : false;
+
+    if (
+      sessionModelExhaustionState &&
+      isModelSessionCooldownActive({
+        exhaustedModels: sessionModelExhaustionState.exhaustedModels,
+        provider: candidate.provider,
+        model: candidate.model,
+        now: Date.now(),
+      })
+    ) {
+      const error = `Model ${candidate.provider}/${candidate.model} is in session cooldown`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+        reason: "rate_limit",
+      });
+      await observeDecision({
+        decision: "skip_candidate",
+        runId: params.runId,
+        sessionId: params.sessionId,
+        lane: params.lane,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: "rate_limit",
+        error,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: hasFallbackCandidates,
+      });
+      continue;
+    }
+
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
@@ -1062,6 +1198,15 @@ export async function runWithModelFallback<T>(params: {
       attribution: { sessionId: params.sessionId, lane: params.lane },
     });
     if ("success" in attemptRun) {
+      if (sessionModelExhaustionState) {
+        await persistSessionModelExhaustion({
+          cfg: params.cfg,
+          state: sessionModelExhaustionState,
+          provider: candidate.provider,
+          model: candidate.model,
+          clear: true,
+        });
+      }
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         await observeDecision({
           decision: "candidate_succeeded",
@@ -1160,6 +1305,19 @@ export async function runWithModelFallback<T>(params: {
       // there are remaining candidates.  Only abort/context-overflow errors
       // (handled above) are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
+      const failureDescription = describeFailoverError(normalized);
+      if (
+        sessionModelExhaustionState &&
+        isKnownFailover &&
+        shouldUseTransientCooldownProbeSlot(failureDescription.reason)
+      ) {
+        await persistSessionModelExhaustion({
+          cfg: params.cfg,
+          state: sessionModelExhaustionState,
+          provider: candidate.provider,
+          model: candidate.model,
+        });
+      }
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
       }

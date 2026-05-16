@@ -89,6 +89,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.contextLimits.memoryGetDefaultLines": "Default memory_get Line Window",
   "agents.defaults.contextLimits.toolResultMaxChars": "Default Tool Result Max Chars",
   "agents.defaults.contextLimits.postCompactionMaxChars": "Default Post-compaction Max Chars",
+  "agents.defaults.modelExhaustionRetryMinutes": "Model Exhaustion Retry Minutes",
   "agents.defaults.agentRuntime": "Legacy Default Agent Runtime",
   "agents.defaults.agentRuntime.id": "Legacy Default Agent Runtime ID",
   "agents.defaults.embeddedHarness": "Default Legacy Embedded Harness Settings",

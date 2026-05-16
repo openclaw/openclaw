@@ -222,6 +222,8 @@ export type SessionEntry = {
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
+  /** Session-scoped model cooldowns keyed as provider/model. */
+  exhaustedModels?: Record<string, number>;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
