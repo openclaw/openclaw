@@ -72,6 +72,10 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  // Exit on pairing required so systemd can restart the node. After approval,
+  // the restarted node will connect successfully. Without this, the node would
+  // pause reconnection and never retry after the operator approves it.
+  ConnectErrorDetailCodes.PAIRING_REQUIRED,
 ]);
 
 type NodeHostReconnectPausedDeps = {

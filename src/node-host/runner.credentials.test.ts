@@ -177,27 +177,32 @@ describe("handleNodeHostReconnectPaused", () => {
     ]);
   });
 
-  it("keeps pairing pauses visible without exiting foreground approval flow", () => {
+  it("exits on pairing required so systemd can restart after approval", () => {
     const lines: string[] = [];
     const exit = vi.fn((code: number) => {
       throw new Error(`exit ${code}`);
     }) as (code: number) => never;
 
-    handleNodeHostReconnectPaused(
-      {
-        code: 1008,
-        reason: "connect failed",
-        detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      },
-      { writeLine: (line) => lines.push(line), exit },
+    // Node should exit on PAIRING_REQUIRED so systemd can restart it.
+    // After the operator approves the device, the restarted node will connect.
+    expect(shouldExitNodeHostOnReconnectPaused(ConnectErrorDetailCodes.PAIRING_REQUIRED)).toBe(
+      true,
     );
 
-    expect(shouldExitNodeHostOnReconnectPaused(ConnectErrorDetailCodes.PAIRING_REQUIRED)).toBe(
-      false,
-    );
-    expect(exit).not.toHaveBeenCalled();
+    expect(() =>
+      handleNodeHostReconnectPaused(
+        {
+          code: 1008,
+          reason: "connect failed",
+          detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        },
+        { writeLine: (line) => lines.push(line), exit },
+      ),
+    ).toThrow("exit 1");
+
+    expect(exit).toHaveBeenCalledWith(1);
     expect(lines).toEqual([
-      "node host gateway reconnect paused after close (1008): connect failed detail=PAIRING_REQUIRED; waiting for operator action",
+      "node host gateway reconnect paused after close (1008): connect failed detail=PAIRING_REQUIRED; exiting for supervisor restart",
     ]);
   });
 });
