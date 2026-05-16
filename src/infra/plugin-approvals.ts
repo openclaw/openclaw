@@ -1283,7 +1283,7 @@ function summarizePackageManagerCommand(
   command: string,
   args: readonly string[],
 ): CommandActionSummary {
-  const { ambiguous, subcommand } = parsePackageManagerSubcommand(args);
+  const { ambiguous, subcommand } = parsePackageManagerSubcommand(command, args);
   if (ambiguous) {
     return {
       text: `use the ${command} package manager with options I cannot fully summarize`,
@@ -1377,7 +1377,10 @@ const PACKAGE_MANAGER_GLOBAL_VALUE_OPTIONS = new Set([
   "-w",
 ]);
 
-function parsePackageManagerSubcommand(args: readonly string[]): {
+function parsePackageManagerSubcommand(
+  command: string,
+  args: readonly string[],
+): {
   ambiguous: boolean;
   subcommand: string;
 } {
@@ -1394,6 +1397,9 @@ function parsePackageManagerSubcommand(args: readonly string[]): {
     }
 
     const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (command === "pnpm" && arg === "-w") {
+      continue;
+    }
     if (PACKAGE_MANAGER_GLOBAL_FLAGS.has(arg) || PACKAGE_MANAGER_GLOBAL_FLAGS.has(optionName)) {
       continue;
     }

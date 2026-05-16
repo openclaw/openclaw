@@ -1855,6 +1855,16 @@ describe("plugin-sdk/approval-renderers", () => {
       manager: "pnpm",
     },
     {
+      command: "pnpm -w install",
+      id: "plugin-command-pnpm-workspace-root-install",
+      manager: "pnpm",
+    },
+    {
+      command: "npm -w app install",
+      id: "plugin-command-npm-workspace-install",
+      manager: "npm",
+    },
+    {
       command: "yarn --cwd app add lodash",
       id: "plugin-command-yarn-cwd-add",
       manager: "yarn",
