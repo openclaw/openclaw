@@ -611,7 +611,8 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
+        skipPluginValidation:
+          ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
       },
     });
     logConfigUpdated(ctx.runtime);

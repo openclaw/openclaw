@@ -1850,7 +1850,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       repair: true,
       yes: opts.yes === true,
     });
-    configSnapshot = await readConfigFileSnapshot();
+    configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
       configSnapshot = await persistRequestedUpdateChannel({
         configSnapshot,
@@ -2287,7 +2287,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
 
     const postCoreConfigSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot: await readConfigFileSnapshot(),
+      configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
       requestedChannel: postCoreRequestedChannel,
     });
 
@@ -2670,7 +2670,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   });
 
   let postUpdateConfigSnapshot =
-    result.status === "ok" && !opts.dryRun ? await readConfigFileSnapshot() : configSnapshot;
+    result.status === "ok" && !opts.dryRun
+      ? await readConfigFileSnapshot({ skipPluginValidation: true })
+      : configSnapshot;
   if (!shouldResumePostCoreInFreshProcess) {
     postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
       configSnapshot: postUpdateConfigSnapshot,

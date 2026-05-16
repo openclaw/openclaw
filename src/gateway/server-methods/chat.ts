@@ -1582,25 +1582,36 @@ function canRequesterAbortChatRun(
   return false;
 }
 
-function resolveAuthorizedRunIdsForSession(params: {
+function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  sessionKey: string;
+  sessionKeys: Iterable<string>;
+  sessionIds?: Iterable<string | undefined>;
   requester: ChatAbortRequester;
 }) {
-  const authorizedRunIds: string[] = [];
+  const sessionKeys = new Set(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+      (sessionKey): sessionKey is string => Boolean(sessionKey),
+    ),
+  );
+  const sessionIds = new Set(
+    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalText(sessionId)).filter(
+      (sessionId): sessionId is string => Boolean(sessionId),
+    ),
+  );
+  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.sessionKey !== params.sessionKey) {
+    if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
     matchedSessionRuns += 1;
     if (canRequesterAbortChatRun(active, params.requester)) {
-      authorizedRunIds.push(runId);
+      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
     }
   }
   return {
     matchedSessionRuns,
-    authorizedRunIds,
+    authorizedRuns,
   };
 }
 
@@ -1608,23 +1619,27 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
+  sessionKeyAliases?: string[];
+  sessionId?: string;
+  persistSessionKey?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
-  const { matchedSessionRuns, authorizedRunIds } = resolveAuthorizedRunIdsForSession({
+  const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
-    sessionKey: params.sessionKey,
+    sessionKeys: [params.sessionKey, ...(params.sessionKeyAliases ?? [])],
+    sessionIds: [params.sessionId],
     requester: params.requester,
   });
-  if (authorizedRunIds.length === 0) {
+  if (authorizedRuns.length === 0) {
     return {
       aborted: false,
       runIds: [],
       unauthorized: matchedSessionRuns > 0,
     };
   }
-  const authorizedRunIdSet = new Set(authorizedRunIds);
+  const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
@@ -1632,10 +1647,10 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     abortOrigin: params.abortOrigin,
   });
   const runIds: string[] = [];
-  for (const runId of authorizedRunIds) {
+  for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       stopReason: params.stopReason,
     });
     if (res.aborted) {
@@ -1646,7 +1661,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   if (res.aborted) {
     await persistAbortedPartials({
       context: params.context,
-      sessionKey: params.sessionKey,
+      sessionKey: params.persistSessionKey ?? params.sessionKey,
       snapshots,
     });
   }
@@ -2054,6 +2069,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
+        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        sessionId: entry?.sessionId,
+        persistSessionKey: sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
