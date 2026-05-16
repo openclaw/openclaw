@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -18,6 +18,7 @@ import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-me
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { detectMime } from "../media/mime.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -422,9 +423,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
     return false;
   }
   const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
-  const sigBuffer = Buffer.from(sig, "base64url");
-  const expectedBuffer = Buffer.from(expectedSig, "base64url");
-  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+  if (!safeEqualSecret(sig, expectedSig)) {
     return false;
   }
   try {

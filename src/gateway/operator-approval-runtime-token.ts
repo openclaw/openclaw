@@ -1,4 +1,5 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { safeEqualSecret } from "../security/secret-equal.js";
 
 let approvalRuntimeToken: string | null = null;
 
@@ -13,7 +14,5 @@ export function isOperatorApprovalRuntimeToken(value: string | null | undefined)
     return false;
   }
   const expected = getOperatorApprovalRuntimeToken();
-  const tokenBytes = Buffer.from(token);
-  const expectedBytes = Buffer.from(expected);
-  return tokenBytes.length === expectedBytes.length && timingSafeEqual(tokenBytes, expectedBytes);
+  return safeEqualSecret(token, expected);
 }
