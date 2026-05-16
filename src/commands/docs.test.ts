@@ -26,26 +26,29 @@ vi.mock("../terminal/theme.js", () => ({
 
 import { docsSearchCommand } from "./docs.js";
 
-function createRuntime(): RuntimeEnv & {
-  logs: string[];
-  errors: string[];
-  exitCode?: number;
-} {
-  const runtime = {
-    logs: [] as string[],
-    errors: [] as string[],
-    exitCode: undefined as number | undefined,
-    log: (message: string) => {
-      runtime.logs.push(message);
+function createRuntime() {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  let exitCode: number | undefined;
+  const runtime: RuntimeEnv = {
+    log: (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
     },
-    error: (message: string) => {
-      runtime.errors.push(message);
+    error: (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
     },
     exit: (code: number) => {
-      runtime.exitCode = code;
+      exitCode = code;
     },
   };
-  return runtime;
+  return {
+    runtime,
+    logs,
+    errors,
+    get exitCode() {
+      return exitCode;
+    },
+  };
 }
 
 describe("docsSearchCommand", () => {
@@ -62,7 +65,7 @@ describe("docsSearchCommand", () => {
       stderr: "",
     });
 
-    const runtime = createRuntime();
+    const { runtime, logs, exitCode } = createRuntime();
     await docsSearchCommand(["browser", "existing-session"], runtime);
 
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
@@ -77,8 +80,8 @@ describe("docsSearchCommand", () => {
       ],
       expect.objectContaining({ timeoutMs: 30_000 }),
     );
-    expect(runtime.exitCode).toBeUndefined();
-    expect(runtime.logs.join("\n")).toContain("Browser");
+    expect(exitCode).toBeUndefined();
+    expect(logs.join("\n")).toContain("Browser");
   });
 
   it("fails when mcporter returns an MCP tool error with exit code 0", async () => {
@@ -88,12 +91,12 @@ describe("docsSearchCommand", () => {
       stderr: "",
     });
 
-    const runtime = createRuntime();
+    const { runtime, logs, errors, exitCode } = createRuntime();
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
-    expect(runtime.exitCode).toBe(1);
-    expect(runtime.errors.join("\n")).toContain("Docs search failed:");
-    expect(runtime.errors.join("\n")).toContain("Tool SearchOpenClaw not found");
-    expect(runtime.logs.join("\n")).not.toContain("No results");
+    expect(exitCode).toBe(1);
+    expect(errors.join("\n")).toContain("Docs search failed:");
+    expect(errors.join("\n")).toContain("Tool SearchOpenClaw not found");
+    expect(logs.join("\n")).not.toContain("No results");
   });
 });
