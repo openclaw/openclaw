@@ -442,6 +442,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   }
   const log = createSubsystemLogger(params.label);
   const activeEntries = new Map<string, ActiveApprovalEntries>();
+  let stopped = false;
   const resolveApprovalKind =
     nativeRuntime.resolveApprovalKind ??
     ((request: ApprovalRequest) =>
@@ -514,6 +515,15 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         if (!entry) {
           return null;
         }
+        if (stopped) {
+          await nativeRuntime.interactions?.unbindPending?.({
+            ...baseContext,
+            entry,
+            request,
+            approvalKind,
+          });
+          return null;
+        }
         const binding = await nativeRuntime.interactions?.bindPending?.({
           ...baseContext,
           entry,
@@ -522,6 +532,16 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           view: pendingContent.view,
           pendingPayload: pendingContent.payload,
         });
+        if (stopped) {
+          await nativeRuntime.interactions?.unbindPending?.({
+            ...baseContext,
+            entry,
+            ...(binding === undefined || binding === null ? {} : { binding }),
+            request,
+            approvalKind,
+          });
+          return null;
+        }
         const wrapped: WrappedPendingEntry = {
           entry,
           ...(binding === undefined || binding === null ? {} : { binding }),
@@ -654,6 +674,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         });
       },
       onStopped: async () => {
+        stopped = true;
         if (activeEntries.size === 0) {
           activeEntries.clear();
           return;
