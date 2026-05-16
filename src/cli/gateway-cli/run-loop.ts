@@ -112,6 +112,8 @@ export async function runGatewayLoop(params: {
   // The HTTP server can report ready before params.start returns its close handle.
   // Defer lifecycle signals from that window until the loop can close and advance.
   let pendingStartupRequest: GatewayRunSignalRequest | null = null;
+  let pendingStartupForceExitTimer: ReturnType<typeof setTimeout> | null = null;
+  let restartDrainingMarkPromise: Promise<void> | null = null;
   let startupFailedWithoutServerHandle = false;
   const processInstanceId = randomUUID();
   const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
@@ -305,6 +307,32 @@ export async function runGatewayLoop(params: {
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
+  const clearPendingStartupForceExitTimer = () => {
+    if (!pendingStartupForceExitTimer) {
+      return;
+    }
+    clearTimeout(pendingStartupForceExitTimer);
+    pendingStartupForceExitTimer = null;
+  };
+  const armPendingStartupForceExitTimer = () => {
+    if (pendingStartupForceExitTimer) {
+      return;
+    }
+    pendingStartupForceExitTimer = setTimeout(() => {
+      pendingStartupForceExitTimer = null;
+      gatewayLog.error(
+        "startup restart request timed out before gateway returned a close handle; exiting for supervisor recovery",
+      );
+      void (async () => {
+        try {
+          await writeStabilityBundle("gateway.restart_startup_request_timeout");
+        } finally {
+          exitProcess(1);
+        }
+      })();
+    }, SHUTDOWN_TIMEOUT_MS);
+    pendingStartupForceExitTimer.unref?.();
+  };
   const resolveRestartDrainTimeoutMs = async (
     restartIntent?: RestartIntentOptions,
   ): Promise<RestartDrainTimeoutMs> => {
@@ -322,6 +350,18 @@ export async function runGatewayLoop(params: {
     } catch {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }
+  };
+  const markRestartDraining = async () => {
+    if (!restartDrainingMarkPromise) {
+      restartDrainingMarkPromise = (async () => {
+        const { markGatewayDraining } = await loadGatewayLifecycleRuntimeModule();
+        markGatewayDraining();
+      })().catch((err) => {
+        restartDrainingMarkPromise = null;
+        throw err;
+      });
+    }
+    await restartDrainingMarkPromise;
   };
 
   const runAcceptedRequest = ({
@@ -404,7 +444,6 @@ export async function runGatewayLoop(params: {
                 getInspectableActiveTaskRestartBlockers,
                 getActiveEmbeddedRunCount,
                 getActiveTaskCount,
-                markGatewayDraining,
                 waitForActiveEmbeddedRuns,
                 waitForActiveTasks,
               } = await loadGatewayLifecycleRuntimeModule();
@@ -439,7 +478,7 @@ export async function runGatewayLoop(params: {
 
               // Reject new enqueues immediately during the drain window so
               // sessions get an explicit restart error instead of silent task loss.
-              markGatewayDraining();
+              await markRestartDraining();
               const activeTasks = getActiveTaskCount();
               const activeRuns = getActiveEmbeddedRunCount();
               activeTasksAtDrainStart = activeTasks;
@@ -540,6 +579,7 @@ export async function runGatewayLoop(params: {
     }
     const request = pendingStartupRequest;
     pendingStartupRequest = null;
+    clearPendingStartupForceExitTimer();
     startupFailedWithoutServerHandle = false;
     runAcceptedRequest(request);
   };
@@ -554,6 +594,7 @@ export async function runGatewayLoop(params: {
       if (action === "stop" && pendingStartupRequest && !server) {
         gatewayLog.info(`received ${signal}; overriding pending startup restart with shutdown`);
         pendingStartupRequest = null;
+        clearPendingStartupForceExitTimer();
         startupFailedWithoutServerHandle = false;
         runAcceptedRequest(acceptedRequest);
         return;
@@ -583,6 +624,10 @@ export async function runGatewayLoop(params: {
     }
     if (!server || !restartResolver) {
       pendingStartupRequest = acceptedRequest;
+      void markRestartDraining().catch((err) => {
+        gatewayLog.warn(`failed to mark gateway draining for startup restart: ${String(err)}`);
+      });
+      armPendingStartupForceExitTimer();
       return;
     }
     runAcceptedRequest(acceptedRequest);
@@ -668,6 +713,7 @@ export async function runGatewayLoop(params: {
     let isFirstStart = true;
     for (;;) {
       await onIteration();
+      restartDrainingMarkPromise = null;
       let startupFailedBeforeServerHandle = false;
       try {
         server = await params.start({ startupStartedAt });
