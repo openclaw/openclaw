@@ -69,12 +69,22 @@ Sessions are owned by the gateway, not by clients.
 - Groups/channels get their own session keys.
 - The session store and transcripts live on the gateway host.
 
+The resolved `sessionKey` also controls queueing. Runs with the same session
+key share one session lane, then contend for the configured global lane. Runs
+with different session keys can run in parallel up to the global concurrency
+cap.
+
+Changing `session.dmScope` changes which direct messages collapse into the same
+session key. That changes both context sharing and queue contention.
+
 Multiple devices/channels can map to the same session, but history is not fully
 synced back to every client. Recommendation: use one primary device for long
 conversations to avoid divergent context. The Control UI and TUI always show the
 gateway-backed session transcript, so they are the source of truth.
 
-Details: [Session management](/concepts/session).
+A `sessionKey` selects context; it is not a user authorization boundary. Details:
+[Session management](/concepts/session), [Command queue](/concepts/queue), and
+[Gateway security](/gateway/security).
 
 ## Tool result metadata
 
