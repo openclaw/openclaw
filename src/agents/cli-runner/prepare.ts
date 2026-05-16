@@ -479,7 +479,6 @@ export async function prepareCliRunContext(
     },
   });
   const contextEngineConfig = params.config ?? getRuntimeConfig();
-  let contextEngine: PreparedCliRunContext["contextEngine"];
   try {
     ensureContextEnginesInitialized();
     const { sessionAgentId: contextEngineSessionAgentId } = resolveSessionAgentIds({
@@ -492,7 +491,8 @@ export async function prepareCliRunContext(
       agentDir: contextEngineAgentDir,
       workspaceDir,
     });
-    contextEngine = resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
+    const contextEngine =
+      resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
     const hadSessionFile = await hasCliSessionTranscript({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
@@ -532,13 +532,6 @@ export async function prepareCliRunContext(
       extraSystemPromptHash,
     };
   } catch (err) {
-    try {
-      await contextEngine?.dispose?.();
-    } catch (disposeErr) {
-      cliBackendLog.warn(
-        `cli context-engine cleanup after prepare failure failed: ${String(disposeErr)}`,
-      );
-    }
     try {
       await preparedBackendFinal.cleanup?.();
     } catch (cleanupErr) {

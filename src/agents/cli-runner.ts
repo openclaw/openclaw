@@ -160,30 +160,8 @@ async function finalizeCliContextEngineTurn(params: {
     warn: (message) => log.warn(message),
   });
   if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
-    const contextEngine = context.contextEngine;
-    const deferredDispose = deferredTurnMaintenance.finally(async () => {
-      await disposeContextEngine(contextEngine);
-    });
-    context.contextEngineDeferredTurnMaintenance = deferredDispose;
-    void deferredDispose;
+    context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
   }
-}
-
-async function disposeContextEngine(
-  contextEngine: PreparedCliRunContext["contextEngine"],
-): Promise<void> {
-  try {
-    await contextEngine?.dispose?.();
-  } catch (err) {
-    log.warn(`context engine dispose failed after CLI run: ${formatErrorMessage(err)}`);
-  }
-}
-
-async function disposeCliContextEngine(context: PreparedCliRunContext): Promise<void> {
-  if (context.contextEngineDeferredTurnMaintenance) {
-    return;
-  }
-  await disposeContextEngine(context.contextEngine);
 }
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
@@ -688,11 +666,7 @@ export async function runPreparedCliAgent(
       return toCliRunFailure(err);
     }
   } finally {
-    try {
-      await context.preparedBackend.cleanup?.();
-    } finally {
-      await disposeCliContextEngine(context);
-    }
+    await context.preparedBackend.cleanup?.();
   }
 }
 

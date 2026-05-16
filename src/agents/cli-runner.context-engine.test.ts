@@ -204,7 +204,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
         llm: { complete: expect.any(Function) },
       },
     });
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("does not synthesize a context-engine user turn for empty transcript prompts", async () => {
@@ -228,7 +228,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const turnMessages = afterTurnParams?.messages.slice(afterTurnParams.prePromptMessageCount);
     expect(turnMessages).toHaveLength(1);
     expectMessageText(turnMessages?.[0], "final answer");
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("does not finalize prepared model prompt as transcript turn text", async () => {
@@ -250,7 +250,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(turnMessages).toHaveLength(2);
     expectMessageText(turnMessages?.[0], "original user ask");
     expectMessageText(turnMessages?.[1], "final answer");
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("loads unbounded context-engine history separately from hook history", async () => {
@@ -323,7 +323,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expectMessageText(ingestBatchParams?.messages[0], "transcript visible ask");
     expectMessageText(ingestBatchParams?.messages[1], "final answer");
     expect(maintain).toHaveBeenCalledTimes(2);
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("preserves deferred maintenance ownership for background engines", async () => {
@@ -348,10 +348,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
     expect(context.contextEngineDeferredTurnMaintenance).toBeDefined();
     await context.contextEngineDeferredTurnMaintenance;
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("disposes background engines when no deferred turn maintenance is queued", async () => {
+  it("does not dispose background engines when no deferred turn maintenance is queued", async () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({
       info: {
@@ -365,10 +365,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
     await runPreparedCliAgent(buildPreparedContext(contextEngine));
 
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("disposes background engines after failed CLI attempts", async () => {
+  it("does not dispose background engines after failed CLI attempts", async () => {
     executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
     const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
       createMaintenanceResult(),
@@ -390,7 +390,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     );
 
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("does not finalize or run turn maintenance on failed CLI attempts", async () => {
@@ -423,10 +423,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(afterTurn).not.toHaveBeenCalled();
     expect(ingestBatch).not.toHaveBeenCalled();
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("preserves the primary CLI error when context engine disposal fails", async () => {
+  it("does not dispose context engines when CLI attempts fail", async () => {
     executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
     const dispose = vi.fn(async () => {
       throw new Error("dispose boom");
@@ -438,6 +438,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       "cli boom",
     );
 
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 });
