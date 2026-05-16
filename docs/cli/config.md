@@ -271,6 +271,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     {
       "ok": true,
       "operations": 1,
+      "configPath": "~/.openclaw/openclaw.json",
       "inputModes": ["unset"],
       "checks": { "schema": true, "resolvability": true, "resolvabilityComplete": true },
       "refsChecked": 0,
