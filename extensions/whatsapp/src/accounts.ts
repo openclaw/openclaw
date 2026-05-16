@@ -49,8 +49,12 @@ export type ResolvedWhatsAppAccount = {
 
 export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
 
+function resolveWhatsAppOAuthDir(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOAuthDir(env);
+}
+
 export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
-  const oauthDir = resolveOAuthDir();
+  const oauthDir = resolveWhatsAppOAuthDir();
   const whatsappDir = path.join(oauthDir, "whatsapp");
   const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
 
@@ -79,12 +83,12 @@ export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
 }
 
 function resolveDefaultAuthDir(accountId: string): string {
-  return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
+  return path.join(resolveWhatsAppOAuthDir(), "whatsapp", normalizeAccountId(accountId));
 }
 
 function resolveLegacyAuthDir(): string {
   // Legacy Baileys creds lived in the same directory as OAuth tokens.
-  return resolveOAuthDir();
+  return resolveWhatsAppOAuthDir();
 }
 
 function legacyAuthExists(authDir: string): boolean {

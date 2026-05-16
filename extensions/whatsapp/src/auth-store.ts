@@ -43,7 +43,30 @@ export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
 
-export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
+class LazyWhatsAppWebAuthDir {
+  #value: string | null = null;
+
+  #read(): string {
+    this.#value ??= resolveDefaultWebAuthDir();
+    return this.#value;
+  }
+
+  toString(): string {
+    return this.#read();
+  }
+
+  valueOf(): string {
+    return this.#read();
+  }
+
+  [Symbol.toPrimitive](): string {
+    return this.#read();
+  }
+}
+
+// Historic string export. Resolve on first read so profile env can be applied
+// before Baileys auth paths are pinned for the process.
+export const WA_WEB_AUTH_DIR = new LazyWhatsAppWebAuthDir() as unknown as string;
 
 export function readCredsJsonRaw(filePath: string): string | null {
   return readWebCredsJsonRawSync(filePath);
