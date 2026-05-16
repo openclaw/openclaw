@@ -302,13 +302,16 @@ does not extend to node-role Control UI sessions.
 
 `openclaw security audit` raises `config.insecure_or_dangerous_flags` when
 known insecure/dangerous debug switches are enabled. Keep these unset in
-production.
+production. Each enabled flag is reported as its own finding. If audit
+suppressions are configured, `security.audit.suppressions.active` remains in the
+active audit output even when matching findings move to `suppressedFindings`.
 
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
     - `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+    - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`

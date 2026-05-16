@@ -300,7 +300,7 @@ async function scanLaunchdDir(params: {
     const marker =
       hasGatewayServiceMarker(contents) || executionMarker === "openclaw"
         ? "openclaw"
-        : executionMarker === "clawdbot" || legacyLabel || detectMarker(contents) === "clawdbot"
+        : executionMarker === "clawdbot" || legacyLabel
           ? "clawdbot"
           : null;
     if (!marker) {

@@ -167,6 +167,11 @@ describe("xai image generation provider", () => {
     expect(request.timeoutMs).toBe(180_000);
     expect(request.body?.aspect_ratio).toBe("2:3");
     expect(request.body?.resolution).toBe("2k");
+    expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultTimeoutMs: 180_000,
+      }),
+    );
   });
 
   it("supports edit with exact user-provided payload format including image object with type image_url", async () => {
