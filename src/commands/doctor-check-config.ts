@@ -15,7 +15,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveTtsConfig, isTtsProviderConfigured, TTS_PROVIDERS } from "../tts/tts.js";
+import { resolveTtsConfig, isTtsProviderConfigured, resolveTtsProviderOrder } from "../tts/tts.js";
 
 export type CheckConfigResult = {
   category: string;
@@ -316,12 +316,13 @@ function checkTtsConfig(cfg: OpenClawConfig, results: CheckConfigResult[]): void
 
     // TTS is enabled — check if the configured provider is actually available
     const configuredProvider = ttsConfig.provider;
-    const isConfigured = isTtsProviderConfigured(ttsConfig, configuredProvider);
+    const isConfigured = isTtsProviderConfigured(ttsConfig, configuredProvider, cfg);
 
     if (!isConfigured) {
       // Check if any fallback provider is available
-      const availableFallback = TTS_PROVIDERS.find(
-        (p) => p !== configuredProvider && isTtsProviderConfigured(ttsConfig, p),
+      const availableFallback = resolveTtsProviderOrder(configuredProvider, cfg).find(
+        (provider) =>
+          provider !== configuredProvider && isTtsProviderConfigured(ttsConfig, provider, cfg),
       );
 
       const reason =
