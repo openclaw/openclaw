@@ -136,6 +136,11 @@ export function applyModelOverrideToSessionEntry(params: {
     delete entry.fallbackNoticeSelectedModel;
     delete entry.fallbackNoticeActiveModel;
     delete entry.fallbackNoticeReason;
+    delete entry.modelHealthProvider;
+    delete entry.modelHealthModel;
+    delete entry.modelHealthReason;
+    delete entry.modelHealthExpiresAt;
+    delete entry.exhaustedModels;
     entry.updatedAt = Date.now();
   }
 

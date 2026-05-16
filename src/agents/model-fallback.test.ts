@@ -37,6 +37,45 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
+const sessionStoreMock = vi.hoisted(() => {
+  const store: Record<string, Record<string, unknown>> = {};
+  return {
+    store,
+    clear: () => {
+      for (const key of Object.keys(store)) {
+        delete store[key];
+      }
+    },
+    resolveStoredSessionKeyForSessionId: vi.fn((params: { sessionId: string }) => {
+      if (!params.sessionId) {
+        return { sessionKey: undefined, sessionStore: store, storePath: "/tmp/session-store.json" };
+      }
+      const sessionKey = "session-key";
+      if (!store[sessionKey]) {
+        store[sessionKey] = {
+          sessionId: params.sessionId,
+          updatedAt: Date.now(),
+        };
+      }
+      return { sessionKey, sessionStore: store, storePath: "/tmp/session-store.json" };
+    }),
+    updateSessionStoreEntry: vi.fn(async ({ sessionKey, update }: { sessionKey: string; update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null> }) => {
+      const entry = store[sessionKey];
+      if (!entry) {
+        return null;
+      }
+      const patch = await update(entry);
+      if (!patch) {
+        return entry;
+      }
+      store[sessionKey] = { ...entry, ...patch };
+      return store[sessionKey];
+    }),
+  };
+});
+
+vi.mock("../config/sessions.js", () => sessionStoreMock);
+
 const authSourceCheckMock = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
@@ -174,6 +213,9 @@ afterAll(() => {
 
 function resetModelFallbackTestState(): void {
   authRuntimeMock.clear();
+  sessionStoreMock.clear();
+  sessionStoreMock.resolveStoredSessionKeyForSessionId.mockClear();
+  sessionStoreMock.updateSessionStoreEntry.mockClear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
   authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(false);
@@ -2047,6 +2089,131 @@ describe("runWithModelFallback", () => {
         allowTransientCooldownProbe: true,
       });
     });
+  });
+});
+
+describe("persisted model health cooldowns", () => {
+  it("skips a persisted unhealthy model until the cooldown expires", async () => {
+    const now = Date.now();
+    sessionStoreMock.store["session-key"] = {
+      sessionId: "sess-health",
+      updatedAt: now,
+      exhaustedModels: {
+        "anthropic/claude-opus-4-6": now + 60_000,
+      },
+      modelHealthProvider: "anthropic",
+      modelHealthModel: "claude-opus-4-6",
+      modelHealthReason: "rate_limit",
+      modelHealthExpiresAt: now + 60_000,
+    };
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValue("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      run,
+      sessionId: "sess-health",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  });
+
+  it("persists a failing model cooldown for later runs", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("LLM request failed: provider rate-limited the model.", {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          reason: "rate_limit",
+          status: 429,
+        }),
+      )
+      .mockResolvedValueOnce("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      run,
+      sessionId: "sess-persist",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    const entry = sessionStoreMock.store["session-key"] as Record<string, unknown>;
+    const exhaustedModels = entry.exhaustedModels as Record<string, number>;
+    expect(exhaustedModels["anthropic/claude-opus-4-6"]).toBeGreaterThan(Date.now());
+    expect(entry.modelHealthProvider).toBe("anthropic");
+    expect(entry.modelHealthModel).toBe("claude-opus-4-6");
+    expect(entry.modelHealthReason).toBe("rate_limit");
+    expect((entry.modelHealthExpiresAt as number) > Date.now()).toBe(true);
+  });
+
+  it("clears an expired persisted model cooldown when the model succeeds again", async () => {
+    const now = Date.now();
+    sessionStoreMock.store["session-key"] = {
+      sessionId: "sess-clear",
+      updatedAt: now,
+      modelHealthProvider: "anthropic",
+      modelHealthModel: "claude-opus-4-6",
+      modelHealthReason: "rate_limit",
+      modelHealthExpiresAt: now - 1,
+    };
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      run,
+      sessionId: "sess-clear",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(result.result).toBe("ok");
+    const entry = sessionStoreMock.store["session-key"] as Record<string, unknown>;
+    expect(entry.exhaustedModels).toBeUndefined();
+    expect(entry.modelHealthProvider).toBeUndefined();
+    expect(entry.modelHealthModel).toBeUndefined();
+    expect(entry.modelHealthReason).toBeUndefined();
+    expect(entry.modelHealthExpiresAt).toBeUndefined();
   });
 });
 

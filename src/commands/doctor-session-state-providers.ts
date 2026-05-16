@@ -394,6 +394,11 @@ export function applySessionRouteStateRepair(params: {
     clear("fallbackNoticeSelectedModel");
     clear("fallbackNoticeActiveModel");
     clear("fallbackNoticeReason");
+    clear("modelHealthProvider");
+    clear("modelHealthModel");
+    clear("modelHealthReason");
+    clear("modelHealthExpiresAt");
+    clear("exhaustedModels");
   }
   if (params.repair.reasons.includes("pinned runtime")) {
     clear("agentHarnessId");

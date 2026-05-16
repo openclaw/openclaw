@@ -28,6 +28,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneExhaustedModels,
   pruneQuotaSuspensions,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
@@ -464,13 +465,16 @@ export async function runQuotaSuspensionMaintenance(params: {
   }
   return await updateSessionStore(
     params.storePath,
-    (store) =>
-      pruneQuotaSuspensions({
+    (store) => {
+      const now = params.now ?? Date.now();
+      pruneExhaustedModels({ store, now, log: params.log });
+      return pruneQuotaSuspensions({
         store,
-        now: params.now ?? Date.now(),
+        now,
         ttlMs: params.ttlMs,
         log: params.log,
-      }),
+      });
+    },
     { skipMaintenance: true },
   );
 }

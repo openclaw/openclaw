@@ -187,6 +187,12 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /**
+   * Models that are currently exhausted for this session.
+   * Key: provider/model
+   * Value: unhealthy until (epoch ms)
+   */
+  exhaustedModels?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
   /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
@@ -333,6 +339,11 @@ export type SessionEntry = {
   fallbackNoticeSelectedModel?: string;
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
+  /** Durable model health cooldown marker for exhausted or rate-limited models. */
+  modelHealthProvider?: string;
+  modelHealthModel?: string;
+  modelHealthReason?: string;
+  modelHealthExpiresAt?: number;
   contextTokens?: number;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];

@@ -1,7 +1,9 @@
+import path from "node:path";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,6 +15,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -316,6 +319,193 @@ function resolveResultClassificationError(
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
+}
+
+const DEFAULT_MODEL_HEALTH_COOLDOWN_MS = 30 * 60 * 1000;
+
+function resolveModelHealthKey(provider: string, model: string): string {
+  return modelKey(provider, model);
+}
+
+function resolveSessionLookupAgentId(params: {
+  sessionAgentId?: string;
+  agentDir?: string;
+}): string | undefined {
+  return params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined);
+}
+
+function isPersistedModelHealthActive(params: {
+  entry?: import("../config/sessions.js").SessionEntry;
+  provider: string;
+  model: string;
+  now: number;
+}): boolean {
+  const key = resolveModelHealthKey(params.provider, params.model);
+
+  const exhaustedUntil = params.entry?.exhaustedModels?.[key];
+  if (
+    typeof exhaustedUntil === "number" &&
+    Number.isFinite(exhaustedUntil) &&
+    exhaustedUntil > params.now
+  ) {
+    return true;
+  }
+
+  const expiresAt = params.entry?.modelHealthExpiresAt;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= params.now) {
+    return false;
+  }
+  return (
+    resolveModelHealthKey(
+      params.entry?.modelHealthProvider ?? "",
+      params.entry?.modelHealthModel ?? "",
+    ) === key
+  );
+}
+
+async function persistModelHealthCooldown(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionId?: string;
+  sessionAgentId?: string;
+  agentDir?: string;
+  provider: string;
+  model: string;
+  reason: string;
+  ttlMs?: number;
+}): Promise<void> {
+  if (!params.cfg || !params.sessionId) {
+    return;
+  }
+  const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
+    cfg: params.cfg,
+    sessionId: params.sessionId,
+    agentId: resolveSessionLookupAgentId(params),
+  });
+  if (!sessionKey) {
+    return;
+  }
+
+  const defaultTtlMinutes = params.cfg.agents?.defaults?.modelExhaustionRetryMinutes ?? 30;
+  const ttlMs = params.ttlMs ?? defaultTtlMinutes * 60 * 1000;
+  const now = Date.now();
+  const expiresAt = now + ttlMs;
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const key = resolveModelHealthKey(params.provider, params.model);
+        const exhaustedModels = { ...(entry.exhaustedModels ?? {}) };
+
+        const existingKey = resolveModelHealthKey(
+          entry.modelHealthProvider ?? "",
+          entry.modelHealthModel ?? "",
+        );
+        const existingSingularExpiresAt = entry.modelHealthExpiresAt;
+
+        if (
+          exhaustedModels[key] &&
+          exhaustedModels[key] > expiresAt &&
+          existingKey === key &&
+          existingSingularExpiresAt &&
+          existingSingularExpiresAt > expiresAt
+        ) {
+          return {
+            modelHealthReason: params.reason,
+          };
+        }
+
+        exhaustedModels[key] = expiresAt;
+
+        return {
+          exhaustedModels,
+          modelHealthProvider: params.provider,
+          modelHealthModel: params.model,
+          modelHealthReason: params.reason,
+          modelHealthExpiresAt: expiresAt,
+        };
+      },
+    });
+  } catch (err) {
+    log.warn("failed to persist model health cooldown", {
+      sessionId: params.sessionId,
+      provider: params.provider,
+      model: params.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function clearPersistedModelHealth(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionId?: string;
+  sessionAgentId?: string;
+  agentDir?: string;
+  provider: string;
+  model: string;
+}): Promise<void> {
+  if (!params.cfg || !params.sessionId) {
+    return;
+  }
+  const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
+    cfg: params.cfg,
+    sessionId: params.sessionId,
+    agentId: resolveSessionLookupAgentId(params),
+  });
+  if (!sessionKey) {
+    return;
+  }
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const key = resolveModelHealthKey(params.provider, params.model);
+        const exhaustedModels = entry.exhaustedModels ? { ...entry.exhaustedModels } : undefined;
+        let mutated = false;
+
+        if (exhaustedModels && exhaustedModels[key]) {
+          delete exhaustedModels[key];
+          mutated = true;
+        }
+
+        const update: Partial<import("../config/sessions.js").SessionEntry> = {};
+        if (mutated) {
+          update.exhaustedModels =
+            exhaustedModels && Object.keys(exhaustedModels).length > 0
+              ? exhaustedModels
+              : undefined;
+        }
+
+        if (
+          resolveModelHealthKey(entry.modelHealthProvider ?? "", entry.modelHealthModel ?? "") ===
+          key
+        ) {
+          update.modelHealthProvider = undefined;
+          update.modelHealthModel = undefined;
+          update.modelHealthReason = undefined;
+          update.modelHealthExpiresAt = undefined;
+          mutated = true;
+        }
+
+        return mutated ? update : null;
+      },
+    });
+  } catch (err) {
+    log.warn("failed to clear persisted model health cooldown", {
+      sessionId: params.sessionId,
+      provider: params.provider,
+      model: params.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function shouldPersistModelHealthReason(reason: string | null | undefined): boolean {
+  return (
+    reason === "model_not_found" ||
+    shouldAllowCooldownProbeForReason(reason as FailoverReason | null | undefined)
+  );
 }
 
 function recordFailedCandidateAttempt(params: {
@@ -820,6 +1010,7 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   runId?: string;
   sessionId?: string;
+  sessionAgentId?: string;
   lane?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -847,6 +1038,18 @@ export async function runWithModelFallback<T>(params: {
         }),
       })
     : null;
+  const sessionResolution =
+    params.cfg && params.sessionId
+      ? resolveStoredSessionKeyForSessionId({
+          cfg: params.cfg,
+          sessionId: params.sessionId,
+          agentId:
+            params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined),
+        })
+      : null;
+  const sessionHealthEntry = sessionResolution?.sessionKey
+    ? sessionResolution.sessionStore[sessionResolution.sessionKey]
+    : undefined;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
@@ -884,6 +1087,43 @@ export async function runWithModelFallback<T>(params: {
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
+    const now = Date.now();
+    if (
+      sessionHealthEntry &&
+      isPersistedModelHealthActive({
+        entry: sessionHealthEntry,
+        provider: candidate.provider,
+        model: candidate.model,
+        now,
+      })
+    ) {
+      const persistedReason = sessionHealthEntry.modelHealthReason ?? "unknown";
+      const error = `Model ${candidate.provider}/${candidate.model} is in persisted cooldown`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+        reason: persistedReason,
+      });
+      await observeDecision({
+        decision: "skip_candidate",
+        runId: params.runId,
+        sessionId: params.sessionId,
+        lane: params.lane,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: persistedReason,
+        error,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: hasFallbackCandidates,
+      });
+      continue;
+    }
     if (authRuntime && authStore) {
       const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -1086,6 +1326,13 @@ export async function runWithModelFallback<T>(params: {
           `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
         );
       }
+      await clearPersistedModelHealth({
+        cfg: params.cfg,
+        sessionId: params.sessionId,
+        agentDir: params.agentDir,
+        provider: candidate.provider,
+        model: candidate.model,
+      });
       return attemptRun.success;
     }
     const err = attemptRun.error;
@@ -1181,6 +1428,17 @@ export async function runWithModelFallback<T>(params: {
         requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,
       });
+      const failureReason = describeFailoverError(normalized).reason;
+      if (shouldPersistModelHealthReason(failureReason)) {
+        await persistModelHealthCooldown({
+          cfg: params.cfg,
+          sessionId: params.sessionId,
+          agentDir: params.agentDir,
+          provider: candidate.provider,
+          model: candidate.model,
+          reason: failureReason ?? "unknown",
+        });
+      }
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,

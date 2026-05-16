@@ -357,6 +357,11 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
+  /**
+   * Minutes to skip a model after it has been exhausted (rate limited) in a session.
+   * Default: 30.
+   */
+  modelExhaustionRetryMinutes?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
