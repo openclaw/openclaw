@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Matrix/approvals: release in-flight reaction bindings when the channel approval handler stops mid-delivery, preventing stale approval targets after restart. Fixes #82485. (#82482) Thanks @Feelw00.
+- Matrix/E2EE: stop requesting MSC4222 `state_after` sync responses so homeservers with incomplete state-after data do not leave fresh encrypted rooms without outbound room encryptors. Fixes #82515. Thanks @nickdecooman.
 - TUI: update the displayed model in real time when an auto-fallback resolution swaps in a different model mid-turn, so the status line reflects the actual model handling the run. Fixes #82296. Thanks @giodl73-repo.
 - Gateway/sessions: estimate context usage from local/OpenAI-compatible transcripts when provider usage telemetry is missing, so status no longer shows empty usage for real local-model sessions. Fixes #73990. (#82317) Thanks @giodl73-repo.
 - Agents/sessions: preserve fresh post-compaction token snapshots across stale usage updates, preventing repeated auto-compaction after every message. Fixes #82576. (#82578) Thanks @njuboy11.
