@@ -70,6 +70,10 @@ const MattermostSlashCommandsSchema = z
   .strict()
   .optional();
 
+const MattermostAllowFromListSchema = z.array(z.union([z.string(), z.number()])).optional();
+
+const MattermostLegacyObjectSchema = z.object({}).passthrough();
+
 const MattermostNetworkSchema = z
   .object({
     /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
@@ -127,9 +131,13 @@ const MattermostAccountSchemaBase = z
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: MattermostAllowFromListSchema,
+    groupAllowFrom: MattermostAllowFromListSchema,
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    // Compatibility fields from pre-plugin Mattermost configs.
+    channelOverrides: z.record(z.string(), MattermostLegacyObjectSchema).optional(),
+    sessionPolicy: z.union([z.string(), MattermostLegacyObjectSchema]).optional(),
+    attachments: z.union([z.boolean(), MattermostLegacyObjectSchema]).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: MattermostStreamingSchema.optional(),

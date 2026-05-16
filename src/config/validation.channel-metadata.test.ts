@@ -231,6 +231,35 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       expect(result.config.channels?.discord?.accounts?.work?.agentComponents?.ttlMs).toBe(60_000);
     }
   });
+
+  it("accepts legacy Mattermost compatibility keys through bundled channel metadata", () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        mattermost: {
+          channelOverrides: {
+            legacyChannel: {
+              chatmode: "onmessage",
+            },
+          },
+          sessionPolicy: { mode: "isolated", idleMinutes: 30 },
+          attachments: { enabled: true },
+          accounts: {
+            main: {
+              channelOverrides: {
+                accountChannel: {
+                  chatmode: "oncall",
+                },
+              },
+              sessionPolicy: "isolated",
+              attachments: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
