@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -167,20 +168,7 @@ function listExternalRepoBundledPluginManifestDirs(): string[] | null {
 }
 
 function listGitRepoBundledPluginManifestFiles(): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "extensions/*/openclaw.plugin.json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted();
+  return listGitTrackedFiles({ repoRoot, pathspecs: "extensions/*/openclaw.plugin.json" });
 }
 
 function listFindRepoBundledPluginManifestFiles(): string[] | null {
@@ -209,7 +197,7 @@ function listFindRepoBundledPluginManifestFiles(): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
+    .map((file) => toRepoRelativePath(repoRoot, file))
     .toSorted();
 }
 

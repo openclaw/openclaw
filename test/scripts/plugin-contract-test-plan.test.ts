@@ -1,21 +1,13 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
 function listContractTests(rootDir = "src/plugins/contracts"): string[] {
-  const result = spawnSync("git", ["ls-files", "--", rootDir], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  expect(result.status).toBe(0);
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.endsWith(".test.ts"))
-    .toSorted((a, b) => a.localeCompare(b));
+  const files = listGitTrackedFiles({ pathspecs: rootDir });
+  expect(files).not.toBeNull();
+  return (files ?? []).filter((line) => line.endsWith(".test.ts"));
 }
 
 describe("scripts/lib/plugin-contract-test-plan.mjs", () => {

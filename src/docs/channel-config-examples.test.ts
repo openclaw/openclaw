@@ -5,6 +5,7 @@ import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
 const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
 
@@ -29,21 +30,11 @@ function listExternalChannelDocFiles(): string[] | null {
 }
 
 function listGitChannelDocFiles(): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "docs/channels/*.md"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ pathspecs: "docs/channels/*.md" });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((filePath) => path.join(process.cwd(), filePath))
-    .toSorted();
+  return files.map((filePath) => path.join(process.cwd(), filePath)).toSorted();
 }
 
 function listFindChannelDocFiles(): string[] | null {

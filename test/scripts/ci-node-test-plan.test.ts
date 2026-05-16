@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 
@@ -36,18 +36,10 @@ const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
 ]);
 
 function listTestFiles(rootDir: string): string[] {
-  const result = spawnSync("git", ["ls-files", "--", rootDir], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  expect(result.status).toBe(0);
-  if (result.status === 0) {
-    return result.stdout
-      .split("\n")
-      .map((line) => line.trim().replaceAll("\\", "/"))
-      .filter((line) => line.endsWith(".test.ts"))
-      .toSorted((a, b) => a.localeCompare(b));
+  const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
+  expect(gitFiles).not.toBeNull();
+  if (gitFiles) {
+    return gitFiles.filter((line) => line.endsWith(".test.ts"));
   }
 
   if (!existsSync(rootDir)) {
@@ -61,13 +53,13 @@ function listTestFiles(rootDir: string): string[] {
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
-        files.push(path.replaceAll("\\", "/"));
+        files.push(toRepoPath(path));
       }
     }
   };
 
   visit(rootDir);
-  return files.toSorted((a, b) => a.localeCompare(b));
+  return sortRepoPaths(files);
 }
 
 function listMatchedTestFiles(config: VitestConfig): string[] {
@@ -80,7 +72,7 @@ function listMatchedTestFiles(config: VitestConfig): string[] {
       dot: false,
       ignore: testConfig.exclude ?? [],
     })
-    .map((file) => relative(process.cwd(), resolve(cwd, file)).replaceAll("\\", "/"))
+    .map((file) => toRepoPath(relative(process.cwd(), resolve(cwd, file))))
     .toSorted((a, b) => a.localeCompare(b));
 }
 

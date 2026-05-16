@@ -1,6 +1,5 @@
-import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   BaseProbeResult as ContractBaseProbeResult,
@@ -51,6 +50,7 @@ import { publicPluginSdkSubpaths as pluginSdkSubpaths } from "../../plugin-sdk/e
 import * as globalSingletonDirectSdk from "../../plugin-sdk/global-singleton.js";
 import * as providerEntryDirectSdk from "../../plugin-sdk/provider-entry.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -328,23 +328,15 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
 }
 
 function listTrackedRepoTsFiles(dir: string): string[] | null {
-  const relativeDir = relative(REPO_ROOT, dir)
-    .split(/[\\/]+/u)
-    .join("/");
+  const relativeDir = toRepoRelativePath(REPO_ROOT, dir);
   if (!relativeDir || relativeDir.startsWith("..")) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  return files
     .filter(
       (line) =>
         line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),

@@ -5,15 +5,16 @@ import { fileURLToPath } from "node:url";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  sortRepoPaths,
+  toRepoRelativePath,
+} from "../../test-utils/repo-files.js";
 
 const thisFilePath = fileURLToPath(import.meta.url);
 const thisDir = path.dirname(thisFilePath);
 const repoRoot = path.resolve(thisDir, "../../..");
 const loadConfigPattern = /\b(?:getRuntimeConfig|config\.getRuntimeConfig)\s*\(/;
-
-function toPosix(relativePath: string): string {
-  return relativePath.split(path.sep).join("/");
-}
 
 function readRepoFile(relativePath: string): string {
   const absolute = path.join(repoRoot, relativePath);
@@ -21,21 +22,7 @@ function readRepoFile(relativePath: string): string {
 }
 
 function listGitFiles(pathspecs: string[]): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map(toPosix)
-    .toSorted();
+  return listGitTrackedFiles({ repoRoot, pathspecs });
 }
 
 function listFindFiles(args: string[]): string[] | null {
@@ -52,9 +39,8 @@ function listFindFiles(args: string[]): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((file) => path.relative(repoRoot, file))
-    .map(toPosix)
-    .toSorted();
+    .map((file) => toRepoRelativePath(repoRoot, file))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function listCoreOutboundEntryFiles(): string[] {
@@ -70,17 +56,16 @@ function listCoreOutboundEntryFiles(): string[] {
       "*.ts",
     ]);
   if (externalFiles) {
-    return externalFiles
-      .filter((file) => !file.endsWith(".test.ts"))
-      .map(toPosix)
-      .toSorted();
+    return sortRepoPaths(externalFiles.filter((file) => !file.endsWith(".test.ts")));
   }
 
   const outboundDir = path.join(repoRoot, "src/channels/plugins/outbound");
   return fs
     .readdirSync(outboundDir)
     .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-    .map((name) => toPosix(path.join("src/channels/plugins/outbound", name)))
+    .map((name) =>
+      toRepoRelativePath(repoRoot, path.join(repoRoot, "src/channels/plugins/outbound", name)),
+    )
     .toSorted();
 }
 
@@ -113,7 +98,7 @@ function listExtensionFiles(): {
     const srcDir = path.join(extensionsRoot, entry.name, "src");
     const outboundPath = path.join(srcDir, "outbound.ts");
     if (existsSync(outboundPath)) {
-      adapterEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/outbound.ts")));
+      adapterEntrypoints.push(path.posix.join("extensions", entry.name, "src/outbound.ts"));
     }
 
     const channelPath = path.join(srcDir, "channel.ts");
@@ -122,7 +107,7 @@ function listExtensionFiles(): {
     }
     const source = readFileSync(channelPath, "utf8");
     if (/\boutbound\s*:\s*\{/.test(source)) {
-      inlineChannelEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/channel.ts")));
+      inlineChannelEntrypoints.push(path.posix.join("extensions", entry.name, "src/channel.ts"));
     }
   }
 

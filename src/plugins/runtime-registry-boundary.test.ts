@@ -4,6 +4,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { expectNoFsSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const allowedRuntimeResolverRefs = new Set([
@@ -26,20 +27,12 @@ function listExternalSourceFiles(dir: string): string[] | null {
 }
 
 function listGitSourceFiles(dir: string): string[] | null {
-  const relativeRoot = toPosix(relative(repoRoot, dir)) || ".";
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024 * 4,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const relativeRoot = toRepoRelativePath(repoRoot, dir) || ".";
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
+  return files
     .map((file) => resolve(repoRoot, file))
     .filter(isProductionTypeScriptFile)
     .toSorted();
@@ -86,10 +79,6 @@ function listSourceFilesByDirectory(dir: string): string[] {
 
 function isProductionTypeScriptFile(path: string): boolean {
   return path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith(".test.tsx");
-}
-
-function toPosix(value: string): string {
-  return value.split("\\").join("/");
 }
 
 describe("runtime plugin registry boundary", () => {

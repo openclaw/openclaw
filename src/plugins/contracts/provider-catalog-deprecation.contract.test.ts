@@ -1,14 +1,18 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath,
+} from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const extensionsRoot = path.join(repoRoot, "extensions");
 
 function isProductionSourcePath(filePath: string): boolean {
-  const normalized = filePath.split(path.sep).join("/");
+  const normalized = toRepoPath(filePath);
   if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized)) {
     return false;
   }
@@ -19,22 +23,16 @@ function isProductionSourcePath(filePath: string): boolean {
 }
 
 function listGitProductionSourceFiles(root: string): string[] | null {
-  const relativeRoot = path.relative(repoRoot, root).split(path.sep).join("/");
+  const relativeRoot = toRepoRelativePath(repoRoot, root);
   if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.length > 0 && isProductionSourcePath(line))
+  return files
+    .filter(isProductionSourcePath)
     .map((line) => path.join(repoRoot, ...line.split("/")))
     .toSorted();
 }

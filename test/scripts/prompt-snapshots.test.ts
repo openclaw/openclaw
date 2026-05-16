@@ -14,6 +14,7 @@ import {
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -107,7 +108,7 @@ function listFindCommittedPromptSnapshotFiles(): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((filePath) => path.relative(process.cwd(), filePath).split(path.sep).join("/"))
+    .map((filePath) => toRepoRelativePath(process.cwd(), filePath))
     .toSorted();
 }
 

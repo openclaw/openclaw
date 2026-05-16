@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -147,7 +148,7 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
       if (!entry.isFile() || !entry.name.endsWith(".ts")) {
         continue;
       }
-      const repoRelativePath = relative(REPO_ROOT, fullPath).split(sep).join("/");
+      const repoRelativePath = toRepoRelativePath(REPO_ROOT, fullPath);
       if (filter.excludeTests && repoRelativePath.endsWith(".test.ts")) {
         continue;
       }
@@ -174,18 +175,11 @@ function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): st
   if (!rootRelativePath || rootRelativePath.startsWith("..")) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", rootRelativePath], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: rootRelativePath });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  return files
     .filter((line) => line.endsWith(".ts"))
     .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
     .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
@@ -226,7 +220,7 @@ function listFindTsFiles(rootRelativePath: string, filter: FileFilter): string[]
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => relative(REPO_ROOT, line).split(sep).join("/"))
+    .map((line) => toRepoRelativePath(REPO_ROOT, line))
     .filter((line) => line.endsWith(".ts"))
     .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
     .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))

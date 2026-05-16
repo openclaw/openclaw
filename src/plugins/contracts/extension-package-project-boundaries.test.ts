@@ -1,6 +1,5 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectExtensionsWithTsconfig,
@@ -14,6 +13,7 @@ import {
   readExtensionPackageBoundaryTsconfig,
 } from "../../../scripts/lib/extension-package-boundary.ts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
@@ -82,18 +82,12 @@ function listTrackedCodeFiles(relativeDir: string): string[] | null {
     const files = trackedCodeFilesByRoot.get(relativeDir);
     return files ? [...files] : null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
+  if (!trackedFiles) {
     trackedCodeFilesByRoot.set(relativeDir, null);
     return null;
   }
-  const files = result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  const files = trackedFiles
     .filter((line) => line.length > 0 && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(line))
     .toSorted();
   trackedCodeFilesByRoot.set(relativeDir, files);
@@ -111,11 +105,11 @@ function collectCodeFiles(relativeDir: string): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const nextPath = resolve(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...collectCodeFiles(relative(REPO_ROOT, nextPath).replaceAll("\\", "/")));
+      files.push(...collectCodeFiles(toRepoRelativePath(REPO_ROOT, nextPath)));
       continue;
     }
     if (entry.isFile() && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(entry.name)) {
-      files.push(relative(REPO_ROOT, nextPath).replaceAll("\\", "/"));
+      files.push(toRepoRelativePath(REPO_ROOT, nextPath));
     }
   }
   return files.toSorted();

@@ -3,6 +3,7 @@ import fs, { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
 const toolsDir = new URL("./", import.meta.url);
 const toolsDirPath = fileURLToPath(toolsDir);
@@ -48,18 +49,11 @@ function listExternalProductionToolModuleFiles(): string[] | null {
 }
 
 function listGitProductionToolModuleFiles(): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "src/tools/*.ts"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: "src/tools/*.ts" });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
+  return files
     .filter((line) => line.startsWith("src/tools/"))
     .map((line) => line.slice("src/tools/".length))
     .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
