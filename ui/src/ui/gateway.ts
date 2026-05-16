@@ -66,6 +66,18 @@ export class GatewayRequestError extends Error {
   }
 }
 
+export class GatewayRequestTimeoutError extends Error {
+  readonly method: string;
+  readonly timeoutMs: number;
+
+  constructor(params: { method: string; timeoutMs: number }) {
+    super(`gateway request timed out after ${params.timeoutMs}ms: ${params.method}`);
+    this.name = "GatewayRequestTimeoutError";
+    this.method = params.method;
+    this.timeoutMs = params.timeoutMs;
+  }
+}
+
 export function resolveGatewayErrorDetailCode(
   error: { details?: unknown } | null | undefined,
 ): string | null {
@@ -167,6 +179,8 @@ type Pending = {
   reject: (err: unknown) => void;
   method: string;
   startedAtMs: number;
+  timeoutId: number | null;
+  timeoutMs: number;
 };
 
 type SelectedConnectAuth = {
@@ -259,6 +273,7 @@ export type GatewayBrowserClientOptions = {
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayRequestTiming) => void;
+  requestTimeoutMs?: number;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -273,12 +288,19 @@ export type GatewayRequestTiming = {
   errorCode?: string;
 };
 
+export type GatewayRequestOptions = {
+  timeoutMs?: number;
+};
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 const STARTUP_RETRY_CLOSE_CODE = 4013;
 const BROWSER_WEBSOCKET_CLOSE_CODE = 1006;
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
+const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_SERVER_GRACE_MS = 5_000;
+const MAX_BROWSER_TIMEOUT_MS = 2_147_483_647;
 
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
@@ -533,6 +555,7 @@ export class GatewayBrowserClient {
 
   private flushPending(err: Error) {
     for (const [id, p] of this.pending) {
+      this.clearRequestTimer(p);
       this.emitRequestTiming(id, p, false, "CLIENT_CLOSED");
       p.reject(err);
     }
@@ -560,6 +583,39 @@ export class GatewayBrowserClient {
     } catch (err) {
       console.error("[gateway] request timing handler error:", err);
     }
+  }
+
+  private clearRequestTimer(pending: Pending): void {
+    if (pending.timeoutId !== null) {
+      window.clearTimeout(pending.timeoutId);
+      pending.timeoutId = null;
+    }
+  }
+
+  private resolveRequestTimeoutMs(params: unknown, options?: GatewayRequestOptions): number {
+    const explicitTimeoutMs = options?.timeoutMs;
+    if (typeof explicitTimeoutMs === "number" && Number.isFinite(explicitTimeoutMs)) {
+      return Math.min(Math.max(1, Math.floor(explicitTimeoutMs)), MAX_BROWSER_TIMEOUT_MS);
+    }
+    const paramsTimeoutMs =
+      params && typeof params === "object" && "timeoutMs" in params
+        ? (params as { timeoutMs?: unknown }).timeoutMs
+        : undefined;
+    if (
+      typeof paramsTimeoutMs === "number" &&
+      Number.isFinite(paramsTimeoutMs) &&
+      paramsTimeoutMs > 0
+    ) {
+      return Math.min(
+        Math.floor(paramsTimeoutMs) + REQUEST_TIMEOUT_SERVER_GRACE_MS,
+        MAX_BROWSER_TIMEOUT_MS,
+      );
+    }
+    const defaultTimeoutMs = this.opts.requestTimeoutMs;
+    if (typeof defaultTimeoutMs === "number" && Number.isFinite(defaultTimeoutMs)) {
+      return Math.min(Math.max(1, Math.floor(defaultTimeoutMs)), MAX_BROWSER_TIMEOUT_MS);
+    }
+    return DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
   }
 
   private buildConnectClient(): GatewayConnectClientInfo {
@@ -789,6 +845,7 @@ export class GatewayBrowserClient {
         return;
       }
       this.pending.delete(res.id);
+      this.clearRequestTimer(pending);
       if (res.ok) {
         this.emitRequestTiming(res.id, pending, true);
         pending.resolve(res.payload);
@@ -842,17 +899,22 @@ export class GatewayBrowserClient {
     };
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: GatewayRequestOptions,
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
     }
-    return this.requestOnSocket(this.ws, method, params);
+    return this.requestOnSocket(this.ws, method, params, options);
   }
 
   private requestOnSocket<T = unknown>(
     ws: WebSocket,
     method: string,
     params?: unknown,
+    options?: GatewayRequestOptions,
   ): Promise<T> {
     if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
@@ -860,8 +922,25 @@ export class GatewayBrowserClient {
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
     const startedAtMs = this.nowMs();
+    const timeoutMs = this.resolveRequestTimeoutMs(params, options);
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method, startedAtMs });
+      const pending: Pending = {
+        resolve: (v) => resolve(v as T),
+        reject,
+        method,
+        startedAtMs,
+        timeoutId: null,
+        timeoutMs,
+      };
+      pending.timeoutId = window.setTimeout(() => {
+        if (!this.pending.delete(id)) {
+          return;
+        }
+        this.clearRequestTimer(pending);
+        this.emitRequestTiming(id, pending, false, "CLIENT_TIMEOUT");
+        reject(new GatewayRequestTimeoutError({ method, timeoutMs }));
+      }, timeoutMs);
+      this.pending.set(id, pending);
     });
     ws.send(JSON.stringify(frame));
     return p;
