@@ -803,6 +803,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     storeAllowFrom: string[];
     dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
     allowFrom?: string[];
+    text?: string;
   }) =>
     resolveIMessageInboundDecision({
       cfg,
@@ -810,13 +811,13 @@ describe("resolveIMessageInboundDecision command auth", () => {
       message: {
         id: params.messageId,
         sender: "+15555550123",
-        text: "/status",
+        text: params.text ?? "/status",
         is_from_me: false,
         is_group: false,
       },
       opts: undefined,
-      messageText: "/status",
-      bodyText: "/status",
+      messageText: params.text ?? "/status",
+      bodyText: params.text ?? "/status",
       allowFrom: params.allowFrom ?? [],
       groupAllowFrom: [],
       groupPolicy: "open",
@@ -849,6 +850,44 @@ describe("resolveIMessageInboundDecision command auth", () => {
       return;
     }
     expect(decision.commandAuthorized).toBe(true);
+  });
+
+  it("marks authorized iMessage control commands as text command turns", async () => {
+    const decision = await resolveDmCommandDecision({
+      messageId: 102,
+      dmPolicy: "pairing",
+      storeAllowFrom: ["+15555550123"],
+      text: "/new",
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload } = buildIMessageInboundContext({
+      cfg,
+      decision,
+      message: {
+        id: 102,
+        guid: "p:0/GUID-command",
+        sender: "+15555550123",
+        text: "/new",
+        is_from_me: false,
+        is_group: false,
+      },
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.CommandSource).toBe("text");
+    expect(ctxPayload.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "new",
+    });
   });
 });
 

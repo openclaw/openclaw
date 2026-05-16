@@ -1031,6 +1031,7 @@ export function buildIMessageInboundContext(params: {
     MediaRemoteHost: params.remoteHost,
     WasMentioned: decision.effectiveWasMentioned,
     CommandAuthorized: decision.commandAuthorized,
+    CommandSource: decision.commandAuthorized ? ("text" as const) : undefined,
     OriginatingChannel: "imessage" as const,
     OriginatingTo: imessageTo,
   });
