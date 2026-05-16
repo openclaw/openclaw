@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -23,7 +24,7 @@ import {
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -42,6 +43,10 @@ import {
   formatValidationErrors,
   validateSessionsUsageParams,
 } from "../protocol/index.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "../session-store-key.js";
 import {
   listAgentsForGateway,
   loadCombinedSessionStoreForGateway,
@@ -308,6 +313,7 @@ type UsageGroupingMode = "instance" | "family";
 
 type MergedEntry = {
   key: string;
+  agentId: string;
   sessionId: string;
   sessionFile: string;
   label?: string;
@@ -347,24 +353,48 @@ function buildStoreBySessionId(
   return storeBySessionId;
 }
 
+function filterSessionStoreByAgent(params: {
+  config: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  agentId: string;
+}): Record<string, SessionEntry> {
+  const scopedAgentId = normalizeAgentId(params.agentId);
+  const scopedStore: Record<string, SessionEntry> = {};
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (params.config.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+      scopedStore[key] = entry;
+      continue;
+    }
+    if (resolveSessionStoreAgentId(params.config, key) === scopedAgentId) {
+      scopedStore[key] = entry;
+    }
+  }
+  return scopedStore;
+}
+
 async function discoverAllSessionsForUsage(params: {
   config: OpenClawConfig;
+  agentId?: string;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const agents = listAgentsForGateway(params.config).agents;
-  const results = await Promise.all(
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const agents = requestedAgentId
+    ? [{ id: normalizeAgentId(requestedAgentId) }]
+    : listAgentsForGateway(params.config).agents;
+  const discovered = await Promise.all(
     agents.map(async (agent) => {
+      const agentId = normalizeAgentId(agent.id);
       const sessions = await discoverAllSessions({
-        agentId: agent.id,
+        agentId,
         startMs: params.startMs,
         endMs: params.endMs,
         includeFirstUserMessage: false,
       });
-      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
+      return sessions.map((session) => Object.assign({}, session, { agentId }));
     }),
   );
-  return results.flat().toSorted((a, b) => b.mtime - a.mtime);
+  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
 function addUniqueSessionIds(target: string[], ids: Array<string | undefined>): string[] {
@@ -827,30 +857,64 @@ export const usageHandlers: GatewayRequestHandlers = {
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
+    const requestedAgentId = normalizeOptionalString(p.agentId);
+    const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
+    if (
+      requestedAgentId &&
+      specificKeyAgentId &&
+      normalizeAgentId(requestedAgentId) !== specificKeyAgentId
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      );
+      return;
+    }
+    const effectiveAgentId = normalizeAgentId(
+      requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
+    );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
     // Load session store for named sessions
-    const { storePath, store } = loadCombinedSessionStoreForGateway(config);
+    const { storePath, store } = loadCombinedSessionStoreForGateway(config, {
+      agentId: effectiveAgentId,
+    });
+    const scopedStore = filterSessionStoreByAgent({
+      config,
+      store,
+      agentId: effectiveAgentId,
+    });
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
-      const parsed = parseAgentSessionKey(specificKey);
-      const agentIdFromKey = parsed?.agentId;
-      const keyRest = parsed?.rest ?? specificKey;
+      const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
+        cfg: config,
+        agentId: effectiveAgentId,
+        sessionKey: specificKey,
+      });
+      const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
+      const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;
+      const keyRest = scopedParsed?.rest ?? specificKey;
 
       // Prefer the store entry when available, even if the caller provides a discovered key
       // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
-      const storeBySessionId = buildStoreBySessionId(store);
+      const storeBySessionId = buildStoreBySessionId(scopedStore);
 
-      const storeMatch = store[specificKey]
-        ? { key: specificKey, entry: store[specificKey] }
-        : null;
-      const storeByIdMatch = storeBySessionId.get(keyRest) ?? null;
-      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
+      const storeMatch = scopedStore[scopedSpecificKey]
+        ? { key: scopedSpecificKey, entry: scopedStore[scopedSpecificKey] }
+        : scopedStore[specificKey]
+          ? { key: specificKey, entry: scopedStore[specificKey] }
+          : null;
+      const storeByIdMatch =
+        storeBySessionId.get(keyRest) ??
+        (keyRest !== specificKey ? storeBySessionId.get(specificKey) : undefined) ??
+        null;
+      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
       const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
@@ -885,6 +949,7 @@ export const usageHandlers: GatewayRequestHandlers = {
               groupingMode,
               base: {
                 key: resolvedStoreKey,
+                agentId: agentIdFromKey,
                 sessionId,
                 sessionFile,
                 label: storeEntry?.label,
@@ -901,15 +966,16 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Full discovery for list view
       const discoveredSessions = await discoverAllSessionsForUsage({
         config,
+        agentId: effectiveAgentId,
         startMs,
         endMs,
       });
 
       // Build a map of sessionId -> store entry for quick lookup
-      const storeBySessionId = buildStoreBySessionId(store);
+      const storeBySessionId = buildStoreBySessionId(scopedStore);
       const storeFamilySessionIds = new Set<string>();
       if (groupingMode === "family") {
-        for (const entry of Object.values(store)) {
+        for (const entry of Object.values(scopedStore)) {
           for (const sessionId of entry?.usageFamilySessionIds ?? []) {
             storeFamilySessionIds.add(sessionId);
           }
@@ -925,6 +991,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             groupingMode,
             base: {
               key: storeMatch.key,
+              agentId: discovered.agentId,
               sessionId: discovered.sessionId,
               sessionFile: discovered.sessionFile,
               label: storeMatch.entry.label,
@@ -940,6 +1007,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           mergedEntries.push({
             // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
             key: `agent:${discovered.agentId}:${discovered.sessionId}`,
+            agentId: discovered.agentId,
             sessionId: discovered.sessionId,
             sessionFile: discovered.sessionFile,
             label: undefined, // No label for unnamed sessions
@@ -1040,7 +1108,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     for (const merged of limitedEntries) {
-      const agentId = parseAgentSessionKey(merged.key)?.agentId;
+      const agentId = merged.agentId;
       let usage: SessionCostSummary | null = null;
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {

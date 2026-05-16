@@ -32,6 +32,23 @@ const musicGenerationRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const musicGenerateBackgroundMocks = vi.hoisted(() => ({
+  musicGenerationTaskLifecycle: {
+    createTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.createMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.createMusicGenerationTaskRun(params),
+    recordTaskProgress: (
+      params: Parameters<typeof musicGenerateBackground.recordMusicGenerationTaskProgress>[0],
+    ) => musicGenerateBackgroundMocks.recordMusicGenerationTaskProgress(params),
+    completeTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.completeMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.completeMusicGenerationTaskRun(params),
+    failTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.failMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.failMusicGenerationTaskRun(params),
+    wakeTaskCompletion: (
+      params: Parameters<typeof musicGenerateBackground.wakeMusicGenerationTaskCompletion>[0],
+    ) => musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion(params),
+  },
   completeMusicGenerationTaskRun: vi.fn((params) => {
     if (!params.handle) {
       return;
@@ -354,7 +371,8 @@ describe("createMusicGenerateTool", () => {
     );
     expect(text).toContain("Generated 1 track with google/lyria-3-clip-preview.");
     expect(text).toContain("Lyrics returned.");
-    expect(text).toContain("MEDIA:/tmp/generated-night-drive.mp3");
+    expect(text).toContain('path="/tmp/generated-night-drive.mp3"');
+    expect(text).not.toContain("MEDIA:");
     const details = detailsOf(result);
     expect(details.provider).toBe("google");
     expect(details.model).toBe("lyria-3-clip-preview");
@@ -363,6 +381,14 @@ describe("createMusicGenerateTool", () => {
     expect(details.lyrics).toEqual(["wake the city up"]);
     expect((details.media as { mediaUrls?: unknown }).mediaUrls).toEqual([
       "/tmp/generated-night-drive.mp3",
+    ]);
+    expect((details.media as { attachments?: unknown }).attachments).toEqual([
+      {
+        type: "audio",
+        path: "/tmp/generated-night-drive.mp3",
+        mimeType: "audio/mpeg",
+        name: "night-drive.mp3",
+      },
     ]);
     expect(details.paths).toEqual(["/tmp/generated-night-drive.mp3"]);
     expect(details.metadata).toEqual({ taskId: "music-task-1" });
@@ -570,7 +596,16 @@ describe("createMusicGenerateTool", () => {
     const wake = wakeCompletionCall();
     expect((wake.handle as { taskId?: unknown }).taskId).toBe("task-123");
     expect(wake.status).toBe("ok");
-    expect(wake.result).toContain("MEDIA:/tmp/generated-night-drive.mp3");
+    expect(wake.result).toContain('path="/tmp/generated-night-drive.mp3"');
+    expect(wake.result).not.toContain("MEDIA:");
+    expect(wake.attachments).toEqual([
+      {
+        type: "audio",
+        path: "/tmp/generated-night-drive.mp3",
+        mimeType: "audio/mpeg",
+        name: "night-drive.mp3",
+      },
+    ]);
   });
 
   it("lists provider capabilities", async () => {

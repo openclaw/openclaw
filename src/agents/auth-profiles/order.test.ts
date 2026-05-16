@@ -337,6 +337,40 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["openai-codex:personal", "openai:default"]);
   });
 
+  it("keeps Codex profiles listed in the friendly OpenAI order for Codex auth", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:backup": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:personal", "openai:backup"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
+  });
+
   it("keeps direct OpenAI Codex auth order ahead of the friendly OpenAI alias", async () => {
     const store: AuthProfileStore = {
       version: 1,

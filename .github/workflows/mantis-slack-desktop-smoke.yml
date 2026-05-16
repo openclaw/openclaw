@@ -44,7 +44,7 @@ on:
           - prehydrated
 
 permissions:
-  contents: write
+  contents: read
   issues: write
   pull-requests: write
 
@@ -64,8 +64,11 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
+        id: permission
         uses: actions/github-script@v8
         with:
           script: |
@@ -79,14 +82,18 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   validate_ref:
     name: Validate candidate ref
     needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
@@ -368,7 +375,6 @@ jobs:
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: write
           permission-issues: write
           permission-pull-requests: write
 
@@ -376,9 +382,15 @@ jobs:
         if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' && steps.upload_artifact.outputs.artifact-url != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
-          TARGET_PR: ${{ inputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          MANTIS_ARTIFACT_R2_ACCESS_KEY_ID: ${{ secrets.MANTIS_ARTIFACT_R2_ACCESS_KEY_ID }}
+          MANTIS_ARTIFACT_R2_BUCKET: openclaw-crabbox-artifacts
+          MANTIS_ARTIFACT_R2_ENDPOINT: ${{ vars.MANTIS_ARTIFACT_R2_ENDPOINT }}
+          MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL: https://artifacts.openclaw.ai
+          MANTIS_ARTIFACT_R2_REGION: auto
+          MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY: ${{ secrets.MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY }}
           REQUEST_SOURCE: workflow_dispatch
+          TARGET_PR: ${{ inputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail

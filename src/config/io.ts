@@ -5,6 +5,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { isVerbose } from "../global-state.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -2146,6 +2147,9 @@ export function createConfigIO(
       if (isVitest && !shouldLogInVitest) {
         return;
       }
+      if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !shouldLogInVitest) {
+        return;
+      }
       deps.logger.warn(
         formatConfigOverwriteLogMessage({
           configPath,
@@ -2368,10 +2372,12 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 
 export async function readConfigFileSnapshot(options?: {
   measure?: ConfigSnapshotReadMeasure;
+  skipPluginValidation?: boolean;
 }): Promise<ConfigFileSnapshot> {
-  return await createConfigIO(
-    options?.measure ? { measure: options.measure } : {},
-  ).readConfigFileSnapshot();
+  return await createConfigIO({
+    ...(options?.measure ? { measure: options.measure } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+  }).readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotWithPluginMetadata(options?: {
@@ -2405,8 +2411,12 @@ export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
 
-export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
-  return await createConfigIO().readConfigFileSnapshotForWrite();
+export async function readConfigFileSnapshotForWrite(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<ReadConfigFileSnapshotForWriteResult> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readConfigFileSnapshotForWrite();
 }
 
 export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {

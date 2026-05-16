@@ -9,10 +9,7 @@ import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
 } from "./control-ui-css.js";
-import {
-  SilentReplyPolicyConfigSchema,
-  SilentReplyRewriteConfigSchema,
-} from "./zod-schema.agent-defaults.js";
+import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -314,6 +311,22 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    codex: z
+      .object({
+        agents: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i),
+          )
+          .min(1)
+          .optional(),
+        defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
+        default_tools_approval_mode: z.enum(["auto", "prompt", "approve"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .catchall(z.unknown());
 
@@ -400,6 +413,7 @@ export const OpenClawSchema = z
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
         stuckSessionAbortMs: z.number().int().positive().optional(),
+        memoryPressureSnapshot: z.boolean().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -1142,7 +1156,6 @@ export const OpenClawSchema = z
         z
           .object({
             silentReply: SilentReplyPolicyConfigSchema.optional(),
-            silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
           })
           .strict(),
       )

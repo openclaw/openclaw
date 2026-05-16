@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
@@ -49,6 +50,34 @@ function collectUnroutedForcedFiles(
 }
 
 describe("unit-fast vitest lane", () => {
+  it("loads the config without recursively walking repo roots", () => {
+    const script = `
+      import fs from "node:fs";
+      let readdirSyncCalls = 0;
+      const originalReaddirSync = fs.readdirSync;
+      fs.readdirSync = function patchedReaddirSync(...args) {
+        readdirSyncCalls += 1;
+        return originalReaddirSync.apply(this, args);
+      };
+      await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
+      console.log(readdirSyncCalls);
+    `;
+    const result = spawnNodeEvalSync(script, {
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      evalFlag: "-e",
+      imports: ["tsx"],
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const numericOutputLines = result.stdout
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => Number(line.trim()))
+      .filter(Number.isFinite);
+    expect(numericOutputLines.length, result.stdout).toBeGreaterThan(0);
+    expect(numericOutputLines.at(-1)).toBeLessThan(20);
+  });
+
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
     const config = createUnitFastVitestConfig({});
     const testConfig = requireTestConfig(config);
