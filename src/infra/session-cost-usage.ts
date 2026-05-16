@@ -1895,6 +1895,11 @@ export async function loadSessionUsageTimeSeries(params: {
   const sortedPoints = points.toSorted((a, b) => a.timestamp - b.timestamp);
 
   // Optionally downsample if too many points
+  if (params.maxPoints !== undefined && params.maxPoints !== null) {
+    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
+      return { sessionId: params.sessionId, points: [] };
+    }
+  }
   const maxPoints = params.maxPoints ?? 100;
   if (sortedPoints.length > maxPoints) {
     const step = Math.ceil(sortedPoints.length / maxPoints);
@@ -1958,6 +1963,11 @@ export async function loadSessionLogs(params: {
   }
 
   const logs: SessionLogEntry[] = [];
+  if (params.limit !== undefined && params.limit !== null) {
+    if (!Number.isFinite(params.limit) || params.limit <= 0) {
+      return [];
+    }
+  }
   const limit = params.limit ?? 50;
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
