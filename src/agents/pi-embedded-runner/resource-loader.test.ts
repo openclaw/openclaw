@@ -2,12 +2,16 @@ import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedPiResourceLoader,
+  createEmbeddedPiResourceLoaderSync,
   EMBEDDED_PI_RESOURCE_LOADER_DISCOVERY_OPTIONS,
-  getResourceLoaderCacheSize,
-  invalidateResourceLoaderCache,
   markResourceLoaderReloaded,
-  pruneResourceLoaderCache,
 } from "./resource-loader.js";
+
+// Mock DefaultResourceLoader to track construction and method calls
+const mockLoadExtensionFactories = vi.fn(async (runtime: unknown) => ({
+  extensions: [],
+  errors: [],
+}));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   DefaultResourceLoader: vi.fn(function DefaultResourceLoader(
@@ -16,28 +20,26 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   ) {
     Object.assign(this, {
       options,
-      reload: vi.fn(async () => undefined),
+      extensionsResult: { extensions: [], errors: [], runtime: {} },
+      loadExtensionFactories: mockLoadExtensionFactories,
     });
   }),
 }));
 
 describe("createEmbeddedPiResourceLoader", () => {
   beforeEach(() => {
-    // Clear cache before each test
-    invalidateResourceLoaderCache();
-    // Reset mock call count
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    invalidateResourceLoaderCache();
+    vi.clearAllMocks();
   });
 
-  it("keeps inline extensions but disables Pi filesystem discovery", () => {
+  it("passes correct options to DefaultResourceLoader including discovery flags", async () => {
     const settingsManager = {};
     const extensionFactories = [vi.fn()];
 
-    createEmbeddedPiResourceLoader({
+    await createEmbeddedPiResourceLoader({
       cwd: "/workspace",
       agentDir: "/agent",
       settingsManager: settingsManager as never,
@@ -53,230 +55,136 @@ describe("createEmbeddedPiResourceLoader", () => {
     });
   });
 
-  it("caches resource loader for repeated calls with same cwd/agentDir", () => {
+  it("calls loadExtensionFactories directly without reload()", async () => {
     const settingsManager = {};
 
-    // First call creates new loader
-    const loader1 = createEmbeddedPiResourceLoader({
+    await createEmbeddedPiResourceLoader({
       cwd: "/workspace",
       agentDir: "/agent",
       settingsManager: settingsManager as never,
       extensionFactories: [],
     });
 
-    // Second call should return cached loader (no new DefaultResourceLoader call)
-    const loader2 = createEmbeddedPiResourceLoader({
+    // Should call loadExtensionFactories directly
+    expect(mockLoadExtensionFactories).toHaveBeenCalledTimes(1);
+    // Should not have a reload method called (we skip it entirely)
+    // The mock doesn't have reload, so if it was called it would throw
+  });
+
+  it("loads inline extensionFactories into extensionsResult", async () => {
+    const extensionFactories = [vi.fn(), vi.fn()];
+    const mockExtensions = [{ name: "test-extension" }];
+    
+    mockLoadExtensionFactories.mockResolvedValueOnce({
+      extensions: mockExtensions,
+      errors: [],
+    });
+
+    const loader = await createEmbeddedPiResourceLoader({
       cwd: "/workspace",
       agentDir: "/agent",
-      settingsManager: settingsManager as never,
+      settingsManager: {} as never,
+      extensionFactories: extensionFactories as never,
+    });
+
+    // Extensions should be loaded into extensionsResult
+    expect((loader as any).extensionsResult.extensions).toEqual(mockExtensions);
+  });
+
+  it("accumulates errors from loadExtensionFactories", async () => {
+    const mockErrors = [{ path: "<inline:1>", error: "Failed to load" }];
+    
+    mockLoadExtensionFactories.mockResolvedValueOnce({
+      extensions: [],
+      errors: mockErrors,
+    });
+
+    const loader = await createEmbeddedPiResourceLoader({
+      cwd: "/workspace",
+      agentDir: "/agent",
+      settingsManager: {} as never,
+      extensionFactories: [vi.fn()] as never,
+    });
+
+    expect((loader as any).extensionsResult.errors).toEqual(mockErrors);
+  });
+
+  it("is async to allow extension factory loading", async () => {
+    // createEmbeddedPiResourceLoader returns a Promise
+    const result = createEmbeddedPiResourceLoader({
+      cwd: "/workspace",
+      agentDir: "/agent",
+      settingsManager: {} as never,
       extensionFactories: [],
     });
 
-    // Should be same instance
-    expect(loader1).toBe(loader2);
-    // Should only create one DefaultResourceLoader
+    expect(result).toBeInstanceOf(Promise);
+    await result; // Should resolve without error
+  });
+});
+
+describe("createEmbeddedPiResourceLoaderSync", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates loader synchronously without extensionFactories", () => {
+    const loader = createEmbeddedPiResourceLoaderSync({
+      cwd: "/workspace",
+      agentDir: "/agent",
+      settingsManager: {} as never,
+    });
+
+    expect(loader).toBeDefined();
     expect(DefaultResourceLoader).toHaveBeenCalledTimes(1);
   });
 
-  it("creates separate loaders for different workspaces", () => {
-    const loader1 = createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-
-    const loader2 = createEmbeddedPiResourceLoader({
-      cwd: "/workspace2",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-
-    // Should be different instances
-    expect(loader1).not.toBe(loader2);
-    // Should create two DefaultResourceLoader
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(2);
-  });
-
-  it("creates separate loaders for different agentDirs", () => {
-    const loader1 = createEmbeddedPiResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent1",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-
-    const loader2 = createEmbeddedPiResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent2",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-
-    expect(loader1).not.toBe(loader2);
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(2);
-  });
-
-  it("cache size tracks number of cached loaders", () => {
-    expect(getResourceLoaderCacheSize()).toBe(0);
-
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(getResourceLoaderCacheSize()).toBe(1);
-
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace2",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(getResourceLoaderCacheSize()).toBe(2);
-
-    // Same workspace should not increase cache size
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(getResourceLoaderCacheSize()).toBe(2);
-  });
-
-  it("invalidateResourceLoaderCache clears all entries", () => {
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace2",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(getResourceLoaderCacheSize()).toBe(2);
-
-    invalidateResourceLoaderCache();
-    expect(getResourceLoaderCacheSize()).toBe(0);
-
-    // After invalidate, should create new loader
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(3);
-  });
-
-  it("invalidateResourceLoaderCache with specific cwd/agentDir only removes that entry", () => {
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent1",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace2",
-      agentDir: "/agent2",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(getResourceLoaderCacheSize()).toBe(2);
-
-    invalidateResourceLoaderCache("/workspace1", "/agent1");
-    expect(getResourceLoaderCacheSize()).toBe(1);
-
-    // workspace1 should create new loader
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace1",
-      agentDir: "/agent1",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(3);
-
-    // workspace2 should still use cached loader
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace2",
-      agentDir: "/agent2",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(3); // No new call
-  });
-
-  it("markResourceLoaderReloaded updates lastReloadAt timestamp", () => {
-    createEmbeddedPiResourceLoader({
+  it("does not call loadExtensionFactories for sync version", () => {
+    createEmbeddedPiResourceLoaderSync({
       cwd: "/workspace",
       agentDir: "/agent",
       settingsManager: {} as never,
-      extensionFactories: [],
     });
 
-    // Should not throw
+    // Sync version skips extension loading
+    expect(mockLoadExtensionFactories).not.toHaveBeenCalled();
+  });
+
+  it("passes empty extensionFactories array", () => {
+    createEmbeddedPiResourceLoaderSync({
+      cwd: "/workspace",
+      agentDir: "/agent",
+      settingsManager: {} as never,
+    });
+
+    expect(DefaultResourceLoader).toHaveBeenCalledWith({
+      cwd: "/workspace",
+      agentDir: "/agent",
+      settingsManager: {},
+      extensionFactories: [],
+      ...EMBEDDED_PI_RESOURCE_LOADER_DISCOVERY_OPTIONS,
+    });
+  });
+});
+
+describe("EMBEDDED_PI_RESOURCE_LOADER_DISCOVERY_OPTIONS", () => {
+  it("disables all filesystem discovery", () => {
+    expect(EMBEDDED_PI_RESOURCE_LOADER_DISCOVERY_OPTIONS).toEqual({
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+  });
+});
+
+describe("markResourceLoaderReloaded", () => {
+  it("is a no-op that does not throw", () => {
+    // Should not throw for any arguments
     markResourceLoaderReloaded("/workspace", "/agent");
-  });
-
-  it("pruneResourceLoaderCache removes expired entries when TTL env is set", async () => {
-    // Set very short TTL for test
-    process.env.OPENCLAW_RESOURCE_LOADER_CACHE_TTL_MS = "100";
-
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(getResourceLoaderCacheSize()).toBe(1);
-
-    // Wait for TTL to expire
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    pruneResourceLoaderCache();
-    expect(getResourceLoaderCacheSize()).toBe(0);
-
-    // After prune, should create new loader
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(2);
-
-    // Clean up env
-    delete process.env.OPENCLAW_RESOURCE_LOADER_CACHE_TTL_MS;
-  });
-
-  it("respects OPENCLAW_RESOURCE_LOADER_CACHE_TTL_MS env var", () => {
-    // Set TTL to 10 seconds (minimum)
-    process.env.OPENCLAW_RESOURCE_LOADER_CACHE_TTL_MS = "10000";
-
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(1);
-
-    // Immediate second call should use cache
-    createEmbeddedPiResourceLoader({
-      cwd: "/workspace",
-      agentDir: "/agent",
-      settingsManager: {} as never,
-      extensionFactories: [],
-    });
-    expect(DefaultResourceLoader).toHaveBeenCalledTimes(1);
-
-    // Clean up env
-    delete process.env.OPENCLAW_RESOURCE_LOADER_CACHE_TTL_MS;
+    markResourceLoaderReloaded("", "");
+    markResourceLoaderReloaded("any", "path");
+    expect(true).toBe(true); // Explicit pass
   });
 });

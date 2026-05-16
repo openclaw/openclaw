@@ -1012,13 +1012,15 @@ async function compactEmbeddedPiSessionDirectOnce(
         modelId,
         model,
       });
-      const resourceLoader = createEmbeddedPiResourceLoader({
+      // Create resource loader with fast-path: skip packageManager.resolve()
+      const resourceLoader = await createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
         agentDir,
         settingsManager,
         extensionFactories,
       });
-      await resourceLoader.reload();
+      // No reload() needed - constructor state matches reload() output for no* flags,
+      // and OpenClaw overrides systemPrompt via applySystemPromptOverrideToSession.
       markResourceLoaderReloaded(resolvedWorkspace, agentDir);
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
       // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
