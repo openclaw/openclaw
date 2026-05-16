@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { setPluginEnabledInConfig } from "../plugins/toggle-config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -103,56 +104,123 @@ export async function ensureCodexRuntimePluginForModelSelection(params: {
   };
 }
 
+export type EnsureCodexRuntimePluginForGatewayStartupResult = {
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+};
+
 export async function ensureCodexRuntimePluginForGatewayStartup(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   log: (message: string) => void;
   env?: NodeJS.ProcessEnv;
-}): Promise<OpenClawConfig> {
+}): Promise<EnsureCodexRuntimePluginForGatewayStartupResult> {
   const { collectConfiguredModelRefs } = await import("../config/model-refs.js");
   const needsCodex = collectConfiguredModelRefs(params.cfg).some(({ value }) =>
     modelSelectionShouldEnsureCodexPlugin({ model: value, config: params.cfg }),
   );
   if (!needsCodex) {
-    return params.cfg;
+    return {
+      cfg: params.cfg,
+      ...(params.activationSourceConfig !== undefined
+        ? { activationSourceConfig: params.activationSourceConfig }
+        : {}),
+    };
   }
+  // Pre-clear the runtime allowlist so the install path's own enablement step
+  // does not fail with "blocked by allowlist" before we even reach disk.
+  const cfgForInstall = ensureCodexEnabledInStartupConfig(params.cfg, params.log);
   const env = params.env ?? process.env;
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env });
+  let installedCfg: OpenClawConfig;
   if (isInstalledRecordPresentOnDisk(existingRecords[CODEX_RUNTIME_PLUGIN_ID], env)) {
-    const enableResult = enablePluginInConfig(params.cfg, CODEX_RUNTIME_PLUGIN_ID);
-    return enableResult.enabled ? enableResult.config : params.cfg;
+    const enableResult = enablePluginInConfig(cfgForInstall, CODEX_RUNTIME_PLUGIN_ID);
+    installedCfg = enableResult.enabled ? enableResult.config : cfgForInstall;
+  } else {
+    params.log(
+      `gateway: codex runtime plugin required by configured models but not installed — installing ${CODEX_RUNTIME_PLUGIN_NPM_SPEC}`,
+    );
+    const { ensureOnboardingPluginInstalled } = await import("./onboarding-plugin-install.js");
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: cfgForInstall,
+      entry: {
+        pluginId: CODEX_RUNTIME_PLUGIN_ID,
+        label: CODEX_RUNTIME_PLUGIN_LABEL,
+        install: { npmSpec: CODEX_RUNTIME_PLUGIN_NPM_SPEC, defaultChoice: "npm" },
+        trustedSourceLinkedOfficialInstall: true,
+        preferRemoteInstall: true,
+      },
+      prompter: createGatewayStartupPrompter(params.log),
+      runtime: {
+        log: (...args) => {
+          params.log(args.map(String).join(" "));
+        },
+        error: (...args) => {
+          params.log(args.map(String).join(" "));
+        },
+        exit: () => {
+          throw new Error("codex startup install attempted process exit");
+        },
+      },
+      promptInstall: false,
+      autoConfirmSingleSource: true,
+    });
+    if (result.installed) {
+      params.log(`gateway: codex runtime plugin installed`);
+    }
+    installedCfg = result.cfg;
   }
-  params.log(
-    `gateway: codex runtime plugin required by configured models but not installed — installing ${CODEX_RUNTIME_PLUGIN_NPM_SPEC}`,
-  );
-  const { ensureOnboardingPluginInstalled } = await import("./onboarding-plugin-install.js");
-  const result = await ensureOnboardingPluginInstalled({
-    cfg: params.cfg,
-    entry: {
-      pluginId: CODEX_RUNTIME_PLUGIN_ID,
-      label: CODEX_RUNTIME_PLUGIN_LABEL,
-      install: { npmSpec: CODEX_RUNTIME_PLUGIN_NPM_SPEC, defaultChoice: "npm" },
-      trustedSourceLinkedOfficialInstall: true,
-      preferRemoteInstall: true,
-    },
-    prompter: createGatewayStartupPrompter(params.log),
-    runtime: {
-      log: (...args) => {
-        params.log(args.map(String).join(" "));
-      },
-      error: (...args) => {
-        params.log(args.map(String).join(" "));
-      },
-      exit: () => {
-        throw new Error("codex startup install attempted process exit");
-      },
-    },
-    promptInstall: false,
-    autoConfirmSingleSource: true,
-  });
-  if (result.installed) {
-    params.log(`gateway: codex runtime plugin installed`);
+  // The planner reads the activation source's plugins.allow when deciding which
+  // required-harness plugins to load. Without this second pass codex stays out
+  // of the allowlist there and the original "harness not registered" error
+  // returns under restrictive source configs.
+  const finalActivationSource =
+    params.activationSourceConfig !== undefined
+      ? ensureCodexEnabledInStartupConfig(params.activationSourceConfig, params.log)
+      : undefined;
+  return {
+    cfg: installedCfg,
+    ...(finalActivationSource !== undefined
+      ? { activationSourceConfig: finalActivationSource }
+      : {}),
+  };
+}
+
+// Force codex enabled (and present in plugins.allow) on an in-memory startup
+// config copy. The user's on-disk config is untouched. Logs once per call when
+// an override is applied so operators can tell why their allowlist appears to
+// have grown a member.
+function ensureCodexEnabledInStartupConfig(
+  cfg: OpenClawConfig,
+  log: (message: string) => void,
+): OpenClawConfig {
+  if (cfg.plugins?.enabled === false) {
+    log(
+      `gateway: codex runtime plugin required by configured openai models, but \`plugins.enabled\` is false. The openai harness will not register until plugins are re-enabled.`,
+    );
+    return cfg;
   }
-  return result.cfg;
+  if (cfg.plugins?.deny?.includes(CODEX_RUNTIME_PLUGIN_ID)) {
+    log(
+      `gateway: codex runtime plugin required by configured openai models, but \`${CODEX_RUNTIME_PLUGIN_ID}\` is listed in \`plugins.deny\`. Remove it from the denylist to register the openai harness.`,
+    );
+    return cfg;
+  }
+  let next = cfg;
+  const allow = cfg.plugins?.allow;
+  if (Array.isArray(allow) && allow.length > 0 && !allow.includes(CODEX_RUNTIME_PLUGIN_ID)) {
+    log(
+      `gateway: adding \`${CODEX_RUNTIME_PLUGIN_ID}\` to \`plugins.allow\` for this session (required by configured openai models). Persist it in your config file to silence this notice.`,
+    );
+    next = {
+      ...next,
+      plugins: {
+        ...next.plugins,
+        allow: [...allow, CODEX_RUNTIME_PLUGIN_ID],
+      },
+    };
+  }
+  return setPluginEnabledInConfig(next, CODEX_RUNTIME_PLUGIN_ID, true);
 }
 
 function createGatewayStartupPrompter(log: (message: string) => void): WizardPrompter {
@@ -176,7 +244,19 @@ function createGatewayStartupPrompter(log: (message: string) => void): WizardPro
     multiselect: async () => abort("multiselect"),
     text: async () => abort("text"),
     confirm: async () => abort("confirm"),
-    progress: () => abort("progress"),
+    progress: (label) => {
+      log(`[codex-install] ${label}`);
+      return {
+        update: (message) => {
+          log(`[codex-install] ${message}`);
+        },
+        stop: (message) => {
+          if (message !== undefined) {
+            log(`[codex-install] ${message}`);
+          }
+        },
+      };
+    },
   };
 }
 

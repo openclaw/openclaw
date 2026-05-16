@@ -77,18 +77,28 @@ export async function prepareGatewayPluginBootstrap(params: {
   // Ensure the codex runtime plugin is installed and enabled before plugin loading
   // so the harness is registered when openai/openai-codex models are configured.
   // ensureCodexRuntimePluginForModelSelection only fires during onboarding; users
-  // upgrading with existing OpenAI config skip that path entirely.
-  const cfgAtStart = params.minimalTestGateway
-    ? params.cfgAtStart
-    : await (async () => {
-        const { ensureCodexRuntimePluginForGatewayStartup } =
-          await import("../commands/codex-runtime-plugin-install.js");
-        return ensureCodexRuntimePluginForGatewayStartup({
+  // upgrading with existing OpenAI config skip that path entirely. The helper
+  // returns both the runtime config and the activation source config with codex
+  // enabled, because the planner enforces plugins.allow against the activation
+  // source and would otherwise reject the auto-installed plugin.
+  const { cfg: cfgAtStart, activationSourceConfig: codexActivationSourceConfig } =
+    params.minimalTestGateway
+      ? {
           cfg: params.cfgAtStart,
-          log: params.log.info,
-        });
-      })();
-  const activationSourceConfig = params.activationSourceConfig ?? cfgAtStart;
+          activationSourceConfig: params.activationSourceConfig,
+        }
+      : await (async () => {
+          const { ensureCodexRuntimePluginForGatewayStartup } =
+            await import("../commands/codex-runtime-plugin-install.js");
+          return ensureCodexRuntimePluginForGatewayStartup({
+            cfg: params.cfgAtStart,
+            ...(params.activationSourceConfig !== undefined
+              ? { activationSourceConfig: params.activationSourceConfig }
+              : {}),
+            log: params.log.info,
+          });
+        })();
+  const activationSourceConfig = codexActivationSourceConfig ?? cfgAtStart;
 
   initSubagentRegistry();
 
