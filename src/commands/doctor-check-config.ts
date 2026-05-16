@@ -272,7 +272,7 @@ function checkFallbackModels(cfg: OpenClawConfig, results: CheckConfigResult[]):
   let hasIssue = false;
   for (const { source, fallbacks } of allFallbackSources) {
     for (const fallback of fallbacks) {
-      const raw = String(fallback).trim();
+      const raw = fallback.trim();
       if (!raw) {
         continue;
       }
