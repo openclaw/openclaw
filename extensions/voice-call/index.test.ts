@@ -654,6 +654,29 @@ describe("voice-call plugin", () => {
     expect(String(result.details.error)).toContain("sid required");
   });
 
+  it("CLI rejects invalid numeric options", async () => {
+    const program = new Command();
+    await registerVoiceCallCli(program);
+
+    await expect(
+      program.parseAsync(["voicecall", "expose", "--port", "nope", "--mode", "off"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/Invalid numeric value for --port/);
+
+    const tmpFile = path.join(os.tmpdir(), `voicecall-invalid-${Date.now()}.jsonl`);
+    fs.writeFileSync(tmpFile, "{}\n", "utf8");
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "later"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Invalid numeric value for --last/);
+    } finally {
+      fs.unlinkSync(tmpFile);
+    }
+  });
+
   it("CLI latency summarizes turn metrics from JSONL", async () => {
     const program = new Command();
     const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
