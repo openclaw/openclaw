@@ -6,7 +6,7 @@ const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
 }));
 const consumeGatewayRestartIntentPayloadSync = vi.fn<
-  () => { force?: boolean; waitMs?: number } | null
+  () => { reason?: string; force?: boolean; waitMs?: number } | null
 >(() => null);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const consumeGatewayRestartIntentSync = vi.fn(() => false);
@@ -1074,6 +1074,40 @@ describe("runGatewayLoop", () => {
         expectRestartHandoffCall({
           restartKind: "full-process",
           reason: undefined,
+          supervisorMode: "launchd",
+        });
+      });
+    } finally {
+      vi.useRealTimers();
+      delete process.env.LAUNCH_JOB_LABEL;
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
+  });
+
+  it("carries SIGTERM restart intent reason into launchd supervised handoff", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
+    try {
+      setPlatform("darwin");
+      process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+        mode: "supervised",
+      });
+
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { exited } = await createSignaledLoopHarness();
+        const sigterm = captureSignal("SIGTERM");
+
+        vi.useFakeTimers();
+        sigterm();
+        await vi.advanceTimersByTimeAsync(1500);
+
+        await expect(exited).resolves.toBe(0);
+        expectRestartHandoffCall({
+          restartKind: "full-process",
+          reason: "gateway.restart",
           supervisorMode: "launchd",
         });
       });

@@ -138,6 +138,25 @@ describe("runtime parity", () => {
     expect(result.drift).toBe("none");
   });
 
+  it("runs runtime cells serially so shared QA state cannot cross-contaminate", async () => {
+    const events: string[] = [];
+    const result = await runRuntimeParityScenario({
+      scenarioId: "serial",
+      runCell: async (runtime) => {
+        events.push(`start:${runtime}`);
+        await Promise.resolve();
+        events.push(`finish:${runtime}`);
+        return {
+          scenarioStatus: "pass",
+          cell: makeCell(runtime),
+        };
+      },
+    });
+
+    expect(result.drift).toBe("none");
+    expect(events).toEqual(["start:pi", "finish:pi", "start:codex", "finish:codex"]);
+  });
+
   it("classifies final-text-only differences as text-only", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "text-only",
@@ -386,5 +405,270 @@ describe("runtime parity", () => {
 
     expect(cell.finalText).toBe("parent scenario final");
     expect(cell.transcriptBytes).not.toContain("child worker final");
+  });
+
+  it("ignores newer heartbeat-only operational transcripts when selecting the scenario reply", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot([
+      {
+        sessionId: "scenario",
+        updatedAt: 10,
+        transcriptBytes: JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "scenario final",
+            usage: {
+              input: 10,
+              output: 5,
+              totalTokens: 15,
+            },
+          },
+        }),
+      },
+      {
+        sessionId: "heartbeat",
+        updatedAt: 20,
+        transcriptBytes: [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content:
+                "Read HEARTBEAT.md if it exists. If nothing needs attention, reply HEARTBEAT_OK.",
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: "HEARTBEAT_OK",
+              usage: {
+                input: 100,
+                output: 50,
+                totalTokens: 150,
+              },
+            },
+          }),
+        ].join("\n"),
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "pi",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.finalText).toBe("scenario final");
+    expect(cell.usage.totalTokens).toBe(15);
+    expect(cell.transcriptBytes).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("ignores production heartbeat poll transcripts when selecting the scenario reply", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot([
+      {
+        sessionId: "scenario",
+        updatedAt: 10,
+        transcriptBytes: JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "scenario final",
+          },
+        }),
+      },
+      {
+        sessionId: "heartbeat",
+        updatedAt: 20,
+        transcriptBytes: [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: "[OpenClaw heartbeat poll]",
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: "HEARTBEAT_OK",
+            },
+          }),
+        ].join("\n"),
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "pi",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.finalText).toBe("scenario final");
+    expect(cell.transcriptBytes).not.toContain("[OpenClaw heartbeat poll]");
+  });
+
+  it("ignores heartbeat tool-response transcripts when selecting the scenario reply", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot([
+      {
+        sessionId: "scenario",
+        updatedAt: 10,
+        transcriptBytes: JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "scenario final",
+          },
+        }),
+      },
+      {
+        sessionId: "heartbeat-tool",
+        updatedAt: 20,
+        transcriptBytes: [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: "[OpenClaw heartbeat poll]",
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_call",
+                  id: "call-heartbeat",
+                  name: "heartbeat_respond",
+                  arguments: {
+                    notify: false,
+                    outcome: "no_change",
+                    summary: "nothing due",
+                  },
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "tool",
+              toolCallId: "call-heartbeat",
+              content: JSON.stringify({ status: "ok" }),
+            },
+          }),
+        ].join("\n"),
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.finalText).toBe("scenario final");
+    expect(cell.transcriptBytes).not.toContain("heartbeat_respond");
+  });
+
+  it("ignores due-task heartbeats that run ordinary tools before responding", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot([
+      {
+        sessionId: "scenario",
+        updatedAt: 10,
+        transcriptBytes: JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "scenario final",
+          },
+        }),
+      },
+      {
+        sessionId: "heartbeat-tool-check",
+        updatedAt: 20,
+        transcriptBytes: [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "Run the following periodic tasks (only those due based on their intervals):",
+                    "",
+                    "- status: Check deployment status",
+                    "",
+                    "After completing all due tasks, use heartbeat_respond to report the outcome.",
+                  ].join("\n"),
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-read",
+                  name: "read",
+                  arguments: { file: "HEARTBEAT.md" },
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_call_id: "call-read",
+                  content: "deployment ok",
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-heartbeat",
+                  name: "heartbeat_respond",
+                  arguments: {
+                    notify: false,
+                    outcome: "no_change",
+                    summary: "deployment ok",
+                  },
+                },
+              ],
+            },
+          }),
+        ].join("\n"),
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.finalText).toBe("scenario final");
+    expect(cell.transcriptBytes).not.toContain("deployment ok");
   });
 });

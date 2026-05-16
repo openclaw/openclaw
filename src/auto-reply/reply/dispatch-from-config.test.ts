@@ -153,6 +153,7 @@ const ttsMocks = vi.hoisted(() => {
           ...params.payload,
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
         };
       }
       return params.payload;
@@ -2722,6 +2723,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
     expect(finalPayload?.audioAsVoice).toBe(true);
     expect(finalPayload?.spokenText).toBe("Hello from block streaming.");
+    expect(finalPayload?.trustedLocalMedia).toBe(true);
   });
 
   it("closes oneshot ACP sessions after the turn completes", async () => {
