@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { AgentConfig } from "../config/types.agents.js";
@@ -271,12 +272,16 @@ export function resolveEffectiveModelFallbacks(params: {
   agentId: string;
   hasSessionModelOverride: boolean;
   modelOverrideSource?: "auto" | "user";
+  hasAutoFallbackProvenance?: boolean;
 }): string[] | undefined {
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }
-  if (params.modelOverrideSource !== "auto") {
+  const canUseConfiguredFallbacks =
+    params.modelOverrideSource === "auto" ||
+    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
+  if (!canUseConfiguredFallbacks) {
     return [];
   }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
