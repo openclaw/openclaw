@@ -1238,6 +1238,56 @@ describe("runPreparedReply media-only handling", () => {
     expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
   });
 
+  it("isolates image override auth profile from the pre-override runtime provider", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-runtime-provider-auth",
+      sessionFile: "/tmp/session-image-runtime-provider-auth.jsonl",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-1",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o-mini",
+        hasAppliedImageModelOverride: true,
+        imageModelOverrideBaseProvider: "anthropic",
+        isNewSession: false,
+        sessionId: "session-image-runtime-provider-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");

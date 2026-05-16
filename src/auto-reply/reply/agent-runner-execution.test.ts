@@ -4018,7 +4018,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
   });
 
-  it("does not persist fallback selection for one-turn image model fallbacks", async () => {
+  it("does not persist fallback selection for one-turn image model overrides", async () => {
     state.runWithModelFallbackMock.mockImplementation(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
         result: await params.run("openai", "gpt-4o-mini"),
@@ -4035,7 +4035,7 @@ describe("runAgentTurnWithFallback", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-4o";
-    followupRun.run.imageModelFallbacksOverride = ["openai/gpt-4o-mini"];
+    followupRun.run.hasOneTurnModelOverride = true;
 
     const sessionEntry: SessionEntry = {
       sessionId: "session",

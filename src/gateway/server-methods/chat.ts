@@ -5,6 +5,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -2042,6 +2043,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       config: cfg,
     });
+    const resolvedConfiguredDefaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
     const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
       config: cfg,
@@ -2163,8 +2165,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             const imageModelPlan = await resolveImageModelOverridePlan({
               cfg,
               agentId,
-              defaultProvider: resolvedSessionModel.provider,
-              defaultModel: resolvedSessionModel.model,
+              defaultProvider: resolvedConfiguredDefaultModel.provider,
+              defaultModel: resolvedConfiguredDefaultModel.model,
               hasImageAttachments,
               sessionModelSupportsImages:
                 supportsSessionModelImages || explicitOriginSupportsInlineImages,

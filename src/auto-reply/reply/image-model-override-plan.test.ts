@@ -63,8 +63,8 @@ describe("resolveImageModelOverridePlan", () => {
 
     const plan = await resolveImageModelOverridePlan({
       cfg: buildConfig({ imageModel: "gpt-4o" }),
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
       hasImageAttachments: true,
       sessionModelSupportsImages: false,
       modelSupportsImages,
@@ -78,6 +78,27 @@ describe("resolveImageModelOverridePlan", () => {
     expect(modelSupportsImages).toHaveBeenCalledWith({
       provider: "openai",
       model: "gpt-4o",
+    });
+  });
+
+  it("uses the configured default provider for unmatched providerless image models", async () => {
+    const modelSupportsImages = vi.fn(async (ref: { provider: string; model: string }) => {
+      return ref.provider === "ollama" && ref.model === "qwen2.5vl:7b";
+    });
+
+    const plan = await resolveImageModelOverridePlan({
+      cfg: buildConfig({ imageModel: "qwen2.5vl:7b" }),
+      defaultProvider: "ollama",
+      defaultModel: "llama3.2",
+      hasImageAttachments: true,
+      sessionModelSupportsImages: false,
+      modelSupportsImages,
+    });
+
+    expect(plan).toEqual({
+      kind: "inline-image-model",
+      modelOverride: "ollama/qwen2.5vl:7b",
+      modelOverrideFallbacks: [],
     });
   });
 

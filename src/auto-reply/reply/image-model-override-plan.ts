@@ -1,4 +1,3 @@
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -44,9 +43,9 @@ function resolveImageModelCandidate(params: {
     return null;
   }
   const imageDefaultProvider = trimmed.includes("/")
-    ? DEFAULT_PROVIDER
+    ? params.defaultProvider
     : (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      DEFAULT_PROVIDER);
+      params.defaultProvider);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: imageDefaultProvider,

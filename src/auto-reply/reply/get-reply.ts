@@ -568,6 +568,26 @@ export async function getReplyFromConfig(
     provider = resolvedChannelModelOverride.ref.provider;
     model = resolvedChannelModelOverride.ref.model;
   }
+  const imageModelOverrideBaseProvider = hasAppliedImageModelOverride
+    ? (() => {
+        if (
+          storedModelOverride?.model &&
+          !hasResolvedHeartbeatModelOverride &&
+          !staleHeartbeatAutoFallbackOverride
+        ) {
+          return storedModelOverride.provider ?? defaultProvider;
+        }
+        if (!hasEffectiveSessionModelOverride && resolvedChannelModelOverride) {
+          return resolvedChannelModelOverride.ref.provider;
+        }
+        const runtimeProvider = normalizeOptionalString(sessionEntry.modelProvider);
+        const runtimeModel = normalizeOptionalString(sessionEntry.model);
+        if (runtimeProvider && runtimeModel) {
+          return runtimeProvider;
+        }
+        return defaultProvider;
+      })()
+    : undefined;
 
   if (
     shouldUseReplyFastDirectiveExecution({
@@ -643,6 +663,7 @@ export async function getReplyFromConfig(
         workspaceDir,
         abortedLastRun,
         hasAppliedImageModelOverride,
+        imageModelOverrideBaseProvider,
         imageModelFallbacksOverride,
       }),
     );
@@ -886,6 +907,7 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
       hasAppliedImageModelOverride,
+      imageModelOverrideBaseProvider,
       imageModelFallbacksOverride,
     }),
   );

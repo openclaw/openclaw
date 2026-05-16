@@ -351,6 +351,7 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   hasAppliedImageModelOverride?: boolean;
+  imageModelOverrideBaseProvider?: string;
   imageModelFallbacksOverride?: string[];
 };
 
@@ -394,6 +395,7 @@ export async function runPreparedReply(
     workspaceDir,
     sessionStore,
     hasAppliedImageModelOverride,
+    imageModelOverrideBaseProvider,
     imageModelFallbacksOverride,
   } = params;
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
@@ -897,10 +899,10 @@ export async function runPreparedReply(
     if (hasAppliedImageModelOverride !== true) {
       return false;
     }
-    return (
-      normalizeProviderId(provider) !==
-      normalizeProviderId(resolveActiveSessionProviderForAuthProfile())
-    );
+    const activeSessionProvider =
+      normalizeOptionalString(imageModelOverrideBaseProvider) ??
+      resolveActiveSessionProviderForAuthProfile();
+    return normalizeProviderId(provider) !== normalizeProviderId(activeSessionProvider);
   };
   const resolveRuntimeAuthProfile = async (): Promise<{
     authProfileId?: string;
@@ -1069,6 +1071,7 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      hasOneTurnModelOverride: hasAppliedImageModelOverride || undefined,
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
