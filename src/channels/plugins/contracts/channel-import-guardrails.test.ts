@@ -313,6 +313,9 @@ function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] |
       if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(line) || line.endsWith(".d.ts")) {
         return false;
       }
+      if (!fs.existsSync(resolve(REPO_ROOT, line))) {
+        return false;
+      }
       const parts = line.split("/");
       return !parts.some(
         (part) => part === "node_modules" || part === "dist" || part === "coverage",
