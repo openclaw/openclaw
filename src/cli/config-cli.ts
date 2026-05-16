@@ -77,6 +77,7 @@ type ConfigSetOperation = {
   value: unknown;
   mutation?: "set" | "merge" | "replace" | "delete";
   schemaValidated?: boolean;
+  touchesAllSecretRefs?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
@@ -1034,6 +1035,20 @@ function parseProviderAliasFromTargetPath(path: PathSegment[]): string | null {
   return null;
 }
 
+function touchesSecretProviderCollection(path: PathSegment[]): boolean {
+  return (
+    (path.length === 1 && path[0] === "secrets") ||
+    (path.length === 2 && path[0] === "secrets" && path[1] === "providers")
+  );
+}
+
+function touchesSecretDefaults(path: PathSegment[]): boolean {
+  return (
+    (path.length === 1 && path[0] === "secrets") ||
+    (path.length === 2 && path[0] === "secrets" && path[1] === "defaults")
+  );
+}
+
 function buildValueAssignmentOperation(params: {
   requestedPath: PathSegment[];
   value: unknown;
@@ -1161,12 +1176,14 @@ function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
 function buildUnsetOperation(path: PathSegment[]): ConfigSetOperation {
   const resolved = resolveConfigSecretTargetByPath(path);
   const providerAlias = parseProviderAliasFromTargetPath(path);
+  const touchesAllSecretRefs = touchesSecretProviderCollection(path) || touchesSecretDefaults(path);
   return {
     inputMode: "unset",
     requestedPath: path,
     setPath: path,
     value: undefined,
     mutation: "delete",
+    ...(touchesAllSecretRefs ? { touchesAllSecretRefs: true } : {}),
     ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
     ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
   };
@@ -1376,6 +1393,7 @@ function collectDryRunRefs(params: {
   const refsByKey = new Map<string, SecretRef>();
   const targetPaths = new Set<string>();
   const providerAliases = new Set<string>();
+  let includeAllDiscoveredRefs = false;
 
   for (const operation of params.operations) {
     if (operation.assignedRef) {
@@ -1390,9 +1408,10 @@ function collectDryRunRefs(params: {
     if (operation.touchedProviderAlias) {
       providerAliases.add(operation.touchedProviderAlias);
     }
+    includeAllDiscoveredRefs ||= operation.touchesAllSecretRefs === true;
   }
 
-  if (targetPaths.size === 0 && providerAliases.size === 0) {
+  if (!includeAllDiscoveredRefs && targetPaths.size === 0 && providerAliases.size === 0) {
     return [...refsByKey.values()];
   }
 
@@ -1406,7 +1425,7 @@ function collectDryRunRefs(params: {
     if (!ref) {
       continue;
     }
-    if (targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
+    if (includeAllDiscoveredRefs || targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
       refsByKey.set(secretRefKey(ref), ref);
     }
   }
@@ -1643,9 +1662,13 @@ function formatDryRunFailureMessage(params: {
   skippedExecRefs: number;
 }): string {
   const { errors, skippedExecRefs } = params;
+  const missingPathErrors = errors.filter((error) => error.kind === "missing-path");
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
   const lines: string[] = [];
+  if (missingPathErrors.length > 0) {
+    lines.push(...missingPathErrors.map((error) => error.message));
+  }
   if (schemaErrors.length > 0) {
     lines.push("Dry run failed: config schema validation failed.");
     lines.push(...schemaErrors.map((error) => `- ${error.message}`));
@@ -2035,6 +2058,27 @@ export async function runConfigUnset(opts: {
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      if (cliOptions.dryRun && cliOptions.json) {
+        throw new ConfigSetDryRunValidationError({
+          ok: false,
+          operations: 1,
+          configPath: shortenHomePath(snapshot.path),
+          inputModes: ["unset"],
+          checks: {
+            schema: false,
+            resolvability: false,
+            resolvabilityComplete: false,
+          },
+          refsChecked: 0,
+          skippedExecRefs: 0,
+          errors: [
+            {
+              kind: "missing-path",
+              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+            },
+          ],
+        });
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,

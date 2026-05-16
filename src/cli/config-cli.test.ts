@@ -2741,6 +2741,117 @@ describe("config cli", () => {
       });
     });
 
+    it("prints structured JSON when unset dry-run misses a path", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as {
+        ok: boolean;
+        inputModes: string[];
+        checks: { schema: boolean; resolvability: boolean; resolvabilityComplete: boolean };
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.inputModes).toEqual(["unset"]);
+      expect(payload.checks).toEqual({
+        schema: false,
+        resolvability: false,
+        resolvabilityComplete: false,
+      });
+      expect(payload.errors).toEqual([
+        {
+          kind: "missing-path",
+          message: "Config path not found: tools.alsoAllow. Nothing was changed.",
+        },
+      ]);
+    });
+
+    it("validates existing refs when unset dry-run removes all secret providers", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {
+            vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: {
+                source: "file",
+                provider: "vaultfile",
+                id: "/providers/search/apiKey",
+              },
+            },
+          },
+        } as never,
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+      mockResolveSecretRefValue.mockRejectedValueOnce(new Error("provider removed"));
+
+      await expect(
+        runConfigCommand(["config", "unset", "secrets.providers", "--dry-run"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const [secretRef] = requireResolveSecretRefCall(0);
+      const secretRefRecord = requireRecord(secretRef, "existing SecretRef");
+      expect(secretRefRecord.provider).toBe("vaultfile");
+      expect(secretRefRecord.id).toBe("/providers/search/apiKey");
+      expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
+      expectErrorIncludes("provider removed");
+    });
+
+    it("validates existing refs when unset dry-run removes secret defaults", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          defaults: {
+            env: "vaultenv",
+          },
+          providers: {
+            default: { source: "env" },
+            vaultenv: { source: "env" },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: "${WEB_SEARCH_API_KEY}",
+            },
+          },
+        } as never,
+      } as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "secrets.defaults", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const [secretRef] = requireResolveSecretRefCall(0);
+      const secretRefRecord = requireRecord(secretRef, "defaulted SecretRef");
+      expect(secretRefRecord).toMatchObject({
+        source: "env",
+        provider: "default",
+        id: "WEB_SEARCH_API_KEY",
+      });
+      expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
+    });
+
     it("rejects config unset --json without --dry-run", async () => {
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
