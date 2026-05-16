@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type RuntimeId = "pi" | "codex";
 
@@ -851,11 +852,20 @@ async function loadRuntimeParityMockToolCalls(
     return null;
   }
   try {
-    const response = await fetch(`${normalizedBaseUrl}/debug/requests`);
-    if (!response.ok) {
-      return null;
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${normalizedBaseUrl}/debug/requests`,
+      policy: { allowPrivateNetwork: true },
+      auditContext: "qa-lab-runtime-parity-mock-tool-calls",
+    });
+    let payload: unknown;
+    try {
+      if (!response.ok) {
+        return null;
+      }
+      payload = await response.json();
+    } finally {
+      await release();
     }
-    const payload = (await response.json()) as unknown;
     if (!Array.isArray(payload)) {
       return null;
     }

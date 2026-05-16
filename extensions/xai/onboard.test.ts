@@ -25,7 +25,11 @@ describe("xai onboard", () => {
       modelId: "custom-model",
       modelName: "Custom",
     });
-    legacy.models!.providers!.xai!.models.push(
+    const xaiProvider = legacy.models?.providers?.xai;
+    if (!xaiProvider) {
+      throw new Error("expected xAI provider fixture");
+    }
+    xaiProvider.models.push(
       {
         id: "grok-3",
         name: "Grok 3",
