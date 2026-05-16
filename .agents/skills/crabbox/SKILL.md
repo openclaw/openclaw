@@ -353,18 +353,18 @@ Common desktop flow:
 
 ```sh
 ../crabbox/bin/crabbox warmup --provider hetzner --desktop --browser --class standard --idle-timeout 60m --ttl 240m
-../crabbox/bin/crabbox desktop launch --provider hetzner --id <cbx_id-or-slug> --browser --url https://example.com --webvnc --open
+../crabbox/bin/crabbox desktop launch --provider hetzner --id <cbx_id-or-slug> --browser --url https://example.com --webvnc --open --take-control
 ```
 
 Useful WebVNC commands:
 
 ```sh
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open
-../crabbox/bin/crabbox webvnc daemon start --provider hetzner --id <cbx_id-or-slug> --open
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open --take-control
+../crabbox/bin/crabbox webvnc daemon start --provider hetzner --id <cbx_id-or-slug> --open --take-control
 ../crabbox/bin/crabbox webvnc daemon status --provider hetzner --id <cbx_id-or-slug>
 ../crabbox/bin/crabbox webvnc daemon stop --provider hetzner --id <cbx_id-or-slug>
 ../crabbox/bin/crabbox webvnc status --provider hetzner --id <cbx_id-or-slug>
-../crabbox/bin/crabbox webvnc reset --provider hetzner --id <cbx_id-or-slug> --open
+../crabbox/bin/crabbox webvnc reset --provider hetzner --id <cbx_id-or-slug> --open --take-control
 ../crabbox/bin/crabbox desktop doctor --provider hetzner --id <cbx_id-or-slug>
 ../crabbox/bin/crabbox desktop click --provider hetzner --id <cbx_id-or-slug> --x 640 --y 420
 ../crabbox/bin/crabbox desktop paste --provider hetzner --id <cbx_id-or-slug> --text "user@example.com"
@@ -377,6 +377,8 @@ Useful WebVNC commands:
 browser/app inside the visible session, bridges the lease into the authenticated
 WebVNC portal, and opens the portal. Keep browsers windowed for human QA; use
 `--fullscreen` only for capture/video workflows.
+For human handoff, include `--take-control` so the opened portal viewer gets
+keyboard/mouse control automatically instead of landing as an observer.
 
 Human handoff preflight:
 
