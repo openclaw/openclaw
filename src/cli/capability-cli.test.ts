@@ -138,6 +138,11 @@ const mocks = vi.hoisted(() => ({
       runtime.log(JSON.stringify({ ok: true, providers: [{ id: "openai" }] }));
     },
   ),
+  resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    effectiveConfig: config,
+    diagnostics: [],
+  })),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -200,6 +205,11 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
   randomIdempotencyKey: () => "run-1",
+}));
+
+vi.mock("./command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets:
+    mocks.resolveCommandConfigWithSecrets as typeof import("./command-config-resolution.js").resolveCommandConfigWithSecrets,
 }));
 
 vi.mock("../gateway/connection-details.js", () => ({
@@ -337,6 +347,11 @@ describe("capability cli", () => {
       }
       return {};
     }) as never);
+    mocks.resolveCommandConfigWithSecrets.mockClear().mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      effectiveConfig: config,
+      diagnostics: [],
+    }));
     mocks.describeImageFile.mockClear();
     mocks.describeImageFileWithModel.mockClear();
     mocks.generateImage.mockReset();
@@ -2096,6 +2111,76 @@ describe("capability cli", () => {
         },
       ],
     });
+  });
+
+  it("resolves web search SecretRefs before local search execution", async () => {
+    const rawConfig = {
+      tools: { web: { search: { provider: "exa" } } },
+      plugins: {
+        entries: {
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: { source: "file", provider: "tool-api-keys", id: "/exa" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      tools: { web: { search: { provider: "exa" } } },
+      plugins: {
+        entries: {
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-exa-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "exa",
+      result: { results: [{ title: "OpenClaw" }] },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "web", "search", "--query", "OpenClaw beta", "--json"],
+    });
+
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "web.search",
+        targetIds: expect.any(Set),
+        runtime: mocks.runtime,
+      }),
+    );
+    expect(vi.mocked(webSearchRuntime.runWebSearch)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        providerId: undefined,
+        args: expect.objectContaining({ query: "OpenClaw beta" }),
+      }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        capability: "web.search",
+        provider: "exa",
+      }),
+    );
   });
 
   it("surfaces selected and configured embedding provider state", async () => {

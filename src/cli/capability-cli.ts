@@ -87,6 +87,8 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import { getWebSearchCommandSecretTargetIds } from "./command-secret-targets.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -1528,8 +1530,14 @@ async function runTtsStateMutation(params: {
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
   const cfg = getRuntimeConfig();
-  const result = await runWebSearch({
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
+    commandName: "web.search",
+    targetIds: getWebSearchCommandSecretTargetIds(),
+    runtime: defaultRuntime,
+  });
+  const result = await runWebSearch({
+    config: effectiveConfig,
     providerId: params.provider,
     args: {
       query: params.query,

@@ -76,6 +76,14 @@ function isPluginWebCredentialTargetId(id: string): boolean {
   return configPath === "webSearch.apiKey" || configPath === "webFetch.apiKey";
 }
 
+function isPluginWebSearchCredentialTargetId(id: string): boolean {
+  const segments = id.split(".");
+  if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
+    return false;
+  }
+  return segments.slice(4).join(".") === "webSearch.apiKey";
+}
+
 function getAgentRuntimeBaseTargetIds(): string[] {
   cachedAgentRuntimeBaseTargetIds ??= [
     ...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS,
@@ -234,6 +242,16 @@ export function getConfiguredChannelsCommandSecretTargetIds(
 
 export function getModelsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_MODEL_TARGET_IDS);
+}
+
+export function getWebSearchCommandSecretTargetIds(): Set<string> {
+  return toTargetIdSet([
+    "tools.web.search.apiKey",
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebSearchCredentialTargetId)
+      .toSorted(),
+  ]);
 }
 
 export function getAgentRuntimeCommandSecretTargetIds(params?: {

@@ -58,6 +58,7 @@ import {
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
+  getWebSearchCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -80,6 +81,14 @@ describe("command secret target ids", () => {
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("scopes web search command targets to search credentials only", () => {
+    const ids = getWebSearchCommandSecretTargetIds();
+    expect(ids).toEqual(
+      new Set(["plugins.entries.exa.config.webSearch.apiKey", "tools.web.search.apiKey"]),
+    );
+    expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
   });
 
   it("includes channel targets for agent runtime when delivery needs them", () => {
