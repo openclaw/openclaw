@@ -168,6 +168,38 @@ Notes:
 - `stdin: $step.stdout` and `stdin: $step.json` pass a prior step's output.
 - `condition` (or `when`) can gate steps on `$step.approved`.
 
+### Step environment variables
+
+Lobster step shells receive `process.env` from the gateway plus a small, fixed set of injected variables. **No other `LOBSTER_*` variables are populated.** The complete set is:
+
+| Variable                   | Where it appears | Description                                                                                                                        |
+| -------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `LOBSTER_ARG_<UPPER_NAME>` | Every step       | One per declared workflow `arg`; the upper-cased arg name carries the resolved value (default or `argsJson` override).             |
+| `LOBSTER_FINAL_STATUS`     | Final step only  | The terminal status of the workflow (`ok`, `needs_approval`, `cancelled`, or `error`). Useful for `on_finish`-style cleanup steps. |
+
+#### Patterns that do not work
+
+Extrapolating from `LOBSTER_ARG_*` to other namespaces is a common authoring trap. The following variables are **never** injected and will silently fall through to the shell default:
+
+```bash
+# These do NOT exist; they always return the fallback default.
+"${LOBSTER_STEP_collect_STDOUT:-}"
+"${LOBSTER_STEP_categorize_JSON_status:-pending}"
+"${LOBSTER_OUTPUT_<id>:-}"
+```
+
+A step that gates on `${LOBSTER_STEP_self_gate_JSON_tripped:-no}` will always see `no`, regardless of what the upstream step produced. That can make a workflow appear to work in the happy path while silently misrouting in failure scenarios.
+
+#### Supported ways to read prior step output
+
+Use one of these instead:
+
+- **`stdin:` piping**: `stdin: $collect.stdout` or `stdin: $collect.json` streams a prior step's output to the next step's stdin.
+- **Template substitution**: `$step.json.field` references a JSON field from a prior step inside `command:`, `condition:`, or `when:` expressions.
+- **`condition:` / `when:`**: gate on `$step.approved`, `$step.ok`, or `$step.json.<field>` instead of trying to read step state from the environment.
+
+If you need a value to survive into a shell-level variable for the current step only, parse it from stdin (`read VAR < <(jq -r .field)`) rather than reaching for an env var that does not exist.
+
 ## Install Lobster
 
 Bundled Lobster workflows run in-process; no separate `lobster` binary is required. The embedded runner ships with the Lobster plugin.
