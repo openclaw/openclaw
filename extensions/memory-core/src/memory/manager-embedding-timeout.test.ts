@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
+  runEmbeddingOperationWithTimeout,
 } from "./manager-embedding-ops.js";
 
 describe("memory embedding timeout resolution", () => {
@@ -34,6 +35,27 @@ describe("memory embedding timeout resolution", () => {
         configuredBatchTimeoutSeconds: 45,
       }),
     ).toBe(45_000);
+  });
+});
+
+describe("memory embedding timeout abort", () => {
+  it("aborts the provider operation when the timeout fires", async () => {
+    let signalSeen: AbortSignal | undefined;
+
+    await expect(
+      runEmbeddingOperationWithTimeout({
+        timeoutMs: 1,
+        message: "memory embeddings query timed out after 0s",
+        run: async (signal) => {
+          signalSeen = signal;
+          return await new Promise<number[]>((resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        },
+      }),
+    ).rejects.toThrow("memory embeddings query timed out after 0s");
+
+    expect(signalSeen?.aborted).toBe(true);
   });
 });
 
