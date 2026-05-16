@@ -1585,6 +1585,7 @@ function canRequesterAbortChatRun(
 function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   sessionKeys: Iterable<string>;
+  sessionIds?: Iterable<string | undefined>;
   requester: ChatAbortRequester;
 }) {
   const sessionKeys = new Set(
@@ -1592,10 +1593,15 @@ function resolveAuthorizedRunsForSessionKeys(params: {
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
+  const sessionIds = new Set(
+    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalText(sessionId)).filter(
+      (sessionId): sessionId is string => Boolean(sessionId),
+    ),
+  );
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (!sessionKeys.has(active.sessionKey)) {
+    if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
     matchedSessionRuns += 1;
@@ -1614,6 +1620,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   ops: ChatAbortOps;
   sessionKey: string;
   sessionKeyAliases?: string[];
+  sessionId?: string;
   persistSessionKey?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
@@ -1622,6 +1629,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
     sessionKeys: [params.sessionKey, ...(params.sessionKeyAliases ?? [])],
+    sessionIds: [params.sessionId],
     requester: params.requester,
   });
   if (authorizedRuns.length === 0) {
@@ -2062,6 +2070,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
         sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        sessionId: entry?.sessionId,
         persistSessionKey: sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
