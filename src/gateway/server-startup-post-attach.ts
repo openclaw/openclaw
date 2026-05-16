@@ -836,6 +836,11 @@ export async function startGatewayPostAttachRuntime(
   const sidecarsPromise = params.minimalTestGateway
     ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
+        const [{ resolveStateDir }, { applyStartupRestartThrottle, scheduleStartupThrottleClear }] =
+          await Promise.all([import("../config/paths.js"), import("./server-startup-throttle.js")]);
+        const stateDir = resolveStateDir(process.env);
+        await applyStartupRestartThrottle({ stateDir, log: params.log });
+
         params.log.info("starting channels and sidecars...");
         const loaderStatsBefore = getPluginModuleLoaderStats();
         const result = await measureStartup(params.startupTrace, "sidecars.total", () =>
@@ -871,6 +876,7 @@ export async function startGatewayPostAttachRuntime(
         params.onPluginServices?.(result.pluginServices);
         params.onPostReadySidecars?.(result.postReadySidecars);
         params.onSidecarsReady?.();
+        scheduleStartupThrottleClear({ stateDir });
         params.startupTrace?.mark("sidecars.ready");
         params.log.info("gateway ready");
         return { ...result, pluginRegistry };
