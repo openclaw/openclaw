@@ -15,7 +15,10 @@ import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
-import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
+import {
+  resolveAcpSpawnRuntimePolicyError,
+  resolveRuntimeCwdForAcpSpawn,
+} from "../../../agents/acp-spawn.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import {
@@ -523,6 +526,21 @@ export async function handleAcpSpawnAction(
     requesterSessionKey: params.sessionKey,
     explicitWorkspaceDir: spawn.cwd,
   });
+  let runtimeCwd: string | undefined;
+  try {
+    runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
+      resolvedCwd,
+      explicitCwd: spawn.cwd,
+    });
+  } catch (error) {
+    return stopWithText(
+      collectAcpErrorText({
+        error,
+        fallbackCode: "cwd_resolution_failed",
+        fallbackMessage: "Could not resolve ACP session workspace.",
+      }),
+    );
+  }
 
   let initializedBackend = "";
   let initializedMeta: SessionAcpMeta | undefined;
@@ -533,7 +551,7 @@ export async function handleAcpSpawnAction(
       sessionKey,
       agent: spawn.agentId,
       mode: spawn.mode,
-      cwd: resolvedCwd,
+      cwd: runtimeCwd,
     });
     initializedRuntime = {
       runtime: initialized.runtime,
