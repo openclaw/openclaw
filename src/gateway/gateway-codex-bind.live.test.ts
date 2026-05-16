@@ -30,7 +30,7 @@ const CODEX_BIND_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_BIND);
 const describeLive = LIVE && CODEX_BIND_LIVE ? describe : describe.skip;
 const CODEX_BIND_TIMEOUT_MS = 10 * 60_000;
 const CODEX_BIND_REQUEST_TIMEOUT_MS = 180_000;
-const DEFAULT_CODEX_BIND_MODEL = "gpt-5.4";
+const DEFAULT_CODEX_BIND_MODEL = "gpt-5.5";
 
 type CapturedOutboundReply = {
   accountId?: string;
