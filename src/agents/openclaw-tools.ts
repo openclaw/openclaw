@@ -427,7 +427,8 @@ export function createOpenClawTools(
     ...(includeSubagentSpawnTool
       ? [
           createSessionsSpawnTool({
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionKey: options?.agentSessionKey,
+            completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,

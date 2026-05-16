@@ -250,6 +250,8 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+    completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;
@@ -427,6 +429,20 @@ export function createSessionsSpawnTool(
                 mainKey,
               })
             : alias;
+          const completionOwnerInternalKey = opts?.completionOwnerKey
+            ? resolveInternalSessionKey({
+                key: opts.completionOwnerKey,
+                alias,
+                mainKey,
+              })
+            : undefined;
+          const completionOwnerDisplayKey = completionOwnerInternalKey
+            ? resolveDisplaySessionKey({
+                key: completionOwnerInternalKey,
+                alias,
+                mainKey,
+              })
+            : undefined;
           const requesterDisplayKey = resolveDisplaySessionKey({
             key: requesterInternalKey,
             alias,
@@ -445,9 +461,9 @@ export function createSessionsSpawnTool(
             registerSubagentRun({
               runId: childRunId,
               childSessionKey,
-              requesterSessionKey: requesterInternalKey,
+              requesterSessionKey: completionOwnerInternalKey ?? requesterInternalKey,
               requesterOrigin,
-              requesterDisplayKey,
+              requesterDisplayKey: completionOwnerDisplayKey ?? requesterDisplayKey,
               task,
               taskName,
               cleanup: trackedCleanup,
@@ -497,6 +513,7 @@ export function createSessionsSpawnTool(
         },
         {
           agentSessionKey: opts?.agentSessionKey,
+          completionOwnerKey: opts?.completionOwnerKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,

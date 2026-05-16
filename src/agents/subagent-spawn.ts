@@ -147,6 +147,8 @@ export type SpawnSubagentParams = {
 
 export type SpawnSubagentContext = {
   agentSessionKey?: string;
+  /** Separate key used only for completion routing, not sandbox policy. */
+  completionOwnerKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -774,6 +776,20 @@ export async function spawnSubagentDirect(
     alias,
     mainKey,
   });
+  const completionOwnerInternalKey = ctx.completionOwnerKey
+    ? resolveInternalSessionKey({
+        key: ctx.completionOwnerKey,
+        alias,
+        mainKey,
+      })
+    : undefined;
+  const completionOwnerDisplayKey = completionOwnerInternalKey
+    ? resolveDisplaySessionKey({
+        key: completionOwnerInternalKey,
+        alias,
+        mainKey,
+      })
+    : undefined;
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
@@ -980,7 +996,7 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
       label: label || undefined,
       mode: spawnMode,
-      requesterSessionKey: requesterInternalKey,
+      requesterSessionKey: completionOwnerInternalKey ?? requesterInternalKey,
       requester: {
         channel: childSessionOrigin?.channel,
         accountId: childSessionOrigin?.accountId,
@@ -1246,9 +1262,9 @@ export async function spawnSubagentDirect(
       runId: childRunId,
       childSessionKey,
       controllerSessionKey: requesterInternalKey,
-      requesterSessionKey: requesterInternalKey,
+      requesterSessionKey: completionOwnerInternalKey ?? requesterInternalKey,
       requesterOrigin,
-      requesterDisplayKey,
+      requesterDisplayKey: completionOwnerDisplayKey ?? requesterDisplayKey,
       task,
       taskName,
       cleanup,
