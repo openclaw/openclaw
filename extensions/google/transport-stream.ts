@@ -545,6 +545,29 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   ];
 }
 
+
+function formatReactToolsPrompt(tools: any[]): string {
+  const toolDesc = tools
+    .map((t) => JSON.stringify({ name: t.name, description: t.description, parameters: t.parameters }))
+    .join("\n");
+  return `\n\nYou have access to the following tools:\n${toolDesc}\n\nTo use a tool, you MUST output a JSON block matching this exact format:\nAction: {\n  "name": "tool_name",\n  "arguments": {"arg1": "value1"}\n}\n\nFirst write your Thought: then your Action:`;
+}
+
+function parseReactToolCall(text: string): { name: string; arguments: Record<string, unknown> } | null {
+  const actionIdx = text.lastIndexOf("Action:");
+  if (actionIdx === -1) return null;
+  const jsonStr = text.substring(actionIdx + 7).trim();
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (parsed && typeof parsed.name === "string" && typeof parsed.arguments === "object") {
+      return parsed as { name: string; arguments: Record<string, unknown> };
+    }
+  } catch {
+    // Ignore JSON parse errors
+  }
+  return null;
+}
+
 export function buildGoogleGenerativeAiParams(
   model: GoogleTransportModel,
   context: Context,
@@ -571,16 +594,23 @@ export function buildGoogleGenerativeAiParams(
   if (Object.keys(generationConfig).length > 0) {
     params.generationConfig = generationConfig;
   }
-  if (context.systemPrompt) {
+  let sysText = context.systemPrompt
+    ? sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt))
+    : "";
+
+  const isCli = model.api === ("google-gemini-cli" as any) || model.provider === "google-gemini-cli";
+
+  if (isCli && context.tools?.length) {
+    sysText += formatReactToolsPrompt(context.tools);
+  }
+
+  if (sysText) {
     params.systemInstruction = {
-      parts: [
-        {
-          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
-        },
-      ],
+      parts: [{ text: sysText }],
     };
   }
-  if (context.tools?.length) {
+
+  if (context.tools?.length && !isCli) {
     params.tools = convertGoogleTools(context.tools);
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {
@@ -1022,6 +1052,39 @@ function pushTextBlockEnd(
   const block = output.content[blockIndex];
   if (!block) {
     return;
+  }
+
+  if (block.type === "text" && (output.api === ("google-gemini-cli" as any) || output.provider === "google-gemini-cli")) {
+    const toolCall = parseReactToolCall(block.text);
+    if (toolCall) {
+      const toolCallId = `${toolCall.name}_${Date.now()}_${++toolCallCounter}`;
+      const newBlock: GoogleTransportContentBlock = {
+        type: "toolCall",
+        id: toolCallId,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      };
+      output.content.push(newBlock);
+      const newBlockIndex = output.content.length - 1;
+      stream.push({
+        type: "toolcall_start",
+        contentIndex: newBlockIndex,
+        partial: output as never,
+      });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: newBlockIndex,
+        delta: JSON.stringify(toolCall.arguments),
+        partial: output as never,
+      });
+      stream.push({
+        type: "toolcall_end",
+        contentIndex: newBlockIndex,
+        toolCall: newBlock,
+        partial: output as never,
+      });
+      block.text = "";
+    }
   }
   if (block.type === "thinking") {
     stream.push({
