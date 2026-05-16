@@ -444,6 +444,7 @@ describe("gateway auth browser hardening", () => {
             id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
             mode: GATEWAY_CLIENT_MODES.UI,
           },
+          device: null,
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("origin not allowed");
