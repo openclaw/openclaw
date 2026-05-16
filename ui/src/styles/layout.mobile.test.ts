@@ -1,42 +1,43 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 
 function readMobileCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/layout.mobile.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/layout.mobile.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/layout.mobile.css");
 }
 
 function readLayoutCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/layout.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/layout.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/layout.css");
 }
 
 function readGroupedChatCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/chat/grouped.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/chat/grouped.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/chat/grouped.css");
 }
 
 describe("chat header responsive mobile styles", () => {
   it("keeps the chat header and session controls from clipping on narrow widths", () => {
     const css = readMobileCss();
+    const layoutCss = readLayoutCss();
 
     expect(css).toContain("@media (max-width: 1320px)");
     expect(css).toContain(".content--chat .content-header");
+    expect(css).toContain("max-height: 44px;");
+    expect(layoutCss).toContain(".content--chat .content-header .chat-controls__session-notice");
+    expect(layoutCss).toContain("position: absolute;");
     expect(css).toContain(".chat-controls__session-row");
     expect(css).toContain(".chat-controls__thinking-select");
+  });
+
+  it("lays out mobile chat header action icons as an even full-width grid", () => {
+    const css = readMobileCss();
+
+    expect(css).toContain(
+      ".chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking",
+    );
+    expect(css).toContain("grid-template-columns: repeat(5, minmax(0, 1fr));");
+    expect(css).toContain(
+      ".chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {\n    width: 100%;",
+    );
+    expect(css).toContain("height: 44px;");
   });
 });
 

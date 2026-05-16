@@ -1,6 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -31,9 +34,11 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "active-memory",
   "bonjour",
   "browser",
+  "canvas",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
+  "diffs",
   "file-transfer",
   "google-meet",
   "llm-task",
@@ -50,6 +55,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
   "browser",
+  "canvas",
   "device-pair",
   "file-transfer",
   "memory-core",
@@ -113,22 +119,91 @@ function expectArtifactPresence(
   }
 }
 
+let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined;
+let repoBundledPluginManifestsCache:
+  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
+  | undefined;
+
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
-  return listBundledPluginMetadata({
+  repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
     rootDir: repoRoot,
     includeSyntheticChannelConfigs: false,
   });
+  return repoBundledPluginMetadataCache;
 }
 
-function listRepoBundledPluginManifests() {
+function listRepoBundledPluginManifestsUncached() {
+  const bundledPluginsDir = path.join(repoRoot, "extensions");
+  return listRepoBundledPluginManifestDirs().flatMap((dirName) => {
+    const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
+    return result.ok ? [{ dirName, manifest: result.manifest }] : [];
+  });
+}
+
+function listRepoBundledPluginManifestDirs(): string[] {
+  const externalDirs = listExternalRepoBundledPluginManifestDirs();
+  if (externalDirs) {
+    return externalDirs;
+  }
   const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
-      return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
-    });
+    .map((entry) => entry.name)
+    .toSorted();
+}
+
+function listExternalRepoBundledPluginManifestDirs(): string[] | null {
+  const manifestFiles =
+    listGitRepoBundledPluginManifestFiles() ?? listFindRepoBundledPluginManifestFiles();
+  if (!manifestFiles) {
+    return null;
+  }
+  return manifestFiles
+    .flatMap((file) => {
+      const match = /^extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(file);
+      return match?.[1] ? [match[1]] : [];
+    })
+    .toSorted();
+}
+
+function listGitRepoBundledPluginManifestFiles(): string[] | null {
+  return listGitTrackedFiles({ repoRoot, pathspecs: "extensions/*/openclaw.plugin.json" });
+}
+
+function listFindRepoBundledPluginManifestFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      path.join(repoRoot, "extensions"),
+      "-maxdepth",
+      "2",
+      "-type",
+      "f",
+      "-name",
+      "openclaw.plugin.json",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((file) => toRepoRelativePath(repoRoot, file))
+    .toSorted();
+}
+
+function listRepoBundledPluginManifests() {
+  repoBundledPluginManifestsCache ??= listRepoBundledPluginManifestsUncached();
+  return repoBundledPluginManifestsCache;
 }
 
 function createRepoBundledManifestRegistry(): PluginManifestRegistry {
@@ -247,6 +322,15 @@ function createInstalledPluginIndexForManifests(
 }
 
 describe("bundled plugin metadata", () => {
+  it("lists bundled plugin manifests without scanning extension directories in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const manifests = listRepoBundledPluginManifestsUncached();
+
+      expect(manifests.length).toBeGreaterThan(0);
+      expect(manifests.every((entry) => entry.dirName.length > 0)).toBe(true);
+    });
+  });
+
   it(
     "matches the runtime metadata snapshot",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
@@ -301,17 +385,23 @@ describe("bundled plugin metadata", () => {
       contains: ["runtime-api.js"],
     });
     expect(discord?.manifest.id).toBe("discord");
-    expect(collectRepoBundledChannelConfigsForTest("discord")?.discord).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({ type: "object" }),
-      }),
-    );
+    const discordChannelConfig = collectRepoBundledChannelConfigsForTest("discord")?.discord as
+      | { schema?: { type?: unknown } }
+      | undefined;
+    expect(discordChannelConfig?.schema?.type).toBe("object");
   });
 
   it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
+    });
+  });
+
+  it("keeps iMessage message-tool discovery on a narrow public surface", () => {
+    const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
+    expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
+      contains: ["message-tool-api.js"],
     });
   });
 
@@ -347,11 +437,10 @@ describe("bundled plugin metadata", () => {
   });
 
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
-    expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({ type: "object" }),
-      }),
-    );
+    const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
+      | { schema?: { type?: unknown } }
+      | undefined;
+    expect(tlonChannelConfig?.schema?.type).toBe("object");
   });
 
   it("keeps bundled persisted-auth metadata on channel package manifests", () => {
@@ -434,7 +523,12 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+      const { configSchema } = entry.manifest;
+      if (configSchema === null) {
+        throw new Error(`expected ${entry.manifest.id} config schema`);
+      }
+      expect(typeof configSchema).toBe("object");
+      expect(Array.isArray(configSchema)).toBe(false);
     }
   });
 
@@ -458,8 +552,8 @@ describe("bundled plugin metadata", () => {
       ({ manifest }) => manifest.id === "voice-call",
     );
 
-    expect(entry?.manifest.commandAliases).toContainEqual({ name: "voicecall" });
-    expect(entry?.manifest.activation?.onCommands).toContain("voicecall");
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
@@ -469,7 +563,7 @@ describe("bundled plugin metadata", () => {
     expect(
       resolveGatewayStartupPluginIdsFromRegistry({
         config: {},
-        env: process.env,
+        env: {},
         index,
         manifestRegistry,
         platform: "linux",
@@ -928,7 +1022,7 @@ describe("bundled plugin metadata", () => {
     const channelConfigs = entries[0]?.manifest.channelConfigs as
       | Record<string, unknown>
       | undefined;
-    expect(channelConfigs?.alpha).toMatchObject({
+    expect(channelConfigs?.alpha).toEqual({
       schema: {
         type: "object",
         properties: {

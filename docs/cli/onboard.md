@@ -7,7 +7,7 @@ title: "Onboard"
 
 # `openclaw onboard`
 
-Interactive onboarding for local or remote Gateway setup.
+Full guided onboarding for local or remote Gateway setup. Use this when you want OpenClaw to walk through model auth, workspace, gateway, channels, skills, and health in one flow.
 
 ## Related guides
 
@@ -51,6 +51,28 @@ For plaintext private-network `ws://` targets (trusted networks only), set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 There is no `openclaw.json` equivalent for this client-side transport
 break-glass.
+
+## Locale
+
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve
+order is:
+
+1. `OPENCLAW_LOCALE`
+2. `LC_ALL`
+3. `LC_MESSAGES`
+4. `LANG`
+5. English fallback
+
+Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use
+underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command
+names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
+remain literal.
+
+Example:
+
+```bash
+OPENCLAW_LOCALE=zh-CN openclaw onboard
+```
 
 Non-interactive custom provider:
 
@@ -212,9 +234,12 @@ openclaw onboard --non-interactive \
 ## Common follow-up commands
 
 ```bash
+openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
+
+Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

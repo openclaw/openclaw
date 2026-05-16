@@ -67,6 +67,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("format"),
   Type.Literal("rate_limit"),
   Type.Literal("billing"),
+  Type.Literal("server_error"),
   Type.Literal("timeout"),
   Type.Literal("model_not_found"),
   Type.Literal("empty_response"),
@@ -74,6 +75,39 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("unclassified"),
   Type.Literal("unknown"),
 ]);
+const CronRunDiagnosticSeveritySchema = Type.Union([
+  Type.Literal("info"),
+  Type.Literal("warn"),
+  Type.Literal("error"),
+]);
+const CronRunDiagnosticSourceSchema = Type.Union([
+  Type.Literal("cron-preflight"),
+  Type.Literal("cron-setup"),
+  Type.Literal("model-preflight"),
+  Type.Literal("agent-run"),
+  Type.Literal("tool"),
+  Type.Literal("exec"),
+  Type.Literal("delivery"),
+]);
+const CronRunDiagnosticSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    source: CronRunDiagnosticSourceSchema,
+    severity: CronRunDiagnosticSeveritySchema,
+    message: Type.String(),
+    toolName: Type.Optional(Type.String()),
+    exitCode: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+const CronRunDiagnosticsSchema = Type.Object(
+  {
+    summary: Type.Optional(Type.String()),
+    entries: Type.Array(CronRunDiagnosticSchema),
+  },
+  { additionalProperties: false },
+);
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -237,7 +271,41 @@ export const CronDeliveryPatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const CronFailureNotificationDeliverySchema = Type.Object(
+  {
+    delivered: Type.Optional(Type.Boolean()),
+    status: CronDeliveryStatusSchema,
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const CronJobStateSchema = Type.Object(
+  {
+    nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunStatus: Type.Optional(CronRunStatusSchema),
+    lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
+    lastError: Type.Optional(Type.String()),
+    lastDiagnostics: Type.Optional(CronRunDiagnosticsSchema),
+    lastDiagnosticSummary: Type.Optional(Type.String()),
+    lastErrorReason: Type.Optional(CronFailoverReasonSchema),
+    lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastDelivered: Type.Optional(Type.Boolean()),
+    lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastDeliveryError: Type.Optional(Type.String()),
+    lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
+    lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
+    lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+const CronJobStatePatchSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -252,6 +320,9 @@ export const CronJobStateSchema = Type.Object(
     lastDelivered: Type.Optional(Type.Boolean()),
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
+    lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
+    lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
@@ -288,11 +359,14 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const CronGetParamsSchema = cronIdOrJobIdParams({});
 
 export const CronAddParamsSchema = Type.Object(
   {
@@ -318,7 +392,7 @@ export const CronJobPatchSchema = Type.Object(
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
-    state: Type.Optional(Type.Partial(CronJobStateSchema)),
+    state: Type.Optional(CronJobStatePatchSchema),
   },
   { additionalProperties: false },
 );
@@ -338,6 +412,7 @@ export const CronRunsParamsSchema = Type.Object(
     scope: Type.Optional(Type.Union([Type.Literal("job"), Type.Literal("all")])),
     id: Type.Optional(CronRunLogJobIdSchema),
     jobId: Type.Optional(CronRunLogJobIdSchema),
+    runId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
@@ -360,9 +435,11 @@ export const CronRunLogEntrySchema = Type.Object(
     status: Type.Optional(CronRunStatusSchema),
     error: Type.Optional(Type.String()),
     summary: Type.Optional(Type.String()),
+    diagnostics: Type.Optional(CronRunDiagnosticsSchema),
     delivered: Type.Optional(Type.Boolean()),
     deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     deliveryError: Type.Optional(Type.String()),
+    failureNotificationDelivery: Type.Optional(CronFailureNotificationDeliverySchema),
     sessionId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),

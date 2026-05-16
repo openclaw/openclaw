@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,26 +18,63 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("resolveDiscordAccount allowFrom precedence", () => {
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const resolved = resolveDiscordAccount({
-      cfg: {
-        channels: {
-          discord: {
-            defaultAccount: "work",
-            accounts: {
-              work: { token: "token-work", name: "Work" },
+const defaultAccountOmissionCases = [
+  {
+    name: "resolveDiscordAccount",
+    assert: () => {
+      const resolved = resolveDiscordAccount({
+        cfg: {
+          channels: {
+            discord: {
+              defaultAccount: "work",
+              accounts: {
+                work: { token: "token-work", name: "Work" },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-    expect(resolved.token).toBe("token-work");
-  });
+      expect(resolved.accountId).toBe("work");
+      expect(resolved.name).toBe("Work");
+      expect(resolved.token).toBe("token-work");
+    },
+  },
+  {
+    name: "createDiscordActionGate",
+    assert: () => {
+      const gate = createDiscordActionGate({
+        cfg: {
+          channels: {
+            discord: {
+              actions: { reactions: false },
+              defaultAccount: "work",
+              accounts: {
+                work: {
+                  token: "token-work",
+                  actions: { reactions: true },
+                },
+              },
+            },
+          },
+        },
+      });
 
+      expect(gate("reactions")).toBe(true);
+    },
+  },
+];
+
+describe("Discord defaultAccount omission contract", () => {
+  it.each(defaultAccountOmissionCases)(
+    "$name uses configured defaultAccount when accountId is omitted",
+    ({ assert }) => {
+      assert();
+    },
+  );
+});
+
+describe("resolveDiscordAccount allowFrom precedence", () => {
   it("prefers accounts.default.allowFrom over top-level for default account", () => {
     const resolved = resolveDiscordAccount({
       cfg: {
@@ -93,26 +130,36 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
   });
 });
 
-describe("createDiscordActionGate", () => {
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const gate = createDiscordActionGate({
+describe("resolveDiscordAccount botLoopProtection precedence", () => {
+  it("merges account overrides over Discord channel defaults field-by-field", () => {
+    const resolved = resolveDiscordAccount({
       cfg: {
         channels: {
           discord: {
-            actions: { reactions: false },
-            defaultAccount: "work",
+            botLoopProtection: {
+              maxEventsPerWindow: 4,
+              windowSeconds: 60,
+              cooldownSeconds: 30,
+            },
             accounts: {
               work: {
                 token: "token-work",
-                actions: { reactions: true },
+                botLoopProtection: {
+                  windowSeconds: 10,
+                },
               },
             },
           },
         },
       },
+      accountId: "work",
     });
 
-    expect(gate("reactions")).toBe(true);
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 4,
+      windowSeconds: 10,
+      cooldownSeconds: 30,
+    });
   });
 });
 

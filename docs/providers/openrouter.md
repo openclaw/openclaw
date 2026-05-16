@@ -58,6 +58,7 @@ Bundled fallback examples:
 | --------------------------------- | ---------------------------- |
 | `openrouter/auto`                 | OpenRouter automatic routing |
 | `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
+| `openrouter/moonshotai/kimi-k2.5` | Kimi K2.5 via MoonshotAI     |
 
 ## Image generation
 
@@ -131,6 +132,29 @@ OpenRouter can also be used as a TTS provider through its OpenAI-compatible
 
 If `messages.tts.providers.openrouter.apiKey` is omitted, TTS reuses
 `models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
+
+## Speech-to-text (inbound audio)
+
+OpenRouter can transcribe inbound voice/audio attachments through the shared
+`tools.media.audio` path using its STT endpoint (`/audio/transcriptions`).
+This applies to any channel plugin that forwards inbound voice/audio into
+media understanding preflight.
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openrouter", model: "openai/whisper-large-v3-turbo" }],
+      },
+    },
+  },
+}
+```
+
+OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
+`input_audio` (OpenRouter STT contract), not as multipart OpenAI form uploads.
 
 ## Authentication and headers
 
@@ -211,7 +235,9 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     On verified OpenRouter routes, `openrouter/deepseek/deepseek-v4-flash` and
     `openrouter/deepseek/deepseek-v4-pro` fill missing `reasoning_content` on
     replayed assistant turns so thinking/tool conversations keep DeepSeek V4's
-    required follow-up shape.
+    required follow-up shape. OpenClaw sends OpenRouter-supported
+    `reasoning_effort` values for these routes; `xhigh` is the highest advertised
+    level, and stale `max` overrides are mapped to `xhigh`.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">

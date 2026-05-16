@@ -10,9 +10,17 @@ import {
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import {
+  buildPersistedAuthProfileSecretsStore,
+  loadPersistedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import {
+  commitConfigWithPendingPluginInstalls,
+  transformConfigWithPendingPluginInstalls,
+} from "../cli/plugins-install-record-commit.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -48,13 +56,22 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-async function fileExists(pathname: string): Promise<boolean> {
-  try {
-    await fs.stat(pathname);
-    return true;
-  } catch {
-    return false;
+type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
+
+type AgentsAddMutationResult = {
+  agentDir: string;
+  bindingResult: AgentBindingResult;
+};
+
+class AgentsAddMutationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentsAddMutationError";
   }
+}
+
+function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
+  return { config, added: [], updated: [], skipped: [], conflicts: [] };
 }
 
 async function copyPortableAuthProfiles(params: {
@@ -70,7 +87,12 @@ async function copyPortableAuthProfiles(params: {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
   await fs.mkdir(path.dirname(params.destAuthPath), { recursive: true });
-  saveJsonFile(params.destAuthPath, portable.store);
+  saveJsonFile(
+    params.destAuthPath,
+    buildPersistedAuthProfileSecretsStore(portable.store, undefined, {
+      agentDir: path.dirname(params.destAuthPath),
+    }),
+  );
   return {
     copied: portable.copiedProfileIds.length,
     skipped: portable.skippedProfileIds.length,
@@ -105,7 +127,7 @@ export async function agentsAddCommand(
 
   if (nonInteractive && !workspaceFlag) {
     runtime.error(
-      "Non-interactive mode requires --workspace. Re-run without flags to use the wizard.",
+      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
     );
     runtime.exit(1);
     return;
@@ -113,20 +135,24 @@ export async function agentsAddCommand(
 
   if (nonInteractive) {
     if (!nameInput) {
-      runtime.error("Agent name is required in non-interactive mode.");
+      runtime.error(
+        `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
+      );
       runtime.exit(1);
       return;
     }
     if (!workspaceFlag) {
       runtime.error(
-        "Non-interactive mode requires --workspace. Re-run without flags to use the wizard.",
+        `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
       runtime.exit(1);
       return;
     }
     const agentId = normalizeAgentId(nameInput);
     if (agentId === DEFAULT_AGENT_ID) {
-      runtime.error(`"${DEFAULT_AGENT_ID}" is reserved. Choose another name.`);
+      runtime.error(
+        `"${DEFAULT_AGENT_ID}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect the default agent.`,
+      );
       runtime.exit(1);
       return;
     }
@@ -134,50 +160,72 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
     if (findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0) {
-      runtime.error(`Agent "${agentId}" already exists.`);
+      runtime.error(
+        `Agent "${agentId}" already exists. Run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+      );
       runtime.exit(1);
       return;
     }
 
     const workspaceDir = resolveUserPath(workspaceFlag);
-    const agentDir = opts.agentDir?.trim()
+    const explicitAgentDir = opts.agentDir?.trim()
       ? resolveUserPath(opts.agentDir.trim())
-      : resolveAgentDir(cfg, agentId);
+      : undefined;
     const model = opts.model?.trim();
-    const nextConfig = applyAgentConfig(cfg, {
-      agentId,
-      name: nameInput,
-      workspace: workspaceDir,
-      agentDir,
-      ...(model ? { model } : {}),
-    });
 
-    const bindingParse = parseBindingSpecs({
-      agentId,
-      specs: opts.bind,
-      config: nextConfig,
-    });
-    if (bindingParse.errors.length > 0) {
-      runtime.error(bindingParse.errors.join("\n"));
-      runtime.exit(1);
-      return;
+    let committed;
+    try {
+      committed = await transformConfigWithPendingPluginInstalls<AgentsAddMutationResult>({
+        transform: (latestConfig) => {
+          if (findAgentEntryIndex(listAgentEntries(latestConfig), agentId) >= 0) {
+            throw new AgentsAddMutationError(`Agent "${agentId}" already exists.`);
+          }
+          const agentDir = explicitAgentDir ?? resolveAgentDir(latestConfig, agentId);
+          const nextConfig = applyAgentConfig(latestConfig, {
+            agentId,
+            name: nameInput,
+            workspace: workspaceDir,
+            agentDir,
+            ...(model ? { model } : {}),
+          });
+          const bindingParse = parseBindingSpecs({
+            agentId,
+            specs: opts.bind,
+            config: nextConfig,
+          });
+          if (bindingParse.errors.length > 0) {
+            throw new AgentsAddMutationError(bindingParse.errors.join("\n"));
+          }
+          const bindingResult =
+            bindingParse.bindings.length > 0
+              ? applyAgentBindings(nextConfig, bindingParse.bindings)
+              : emptyBindingResult(nextConfig);
+          return {
+            nextConfig: bindingResult.config,
+            result: { agentDir, bindingResult },
+          };
+        },
+      });
+    } catch (err) {
+      if (err instanceof AgentsAddMutationError) {
+        runtime.error(err.message);
+        runtime.exit(1);
+        return;
+      }
+      throw err;
     }
-    const bindingResult =
-      bindingParse.bindings.length > 0
-        ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
-
-    await commitConfigWithPendingPluginInstalls({
-      nextConfig: bindingResult.config,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
+    const mutationResult = committed.result;
+    if (!mutationResult) {
+      throw new Error("Agent config mutation did not return a result.");
+    }
+    const { agentDir, bindingResult } = mutationResult;
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
-      skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
-      skipOptionalBootstrapFiles: bindingResult.config.agents?.defaults?.skipOptionalBootstrapFiles,
+      skipBootstrap: Boolean(committed.nextConfig.agents?.defaults?.skipBootstrap),
+      skipOptionalBootstrapFiles: committed.nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       agentId,
     });
 
@@ -291,8 +339,8 @@ export async function agentsAddCommand(
         normalizeLowercaseStringOrEmpty(path.resolve(mainAuthPath));
       if (
         !sameAuthPath &&
-        (await fileExists(sourceAuthPath)) &&
-        !(await fileExists(destAuthPath))
+        (await pathExists(sourceAuthPath)) &&
+        !(await pathExists(destAuthPath))
       ) {
         const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
         const portable = sourceStore
@@ -305,7 +353,10 @@ export async function agentsAddCommand(
           });
           if (shouldCopy) {
             await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
-            saveJsonFile(destAuthPath, portable.store);
+            saveJsonFile(
+              destAuthPath,
+              buildPersistedAuthProfileSecretsStore(portable.store, undefined, { agentDir }),
+            );
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({

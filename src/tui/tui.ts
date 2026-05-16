@@ -11,9 +11,10 @@ import {
   ProcessTerminal,
   Text,
   TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -42,6 +43,7 @@ import {
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -251,6 +253,89 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
+type TerminalLossEmitter = {
+  on(event: "close" | "end", listener: () => void): unknown;
+  off(event: "close" | "end", listener: () => void): unknown;
+};
+
+export function isTuiTerminalLossError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { code?: unknown; message?: unknown; syscall?: unknown };
+  const code = typeof err.code === "string" ? err.code : "";
+  const message = typeof err.message === "string" ? err.message : "";
+  const syscall = typeof err.syscall === "string" ? err.syscall : "";
+  if (code === "EIO" || code === "EPIPE") {
+    return true;
+  }
+  return (
+    /\b(EIO|EPIPE)\b/i.test(message) && /\b(read|write|TTY|stdin|stdout)\b/i.test(message + syscall)
+  );
+}
+
+export function installTuiTerminalLossExitHandler(
+  requestExit: () => void,
+  targets: { stdin?: TerminalLossEmitter; stdout?: TerminalLossEmitter } = {
+    stdin: process.stdin,
+    stdout: process.stdout,
+  },
+): () => void {
+  let requested = false;
+  const requestOnce = (): void => {
+    if (requested) {
+      return;
+    }
+    requested = true;
+    requestExit();
+  };
+  const removeUncaughtExceptionHandler = registerUncaughtExceptionHandler((error) => {
+    if (!isTuiTerminalLossError(error)) {
+      return false;
+    }
+    requestOnce();
+    return true;
+  });
+  const onClose = (): void => requestOnce();
+  targets.stdin?.on("end", onClose);
+  targets.stdin?.on("close", onClose);
+  targets.stdout?.on("close", onClose);
+  return () => {
+    removeUncaughtExceptionHandler();
+    targets.stdin?.off("end", onClose);
+    targets.stdin?.off("close", onClose);
+    targets.stdout?.off("close", onClose);
+  };
+}
+
+export function createDeferredTuiFinish(): {
+  requestFinish: () => void;
+  setFinish: (finish: () => void) => void;
+  clearFinish: () => void;
+} {
+  let finishTui: (() => void) | null = null;
+  let finishRequested = false;
+  return {
+    requestFinish: () => {
+      const finish = finishTui;
+      if (finish) {
+        finish();
+        return;
+      }
+      finishRequested = true;
+    },
+    setFinish: (finish) => {
+      finishTui = finish;
+      if (finishRequested) {
+        finish();
+      }
+    },
+    clearFinish: () => {
+      finishTui = null;
+    },
+  };
+}
+
 type DrainableTui = {
   stop: () => void;
   terminal?: {
@@ -258,10 +343,14 @@ type DrainableTui = {
   };
 };
 
+const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
+const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
+const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
+
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
     try {
-      await tui.terminal.drainInput();
+      await tui.terminal.drainInput(TUI_SHUTDOWN_DRAIN_MAX_MS, TUI_SHUTDOWN_DRAIN_IDLE_MS);
     } catch {
       // Best-effort only. A failed drain should not skip terminal shutdown.
     }
@@ -270,6 +359,7 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
+type TuiCtrlCAction = CtrlCAction | "force-exit";
 
 export function resolveCtrlCAction(params: {
   hasInput: boolean;
@@ -296,6 +386,23 @@ export function resolveCtrlCAction(params: {
   };
 }
 
+export function resolveTuiCtrlCAction(params: {
+  hasInput: boolean;
+  now: number;
+  lastCtrlCAt: number;
+  exitRequested?: boolean;
+  wasDisconnected?: boolean;
+  exitWindowMs?: number;
+}): { action: TuiCtrlCAction; nextLastCtrlCAt: number } {
+  if (params.exitRequested === true) {
+    return { action: "force-exit", nextLastCtrlCAt: params.lastCtrlCAt };
+  }
+  if (params.wasDisconnected === true) {
+    return { action: "exit", nextLastCtrlCAt: params.lastCtrlCAt };
+  }
+  return resolveCtrlCAction(params);
+}
+
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig();
@@ -317,6 +424,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
   let pendingOptimisticUserMessage = false;
+  let pendingChatRunId: string | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -394,6 +502,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set pendingOptimisticUserMessage(value) {
       pendingOptimisticUserMessage = value;
+    },
+    get pendingChatRunId() {
+      return pendingChatRunId;
+    },
+    set pendingChatRunId(value) {
+      pendingChatRunId = value ?? null;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -628,6 +742,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     const sessions = await client
       .listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: rememberedKey,
         includeGlobal: false,
         includeUnknown: false,
         agentId: currentAgentId,
@@ -991,9 +1107,18 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     clearLocalBtwRunIds,
   });
 
-  let finishTui: (() => void) | null = null;
+  const deferredFinish = createDeferredTuiFinish();
+  const forceExit = () => {
+    try {
+      process.stderr.write("openclaw tui forcing exit\n");
+    } catch {
+      // Best effort only; force exit must not depend on stderr.
+    }
+    process.exit(130);
+  };
   const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
+      forceExit();
       return;
     }
     exitRequested = true;
@@ -1001,10 +1126,23 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
+    const hardExitTimer = setTimeout(forceExit, TUI_SHUTDOWN_HARD_EXIT_MS);
+    hardExitTimer.unref?.();
     client.stop();
-    void drainAndStopTuiSafely(tui).then(() => {
-      finishTui?.();
-    });
+    void drainAndStopTuiSafely(tui)
+      .catch((err) => {
+        if (!isTuiTerminalLossError(err)) {
+          try {
+            process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
+          } catch {
+            // Best effort only; exit must still complete.
+          }
+        }
+      })
+      .finally(() => {
+        clearTimeout(hardExitTimer);
+        deferredFinish.requestFinish();
+      });
   };
   const exitAwareClient = client as TuiBackend & {
     setRequestExitHandler?: (handler: () => void) => void;
@@ -1065,11 +1203,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
   const handleCtrlC = () => {
     const now = Date.now();
-    const decision = resolveCtrlCAction({
+    const decision = resolveTuiCtrlCAction({
       hasInput: editor.getText().trim().length > 0,
       now,
       lastCtrlCAt,
+      exitRequested,
+      wasDisconnected,
     });
+    if (decision.action === "force-exit") {
+      forceExit();
+      return;
+    }
     lastCtrlCAt = decision.nextLastCtrlCAt;
     if (decision.action === "clear") {
       editor.setText("");
@@ -1162,7 +1306,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       }
       updateFooter();
       tui.requestRender();
-    })();
+    })().catch((err) => {
+      chatLog.addSystem(`startup failed: ${String(err)}`);
+      setConnectionStatus("startup failed", 5000);
+      tui.requestRender();
+    });
   };
 
   client.onDisconnected = (reason) => {
@@ -1203,6 +1351,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
+  let cleanupTerminalLossHandler: (() => void) | null = installTuiTerminalLossExitHandler(() =>
+    requestExit(),
+  );
   tui.start();
   client.start();
   await new Promise<void>((resolve) => {
@@ -1210,14 +1361,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }
+      cleanupTerminalLossHandler?.();
+      cleanupTerminalLossHandler = null;
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
       process.removeListener("exit", finish);
-      finishTui = null;
+      deferredFinish.clearFinish();
       resolve();
     };
-    finishTui = finish;
     process.once("exit", finish);
+    deferredFinish.setFinish(finish);
   });
   return exitResult;
 }

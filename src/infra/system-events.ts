@@ -19,15 +19,20 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  forceSenderIsOwnerFalse?: boolean;
+  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
   trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
 
 type SessionQueue = {
-  queue: SystemEvent[];
-  lastText: string | null;
+  queue: QueuedSystemEvent[];
   lastContextKey: string | null;
+};
+
+type QueuedSystemEvent = Omit<SystemEvent, "trusted"> & {
+  forceSenderIsOwnerFalse: boolean;
 };
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
@@ -38,6 +43,8 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  forceSenderIsOwnerFalse?: boolean;
+  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
   trusted?: boolean;
 };
 
@@ -65,17 +72,17 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
   }
   const created: SessionQueue = {
     queue: [],
-    lastText: null,
     lastContextKey: null,
   };
   queues.set(key, created);
   return created;
 }
 
-function cloneSystemEvent(event: SystemEvent): SystemEvent {
+function cloneSystemEvent(event: QueuedSystemEvent): SystemEvent {
   return {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
+    trusted: !event.forceSenderIsOwnerFalse,
   };
 }
 
@@ -88,6 +95,41 @@ export function isSystemEventContextChanged(
   return normalized !== (existing?.lastContextKey ?? null);
 }
 
+function findDuplicateInQueue(
+  queue: readonly QueuedSystemEvent[],
+  text: string,
+  contextKey: string | null,
+  deliveryContext: DeliveryContext | undefined,
+  forceSenderIsOwnerFalse: boolean,
+): SystemEvent | undefined {
+  if (contextKey === null) {
+    const last = queue[queue.length - 1];
+    return last &&
+      isDuplicateSystemEvent(last, { text, contextKey, deliveryContext, forceSenderIsOwnerFalse })
+      ? last
+      : undefined;
+  }
+  for (const event of queue) {
+    if (
+      isDuplicateSystemEvent(event, {
+        text,
+        contextKey,
+        deliveryContext,
+        forceSenderIsOwnerFalse,
+      })
+    ) {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string | null): void {
+  if (incomingContextKey !== null) {
+    entry.lastContextKey = incomingContextKey;
+  }
+}
+
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const key = requireSessionKey(options?.sessionKey);
   const entry = getOrCreateSessionQueue(key);
@@ -97,17 +139,28 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
-  entry.lastContextKey = normalizedContextKey;
-  if (entry.lastText === cleaned) {
+  const forceSenderIsOwnerFalse =
+    options.forceSenderIsOwnerFalse ??
+    // Preserve the old plugin SDK contract without carrying trust labels into prompts.
+    options.trusted === false;
+  if (
+    findDuplicateInQueue(
+      entry.queue,
+      cleaned,
+      normalizedContextKey,
+      normalizedDeliveryContext,
+      forceSenderIsOwnerFalse,
+    )
+  ) {
     return false;
-  } // skip consecutive duplicates
-  entry.lastText = cleaned;
+  }
+  applyContextKeyPolicy(entry, normalizedContextKey);
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    trusted: options.trusted !== false,
+    forceSenderIsOwnerFalse,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -123,7 +176,6 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   }
   const out = entry.queue.map(cloneSystemEvent);
   entry.queue.length = 0;
-  entry.lastText = null;
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
@@ -139,26 +191,51 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
+function resolveEventOwnerDowngrade(
+  event: Pick<SystemEvent, "forceSenderIsOwnerFalse" | "trusted">,
+): boolean {
+  return event.forceSenderIsOwnerFalse ?? event.trusted === false;
+}
+
+function isDuplicateSystemEvent(
+  existing: QueuedSystemEvent,
+  incoming: Pick<
+    SystemEvent,
+    "text" | "contextKey" | "deliveryContext" | "forceSenderIsOwnerFalse" | "trusted"
+  >,
+): boolean {
+  return (
+    existing.text === incoming.text &&
+    (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
+    existing.forceSenderIsOwnerFalse === resolveEventOwnerDowngrade(incoming) &&
+    areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
+  );
+}
+
+function areSystemEventsEqual(left: QueuedSystemEvent, right: SystemEvent): boolean {
   return (
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    (left.trusted ?? true) === (right.trusted ?? true) &&
+    left.forceSenderIsOwnerFalse === resolveEventOwnerDowngrade(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }
 
 function resetQueueState(key: string, entry: SessionQueue) {
   if (entry.queue.length === 0) {
-    entry.lastText = null;
     entry.lastContextKey = null;
     queues.delete(key);
     return;
   }
-  const newest = entry.queue[entry.queue.length - 1];
-  entry.lastText = newest.text;
-  entry.lastContextKey = newest.contextKey ?? null;
+  for (let index = entry.queue.length - 1; index >= 0; index -= 1) {
+    const contextKey = entry.queue[index].contextKey ?? null;
+    if (contextKey !== null) {
+      entry.lastContextKey = contextKey;
+      return;
+    }
+  }
+  entry.lastContextKey = null;
 }
 
 export function consumeSystemEventEntries(

@@ -1,4 +1,4 @@
-import { completeSimple, getModel, streamSimple } from "@mariozechner/pi-ai";
+import { completeSimple, getModel, streamSimple } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,12 +6,16 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
-import { isBillingErrorMessage } from "./pi-embedded-helpers/failover-matches.js";
+import {
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+} from "./pi-embedded-helpers/failover-matches.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
+const XAI_COMPLETE_LIVE_TIMEOUT_MS = 90_000;
 const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
@@ -31,6 +35,13 @@ function resolveLiveXaiModel() {
   return getModel("xai", "grok-4.3" as never) ?? getModel("xai", "grok-4");
 }
 
+function requireLiveValue<T>(value: T | null | undefined, label: string): T {
+  if (value == null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<void> {
   try {
     await run();
@@ -38,6 +49,10 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
     const message = error instanceof Error ? error.message : String(error);
     if (isBillingErrorMessage(message)) {
       console.warn(`[xai:live] skip ${label}: billing drift: ${message}`);
+      return;
+    }
+    if (isOverloadedErrorMessage(message)) {
+      console.warn(`[xai:live] skip ${label}: temporary provider capacity: ${message}`);
       return;
     }
     if (message.includes("web_search is disabled or no provider is available")) {
@@ -57,35 +72,35 @@ async function collectDoneMessage(
       doneMessage = event.message;
     }
   }
-  expect(doneMessage).toBeDefined();
-  return doneMessage!;
+  return requireLiveValue(doneMessage, "done message");
 }
 
 describeLive("xai live", () => {
-  it("returns assistant text for Grok 4.3", async () => {
-    await runXaiLiveCase("complete", async () => {
-      const model = resolveLiveXaiModel();
-      expect(model).toBeDefined();
-      const res = await completeSimple(
-        model,
-        {
-          messages: createSingleUserPromptMessage(),
-        },
-        {
-          apiKey: XAI_KEY,
-          maxTokens: 64,
-          reasoning: "medium",
-        },
-      );
+  it(
+    "returns assistant text for Grok 4.3",
+    async () => {
+      await runXaiLiveCase("complete", async () => {
+        const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
+        const res = await completeSimple(
+          model,
+          {
+            messages: createSingleUserPromptMessage(),
+          },
+          {
+            apiKey: XAI_KEY,
+            maxTokens: 64,
+          },
+        );
 
-      expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
-    });
-  }, 30_000);
+        expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+      });
+    },
+    XAI_COMPLETE_LIVE_TIMEOUT_MS,
+  );
 
   it("sends wrapped xAI tool payloads live", async () => {
     await runXaiLiveCase("tool-call", async () => {
-      const model = resolveLiveXaiModel();
-      expect(model).toBeDefined();
+      const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
       const agent = { streamFn: streamSimple };
       applyExtraParamsToAgent(agent, undefined, "xai", model.id);
 
@@ -107,7 +122,6 @@ describeLive("xai live", () => {
         {
           apiKey: XAI_KEY,
           maxTokens: 128,
-          reasoning: "medium",
           onPayload: (payload) => {
             capturedPayload = payload as Record<string, unknown>;
           },
@@ -117,18 +131,20 @@ describeLive("xai live", () => {
       const doneMessage = await collectDoneMessage(
         stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
       );
-      expect(doneMessage).toBeDefined();
-      expect(capturedPayload).toBeDefined();
-      if ("tool_stream" in (capturedPayload ?? {})) {
-        expect(capturedPayload?.tool_stream).toBe(true);
+      expect(Array.isArray(doneMessage.content)).toBe(true);
+      const payload = requireLiveValue(capturedPayload, "captured xAI payload");
+      if ("tool_stream" in payload) {
+        expect(payload.tool_stream).toBe(true);
       }
 
-      const payloadTools = Array.isArray(capturedPayload?.tools)
-        ? (capturedPayload.tools as Array<Record<string, unknown>>)
+      const payloadTools = Array.isArray(payload.tools)
+        ? (payload.tools as Array<Record<string, unknown>>)
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction && typeof firstFunction === "object").toBe(true);
+      requireLiveValue(firstFunction, "first xAI tool function");
+      expect(typeof firstFunction).toBe("object");
+      expect(Array.isArray(firstFunction)).toBe(false);
       expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     });
   }, 90_000);
@@ -151,8 +167,8 @@ describeLive("xai live", () => {
         },
       });
 
-      expect(tool).toBeTruthy();
-      const result = await tool!.execute("web-search:grok-live", {
+      const webSearchTool = requireLiveValue(tool, "grok web search tool");
+      const result = await webSearchTool.execute("web-search:grok-live", {
         query: "OpenClaw GitHub",
         count: 3,
       });
@@ -166,7 +182,10 @@ describeLive("xai live", () => {
         message?: string;
       };
 
-      const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+      const errorMessage =
+        details.error && details.message
+          ? `${details.error} ${details.message}`
+          : details.error || details.message || "";
       if (isBillingErrorMessage(errorMessage)) {
         console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
         return;

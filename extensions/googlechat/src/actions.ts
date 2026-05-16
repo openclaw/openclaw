@@ -9,7 +9,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
@@ -57,7 +57,7 @@ async function loadGoogleChatActionMedia(params: {
 }) {
   const runtime = getGoogleChatRuntime();
   return /^https?:\/\//i.test(params.mediaUrl)
-    ? await runtime.channel.media.fetchRemoteMedia({
+    ? await runtime.channel.media.readRemoteMediaBuffer({
         url: params.mediaUrl,
         maxBytes: params.maxBytes,
       })

@@ -29,6 +29,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
 
@@ -37,6 +38,11 @@ type DoctorHealthContribution = FlowContribution & {
   surface: "health";
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
+
+function isUpdateDoctorRun(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
+  const value = env.OPENCLAW_UPDATE_IN_PROGRESS;
+  return value === "1" || value === "true";
+}
 
 function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -312,6 +318,23 @@ async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<vo
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
 }
 
+async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairCodexSessionRoutes } =
+    await import("../commands/doctor/shared/codex-route-warnings.js");
+  const { note } = await import("../terminal/note.js");
+  const result = await maybeRepairCodexSessionRoutes({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
   await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
@@ -320,6 +343,11 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
+async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
+  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -344,8 +372,11 @@ async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
     await import("../commands/doctor-gateway-services.js");
-  const { noteMacLaunchAgentOverrides, noteMacLaunchctlGatewayEnvOverrides } =
-    await import("../commands/doctor-platform-notes.js");
+  const {
+    noteMacLaunchAgentOverrides,
+    noteMacLaunchctlGatewayEnvOverrides,
+    noteMacStaleOpenClawUpdateLaunchdJobs,
+  } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -354,6 +385,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     ctx.prompter,
   );
   await noteMacLaunchAgentOverrides();
+  await noteMacStaleOpenClawUpdateLaunchdJobs();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
 }
 
@@ -493,18 +525,29 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk } = await checkGatewayHealth({
+  const { healthOk, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.healthOk = healthOk;
+  ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
     : { checked: false, ready: false, skipped: false };
+}
+
+async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWhatsappResponsivenessHealth } =
+    await import("../commands/doctor-whatsapp-responsiveness.js");
+  await noteWhatsappResponsivenessHealth({
+    cfg: ctx.cfg,
+    status: ctx.gatewayStatus,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -547,13 +590,14 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { CONFIG_PATH, replaceConfigFile } = await import("../config/config.js");
+  const { replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const shouldWriteConfig =
     ctx.configResult.shouldWriteConfig ||
     JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
+    const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     ctx.cfg = applyWizardMetadata(ctx.cfg, {
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
@@ -566,12 +610,19 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
       writeOptions: {
-        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
-        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
+        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+        skipPluginValidation:
+          ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
       },
     });
     logConfigUpdated(ctx.runtime);
-    const backupPath = `${CONFIG_PATH}.bak`;
+    const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
+    if (updateDoctorRun && fs.existsSync(preUpdateSnapshotPath)) {
+      ctx.runtime.log(
+        `Update changed config; pre-update backup: ${shortenHomePath(preUpdateSnapshotPath)}`,
+      );
+    }
+    const backupPath = `${ctx.configPath}.bak`;
     if (fs.existsSync(backupPath)) {
       ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
@@ -599,14 +650,16 @@ async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Prom
   }
 }
 
-async function runFinalConfigValidationHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
+async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
-  const finalSnapshot = await readConfigFileSnapshot();
+  const finalSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
+  });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
-    _ctx.runtime.error("Invalid config:");
+    ctx.runtime.error("Invalid config:");
     for (const issue of finalSnapshot.issues) {
       const path = issue.path || "<root>";
-      _ctx.runtime.error(`- ${path}: ${issue.message}`);
+      ctx.runtime.error(`- ${path}: ${issue.message}`);
     }
   }
 }
@@ -650,7 +703,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
-      label: "Configured plugin installs",
+      label: "Configured plugin repair",
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
@@ -664,6 +717,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runStateIntegrityHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:codex-session-routes",
+      label: "Codex session routes",
+      run: runCodexSessionRouteHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
@@ -672,6 +730,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-transcripts",
       label: "Session transcripts",
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:config-audit-scrub",
+      label: "Config audit",
+      run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
@@ -742,6 +805,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-health",
       label: "Gateway health",
       run: runGatewayHealthChecks,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:whatsapp-responsiveness",
+      label: "WhatsApp responsiveness",
+      run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:memory-search",

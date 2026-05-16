@@ -277,7 +277,7 @@ export function renderToolPreview(
   options?: {
     onOpenSidebar?: (content: SidebarContent) => void;
     rawText?: string | null;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -301,7 +301,7 @@ export function renderToolPreview(
           title: preview.title?.trim() || "Canvas",
           src: resolveCanvasIframeUrl(
             preview.url,
-            options?.canvasHostUrl,
+            options?.canvasPluginSurfaceUrl,
             options?.allowExternalEmbedUrls ?? false,
           ),
           height: preview.preferredHeight,
@@ -392,11 +392,12 @@ function renderToolDataBlock(params: {
 
 function renderCollapsedToolSummary(params: {
   label: string;
-  name: string;
+  icon: ReturnType<typeof html> | undefined;
+  name?: string;
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const { label, name, expanded, onToggleExpanded } = params;
+  const { label, icon, name, expanded, onToggleExpanded } = params;
   return html`
     <button
       class="chat-tool-msg-summary"
@@ -404,9 +405,9 @@ function renderCollapsedToolSummary(params: {
       aria-expanded=${String(expanded)}
       @click=${() => onToggleExpanded()}
     >
-      <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+      <span class="chat-tool-msg-summary__icon">${icon}</span>
       <span class="chat-tool-msg-summary__label">${label}</span>
-      <span class="chat-tool-msg-summary__names">${name}</span>
+      ${name ? html`<span class="chat-tool-msg-summary__names">${name}</span>` : nothing}
     </button>
   `;
 }
@@ -417,13 +418,15 @@ export function renderToolCard(
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
     onOpenSidebar?: (content: SidebarContent) => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
 ) {
   const hasOutput = Boolean(card.outputText?.trim());
-  const previewLabel = hasOutput ? "Tool output" : "Tool call";
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const previewLabel = display.detail ?? display.label;
+  const previewName = display.detail && hasOutput ? "output" : undefined;
 
   return html`
     <div
@@ -433,7 +436,8 @@ export function renderToolCard(
     >
       ${renderCollapsedToolSummary({
         label: previewLabel,
-        name: card.name,
+        icon: icons[display.icon],
+        name: previewName,
         expanded: opts.expanded,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}
@@ -443,7 +447,7 @@ export function renderToolCard(
               ${renderExpandedToolCardContent(
                 card,
                 opts.onOpenSidebar,
-                opts.canvasHostUrl,
+                opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
               )}
@@ -457,7 +461,7 @@ export function renderToolCard(
 export function renderExpandedToolCardContent(
   card: ToolCard,
   onOpenSidebar?: (content: SidebarContent) => void,
-  canvasHostUrl?: string | null,
+  canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
 ) {
@@ -476,7 +480,7 @@ export function renderExpandedToolCardContent(
     ? renderToolPreview(card.preview, "chat_tool", {
         onOpenSidebar,
         rawText: card.outputText,
-        canvasHostUrl,
+        canvasPluginSurfaceUrl,
         embedSandboxMode,
         allowExternalEmbedUrls,
       })
@@ -529,7 +533,7 @@ export function renderExpandedToolCardContent(
 export function renderToolCardSidebar(
   card: ToolCard,
   onOpenSidebar?: (content: SidebarContent) => void,
-  canvasHostUrl?: string | null,
+  canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -585,7 +589,7 @@ export function renderToolCardSidebar(
         ? html`${renderToolPreview(preview, "chat_tool", {
             onOpenSidebar,
             rawText: card.outputText,
-            canvasHostUrl,
+            canvasPluginSurfaceUrl,
             embedSandboxMode,
           })}`
         : nothing}

@@ -1,6 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import {
@@ -10,6 +10,10 @@ import {
   toPluginMessageSentEvent,
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import {
   buildOutboundMediaLoadOptions,
   isGifMedia,
@@ -668,7 +672,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
-  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -702,6 +706,7 @@ export async function deliverReplies(params: {
   replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
+  transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -709,6 +714,8 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
   };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
+  const transcriptMirror = params.transcriptMirror;
+  const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
@@ -752,10 +759,15 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
+    const presentation = normalizeMessagePresentation(reply?.presentation);
+    const interactive =
+      reply?.interactive ??
+      (presentation ? presentationToInteractiveReply(presentation) : undefined);
     const resolvedReplyText =
       resolveTelegramInteractiveTextFallback({
         text: reply?.text,
-        interactive: reply?.interactive,
+        interactive,
+        presentation,
       }) ??
       reply?.text ??
       "";
@@ -817,7 +829,7 @@ export async function deliverReplies(params: {
       const replyMarkup = buildInlineKeyboard(
         resolveTelegramInlineButtons({
           buttons: telegramData?.buttons,
-          interactive: reply.interactive,
+          interactive,
         }),
       );
       let firstDeliveredMessageId: number | undefined;
@@ -873,6 +885,10 @@ export async function deliverReplies(params: {
         firstDeliveredMessageId,
       });
 
+      if (progress.deliveredCount > deliveredCountBeforeReply && transcriptMirror) {
+        deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
+      }
+
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
@@ -899,6 +915,24 @@ export async function deliverReplies(params: {
         groupId: params.mirrorGroupId,
       });
       throw error;
+    }
+  }
+
+  if (progress.hasDelivered && transcriptMirror) {
+    const text = deliveredContents
+      .map((content) => content.text)
+      .filter(Boolean)
+      .join("\n\n");
+    const mediaUrls = deliveredContents.flatMap((content) => content.mediaUrls);
+    if (text || mediaUrls.length > 0) {
+      try {
+        await transcriptMirror({
+          text: text || undefined,
+          mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+        });
+      } catch (mirrorErr) {
+        logVerbose(`telegram transcriptMirror failed: ${formatErrorMessage(mirrorErr)}`);
+      }
     }
   }
 

@@ -22,7 +22,6 @@ import {
 } from "../secrets/runtime.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  getInspectableTaskRegistrySummary,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -58,6 +57,11 @@ type GatewayHotReloadState = {
 type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
+};
+
+type GatewayGmailRestartAbortController = {
+  abort: () => void;
+  signal: AbortSignal;
 };
 
 export type GatewayPluginReloadResult = {
@@ -99,6 +103,7 @@ type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  stopPostReadySidecars?: () => void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -113,6 +118,8 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
+  clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
   onCronRestart?: () => void;
 };
 
@@ -143,7 +150,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
     const embeddedRuns = getActiveEmbeddedRunCount();
-    const activeTasks = getInspectableTaskRegistrySummary().active;
+    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
     return {
       queueSize,
       pendingReplies,
@@ -164,7 +171,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       details.push(`${counts.embeddedRuns} embedded run(s)`);
     }
     if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} task run(s)`);
+      details.push(`${counts.activeTasks} background task run(s)`);
     }
     return details;
   };
@@ -203,11 +210,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ", ",
       )} complete`,
     );
-    const timeoutMsRaw = nextConfig.gateway?.reload?.deferralTimeoutMs;
-    const timeoutMs =
-      typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
-        ? Math.max(CHANNEL_RELOAD_DEFERRAL_POLL_MS, Math.floor(timeoutMsRaw))
-        : undefined;
+    const timeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+      nextConfig.gateway?.reload?.deferralTimeoutMs,
+    );
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
@@ -339,19 +344,36 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
-      const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
-        import("../hooks/gmail-watcher.js"),
-        import("../hooks/gmail-watcher-lifecycle.js"),
-      ]);
-      await stopGmailWatcher().catch((err) => {
-        params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
-      });
-      await startGmailWatcherWithLogs({
-        cfg: nextConfig,
-        log: params.logHooks,
-        onSkipped: () =>
-          params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
-      });
+      params.stopPostReadySidecars?.();
+      const restartAbortController =
+        params.createGmailRestartAbortController?.() ?? new AbortController();
+      try {
+        if (!restartAbortController.signal.aborted) {
+          const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
+            import("../hooks/gmail-watcher.js"),
+            import("../hooks/gmail-watcher-lifecycle.js"),
+          ]);
+          if (!restartAbortController.signal.aborted) {
+            await stopGmailWatcher().catch((err) => {
+              params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
+            });
+          }
+          if (!restartAbortController.signal.aborted) {
+            await startGmailWatcherWithLogs({
+              cfg: nextConfig,
+              log: params.logHooks,
+              isCancelled: () => restartAbortController.signal.aborted,
+              signal: restartAbortController.signal,
+              onSkipped: () =>
+                params.logHooks.info(
+                  "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",
+                ),
+            });
+          }
+        }
+      } finally {
+        params.clearGmailRestartAbortController?.(restartAbortController);
+      }
     }
 
     if (channelsToRestart.size > 0) {
@@ -420,7 +442,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       );
       const taskBlockers = formatTaskBlockers();
       if (taskBlockers) {
-        params.logReload.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+        params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
       }
 
       deferGatewayRestartUntilIdle({
@@ -479,6 +501,22 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     return { stop: async () => {} };
   }
 
+  let stopped = false;
+  let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
+  const abortActiveGmailRestart = () => {
+    activeGmailRestartAbortController?.abort();
+    activeGmailRestartAbortController = null;
+  };
+  const createGmailRestartAbortController = (): GatewayGmailRestartAbortController => {
+    abortActiveGmailRestart();
+    const abortController = new AbortController();
+    if (stopped) {
+      abortController.abort();
+      return abortController;
+    }
+    activeGmailRestartAbortController = abortController;
+    return abortController;
+  };
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps: params.deps,
     broadcast: params.broadcast,
@@ -486,11 +524,18 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     setState: params.setState,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
+    stopPostReadySidecars: params.stopPostReadySidecars,
     reloadPlugins: params.reloadPlugins,
     logHooks: params.logHooks,
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    createGmailRestartAbortController,
+    clearGmailRestartAbortController: (abortController) => {
+      if (activeGmailRestartAbortController === abortController) {
+        activeGmailRestartAbortController = null;
+      }
+    },
     ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
@@ -499,7 +544,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       }),
   });
 
-  return startGatewayConfigReloader({
+  const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
@@ -599,4 +644,11 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     },
     watchPath: params.watchPath,
   });
+  return {
+    stop: async () => {
+      stopped = true;
+      abortActiveGmailRestart();
+      await configReloader.stop();
+    },
+  };
 }

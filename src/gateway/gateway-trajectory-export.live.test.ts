@@ -152,13 +152,17 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
   const approval = approvals.find((entry) =>
     entry.request?.command?.includes("sessions export-trajectory"),
   );
-  expect(approval?.id).toBeTruthy();
+  expect(typeof approval?.id).toBe("string");
+  expect(approval?.request?.command).toContain("sessions export-trajectory");
+  if (!approval?.id) {
+    throw new Error("expected trajectory export approval id");
+  }
   await client.request(
     "exec.approval.resolve",
-    { id: approval!.id, decision: "allow-once" },
+    { id: approval.id, decision: "allow-once" },
     { timeoutMs: 10_000 },
   );
-  return approval!.id!;
+  return approval.id;
 }
 
 describeLive("gateway live trajectory export", () => {
@@ -279,17 +283,18 @@ describeLive("gateway live trajectory export", () => {
       if (finalText) {
         expect(finalText).toContain("Approve once");
       }
-      expect(await listDirectoryNames(bundleDir)).toEqual(
-        expect.arrayContaining([
-          "artifacts.json",
-          "events.jsonl",
-          "manifest.json",
-          "metadata.json",
-          "prompts.json",
-          "session.jsonl",
-          "tools.json",
-        ]),
-      );
+      const bundleNames = await listDirectoryNames(bundleDir);
+      for (const expectedName of [
+        "artifacts.json",
+        "events.jsonl",
+        "manifest.json",
+        "metadata.json",
+        "prompts.json",
+        "session.jsonl",
+        "tools.json",
+      ]) {
+        expect(bundleNames).toContain(expectedName);
+      }
       expect(beforeExport.has("bundle")).toBe(false);
 
       const manifest = JSON.parse(

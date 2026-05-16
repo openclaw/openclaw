@@ -214,7 +214,9 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+      const issuePaths = res.issues.map((issue) => issue.path);
+      expect(issuePaths).toContain("agents.defaults.pdfMaxBytesMb");
+      expect(issuePaths).toContain("agents.defaults.pdfMaxPages");
     }
   });
 

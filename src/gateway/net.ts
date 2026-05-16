@@ -8,6 +8,8 @@ import {
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
+  safeNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
@@ -55,6 +57,40 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+export function isLocalInterfaceAddress(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
+
+  for (const entries of Object.values(effectiveSnapshot)) {
+    for (const entry of entries ?? []) {
+      if (normalizeIp(entry.address) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -328,6 +364,12 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
+    return [bindHost];
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;

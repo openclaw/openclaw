@@ -1,28 +1,71 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
+const { undiciFetchMock, agentSpy, proxyAgentSpy } = vi.hoisted(() => ({
   undiciFetchMock: vi.fn(),
+  agentSpy: vi.fn(),
   proxyAgentSpy: vi.fn(),
 }));
 
 vi.mock("undici", () => {
+  class Agent {
+    options: unknown;
+    constructor(options?: unknown) {
+      this.options = options;
+      agentSpy(options);
+    }
+  }
   class ProxyAgent {
-    proxyUrl: string;
-    constructor(proxyUrl: string) {
-      if (proxyUrl === "bad-proxy") {
+    options: unknown;
+    uri: string;
+    constructor(options: string | { uri: string; allowH2?: boolean }) {
+      const resolved = typeof options === "string" ? { uri: options } : options;
+      if (resolved.uri === "bad-proxy") {
         throw new Error("bad proxy");
       }
-      this.proxyUrl = proxyUrl;
-      proxyAgentSpy(proxyUrl);
+      this.options = resolved;
+      this.uri = resolved.uri;
+      proxyAgentSpy(resolved);
     }
   }
   return {
+    Agent,
     ProxyAgent,
     fetch: undiciFetchMock,
   };
 });
 
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
+
+type MockWithCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function argAt(mock: MockWithCalls, callIndex: number, argIndex: number): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function objectArgAt(
+  mock: MockWithCalls,
+  callIndex: number,
+  argIndex: number,
+): Record<string, unknown> {
+  const value = argAt(mock, callIndex, argIndex);
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected call ${callIndex} argument ${argIndex} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function recordField(value: unknown, field: string): Record<string, unknown> {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${field} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
 
 describe("resolveDiscordRestFetch", () => {
   beforeAll(async () => {
@@ -32,6 +75,7 @@ describe("resolveDiscordRestFetch", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     undiciFetchMock.mockReset();
+    agentSpy.mockReset();
     proxyAgentSpy.mockReset();
   });
 
@@ -47,18 +91,21 @@ describe("resolveDiscordRestFetch", () => {
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
-    expect(undiciFetchMock).toHaveBeenCalledWith(
+    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
+    expect(proxyOptions.uri).toBe("http://127.0.0.1:8080");
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(argAt(undiciFetchMock, 0, 0)).toBe(
       "https://discord.com/api/v10/oauth2/applications/@me",
-      expect.objectContaining({
-        dispatcher: expect.objectContaining({ proxyUrl: "http://127.0.0.1:8080" }),
-      }),
     );
+    const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+    const dispatcher = recordField(fetchOptions.dispatcher, "dispatcher");
+    expect(dispatcher.uri).toBe("http://127.0.0.1:8080");
+    expect(recordField(dispatcher.options, "dispatcher.options").allowH2).toBe(false);
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to global fetch when proxy URL is invalid", async () => {
+  it("falls back to global fetch when proxy URL is invalid", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -82,7 +129,7 @@ describe("resolveDiscordRestFetch", () => {
 
     expect(fetcher).toBe(fetch);
     expect(proxyAgentSpy).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("loopback host"));
+    expect(String(argAt(runtime.error, 0, 0))).toContain("loopback host");
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -98,8 +145,39 @@ describe("resolveDiscordRestFetch", () => {
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
+    expect(proxyOptions.uri).toBe("http://[::1]:8080");
+    expect(proxyOptions.allowH2).toBe(false);
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("uses undici Agent with IPv4-first lookup when no discord proxy URL is configured", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as const;
+    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const fetcher = resolveDiscordRestFetch(undefined, runtime);
+    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
+
+    const agentOptions = objectArgAt(agentSpy, 0, 0);
+    expect(agentOptions.allowH2).toBe(false);
+    expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
+    expect(argAt(undiciFetchMock, 0, 0)).toBe(
+      "https://discord.com/api/v10/oauth2/applications/@me",
+    );
+    const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+    const dispatcherOptions = recordField(
+      recordField(fetchOptions.dispatcher, "dispatcher").options,
+      "dispatcher.options",
+    );
+    expect(dispatcherOptions.allowH2).toBe(false);
+    expect(typeof recordField(dispatcherOptions.connect, "dispatcher.options.connect").lookup).toBe(
+      "function",
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("uses debug proxy env when no discord proxy URL is configured", async () => {
@@ -115,7 +193,9 @@ describe("resolveDiscordRestFetch", () => {
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:7777");
+    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
+    expect(proxyOptions.uri).toBe("http://127.0.0.1:7777");
+    expect(proxyOptions.allowH2).toBe(false);
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
   });
 });

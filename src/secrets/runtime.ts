@@ -1,8 +1,8 @@
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
@@ -114,7 +114,7 @@ function collectCandidateAgentDirs(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveOpenClawAgentDir(env), env));
+  dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
   for (const agentId of listAgentIds(config)) {
     dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
@@ -471,6 +471,21 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       return true;
     },
   });
+}
+
+export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
+  if (!activeSnapshot || !activeRefreshContext) {
+    return false;
+  }
+  const refreshed = await prepareSecretsRuntimeSnapshot({
+    config: activeSnapshot.sourceConfig,
+    env: activeRefreshContext.env,
+    agentDirs: resolveRefreshAgentDirs(activeSnapshot.sourceConfig, activeRefreshContext),
+    loadAuthStore: activeRefreshContext.loadAuthStore,
+    loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+  });
+  activateSecretsRuntimeSnapshot(refreshed);
+  return true;
 }
 
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {

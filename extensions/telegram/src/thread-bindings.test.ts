@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -66,6 +66,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("telegram thread bindings", () => {
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDirOverride: string | undefined;
 
   beforeEach(async () => {
@@ -82,9 +83,13 @@ describe("telegram thread bindings", () => {
     vi.useRealTimers();
     await __testing.resetTelegramThreadBindingsForTests();
     if (stateDirOverride) {
-      delete process.env.OPENCLAW_STATE_DIR;
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
       stateDirOverride = undefined;
+    }
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
   });
 
@@ -124,8 +129,8 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
+    const error = await getSessionBindingService()
+      .bind({
         targetSessionKey: "agent:main:subagent:child-1",
         targetKind: "subagent",
         conversation: {
@@ -134,10 +139,12 @@ describe("telegram thread bindings", () => {
           conversationId: "77",
         },
         placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
-    });
+      })
+      .then(
+        () => undefined,
+        (bindError: unknown) => bindError,
+      );
+    expect((error as { code?: unknown } | undefined)?.code).toBe("BINDING_CREATE_FAILED");
   });
 
   it("rejects child placement when parentConversationId is also a bare topic ID", async () => {
@@ -147,8 +154,8 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
+    const error = await getSessionBindingService()
+      .bind({
         targetSessionKey: "agent:main:acp:child-acp-1",
         targetKind: "session",
         conversation: {
@@ -158,10 +165,12 @@ describe("telegram thread bindings", () => {
           parentConversationId: "99",
         },
         placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
-    });
+      })
+      .then(
+        () => undefined,
+        (bindError: unknown) => bindError,
+      );
+    expect((error as { code?: unknown } | undefined)?.code).toBe("BINDING_CREATE_FAILED");
   });
 
   it("shares binding state across distinct module instances", async () => {
@@ -232,7 +241,9 @@ describe("telegram thread bindings", () => {
       },
     });
     const original = manager.listBySessionKey("agent:main:subagent:child-1")[0];
-    expect(original).toBeDefined();
+    if (!original) {
+      throw new Error("expected original subagent thread binding");
+    }
 
     const idleUpdated = setTelegramThreadBindingIdleTimeoutBySessionKey({
       accountId: "work",
@@ -538,7 +549,7 @@ describe("telegram thread bindings", () => {
 
       await __testing.resetTelegramThreadBindingsForTests();
       await flushMicrotasks();
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }

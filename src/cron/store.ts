@@ -1,7 +1,7 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
@@ -49,6 +49,10 @@ type CronStateFile = {
   version: 1;
   jobs: Record<string, CronStateFileEntry>;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 
 function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   return {
@@ -154,15 +158,13 @@ function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>)
   return jobs.some(
     (job) =>
       job != null &&
-      job.state !== undefined &&
-      typeof job.state === "object" &&
-      job.state !== null &&
-      Object.keys(job.state as Record<string, unknown>).length > 0,
+      isRecord(job.state) &&
+      Object.keys(job.state).length > 0,
   );
 }
 
 function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
-  if (!job.state || typeof job.state !== "object") {
+  if (!isRecord(job.state)) {
     job.state = {} as never;
   }
 }
@@ -186,9 +188,13 @@ function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unk
     : Date.now();
 }
 
-function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStateFileEntry): void {
+function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown): void {
+  if (!isRecord(entry)) {
+    backfillMissingRuntimeFields(job);
+    return;
+  }
   job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-  job.state = (entry.state ?? {}) as never;
+  job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
   if (
     typeof entry.scheduleIdentity === "string" &&
     entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
@@ -213,7 +219,9 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const jobs = Array.isArray(parsedRecord.jobs)
+      ? (parsedRecord.jobs.filter(isRecord) as never[])
+      : [];
     const store = {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
@@ -281,7 +289,9 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const jobs = Array.isArray(parsedRecord.jobs)
+      ? (parsedRecord.jobs.filter(isRecord) as never[])
+      : [];
     const store = {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
@@ -329,13 +339,15 @@ async function setSecureFileMode(filePath: string): Promise<void> {
 }
 
 async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: dirMode });
-  await fs.promises.chmod(dir, dirMode).catch(() => undefined);
-  const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, content, { encoding: "utf-8", mode: 0o600 });
-  await renameWithRetry(tmp, filePath);
-  await setSecureFileMode(filePath);
+  await replaceFileAtomic({
+    filePath,
+    content,
+    dirMode,
+    mode: 0o600,
+    tempPrefix: ".openclaw-cron",
+    renameMaxRetries: 3,
+    copyFallbackOnPermissionError: true,
+  });
 }
 
 async function serializedFileNeedsWrite(
@@ -408,29 +420,4 @@ export async function saveCronStore(
     updatedCache.configJson = configJson;
   }
   updatedCache.needsSplitMigration = stateOnly && migrating;
-}
-
-const RENAME_MAX_RETRIES = 3;
-const RENAME_BASE_DELAY_MS = 50;
-
-async function renameWithRetry(src: string, dest: string): Promise<void> {
-  for (let attempt = 0; attempt <= RENAME_MAX_RETRIES; attempt++) {
-    try {
-      await fs.promises.rename(src, dest);
-      return;
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
-        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
-        continue;
-      }
-      // Windows doesn't reliably support atomic replace via rename when dest exists.
-      if (code === "EPERM" || code === "EEXIST") {
-        await fs.promises.copyFile(src, dest);
-        await fs.promises.unlink(src).catch(() => {});
-        return;
-      }
-      throw err;
-    }
-  }
 }

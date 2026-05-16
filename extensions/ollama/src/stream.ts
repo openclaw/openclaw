@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,8 +8,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -28,7 +28,10 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import {
@@ -275,6 +278,15 @@ function resolveOllamaThinkParamValue(
   return undefined;
 }
 
+function shouldForwardNativeOllamaThink(
+  model: ProviderRuntimeModel | undefined,
+  think: OllamaThinkValue,
+): boolean {
+  // Ollama accepts top-level `think` as the native chat contract, but rejects
+  // truthy values for models known not to expose thinking support.
+  return think === false || model?.reasoning !== false;
+}
+
 function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
   const raw = model.params?.num_ctx;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -293,29 +305,16 @@ function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
 /**
  * Resolves num_ctx for native /api/chat requests:
  *  1. explicit `params.num_ctx` set on the model wins,
- *  2. otherwise the catalog `contextWindow` / `maxTokens` is forwarded so
- *     OpenClaw's known model windows survive the trip and `/api/chat` does
- *     not silently truncate to Ollama's small Modelfile default (typically
- *     2048 tokens) — which is too small for a system prompt plus tool
- *     definitions and produces "model picks wrong tools / says nonsense"
- *     symptoms on agent turns,
- *  3. when neither is known, return undefined so the Modelfile decides.
+ *  2. otherwise return undefined so Ollama's model, OLLAMA_CONTEXT_LENGTH,
+ *     VRAM, or Modelfile policy decides.
  *
  * This intentionally differs from `resolveOllamaNumCtx` by not falling back
  * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
- * the OpenAI-compat path, but on the native path we prefer to leave num_ctx
- * absent rather than guess a window for an unknown model.
+ * the OpenAI-compat path, but native `/api/chat` should not force the full
+ * advertised catalog context for local models unless the operator opted in.
  */
 function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
-  const configured = resolveOllamaConfiguredNumCtx(model);
-  if (configured !== undefined) {
-    return configured;
-  }
-  const catalog = model.contextWindow ?? model.maxTokens;
-  if (typeof catalog === "number" && Number.isFinite(catalog) && catalog > 0) {
-    return Math.floor(catalog);
-  }
-  return undefined;
+  return resolveOllamaConfiguredNumCtx(model);
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
@@ -351,7 +350,7 @@ function resolveOllamaTopLevelParams(
     }
   }
   const think = resolveOllamaThinkParamValue(params);
-  if (think !== undefined) {
+  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -400,7 +399,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined) {
+  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 

@@ -10,6 +10,28 @@ import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import type { SessionEntry } from "./types.js";
 
+async function expectPathExists(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
+}
+
+function expectBudgetResult(
+  result: Awaited<ReturnType<typeof enforceSessionDiskBudget>>,
+): asserts result is NonNullable<Awaited<ReturnType<typeof enforceSessionDiskBudget>>> {
+  if (result === null) {
+    throw new Error("expected disk budget enforcement result");
+  }
+}
+
 describe("enforceSessionDiskBudget", () => {
   it("does not treat referenced transcripts with marker-like session IDs as archived artifacts", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
@@ -37,12 +59,9 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 0,
-        }),
-      );
+      await expectPathExists(transcriptPath);
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(0);
     });
   });
 
@@ -75,14 +94,48 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      await expect(fs.stat(archivePath)).rejects.toThrow();
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 1,
-          removedEntries: 0,
-        }),
-      );
+      await expectPathExists(transcriptPath);
+      await expectPathMissing(archivePath);
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(1);
+      expect(result.removedEntries).toBe(0);
+    });
+  });
+
+  it("preserves runtime-provided session keys when removing entries for disk budget", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const childKey = "agent:main:subagent:pending-budget";
+      const removableKey = "agent:main:old-removable";
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        [childKey]: {
+          sessionId: "pending-budget",
+          updatedAt: now - 10_000,
+          spawnedBy: "agent:main:main",
+        },
+        [removableKey]: {
+          sessionId: "old-removable",
+          updatedAt: now,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        preserveKeys: new Set([childKey]),
+        maintenance: {
+          maxDiskBytes: 120,
+          highWaterBytes: 80,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(store).toHaveProperty(childKey);
+      expect(store).not.toHaveProperty(removableKey);
     });
   });
 
@@ -135,15 +188,12 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      await expect(fs.stat(checkpointPath)).rejects.toThrow();
-      await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 1,
-          removedEntries: 0,
-        }),
-      );
+      await expectPathExists(transcriptPath);
+      await expectPathMissing(checkpointPath);
+      await expectPathExists(referencedCheckpointPath);
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(1);
+      expect(result.removedEntries).toBe(0);
     });
   });
 
@@ -183,17 +233,14 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      await expect(fs.stat(referencedRuntime)).resolves.toBeDefined();
-      await expect(fs.stat(referencedPointer)).resolves.toBeDefined();
-      await expect(fs.stat(orphanRuntime)).rejects.toThrow();
-      await expect(fs.stat(orphanPointer)).rejects.toThrow();
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 2,
-          removedEntries: 0,
-        }),
-      );
+      await expectPathExists(transcriptPath);
+      await expectPathExists(referencedRuntime);
+      await expectPathExists(referencedPointer);
+      await expectPathMissing(orphanRuntime);
+      await expectPathMissing(orphanPointer);
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(2);
+      expect(result.removedEntries).toBe(0);
     });
   });
 
@@ -232,14 +279,11 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      expect(store[protectedKey]).toBeDefined();
+      expect(store).toHaveProperty(protectedKey);
       expect(store[removableKey]).toBeUndefined();
-      expect(store[activeKey]).toBeDefined();
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedEntries: 1,
-        }),
-      );
+      expect(store).toHaveProperty(activeKey);
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
     });
   });
 });

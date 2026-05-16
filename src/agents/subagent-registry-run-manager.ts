@@ -88,6 +88,7 @@ export type RegisterSubagentRunParams = {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
+  taskName?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -149,6 +150,7 @@ export function createSubagentRunManager(params: {
     waitTimeoutMs: number,
     expectedEntry?: SubagentRunRecord,
   ) => {
+    let completionForRetry: Parameters<typeof params.completeSubagentRun>[0] | undefined;
     try {
       const wait = await waitForAgentRun({
         runId,
@@ -228,7 +230,7 @@ export function createSubagentRunManager(params: {
       if (mutated) {
         params.persist();
       }
-      await params.completeSubagentRun({
+      completionForRetry = {
         runId,
         endedAt: entry.endedAt,
         outcome,
@@ -237,9 +239,37 @@ export function createSubagentRunManager(params: {
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
+      };
+      await params.completeSubagentRun(completionForRetry);
+    } catch (error) {
+      const current = params.runs.get(runId);
+      log.warn("failed to complete subagent run; retrying completion", {
+        runId,
+        childSessionKey: current?.childSessionKey ?? expectedEntry?.childSessionKey,
+        error,
       });
-    } catch {
-      // ignore
+      if (
+        current &&
+        typeof current.endedAt === "number" &&
+        !current.cleanupCompletedAt &&
+        current.pauseReason !== "sessions_yield"
+      ) {
+        if (completionForRetry) {
+          try {
+            await params.completeSubagentRun(completionForRetry);
+            return;
+          } catch (retryError) {
+            log.warn("failed to complete subagent run after retry; retrying ended cleanup", {
+              runId,
+              childSessionKey: current.childSessionKey,
+              error: retryError,
+            });
+          }
+        }
+        current.cleanupHandled = false;
+        params.resumedRuns.delete(runId);
+        params.resumeSubagentRun(runId);
+      }
     }
   };
 
@@ -399,6 +429,7 @@ export function createSubagentRunManager(params: {
       requesterOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
+      taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
       spawnMode,

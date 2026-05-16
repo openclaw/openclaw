@@ -14,8 +14,12 @@ MiniMax, and workflow-configured ComfyUI today.
 
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
-when the track is ready so the agent can post the finished audio back into
-the original channel.
+when the track is ready so the agent can tell the user and attach the
+finished audio. Generated-media completions are delivered by the agent through
+the message tool; OpenClaw does not auto-post the file as a fallback if the
+completion agent writes only a private final reply. The completion wake
+explicitly warns the agent that normal final replies are private for this
+route.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation
@@ -157,7 +161,7 @@ Direct generation example:
   Output format hint when the provider supports it.
 </ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds. Values below 10000ms are raised to 10000ms and reported in the tool result.</ParamField>
+<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.musicGenerationModel.timeoutMs` if configured. Values below 10000ms are raised to 10000ms and reported in the tool result.</ParamField>
 
 <Note>
 Not all providers support all parameters. OpenClaw still validates hard
@@ -318,10 +322,9 @@ Repo wrapper:
 pnpm test:live:media music
 ```
 
-This live file loads missing provider env vars from `~/.profile`, prefers
-live/env API keys ahead of stored auth profiles by default, and runs both
-`generate` and declared `edit` coverage when the provider enables edit
-mode. Coverage today:
+This live file uses already-exported provider env vars ahead of stored auth
+profiles by default, and runs both `generate` and declared `edit` coverage when
+the provider enables edit mode. Coverage today:
 
 - `google`: `generate` plus `edit`
 - `minimax`: `generate` only

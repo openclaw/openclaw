@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
@@ -16,6 +16,12 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 }));
 
 import { resolveFirstGithubToken } from "./auth.js";
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
+  vi.resetModules();
+});
 
 describe("resolveFirstGithubToken", () => {
   beforeEach(() => {
@@ -78,19 +84,26 @@ describe("resolveFirstGithubToken", () => {
   });
 
   it("resolves non-env SecretRefs when config is available", async () => {
+    const config = { secrets: { defaults: { provider: "default" } } } as never;
+    const env = {} as NodeJS.ProcessEnv;
     const result = await resolveFirstGithubToken({
-      config: { secrets: { defaults: { provider: "default" } } } as never,
-      env: {} as NodeJS.ProcessEnv,
+      config,
+      env,
     });
 
     expect(result).toEqual({
       githubToken: "resolved-profile-token",
       hasProfile: true,
     });
-    expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "providers.github-copilot.authProfiles.github-copilot:github.tokenRef",
-      }),
-    );
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledWith({
+      config,
+      env,
+      value: {
+        source: "file",
+        provider: "default",
+        id: "/providers/github-copilot/token",
+      },
+      path: "providers.github-copilot.authProfiles.github-copilot:github.tokenRef",
+    });
   });
 });

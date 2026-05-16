@@ -70,7 +70,7 @@ Other runtime failures may still return `{ "error": "<message>" }` without a
 ### Playwright requirement
 
 Some features (navigate/act/AI snapshot/role snapshot, element screenshots,
-PDF) require Playwright. If Playwright isn’t installed, those endpoints return
+PDF) require Playwright. If Playwright isn't installed, those endpoints return
 a clear 501 error.
 
 What still works without Playwright:
@@ -104,7 +104,13 @@ browser binaries as shown below.
 #### Docker Playwright install
 
 If your Gateway runs in Docker, avoid `npx playwright` (npm override conflicts).
-Use the bundled CLI instead:
+For custom images, bake Chromium into the image:
+
+```bash
+OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
+```
+
+For an existing image, install through the bundled CLI instead:
 
 ```bash
 docker compose run --rm openclaw-cli \
@@ -113,7 +119,8 @@ docker compose run --rm openclaw-cli \
 
 To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
 `/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
-`OPENCLAW_HOME_VOLUME` or a bind mount. See [Docker](/install/docker).
+`OPENCLAW_HOME_VOLUME` or a bind mount. OpenClaw auto-detects the persisted
+Chromium on Linux. See [Docker](/install/docker).
 
 ## How it works (internal)
 
@@ -242,12 +249,12 @@ Snapshot flags at a glance:
 
 ## Snapshots and refs
 
-OpenClaw supports two “snapshot” styles:
+OpenClaw supports two "snapshot" styles:
 
 - **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
   - Output: a text snapshot that includes numeric refs.
   - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
-  - Internally, the ref is resolved via Playwright’s `aria-ref`.
+  - Internally, the ref is resolved via Playwright's `aria-ref`.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
@@ -304,7 +311,7 @@ openclaw browser wait "#main" \
 
 ## Debug workflows
 
-When an action fails (e.g. “not visible”, “strict mode violation”, “covered”):
+When an action fails (e.g. "not visible", "strict mode violation", "covered"):
 
 1. `openclaw browser snapshot --interactive`
 2. Use `click <ref>` / `type <ref>` (prefer role refs in interactive mode)
@@ -334,7 +341,7 @@ Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/re
 
 ## State and environment knobs
 
-These are useful for “make the site behave like X” workflows:
+These are useful for "make the site behave like X" workflows:
 
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
@@ -374,7 +381,7 @@ Strict-mode example (block private/internal destinations by default):
 
 ## Related
 
-- [Browser](/tools/browser) — overview, configuration, profiles, security
-- [Browser login](/tools/browser-login) — signing in to sites
+- [Browser](/tools/browser) - overview, configuration, profiles, security
+- [Browser login](/tools/browser-login) - signing in to sites
 - [Browser Linux troubleshooting](/tools/browser-linux-troubleshooting)
 - [Browser WSL2 troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)

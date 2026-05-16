@@ -7,7 +7,7 @@ read_when:
 title: "Pairing"
 ---
 
-“Pairing” is OpenClaw’s explicit access approval step.
+"Pairing" is OpenClaw's explicit access approval step.
 It is used in two places:
 
 1. **DM pairing** (who is allowed to talk to the bot)
@@ -45,7 +45,7 @@ That gives first-time setups an explicit owner for privileged commands and exec
 approval prompts. After an owner exists, later pairing approvals only grant DM
 access; they do not add more owners.
 
-Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 
 ### Reusable sender groups
 
@@ -123,23 +123,20 @@ The setup code is a base64-encoded JSON payload that contains:
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- primary handed-off `node` token stays `scopes: []`
-- any handed-off `operator` token stays bounded to the bootstrap allowlist:
-  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
-- bootstrap scope checks are role-prefixed, not one flat scope pool:
-  operator scope entries only satisfy operator requests, and non-operator roles
-  must still request scopes under their own role prefix
+- the built-in setup profile allows only the `node` role
+- after approval, the handed-off `node` token stays `scopes: []`
+- the built-in setup-code flow does not hand off an `operator` token
+- operator access requires a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 
 Treat the setup code like a password while it is valid.
 
-For Tailscale, public, or other non-loopback mobile pairing, use Tailscale
-Serve/Funnel or another `wss://` Gateway URL. Direct non-loopback `ws://` setup
-URLs are rejected before QR/setup-code issuance. Plaintext `ws://` setup codes
-are limited to loopback URLs; private-network `ws://` clients still require the explicit
-`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` break-glass described in the remote
-Gateway guide.
+For Tailscale, public, or other remote mobile pairing, use Tailscale Serve/Funnel
+or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
+for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
+emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
+fail closed before QR/setup-code issuance.
 
 ### Approve a node device
 
@@ -209,7 +206,6 @@ Stored under `~/.openclaw/devices/`:
   - Telegram: [Telegram](/channels/telegram)
   - WhatsApp: [WhatsApp](/channels/whatsapp)
   - Signal: [Signal](/channels/signal)
-  - BlueBubbles (iMessage): [BlueBubbles](/channels/bluebubbles)
-  - iMessage (legacy): [iMessage](/channels/imessage)
+  - iMessage: [iMessage](/channels/imessage)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)

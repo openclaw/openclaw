@@ -12,17 +12,17 @@ import {
   formatStoppedCronSessionDiagnosticFields,
   resolveCronSessionDiagnosticContext,
 } from "./diagnostic-session-context.js";
+import {
+  formatRecoveryOutcome,
+  type StuckSessionRecoveryOutcome,
+  type StuckSessionRecoveryRequest,
+} from "./diagnostic-session-recovery.js";
+import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const recoveriesInFlight = new Set<string>();
 
-export type StuckSessionRecoveryParams = {
-  sessionId?: string;
-  sessionKey?: string;
-  ageMs: number;
-  queueDepth?: number;
-  allowActiveAbort?: boolean;
-};
+export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
 
 function recoveryKey(params: StuckSessionRecoveryParams): string | undefined {
   return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
@@ -55,19 +55,41 @@ function formatRecoveryContext(
 
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryParams,
-): Promise<void> {
+): Promise<StuckSessionRecoveryOutcome> {
   const key = recoveryKey(params);
   if (!key || recoveriesInFlight.has(key)) {
-    return;
+    return {
+      status: "skipped",
+      action: "observe_only",
+      reason: key ? "already_in_flight" : "missing_session_ref",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    };
   }
 
   recoveriesInFlight.add(key);
   try {
+    if (
+      !isDiagnosticSessionStateCurrent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        generation: params.stateGeneration,
+        state: "processing",
+      })
+    ) {
+      return {
+        status: "skipped",
+        action: "observe_only",
+        reason: "stale_session_state",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+    }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedPiRunHandleActive(params.sessionId)
         ? params.sessionId
         : undefined;
-    const activeSessionId = params.sessionKey
+    let activeSessionId = params.sessionKey
       ? (resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) ?? fallbackActiveSessionId)
       : fallbackActiveSessionId;
     const activeWorkSessionId = params.sessionKey
@@ -77,16 +99,24 @@ export async function recoverStuckDiagnosticSession(
     const sessionLane = laneKey ? resolveEmbeddedSessionLane(laneKey) : null;
     let aborted = false;
     let drained = true;
+    let forceCleared = false;
 
     if (activeSessionId) {
       if (params.allowActiveAbort !== true) {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "observe_only",
+          reason: "active_embedded_run",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId,
+          activeWorkKind: "embedded_run",
+        };
         diag.warn(
-          `stuck session recovery skipped: reason=active_embedded_run action=observe_only ${formatRecoveryContext(
-            params,
-            { activeSessionId },
-          )}`,
+          `stuck session recovery skipped: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
-        return;
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
       }
       const result = await abortAndDrainEmbeddedPiRun({
         sessionId: activeSessionId,
@@ -97,40 +127,62 @@ export async function recoverStuckDiagnosticSession(
       });
       aborted = result.aborted;
       drained = result.drained;
+      forceCleared = result.forceCleared;
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      diag.warn(
-        `stuck session recovery skipped: reason=active_reply_work action=keep_lane ${formatRecoveryContext(
-          params,
-          { activeSessionId: activeWorkSessionId },
-        )}`,
-      );
-      return;
+      if (params.allowActiveAbort === true) {
+        const result = await abortAndDrainEmbeddedPiRun({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+          forceClear: true,
+          reason: "stuck_recovery",
+        });
+        aborted = result.aborted;
+        drained = result.drained;
+        forceCleared = result.forceCleared;
+        activeSessionId = activeWorkSessionId;
+      } else {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_reply_work",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+          activeWorkKind: "embedded_run",
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
     }
 
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
-        diag.warn(
-          `stuck session recovery skipped: reason=active_lane_task action=keep_lane ${formatRecoveryContext(
-            params,
-            {
-              lane: sessionLane,
-              activeCount: laneSnapshot.activeCount,
-              queuedCount: laneSnapshot.queuedCount,
-            },
-          )}`,
-        );
-        return;
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_lane_task",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          lane: sessionLane,
+          activeCount: laneSnapshot.activeCount,
+          queuedCount: laneSnapshot.queuedCount,
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
       }
     }
 
     const released =
       sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
 
-    if (aborted || released > 0) {
-      const action = aborted ? "abort_embedded_run" : "release_lane";
+    const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
+
+    if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
+      const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
       );
@@ -141,22 +193,57 @@ export async function recoverStuckDiagnosticSession(
           stoppedFields ? ` ${stoppedFields}` : ""
         }`,
       );
-    } else {
-      diag.warn(
-        `stuck session recovery no-op: reason=no_active_work action=none ${formatRecoveryContext(
-          params,
-          {
-            lane: sessionLane ?? undefined,
-          },
-        )}`,
-      );
+      const outcome: StuckSessionRecoveryOutcome =
+        aborted || forceCleared
+          ? {
+              status: "aborted",
+              action: "abort_embedded_run",
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              activeSessionId,
+              activeWorkKind: "embedded_run",
+              aborted,
+              drained,
+              forceCleared,
+              released,
+              lane: sessionLane ?? undefined,
+            }
+          : {
+              status: "released",
+              action: "release_lane",
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              released,
+              lane: sessionLane ?? undefined,
+            };
+      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+      return outcome;
     }
+    const outcome: StuckSessionRecoveryOutcome = {
+      status: "noop",
+      action: "none",
+      reason: "no_active_work",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      lane: sessionLane ?? undefined,
+    };
+    diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+    return outcome;
   } catch (err) {
+    const outcome: StuckSessionRecoveryOutcome = {
+      status: "failed",
+      action: "none",
+      reason: "exception",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      error: String(err),
+    };
     diag.warn(
       `stuck session recovery failed: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
         params.sessionKey ?? "unknown"
       } err=${String(err)}`,
     );
+    return outcome;
   } finally {
     recoveriesInFlight.delete(key);
   }

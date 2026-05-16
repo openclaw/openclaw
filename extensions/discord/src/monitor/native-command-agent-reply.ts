@@ -1,7 +1,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -42,7 +42,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   suppressReplies?: boolean;
   log: ReturnType<typeof createSubsystemLogger>;
 }): Promise<void> {
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.effectiveRoute.agentId,
     channel: "discord",

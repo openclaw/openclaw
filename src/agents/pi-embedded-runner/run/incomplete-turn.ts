@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -619,7 +619,10 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
     return true;
   }
-  if (normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions") {
+  if (
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions" ||
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages"
+  ) {
     return true;
   }
   // Non-visible final turns are narrower than planning-only turns: there is no

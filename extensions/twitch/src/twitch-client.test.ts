@@ -138,9 +138,7 @@ describe("TwitchClientManager", () => {
 
       // New implementation: connect is called, channels are passed to constructor
       expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining("Connected to Twitch as testbot"),
-      );
+      expect(mockLogger.info).toHaveBeenCalledWith("Connected to Twitch as testbot");
     });
 
     it("should use account username as default channel when channel not specified", async () => {
@@ -213,9 +211,7 @@ describe("TwitchClientManager", () => {
         "Missing Twitch client ID",
       );
 
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Missing Twitch client ID"),
-      );
+      expect(mockLogger.error).toHaveBeenCalledWith("Missing Twitch client ID for account testbot");
     });
 
     it("should throw error when token is missing", async () => {
@@ -232,7 +228,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       expect(mockOnMessage).toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Set up handlers for"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Set up handlers for testbot:testchannel");
     });
 
     it("should create separate clients for same account with different channels", async () => {
@@ -279,7 +275,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       expect(mockQuit).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Disconnected"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Disconnected testbot:testchannel");
     });
 
     it("should clear client and message handler", async () => {
@@ -295,7 +291,7 @@ describe("TwitchClientManager", () => {
     });
 
     it("should handle disconnecting non-existent client gracefully", async () => {
-      // disconnect doesn't throw, just does nothing
+      // Missing clients are ignored.
       await manager.disconnect(testAccount);
       expect(mockQuit).not.toHaveBeenCalled();
     });
@@ -326,7 +322,7 @@ describe("TwitchClientManager", () => {
     });
 
     it("should handle empty client list gracefully", async () => {
-      // disconnectAll doesn't throw, just does nothing
+      // Empty client sets are ignored.
       await manager.disconnectAll();
       expect(mockQuit).not.toHaveBeenCalled();
     });
@@ -339,11 +335,10 @@ describe("TwitchClientManager", () => {
 
     it("should send message successfully", async () => {
       const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
+      const { messageId, ...resultRest } = result;
 
-      expect(result).toMatchObject({ ok: true });
-      expect(result.messageId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-      );
+      expect(resultRest).toEqual({ ok: true });
+      expect(messageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 
@@ -373,9 +368,7 @@ describe("TwitchClientManager", () => {
 
       expect(result.ok).toBe(false);
       expect(result.error).toBe("Rate limited");
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to send message"),
-      );
+      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: Rate limited");
     });
 
     it("should handle unknown error types", async () => {
@@ -436,7 +429,6 @@ describe("TwitchClientManager", () => {
         id: "msg123",
       });
 
-      expect(capturedMessage).not.toBeNull();
       expect(capturedMessage?.username).toBe("testuser");
       expect(capturedMessage?.displayName).toBe("TestUser");
       expect(capturedMessage?.userId).toBe("12345");

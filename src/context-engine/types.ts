@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -24,6 +24,24 @@ export type AssembleResult = {
   promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
+  /**
+   * Optional projection lifecycle for hosts with persistent backend threads.
+   *
+   * Context engines that return `thread_bootstrap` ask the host to inject the
+   * assembled context once for the supplied epoch, then reuse the backend
+   * thread until the epoch changes. Engines that omit this field retain the
+   * legacy per-turn projection behavior.
+   */
+  contextProjection?: ContextEngineProjection;
+};
+
+export type ContextEngineProjection = {
+  /** How the assembled context should be projected into the backend runtime. */
+  mode: "per_turn" | "thread_bootstrap";
+  /** Stable context epoch. Changing this tells persistent backends to rotate. */
+  epoch?: string;
+  /** Optional diagnostic fingerprint for the projected context payload. */
+  fingerprint?: string;
 };
 
 export type CompactResult = {
@@ -173,6 +191,12 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   rewriteTranscriptEntries?: (
     request: TranscriptRewriteRequest,
   ) => Promise<TranscriptRewriteResult>;
+  /** LLM completion capability for engines that need model inference. */
+  llm?: {
+    complete: (
+      params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
+  };
 };
 
 /**

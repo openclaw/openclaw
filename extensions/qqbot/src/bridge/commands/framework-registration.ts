@@ -1,14 +1,14 @@
 /**
- * Register all `requireAuth: true` slash commands with the framework via
+ * Register slash commands that are allowed on the framework surface via
  * `api.registerCommand`.
  *
  * Routing through the framework lets `resolveCommandAuthorization()` apply
  * `commands.allowFrom.qqbot` precedence and the `qqbot:` prefix normalization
  * before any QQBot command handler runs.
  *
- * This module is intentionally thin: it wires the engine-side command
- * registry (`getFrameworkCommands`) to the framework registration surface via
- * the three single-responsibility helpers in this directory.
+ * This module is intentionally thin: it wires the engine-side command registry
+ * (`getFrameworkCommands`) to the framework registration surface via the three
+ * single-responsibility helpers in this directory.
  */
 
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -37,6 +37,7 @@ export function registerQQBotFrameworkCommands(api: OpenClawPluginApi): void {
     api.registerCommand({
       name: cmd.name,
       description: cmd.description,
+      channels: ["qqbot"],
       requireAuth: true,
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {

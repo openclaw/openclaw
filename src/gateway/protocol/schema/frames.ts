@@ -59,6 +59,7 @@ export const ConnectParamsSchema = Type.Object(
           bootstrapToken: Type.Optional(Type.String()),
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
+          approvalRuntimeToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),
@@ -88,7 +89,7 @@ export const HelloOkSchema = Type.Object(
       { additionalProperties: false },
     ),
     snapshot: SnapshotSchema,
-    canvasHostUrl: Type.Optional(NonEmptyString),
+    pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
     auth: Type.Object(
       {
         deviceToken: Type.Optional(NonEmptyString),

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -11,7 +11,7 @@ import {
   normalizeInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
   buildDiscordInteractiveComponents,
@@ -102,14 +102,17 @@ export async function handleDiscordMessageAction(
     const rawEmbeds = params.embeds;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
+    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
+    const threadName = readStringParam(params, "threadName");
     return await handleDiscordAction(
       {
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
         content: content ?? "",
+        ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
@@ -117,6 +120,7 @@ export async function handleDiscordMessageAction(
         embeds,
         asVoice,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
       },
@@ -140,6 +144,7 @@ export async function handleDiscordMessageAction(
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
+    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
     return await handleDiscordAction(
@@ -152,6 +157,7 @@ export async function handleDiscordMessageAction(
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
       },

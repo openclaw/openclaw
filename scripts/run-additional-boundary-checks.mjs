@@ -9,6 +9,7 @@ export const BOUNDARY_CHECKS = [
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],
   ["lint:tmp:tsgo-core-boundary", "pnpm", ["run", "lint:tmp:tsgo-core-boundary"]],
   ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
+  ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
   ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
   [
     "lint:plugins:no-register-http-handler",
@@ -52,6 +53,11 @@ export const BOUNDARY_CHECKS = [
     "extension-relative-outside-package-boundary",
     "pnpm",
     ["run", "lint:extensions:no-relative-outside-package"],
+  ],
+  [
+    "lint:extensions:telegram-grammy-types",
+    "pnpm",
+    ["run", "lint:extensions:telegram-grammy-types"],
   ],
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
 ].map(([label, command, args]) => ({ label, command, args }));

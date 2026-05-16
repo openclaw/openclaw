@@ -1,32 +1,24 @@
-import type { AgentRuntimePolicyConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
-import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
-import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../pi-embedded-runner/run/types.js";
-import {
-  normalizeEmbeddedAgentRuntime,
-  resolveEmbeddedAgentRuntime,
-  type EmbeddedAgentRuntime,
-} from "../pi-embedded-runner/runtime.js";
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
-import { listRegisteredAgentHarnesses } from "./registry.js";
+import {
+  resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
+  type AgentHarnessPolicy,
+} from "./policy.js";
+import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 const log = createSubsystemLogger("agents/harness");
-
-type AgentHarnessPolicy = {
-  runtime: EmbeddedAgentRuntime;
-};
+export { resolveAgentHarnessPolicy } from "./policy.js";
+export type { AgentHarnessPolicy };
 
 type AgentHarnessSelectionCandidate = {
   id: string;
@@ -42,9 +34,10 @@ type AgentHarnessSelectionDecision = {
   policy: AgentHarnessPolicy;
   selectedHarnessId: string;
   selectedReason:
-    | "pinned"
     | "forced_pi"
     | "forced_plugin"
+    // Implicit Codex preference found no registered Codex harness, so PI handled the run.
+    | "implicit_plugin_unavailable_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -54,6 +47,31 @@ type AgentHarnessSelectionDecision = {
 
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
+}
+
+export function resolveAvailableAgentHarnessPolicy(params: {
+  provider?: string;
+  modelId?: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  env?: NodeJS.ProcessEnv;
+}): AgentHarnessPolicy {
+  return applyAgentHarnessAvailabilityPolicy(resolveConfiguredAgentHarnessPolicy(params));
+}
+
+function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentHarnessPolicy {
+  if (
+    policy.runtime === "codex" &&
+    policy.runtimeSource === "implicit" &&
+    !getRegisteredAgentHarness("codex")
+  ) {
+    return {
+      ...policy,
+      runtime: "pi",
+    };
+  }
+  return policy;
 }
 
 function compareHarnessSupport(
@@ -74,6 +92,7 @@ export function selectAgentHarness(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
 }): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
 }
@@ -85,9 +104,18 @@ function selectAgentHarnessDecision(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
-  const pinnedPolicy = resolvePinnedAgentHarnessPolicy(params.agentHarnessId);
-  const policy = pinnedPolicy ?? resolveAgentHarnessPolicy(params);
+  const resolvedPolicy = resolveConfiguredAgentHarnessPolicy(params);
+  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const policy =
+    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
+      ? ({
+          ...resolvedPolicy,
+          runtime: runtimeOverride,
+          runtimeSource: "model",
+        } as AgentHarnessPolicy)
+      : resolvedPolicy;
   // PI is intentionally not part of the plugin candidate list. Explicit plugin
   // runtimes fail closed; only `auto` may route an unmatched turn to PI.
   const pluginHarnesses = listPluginAgentHarnesses();
@@ -97,7 +125,7 @@ function selectAgentHarnessDecision(params: {
     return buildSelectionDecision({
       harness: piHarness,
       policy,
-      selectedReason: pinnedPolicy ? "pinned" : "forced_pi",
+      selectedReason: "forced_pi",
       candidates: listHarnessCandidates(pluginHarnesses),
     });
   }
@@ -107,7 +135,18 @@ function selectAgentHarnessDecision(params: {
       return buildSelectionDecision({
         harness: forced,
         policy,
-        selectedReason: pinnedPolicy ? "pinned" : "forced_plugin",
+        selectedReason: "forced_plugin",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (runtime === "codex" && policy.runtimeSource === "implicit") {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy: {
+          ...policy,
+          runtime: "pi",
+        },
+        selectedReason: "implicit_plugin_unavailable_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
@@ -160,6 +199,7 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     agentHarnessId: params.agentHarnessId,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
   logAgentHarnessSelection(selection, {
@@ -242,19 +282,6 @@ function logAgentHarnessSelection(
   });
 }
 
-function resolvePinnedAgentHarnessPolicy(
-  agentHarnessId: string | undefined,
-): AgentHarnessPolicy | undefined {
-  if (!agentHarnessId?.trim()) {
-    return undefined;
-  }
-  const runtime = normalizeEmbeddedAgentRuntime(agentHarnessId);
-  if (runtime === "auto") {
-    return undefined;
-  }
-  return { runtime };
-}
-
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult | undefined> {
@@ -263,7 +290,6 @@ export async function maybeCompactAgentHarnessSession(
     modelId: params.model,
     config: params.config,
     sessionKey: params.sessionKey,
-    agentHarnessId: params.agentHarnessId,
   });
   if (!harness.compact) {
     if (harness.id !== "pi") {
@@ -276,50 +302,4 @@ export async function maybeCompactAgentHarnessSession(
     return undefined;
   }
   return harness.compact(params);
-}
-
-export function resolveAgentHarnessPolicy(params: {
-  provider?: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): AgentHarnessPolicy {
-  const env = params.env ?? process.env;
-  // Harness policy can be session-scoped because users may switch between agents
-  // with different strictness requirements inside the same gateway process.
-  const agentPolicy = resolveAgentEmbeddedHarnessConfig(params.config, {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const defaultsPolicy = resolveAgentRuntimePolicy(params.config?.agents?.defaults);
-  const runtime = env.OPENCLAW_AGENT_RUNTIME?.trim()
-    ? resolveEmbeddedAgentRuntime(env)
-    : normalizeEmbeddedAgentRuntime(agentPolicy?.id ?? defaultsPolicy?.id);
-  if (isCliRuntimeAlias(runtime)) {
-    return {
-      runtime: "pi",
-    };
-  }
-  return {
-    runtime,
-  };
-}
-
-function resolveAgentEmbeddedHarnessConfig(
-  config: OpenClawConfig | undefined,
-  params: { agentId?: string; sessionKey?: string },
-): AgentRuntimePolicyConfig | undefined {
-  if (!config) {
-    return undefined;
-  }
-  const { sessionAgentId } = resolveSessionAgentIds({
-    config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  return resolveAgentRuntimePolicy(
-    listAgentEntries(config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId),
-  );
 }

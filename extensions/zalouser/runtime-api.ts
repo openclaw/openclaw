@@ -22,7 +22,7 @@ export type {
   OpenClawConfig,
   GroupToolPolicyConfig,
   MarkdownTableMode,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 export type {
   PluginRuntime,
   AnyAgentTool,
@@ -49,13 +49,8 @@ export {
 } from "openclaw/plugin-sdk/allow-from";
 export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { buildBaseAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
-export { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
-export {
-  evaluateGroupRouteAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "openclaw/plugin-sdk/group-access";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {
   deliverTextOrMediaReply,
