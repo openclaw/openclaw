@@ -63,7 +63,7 @@ function collectLatestPreCompactionState(entries: SessionEntry[]): SessionEntry[
         latestByKey.set(entry.type, entry);
         break;
       case "custom":
-        latestByKey.set(`custom:${(entry as CustomEntry).customType}`, entry);
+        latestByKey.set(`custom:${String((entry as CustomEntry).customType)}`, entry);
         break;
       default:
         break;
@@ -75,7 +75,7 @@ function collectLatestPreCompactionState(entries: SessionEntry[]): SessionEntry[
 
 function stateEntryKey(entry: SessionEntry): string {
   if (entry.type === "custom") {
-    return `custom:${(entry as CustomEntry).customType}`;
+    return `custom:${String((entry as CustomEntry).customType)}`;
   }
   return entry.type;
 }
