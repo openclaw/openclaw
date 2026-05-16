@@ -1538,7 +1538,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
   });
 
-  it("keeps default main-scope DM last-route metadata on the main session", async () => {
+  it("keeps default main-scope DM thread replies on the main session", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true, replyToMode: "all" } },
@@ -1558,7 +1558,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:600.000");
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main");
+    expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
     ).toEqual({
