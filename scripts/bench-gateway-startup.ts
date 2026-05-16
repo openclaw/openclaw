@@ -495,7 +495,7 @@ function classifyProbeErrorKind(error: unknown): string {
       return code.trim().toLowerCase();
     }
     const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && /probe timeout/iu.test(message)) {
+    if (typeof message === "string" && message.toLowerCase().includes("probe timeout")) {
       return "timeout";
     }
     const name = (error as { name?: unknown }).name;
@@ -662,7 +662,7 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
 }
 
 function classifyGatewayReadyLog(line: string): "gateway-ready" | "http-listen" | null {
-  if (/\[gateway\] http server listening \(/.test(line)) {
+  if (line.includes("[gateway] http server listening (")) {
     return "http-listen";
   }
   if (/\[gateway\] ready(?:\s*\(|\s*$)/.test(line)) {
