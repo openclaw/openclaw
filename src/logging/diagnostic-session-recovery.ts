@@ -1,4 +1,7 @@
-import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+import type {
+  DiagnosticSessionActiveWorkKind,
+  DiagnosticSessionState,
+} from "../infra/diagnostic-events.js";
 
 export type DiagnosticSessionRecoveryStatus =
   | "aborted"
@@ -23,6 +26,7 @@ export type StuckSessionRecoveryRequest = {
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
+  expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
 };
 
@@ -42,6 +46,7 @@ export type StuckSessionRecoveryOutcome =
       drained: boolean;
       forceCleared: boolean;
       released: number;
+      queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
@@ -85,6 +90,7 @@ export function recoveryOutcomeClearsQueuedSessionState(
 ): boolean {
   return (
     outcome.status === "released" ||
+    (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0) ||
     (outcome.status === "noop" && outcome.reason === "no_active_work")
   );
 }

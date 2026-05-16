@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn(),
@@ -61,6 +61,10 @@ vi.mock("./diagnostic-runtime.js", () => ({
 }));
 
 import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "./diagnostic-session-state.js";
+import {
   __testing,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
@@ -99,6 +103,11 @@ function warnLogMessages(): string[] {
 describe("stuck session recovery", () => {
   beforeEach(() => {
     resetMocks();
+    resetDiagnosticSessionStateForTest();
+  });
+
+  afterEach(() => {
+    resetDiagnosticSessionStateForTest();
   });
 
   it("does not abort an active embedded run by default", async () => {
@@ -211,7 +220,7 @@ describe("stuck session recovery", () => {
 
     expect(warnLogMessages()).toEqual([
       'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 stopped="Twitter Mention Moderation Agent" cronJobId=job-123 cronRunId=run-456 lastAssistant="There are 40 cached mentions."',
-      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 activeSessionId=run-456 activeWorkKind=embedded_run lane=session:agent:clawblocker:cron:job-123:run:run-456 aborted=true drained=true forceCleared=false released=0",
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 activeSessionId=run-456 activeWorkKind=embedded_run lane=session:agent:clawblocker:cron:job-123:run:run-456 aborted=true drained=true forceCleared=false released=0 laneQueued=1",
     ]);
   });
 
@@ -219,6 +228,7 @@ describe("stuck session recovery", () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
     mocks.abortEmbeddedPiRun.mockReturnValue(true);
     mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    mocks.forceClearEmbeddedPiRun.mockReturnValue(true);
     mocks.resetCommandLane.mockReturnValue(1);
 
     await recoverStuckDiagnosticSession({
@@ -314,8 +324,106 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
-      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0 laneQueued=1",
     ]);
+  });
+
+  it("accepts idle diagnostic state when idle recovery carries the expected generation", async () => {
+    const state = getDiagnosticSessionState({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+    });
+    state.state = "idle";
+    state.generation = 7;
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 360_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+      expectedState: "idle",
+      stateGeneration: 7,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      activeSessionId: "session-1",
+      activeWorkKind: "embedded_run",
+      queuedCount: 1,
+    });
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("session-1");
+  });
+
+  it("records queued lane work when abort recovery has to reset the lane", async () => {
+    const state = getDiagnosticSessionState({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+    });
+    state.state = "idle";
+    state.generation = 7;
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    mocks.forceClearEmbeddedPiRun.mockReturnValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 360_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+      expectedState: "idle",
+      stateGeneration: 7,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      activeSessionId: "session-1",
+      activeWorkKind: "embedded_run",
+      released: 1,
+      queuedCount: 1,
+    });
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+  });
+
+  it("records queued lane work when processing recovery abort resets the lane", async () => {
+    const state = getDiagnosticSessionState({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+    });
+    state.state = "processing";
+    state.generation = 7;
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    mocks.forceClearEmbeddedPiRun.mockReturnValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 360_000,
+      queueDepth: 2,
+      allowActiveAbort: true,
+      stateGeneration: 7,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      activeSessionId: "session-1",
+      activeWorkKind: "embedded_run",
+      released: 1,
+      queuedCount: 1,
+    });
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
   });
 
   it("does not release the session lane while unregistered lane work is active", async () => {
