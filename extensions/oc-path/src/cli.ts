@@ -204,7 +204,7 @@ function formatMatchHuman(match: OcMatch): string {
 }
 
 function splitDiffLines(s: string): readonly string[] {
-  return s === "" ? [] : s.split(/\r?\n/);
+  return s === "" ? [] : s.split("\n");
 }
 
 export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {

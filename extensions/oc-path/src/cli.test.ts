@@ -184,6 +184,24 @@ describe("openclaw path CLI", () => {
       expect(out).toContain("\n-\n");
     });
 
+    it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
+      const filePath = join(workspaceDir, "AGENTS.md");
+      const before = "---\r\nname: x\r\n---\r\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://AGENTS.md/[frontmatter]/name",
+        "x",
+        { cwd: workspaceDir, json: true, dryRun: true, diff: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.diff).toContain("-name: x\r");
+      expect(out.diff).toContain("+name: x");
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
     it("CLI-S06 --dry-run --diff includes diff in JSON output", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
