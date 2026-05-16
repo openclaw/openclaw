@@ -2027,7 +2027,7 @@ export async function runCodexAppServerAttempt(
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   turnAttemptIdleWatchArmed = true;
   turnTerminalIdleWatchArmed = true;
-  touchTurnCompletionActivity("turn:start", { arm: true, attemptProgress: true });
+  touchTurnCompletionActivity("turn:start", { attemptProgress: true });
 
   const abortListener = () => {
     const shouldRetireClient = timedOut;
