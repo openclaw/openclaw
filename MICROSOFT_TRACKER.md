@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-15 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-16 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 5      | 41     | 46      | 0      | 46        |
-| Windows platform          | 61     | 33     | 94      | 0      | 94        |
+| MS Teams (channel plugin) | 5      | 40     | 45      | 0      | 45        |
+| Windows platform          | 58     | 32     | 90      | 0      | 90        |
 | WSL                       | 7      | 3      | 10      | 0      | 10        |
-| Azure                     | 7      | 6      | 13      | 0      | 13        |
+| Azure                     | 6      | 6      | 12      | 0      | 12        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **80** | **83** | **163** | **0**  | **163**   |
+| **Total**                 | **76** | **81** | **157** | **0**  | **157**   |
 
 ---
 
@@ -54,8 +54,7 @@
 | [ ]       | P0       | #79970 | feat: expose durable session id match selection helpers                                              | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
-| [ ]       | P1       | #71856 | feat(tui): fetch startup conversation summary dynamically from Gateway API                           | M    |             |
-| [ ]       | P2       | #80645 | feat(wizard): add CLI onboarding i18n                                                                | XL   |             |
+| [ ]       | P2       | #82354 | fix(msteams): emit message:sent hook on reply delivery                                               | M    |             |
 | [ ]       | P2       | #80285 | fix: clear cross-run messaging-tool sent-text state after every compaction                           | XL   |             |
 | [ ]       | P2       | #80204 | fix: propagate gateway TLS fingerprints to bootstrap clients                                         | XL   |             |
 | [ ]       | P2       | #80181 | fix: add resilient fallback policy for user model overrides                                          | XL   |             |
@@ -99,11 +98,10 @@
 
 | Resolved? | Priority | #      | Title                                                                                                                                                   | Labels               | Assignee    |
 | --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------- |
+| [ ]       | P1       | #82338 | Image tool blocks Telegram polling and crashes event loop on Windows                                                                                    |                      |             |
 | [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  | `bug` `bug:crash`    |             |
 | [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |                      |             |
-| [ ]       | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    | `bug` `bug:crash`    |             |
 | [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          | `bug` `regression`   |             |
-| [ ]       | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                             |                      |             |
 | [ ]       | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              | `bug` `regression`   |             |
 | [ ]       | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                 |                      |             |
 | [ ]       | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges  |                      |             |
@@ -117,14 +115,12 @@
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      |                      |             |
 | [ ]       | P2       | #81673 | Build official OpenClaw companion downloads for Windows and Linux                                                                                       |                      |             |
 | [ ]       | P2       | #81254 | [Bug]: Windows node Scheduled Task opens persistent cmd window at login                                                                                 | `bug` `bug:behavior` |             |
-| [ ]       | P2       | #81020 | [Windows] scheduled task watchdog: repetition Duration=P1D expires after 1 day, loses auto-restart                                                      |                      |             |
 | [ ]       | P2       | #80650 | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                      | `bug`                |             |
 | [ ]       | P2       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                         |                      |             |
 | [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                           |                      |             |
 | [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                  |                      |             |
 | [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                      |                      |             |
 | [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                            |                      |             |
-| [ ]       | P2       | #78352 | [Bug]: 16 Telegram bots on Windows cause event loop starvation up to 65s — 100% ELU, 90%+ CPU, control-plane RPC >100s                                  |                      |             |
 | [ ]       | P2       | #77805 | telegram bundled channel setup fails on Windows: plugin module path escapes plugin root or fails alias checks                                           |                      |             |
 | [ ]       | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                         |                      |             |
 | [ ]       | P2       | #76884 | [Bug]: OpenClaw on native Windows getting notably slower and slower with each new version???                                                            | `bug`                |             |
@@ -175,7 +171,6 @@
 | [ ]       | P2       | #81443 | fix: resolve QMD Windows shims and guard image URL downloads                         | M    |             |
 | [ ]       | P2       | #81330 | fix(windows): suppress persistent cmd window from scheduled-task node launch         | XS   |             |
 | [ ]       | P2       | #81267 | fix(node): hide Windows node task launcher                                           | M    |             |
-| [ ]       | P2       | #81168 | [codex] Add short plugin cache windows                                               | M    |             |
 | [ ]       | P2       | #80683 | fix(memory-lancedb): add retry mechanism for Windows Docker bind mount sync delays   | S    |             |
 | [ ]       | P2       | #79694 | fix(update): hide post-core update and completion cache child windows on Windows     | XS   |             |
 | [ ]       | P2       | #76245 | [codex] Fallback when Windows gateway task exits early                               | S    |             |
@@ -252,10 +247,9 @@ _No currently open items found._
 
 ### Feature Requests
 
-| Resolved? | Priority | #      | Title                                                                                         | Labels        | Assignee |
-| --------- | -------- | ------ | --------------------------------------------------------------------------------------------- | ------------- | -------- |
-| [ ]       | P2       | #82025 | [Bug]: azure-openai-responses provider fails with 400 'API version not supported' for gpt-5.5 |               |          |
-| [ ]       | P2       | #71058 | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway                 | `enhancement` |          |
+| Resolved? | Priority | #      | Title                                                                         | Labels        | Assignee |
+| --------- | -------- | ------ | ----------------------------------------------------------------------------- | ------------- | -------- |
+| [ ]       | P2       | #71058 | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway | `enhancement` |          |
 
 ---
 
@@ -307,13 +301,11 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
 | MS Teams (channel plugin) | pr    | P1       | #77784 | Add Teams delegated auth for plugin tools                                                                                                               |
-| MS Teams (channel plugin) | pr    | P1       | #71856 | feat(tui): fetch startup conversation summary dynamically from Gateway API                                                                              |
+| Windows platform          | issue | P1       | #82338 | Image tool blocks Telegram polling and crashes event loop on Windows                                                                                    |
 | Windows platform          | issue | P1       | #82125 | [Feature] Windows: crash auto-restart parity with systemd Restart=always / launchd KeepAlive                                                            |
 | Windows platform          | issue | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  |
 | Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |
-| Windows platform          | issue | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    |
 | Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          |
-| Windows platform          | issue | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                             |
 | Windows platform          | issue | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              |
 | Windows platform          | issue | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                 |
 | Windows platform          | issue | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges  |
