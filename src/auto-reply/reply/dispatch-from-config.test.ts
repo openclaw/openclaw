@@ -4903,7 +4903,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("falls back to visible final replies for group/channel turns that miss the message tool", async () => {
+  it("keeps group/channel final replies private when message-tool-only turns miss the message tool", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -4924,12 +4924,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
+    expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("uses the same-provider dispatcher fallback for group/channel final replies in message-tool-only mode", async () => {
+  it("keeps same-provider group/channel final replies private in message-tool-only mode", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     const dispatcher = createDispatcher();
@@ -4954,8 +4954,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).not.toHaveBeenCalled();
   });
 
