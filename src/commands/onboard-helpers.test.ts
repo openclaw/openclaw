@@ -11,6 +11,7 @@ import {
   probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  summarizeExistingConfig,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
@@ -202,6 +203,59 @@ describe("probeGatewayReachable", () => {
       ok: false,
       detail: "connect failed: timeout",
     });
+  });
+});
+
+describe("summarizeExistingConfig", () => {
+  it("collapses gateway fields into a friendly remote summary", () => {
+    expect(
+      summarizeExistingConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789");
+  });
+
+  it("uses the port when no remote gateway URL is configured", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("does not show a stale remote URL as active for local gateway mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("surfaces missing remote URL instead of falling back to port for remote mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+        },
+      }),
+    ).toBe("Gateway: remote via LAN (missing remote URL)");
   });
 });
 
