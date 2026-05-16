@@ -119,21 +119,22 @@ async function finalizeCliContextEngineTurn(params: {
 
   const { params: runParams } = context;
   const prePromptMessages = params.historyMessages.filter(isAgentMessage);
-  const turnMessages = [
-    buildCliContextEngineUserMessage(runParams.transcriptPrompt ?? runParams.prompt),
-    ...(params.assistantText
-      ? [
-          buildCliContextEngineAssistantMessage({
-            text: params.assistantText,
-            provider: runParams.provider,
-            model: context.modelId,
-            usage: params.output.usage,
-          }),
-        ]
-      : []),
-  ];
+  const turnMessages: AgentMessage[] = [];
+  if (runParams.transcriptPrompt) {
+    turnMessages.push(buildCliContextEngineUserMessage(runParams.transcriptPrompt));
+  }
+  if (params.assistantText) {
+    turnMessages.push(
+      buildCliContextEngineAssistantMessage({
+        text: params.assistantText,
+        provider: runParams.provider,
+        model: context.modelId,
+        usage: params.output.usage,
+      }),
+    );
+  }
 
-  await finalizeHarnessContextEngineTurn({
+  const result = await finalizeHarnessContextEngineTurn({
     contextEngine: context.contextEngine,
     promptError: false,
     aborted: runParams.abortSignal?.aborted === true,
@@ -146,10 +147,14 @@ async function finalizeCliContextEngineTurn(params: {
     config: context.contextEngineConfig,
     warn: (message) => log.warn(message),
   });
+  context.contextEngineDeferredTurnMaintenance =
+    result.postTurnFinalizationSucceeded &&
+    typeof context.contextEngine.maintain === "function" &&
+    context.contextEngine.info.turnMaintenanceMode === "background";
 }
 
 async function disposeCliContextEngine(context: PreparedCliRunContext): Promise<void> {
-  if (context.contextEngine?.info.turnMaintenanceMode === "background") {
+  if (context.contextEngineDeferredTurnMaintenance) {
     return;
   }
   try {

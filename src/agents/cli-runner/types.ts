@@ -118,6 +118,7 @@ export type PreparedCliRunContext = {
   hadSessionFile: boolean;
   contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;
+  contextEngineDeferredTurnMaintenance?: boolean;
   modelId: string;
   normalizedModel: string;
   contextWindowInfo?: ContextWindowInfo;

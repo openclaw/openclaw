@@ -197,6 +197,49 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("does not synthesize a context-engine user turn for empty transcript prompts", async () => {
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({ afterTurn, dispose });
+    const context = buildPreparedContext(contextEngine);
+    context.params.transcriptPrompt = "";
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await runPreparedCliAgent(context);
+
+    const afterTurnParams = afterTurn.mock.calls[0]?.[0];
+    expect(afterTurnParams?.messages).toHaveLength(3);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(2);
+    expect(afterTurnParams?.messages.slice(0, 2)).toEqual([
+      textMessage("user", "old ask", 1),
+      textMessage("assistant", "old answer", 2),
+    ]);
+    const turnMessages = afterTurnParams?.messages.slice(afterTurnParams.prePromptMessageCount);
+    expect(turnMessages).toHaveLength(1);
+    expectMessageText(turnMessages?.[0], "final answer");
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not finalize prepared model prompt as transcript turn text", async () => {
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({ afterTurn, dispose });
+    const context = buildPreparedContext(contextEngine);
+    context.params.prompt = "runtime context\n\noriginal user ask";
+    delete context.params.transcriptPrompt;
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await runPreparedCliAgent(context);
+
+    const afterTurnParams = afterTurn.mock.calls[0]?.[0];
+    expect(afterTurnParams?.messages).toHaveLength(3);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(2);
+    const turnMessages = afterTurnParams?.messages.slice(afterTurnParams.prePromptMessageCount);
+    expect(turnMessages).toHaveLength(1);
+    expectMessageText(turnMessages?.[0], "final answer");
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to ingestBatch and still runs turn maintenance", async () => {
     const ingestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async () => ({
       ingestedCount: 2,
@@ -242,6 +285,48 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     await runPreparedCliAgent(buildPreparedContext(contextEngine));
 
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("disposes background engines when no deferred turn maintenance is queued", async () => {
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({
+      info: {
+        id: "test-background-context-engine",
+        name: "Test background context engine",
+        turnMaintenanceMode: "background",
+      },
+      dispose,
+    });
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await runPreparedCliAgent(buildPreparedContext(contextEngine));
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes background engines after failed CLI attempts", async () => {
+    executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      createMaintenanceResult(),
+    );
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({
+      info: {
+        id: "test-background-context-engine",
+        name: "Test background context engine",
+        turnMaintenanceMode: "background",
+      },
+      maintain,
+      dispose,
+    });
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await expect(runPreparedCliAgent(buildPreparedContext(contextEngine))).rejects.toThrow(
+      "cli boom",
+    );
+
+    expect(maintain).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("does not finalize or run turn maintenance on failed CLI attempts", async () => {
