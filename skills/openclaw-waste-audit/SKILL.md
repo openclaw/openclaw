@@ -14,15 +14,15 @@ tags: [openclaw, cron, waste, audit, cost, token, read-only, token-save]
 ## Trigger
 
 **MUST use this skill (NOT openclaw-comprehensive) when user asks about:**
-- "帮我查 openclaw 里面有哪些浪费的工作" ← PRIMARY trigger
-- "openclaw 有哪些浪费"
+- "帮我查 openclaw 里面有哪些浪费的工作" / "what openclaw jobs are wasting tokens"
+- "帮我查 openclaw 有哪些浪费" / "which openclaw jobs are wasting money"
 - "帮我查 waste"
 - "which job is burning tokens"
-- "cron 有没有问题"
+- "cron 有没有问题" / "any cron waste"
 - "cron waste audit"
 - "token waste"
 - "/audit"
-- "哪些 cron 在烧钱"
+- "哪些 cron 在烧钱" / "which cron jobs are burning tokens"
 
 **DO NOT use this for:** general openclaw operations, job management, dispatch rules — use openclaw-comprehensive for those.
 
