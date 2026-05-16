@@ -174,6 +174,10 @@ vi.mock("../config/config.js", () => ({
     mocks.setRuntimeConfigSnapshot as typeof import("../config/config.js").setRuntimeConfigSnapshot,
 }));
 
+vi.mock("./command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: () => "/tmp/agent",
@@ -2255,6 +2259,64 @@ describe("capability cli", () => {
         defaultModels: { audio: "whisper-large-v3-turbo" },
       },
     ]);
+  });
+
+  it("resolves plugin web search SecretRefs before running infer web search", async () => {
+    const unresolvedConfig = {
+      tools: { web: { search: { provider: "tavily", enabled: true } } },
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      ...unresolvedConfig,
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-tavily-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(unresolvedConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "tavily",
+      result: { results: [] },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["infer", "web", "search", "--query", "ping", "--json"],
+    });
+
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "infer web search",
+      }),
+    );
+    expect(webSearchRuntime.runWebSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+      }),
+    );
   });
 
   it("surfaces available, configured, and selected for web providers", async () => {
