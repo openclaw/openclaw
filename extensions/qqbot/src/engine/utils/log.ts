@@ -8,7 +8,21 @@
  * Self-contained within engine/ — no framework SDK dependency.
  */
 
-const isDebug = () => !!process.env.QQBOT_DEBUG;
+// Common false-like environment values. Inlined rather than imported from
+// `openclaw/infra/env` so the QQBot engine stays self-contained (see file
+// header). See #82644 for why `!!process.env.QQBOT_DEBUG` is insufficient:
+// the string `"0"` is non-empty and would otherwise enable debug logging.
+const FALSY_DEBUG_ENV_VALUES = new Set(["", "0", "false", "off", "no", "disabled"]);
+
+function isQQBotDebugEnabled(): boolean {
+  const raw = process.env.QQBOT_DEBUG;
+  if (typeof raw !== "string") {
+    return false;
+  }
+  return !FALSY_DEBUG_ENV_VALUES.has(raw.trim().toLowerCase());
+}
+
+const isDebug = () => isQQBotDebugEnabled();
 const MAX_LOG_VALUE_CHARS = 4096;
 
 export function sanitizeDebugLogValue(value: unknown): string {

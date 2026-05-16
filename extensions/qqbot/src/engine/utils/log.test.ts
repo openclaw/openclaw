@@ -25,4 +25,37 @@ describe("QQBot debug logging", () => {
 
     expect(logSpy).toHaveBeenCalledWith("prefix line one line two");
   });
+
+  it.each([
+    ["0", "false-like numeric"],
+    ["false", "false-like boolean"],
+    ["off", "off"],
+    ["no", "no"],
+    ["disabled", "disabled"],
+    ["", "empty string"],
+    ["FALSE", "uppercase false"],
+    ["  0  ", "padded zero"],
+  ])("keeps debug output suppressed when QQBOT_DEBUG=%s (%s) (#82644)", (value) => {
+    process.env.QQBOT_DEBUG = value;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    debugLog("private message");
+
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["1", "truthy numeric"],
+    ["true", "true"],
+    ["yes", "yes"],
+    ["on", "on"],
+    ["TRUE", "uppercase true"],
+  ])("emits debug output when QQBOT_DEBUG=%s (%s) (#82644)", (value) => {
+    process.env.QQBOT_DEBUG = value;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    debugLog("ok");
+
+    expect(logSpy).toHaveBeenCalledOnce();
+  });
 });
