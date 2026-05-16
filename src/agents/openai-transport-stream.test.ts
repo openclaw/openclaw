@@ -5839,6 +5839,18 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 8192,
   } satisfies Model<"openai-completions">;
 
+  const openRouterAnthropicModel = {
+    ...openRouterModel,
+    id: "anthropic/claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+  } satisfies Model<"openai-completions">;
+
+  const openRouterXaiModel = {
+    ...openRouterModel,
+    id: "x-ai/grok-4.3",
+    name: "Grok 4.3",
+  } satisfies Model<"openai-completions">;
+
   const openAIModel = {
     id: "gpt-5.4-mini",
     name: "GPT-5.4 Mini",
@@ -5974,6 +5986,25 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(assistant).not.toHaveProperty("reasoning_details");
     expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["Anthropic", openRouterAnthropicModel],
+    ["xAI", openRouterXaiModel],
+  ] as const)("strips OpenRouter %s non-replayable reasoning fields", (_label, model) => {
+    for (const thinkingSignature of [
+      "reasoning_details",
+      "reasoning_content",
+      "reasoning",
+      "reasoning_text",
+    ]) {
+      const assistant = getAssistantMessage(buildReplayParams(model, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    }
   });
 
   it.each(["reasoning", "reasoning_content"])(
