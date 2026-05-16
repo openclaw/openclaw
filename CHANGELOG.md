@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/config: show concise human config-write output with an indented backup path instead of printing checksum-heavy overwrite audit details by default.
 - CLI/config: add `--dry-run` support to `openclaw config unset`, with `--json` output and allow-exec validation parity with `config set`/`config patch` dry-run handling. (#81895) Thanks @giodl73-repo.
 - Memory-core: retry disabled dreaming cron cleanup until cron is available after startup, so persisted managed dreaming jobs are removed after restart. Fixes #82383. (#82389) Thanks @neeravmakwana.
 - Providers/xAI: keep retired Grok 3, Grok 4 Fast, Grok 4.1 Fast, and Grok Code slugs out of model pickers while preserving compatibility resolution for existing configs.
