@@ -88,6 +88,7 @@ export async function persistSessionUsageUpdate(params: {
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  preserveFreshTotalTokensOnStaleUsage?: boolean;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -154,15 +155,13 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          // Only update totalTokens value when we have a fresh context snapshot
-          // (lastCallUsage or promptTokens or usageIsContextSnapshot).
-          // When the snapshot is stale we keep the existing totalTokens so that
-          // preflight compaction guards set by incrementCompactionCount are not
-          // corrupted by a stale usage update, but mark it as stale.
           if (hasFreshContextSnapshot) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
-          } else {
+          } else if (
+            params.preserveFreshTotalTokensOnStaleUsage !== true ||
+            entry.totalTokensFresh !== true
+          ) {
             patch.totalTokensFresh = false;
           }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
