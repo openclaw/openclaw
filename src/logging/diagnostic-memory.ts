@@ -16,7 +16,7 @@ const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 
-const log = createSubsystemLogger("diagnostics/memory");
+const log = createSubsystemLogger("gateway").child("diagnostics/memory");
 
 type DiagnosticMemoryThresholds = {
   rssWarningBytes?: number;
@@ -160,6 +160,32 @@ function shouldEmitPressure(
   return true;
 }
 
+function formatOptionalPressureMetric(label: string, value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? ` ${label}=${value}` : "";
+}
+
+function logMemoryPressure(params: {
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
+  writeCriticalBundle: boolean;
+}): void {
+  const { pressure } = params;
+  const message =
+    `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
+    ` rssBytes=${pressure.memory.rssBytes}` +
+    ` heapUsedBytes=${pressure.memory.heapUsedBytes}` +
+    formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
+    formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
+    formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.level === "critical"
+      ? ` memoryPressureSnapshot=${params.writeCriticalBundle ? "enabled" : "disabled"}`
+      : "");
+  if (pressure.level === "critical") {
+    log.warn(message);
+  } else {
+    log.info(message);
+  }
+}
+
 export function emitDiagnosticMemorySample(options?: {
   now?: number;
   memoryUsage?: NodeJS.MemoryUsage;
@@ -194,7 +220,9 @@ export function emitDiagnosticMemorySample(options?: {
       type: "diagnostic.memory.pressure",
       ...pressure,
     });
-    if (pressure.level === "critical" && options?.writeCriticalBundle !== false) {
+    const writeCriticalBundle = options?.writeCriticalBundle === true;
+    logMemoryPressure({ pressure, writeCriticalBundle });
+    if (pressure.level === "critical" && writeCriticalBundle) {
       const sessionStorePaths = options?.sessionStorePaths ?? options?.resolveSessionStorePaths?.();
       const result = writeDiagnosticMemoryPressureBundleSync({
         pressure,
@@ -209,6 +237,10 @@ export function emitDiagnosticMemorySample(options?: {
       } else if (result.status === "failed") {
         log.warn(`critical memory pressure bundle failed: ${String(result.error)}`);
       }
+    } else if (pressure.level === "critical") {
+      log.warn(
+        "critical memory pressure snapshot disabled: diagnostics.memoryPressureSnapshot=false",
+      );
     }
   }
   return memory;

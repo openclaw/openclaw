@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -17,6 +18,11 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
+import { resetLogger, setLoggerOverride } from "./logger.js";
+
+function flushDiagnosticEvents() {
+  return vi.runAllTimersAsync();
+}
 
 function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage {
   return {
@@ -37,6 +43,7 @@ describe("diagnostic memory", () => {
     resetDiagnosticMemoryForTest();
     resetDiagnosticStabilityBundleForTest();
     resetDiagnosticStabilityRecorderForTest();
+    resetLogger();
   });
 
   afterEach(() => {
@@ -46,6 +53,8 @@ describe("diagnostic memory", () => {
     resetDiagnosticMemoryForTest();
     resetDiagnosticStabilityBundleForTest();
     resetDiagnosticStabilityRecorderForTest();
+    setLoggerOverride(null);
+    resetLogger();
   });
 
   it("emits memory samples with byte counts", () => {
@@ -217,7 +226,7 @@ describe("diagnostic memory", () => {
     ).toBe(1);
   });
 
-  it("resolves session store paths only for critical bundle writes", () => {
+  it("resolves session store paths only for enabled critical bundle writes", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-lazy-"));
     const resolveSessionStorePaths = vi.fn(() => []);
     try {
@@ -247,6 +256,7 @@ describe("diagnostic memory", () => {
       emitDiagnosticMemorySample({
         now: 3000,
         stateDir,
+        writeCriticalBundle: true,
         resolveSessionStorePaths,
         memoryUsage: memoryUsage({ rss: 4000 }),
         thresholds: {
@@ -287,6 +297,77 @@ describe("diagnostic memory", () => {
     }
   });
 
+  it("leaves critical pressure bundle writes off by default", () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-memory-pressure-default-off-"),
+    );
+    const resolveSessionStorePaths = vi.fn(() => []);
+    try {
+      startDiagnosticStabilityRecorder();
+
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        stateDir,
+        resolveSessionStorePaths,
+        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+          pressureRepeatMs: 60_000,
+        },
+      });
+
+      expect(resolveSessionStorePaths).not.toHaveBeenCalled();
+      expect(readLatestDiagnosticStabilityBundleSync({ stateDir }).status).toBe("missing");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs memory pressure events through the gateway subsystem", async () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        records.push(event);
+      }
+    });
+    try {
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+          pressureRepeatMs: 60_000,
+        },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      stop();
+    }
+
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "WARN",
+          message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
+          attributes: expect.objectContaining({
+            subsystem: "gateway/diagnostics/memory",
+          }),
+        }),
+        expect.objectContaining({
+          level: "WARN",
+          message:
+            "critical memory pressure snapshot disabled: diagnostics.memoryPressureSnapshot=false",
+          attributes: expect.objectContaining({
+            subsystem: "gateway/diagnostics/memory",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("writes a stability bundle when critical pressure is emitted", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-"));
     const customRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-custom-sessions-"));
@@ -309,6 +390,7 @@ describe("diagnostic memory", () => {
         now: Date.parse("2026-04-22T12:00:00.000Z"),
         uptimeMs: 0,
         stateDir,
+        writeCriticalBundle: true,
         sessionStorePaths: [path.join(customSessionsDir, "sessions.json")],
         memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
         thresholds: {

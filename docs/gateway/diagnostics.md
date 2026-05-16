@@ -189,20 +189,20 @@ diagnostic event collection:
 Disabling diagnostics reduces bug-report detail. It does not affect normal
 Gateway logging.
 
-To keep diagnostics events but skip the critical memory-pressure stability
-snapshot write:
+Critical memory pressure snapshots are off by default. To keep diagnostics
+events and also capture the pre-OOM stability snapshot:
 
 ```json5
 {
   diagnostics: {
-    memoryPressureSnapshot: false,
+    memoryPressureSnapshot: true,
   },
 }
 ```
 
-Use this only when file-system scanning or snapshot writes are not acceptable on
-that host. Normal memory pressure events still record RSS, heap, threshold, and
-growth facts.
+Use this only on hosts that can tolerate the extra file-system scan and snapshot
+write during critical memory pressure. Normal memory pressure events still
+record RSS, heap, threshold, and growth facts when the snapshot is off.
 
 ## Related
 
