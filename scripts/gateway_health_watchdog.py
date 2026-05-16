@@ -32,6 +32,7 @@ Err log: ~/.openclaw/logs/gateway.err.log
 
 Output (one line per tick — designed for grep):
   HEARTBEAT_OK <subreason>
+  WOULD_KICKSTART <reason>: <detail>
   KICKSTART <reason>: <detail>
   COOLDOWN <reason>: <detail>
   ESCALATION <reason>: <detail>
@@ -88,6 +89,7 @@ CONFIG_FILE = Path(os.environ.get(
     "OPENCLAW_CONFIG_PATH",
     OPENCLAW_HOME / "openclaw.json",
 ))
+KICKSTART_ENV = "GATEWAY_WATCHDOG_ALLOW_KICKSTART"
 
 # HARD signals — kick alone (subject to ws-probe debounce + cooldown).
 # These are unambiguous bugs; their presence means the gateway is actively
@@ -659,6 +661,11 @@ def kickstart_gateway(label: str) -> tuple[bool, str]:
     return proc.returncode == 0, out or f"rc={proc.returncode}"
 
 
+def is_kickstart_allowed(env: dict[str, str] | None = None) -> bool:
+    value = (env if env is not None else os.environ).get(KICKSTART_ENV, "")
+    return value.lower() in {"1", "true", "yes"}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -787,13 +794,15 @@ def main() -> int:
               f"since last kickstart (<{KICKSTART_COOLDOWN_S}s). Triggers: {summary}")
         return 0
 
-    if args.dry_run or args.simulate_trigger:
-        state["last_verdict"] = "DRY_RUN"
-        history.append({"ts": now.isoformat(), "verdict": "DRY_RUN",
+    if args.dry_run or args.simulate_trigger or not is_kickstart_allowed():
+        verdict = "DRY_RUN" if (args.dry_run or args.simulate_trigger) else "WOULD_KICKSTART"
+        state["last_verdict"] = verdict
+        history.append({"ts": now.isoformat(), "verdict": verdict,
                         "reason": primary, "detail": summary})
         state["history"] = history[-50:]
         save_state(state)
-        print(f"DRY_RUN would-kickstart {primary}: {summary}")
+        prefix = "DRY_RUN would-kickstart" if verdict == "DRY_RUN" else "WOULD_KICKSTART"
+        print(f"{prefix} {primary}: {summary}")
         return 0
 
     ok, kick_out = kickstart_gateway(GATEWAY_LABEL)

@@ -44,6 +44,13 @@ class GatewayHealthWatchdogTest(unittest.TestCase):
             else:
                 os.environ["OPENCLAW_GATEWAY_PORT"] = previous
 
+    def test_kickstart_requires_explicit_env_opt_in(self) -> None:
+        self.assertFalse(watchdog.is_kickstart_allowed({}))
+        self.assertFalse(watchdog.is_kickstart_allowed({"GATEWAY_WATCHDOG_ALLOW_KICKSTART": "0"}))
+        self.assertTrue(watchdog.is_kickstart_allowed({"GATEWAY_WATCHDOG_ALLOW_KICKSTART": "1"}))
+        self.assertTrue(watchdog.is_kickstart_allowed({"GATEWAY_WATCHDOG_ALLOW_KICKSTART": "true"}))
+        self.assertTrue(watchdog.is_kickstart_allowed({"GATEWAY_WATCHDOG_ALLOW_KICKSTART": "yes"}))
+
     def test_secret_input_resolves_full_env_ref_with_allowlist(self) -> None:
         config = {
             "secrets": {
