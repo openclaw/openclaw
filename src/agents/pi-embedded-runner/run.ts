@@ -61,7 +61,11 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
+import {
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveContextConfigProviderForRuntime,
+  resolveSelectedOpenAIPiRuntimeProvider,
+} from "../openai-codex-routing.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -552,6 +556,16 @@ export async function runEmbeddedPiAgent(
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
+      const modelConfigProvider = provider;
+      const selectedPiRuntimeProvider = resolveSelectedOpenAIPiRuntimeProvider({
+        provider,
+        harnessRuntime: agentHarness.id,
+        agentHarnessId: agentHarness.id,
+        authProfileProvider: params.authProfileId?.split(":", 1)[0],
+        authProfileId: params.authProfileId,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+      });
       const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
@@ -565,7 +579,7 @@ export async function runEmbeddedPiAgent(
           workspaceDir: resolvedWorkspace,
         },
       );
-      const modelResolution =
+      let modelResolution =
         dynamicModelResolution.model || pluginHarnessOwnsTransport
           ? dynamicModelResolution
           : await (async () => {
@@ -576,6 +590,22 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
               });
             })();
+      if (selectedPiRuntimeProvider !== provider && modelResolution.model) {
+        const runtimeModelResolution = await resolveModelAsync(
+          selectedPiRuntimeProvider,
+          modelId,
+          agentDir,
+          params.config,
+          {
+            skipPiDiscovery: true,
+            workspaceDir: resolvedWorkspace,
+          },
+        );
+        if (runtimeModelResolution.model) {
+          provider = selectedPiRuntimeProvider;
+          modelResolution = runtimeModelResolution;
+        }
+      }
       const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
@@ -592,7 +622,7 @@ export async function runEmbeddedPiAgent(
         cfg: params.config,
         provider,
         contextConfigProvider: resolveContextConfigProviderForRuntime({
-          provider,
+          provider: modelConfigProvider,
           runtimeId: agentHarness.id,
         }),
         modelId,
@@ -719,12 +749,23 @@ export async function runEmbeddedPiAgent(
       }
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
-        : resolveAuthProfileOrder({
-            cfg: params.config,
-            store: authStore,
-            provider,
-            preferredProfile: preferredProfileId,
-          });
+        : [
+            ...new Set(
+              listOpenAIAuthProfileProvidersForAgentRuntime({
+                provider,
+                harnessRuntime: agentHarness.id,
+                agentHarnessId: agentHarness.id,
+                config: params.config,
+              }).flatMap((authProvider) =>
+                resolveAuthProfileOrder({
+                  cfg: params.config,
+                  store: authStore,
+                  provider: authProvider,
+                  preferredProfile: preferredProfileId,
+                }),
+              ),
+            ),
+          ];
       const providerPreferredProfileId = lockedProfileId
         ? undefined
         : resolveProviderAuthProfileId({
