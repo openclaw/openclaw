@@ -210,8 +210,10 @@ export async function processDiscordMessage(
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const isRoomEvent = ctx.inboundEventKind === "room_event";
   const shouldAckReaction = () =>
     Boolean(
+      !isRoomEvent &&
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
@@ -227,6 +229,7 @@ export async function processDiscordMessage(
   const shouldSendAckReaction = shouldAckReaction();
   const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const statusReactionsEnabled =
+    !isRoomEvent &&
     shouldSendAckReaction &&
     cfg.messages?.statusReactions?.enabled !== false &&
     (!sourceRepliesAreToolOnly || statusReactionsExplicitlyEnabled);

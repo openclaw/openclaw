@@ -1292,6 +1292,42 @@ describe("processDiscordMessage session routing", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
 
+  it("suppresses Discord reactions for room events even when status reactions are explicit", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: {
+            enabled: true,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getReactionEmojis()).toEqual([]);
+    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+  });
+
   it("uses PluralKit original ids for inbound dedupe while preserving the Discord message id", async () => {
     const ctx = await createBaseContext({
       canonicalMessageId: "orig-123",
