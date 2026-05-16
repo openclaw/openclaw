@@ -46,13 +46,11 @@ type PersistedRegistryMemoState = {
 
 const PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES = 8;
 const pluginMetadataSnapshotMemo = new Map<string, PluginMetadataSnapshotMemo>();
-let pluginMetadataSnapshotRegistryStateMemo:
-  | Pick<PluginMetadataSnapshotMemo, "registryState">
-  | undefined;
+const pluginMetadataSnapshotRegistryStateMemo = new Map<string, PersistedRegistryMemoState>();
 
 export function clearLoadPluginMetadataSnapshotMemo(): void {
   pluginMetadataSnapshotMemo.clear();
-  pluginMetadataSnapshotRegistryStateMemo = undefined;
+  pluginMetadataSnapshotRegistryStateMemo.clear();
 }
 
 const MEMO_RELEVANT_ENV_KEYS = [
@@ -384,6 +382,49 @@ function hashWatchedFiles(watchedFiles: readonly string[]): string {
   return hashJson(watchedFiles.map((filePath) => fileFingerprint(filePath)));
 }
 
+function setCappedMemoEntry<Key, Value>(params: {
+  memo: Map<Key, Value>;
+  key: Key;
+  value: Value;
+}): void {
+  params.memo.delete(params.key);
+  params.memo.set(params.key, params.value);
+  if (params.memo.size > PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES) {
+    const oldestKey = params.memo.keys().next().value;
+    if (oldestKey !== undefined) {
+      params.memo.delete(oldestKey);
+    }
+  }
+}
+
+function computePersistedRegistryMemoStateMemoKey(
+  state: Pick<PersistedRegistryMemoState, "contextHash" | "fastHash">,
+): string {
+  return hashJson({
+    contextHash: state.contextHash,
+    fastHash: state.fastHash,
+  });
+}
+
+function mergePersistedRegistryMemoStates(params: {
+  derived: PersistedRegistryMemoState;
+  lookup: PersistedRegistryMemoState;
+}): PersistedRegistryMemoState {
+  const watchedFiles = [
+    ...new Set([...params.lookup.watchedFiles, ...params.derived.watchedFiles]),
+  ].toSorted();
+  return {
+    contextHash: params.derived.contextHash,
+    fastHash: params.derived.fastHash,
+    fingerprint: {
+      derived: params.derived.fingerprint,
+      lookup: params.lookup.fingerprint,
+    },
+    watchedFiles,
+    watchedFilesHash: hashWatchedFiles(watchedFiles),
+  };
+}
+
 function resolvePersistedRegistryMemoState(params: {
   env: NodeJS.ProcessEnv;
   index?: InstalledPluginIndex;
@@ -498,27 +539,30 @@ function resolvePersistedRegistryMemoState(params: {
   };
 }
 
-function resolvePersistedRegistryMemoStateForLookup(
-  params: {
-    env: NodeJS.ProcessEnv;
-    preferPersisted?: boolean;
-    stateDir?: string;
-  },
-  memo: Pick<PluginMetadataSnapshotMemo, "registryState"> | undefined,
-): PersistedRegistryMemoState {
+function resolvePersistedRegistryMemoStateForLookup(params: {
+  env: NodeJS.ProcessEnv;
+  preferPersisted?: boolean;
+  stateDir?: string;
+}): PersistedRegistryMemoState {
   const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
   const fastHash = hashJson(fastFingerprint);
   const contextHash = resolvePersistedRegistryMemoContextHash({
     ...params,
     fastFingerprint,
   });
-  const registryState = memo?.registryState;
+  const memoKey = computePersistedRegistryMemoStateMemoKey({ contextHash, fastHash });
+  const registryState = pluginMetadataSnapshotRegistryStateMemo.get(memoKey);
   if (
     registryState &&
     registryState.contextHash === contextHash &&
     registryState.fastHash === fastHash &&
     hashWatchedFiles(registryState.watchedFiles) === registryState.watchedFilesHash
   ) {
+    setCappedMemoEntry({
+      memo: pluginMetadataSnapshotRegistryStateMemo,
+      key: memoKey,
+      value: registryState,
+    });
     return registryState;
   }
   return resolvePersistedRegistryMemoState(params);
@@ -707,19 +751,15 @@ export function loadPluginMetadataSnapshot(
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   const env = params.env ?? process.env;
-  const registryState = resolvePersistedRegistryMemoStateForLookup(
-    {
-      env,
-      ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
-      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-    },
-    pluginMetadataSnapshotRegistryStateMemo,
-  );
+  const registryState = resolvePersistedRegistryMemoStateForLookup({
+    env,
+    ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
+    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+  });
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   const memo = pluginMetadataSnapshotMemo.get(memoKey);
   if (memo) {
-    pluginMetadataSnapshotMemo.delete(memoKey);
-    pluginMetadataSnapshotMemo.set(memoKey, memo);
+    setCappedMemoEntry({ memo: pluginMetadataSnapshotMemo, key: memoKey, value: memo });
     return measureDiagnosticsTimelineSpanSync(
       "plugins.metadata.scan",
       () => clonePluginMetadataSnapshot(memo.snapshot),
@@ -750,32 +790,29 @@ export function loadPluginMetadataSnapshot(
     },
   );
   if (canMemoizePluginMetadataSnapshotResult(result)) {
-    const cachedRegistryState =
-      result.registrySource === "derived"
-        ? resolvePersistedRegistryMemoState({
-            env,
-            index: result.snapshot.index,
-            ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
-            ...(params.preferPersisted !== undefined
-              ? { preferPersisted: params.preferPersisted }
-              : {}),
-          })
-        : registryState;
+    const cachedRegistryState = resolveCachedRegistryStateForResult({
+      env,
+      params,
+      registryState,
+      result,
+    });
     const cachedMemoKey = computePluginMetadataSnapshotMemoKey({
       params,
       registryState: cachedRegistryState,
     });
-    pluginMetadataSnapshotRegistryStateMemo = { registryState: cachedRegistryState };
-    pluginMetadataSnapshotMemo.set(cachedMemoKey, {
-      registryState: cachedRegistryState,
-      snapshot: clonePluginMetadataSnapshot(result.snapshot),
+    setCappedMemoEntry({
+      memo: pluginMetadataSnapshotRegistryStateMemo,
+      key: computePersistedRegistryMemoStateMemoKey(cachedRegistryState),
+      value: cachedRegistryState,
     });
-    if (pluginMetadataSnapshotMemo.size > PLUGIN_METADATA_SNAPSHOT_MEMO_MAX_ENTRIES) {
-      const oldestKey = pluginMetadataSnapshotMemo.keys().next().value;
-      if (oldestKey !== undefined) {
-        pluginMetadataSnapshotMemo.delete(oldestKey);
-      }
-    }
+    setCappedMemoEntry({
+      memo: pluginMetadataSnapshotMemo,
+      key: cachedMemoKey,
+      value: {
+        registryState: cachedRegistryState,
+        snapshot: clonePluginMetadataSnapshot(result.snapshot),
+      },
+    });
   }
   return result.snapshot;
 }
@@ -784,6 +821,45 @@ const CACHEABLE_DERIVED_REGISTRY_DIAGNOSTIC_CODES = new Set([
   "persisted-registry-stale-policy",
   "persisted-registry-stale-source",
 ]);
+
+function hasRegistryDiagnosticCode(
+  result: {
+    snapshot: PluginMetadataSnapshot;
+  },
+  code: string,
+): boolean {
+  return result.snapshot.registryDiagnostics.some((diagnostic) => diagnostic.code === code);
+}
+
+function resolveCachedRegistryStateForResult(params: {
+  env: NodeJS.ProcessEnv;
+  params: LoadPluginMetadataSnapshotParams;
+  registryState: PersistedRegistryMemoState;
+  result: {
+    registrySource: PluginRegistrySnapshotSource;
+    snapshot: PluginMetadataSnapshot;
+  };
+}): PersistedRegistryMemoState {
+  if (params.result.registrySource !== "derived") {
+    return params.registryState;
+  }
+  const derivedRegistryState = resolvePersistedRegistryMemoState({
+    env: params.env,
+    index: params.result.snapshot.index,
+    ...(params.params.stateDir
+      ? { stateDir: resolveUserPath(params.params.stateDir, params.env) }
+      : {}),
+    ...(params.params.preferPersisted !== undefined
+      ? { preferPersisted: params.params.preferPersisted }
+      : {}),
+  });
+  return hasRegistryDiagnosticCode(params.result, "persisted-registry-stale-source")
+    ? mergePersistedRegistryMemoStates({
+        derived: derivedRegistryState,
+        lookup: params.registryState,
+      })
+    : derivedRegistryState;
+}
 
 function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;

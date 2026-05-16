@@ -319,6 +319,79 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps separate source-stale memo entries reachable across registry contexts", () => {
+    const firstStateDir = tempStateDir();
+    const secondStateDir = tempStateDir();
+    touchPersistedIndex(firstStateDir);
+    touchPersistedIndex(secondStateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockImplementation((params: { stateDir?: string }) => ({
+      source: "derived",
+      snapshot: makeIndex(params.stateDir === firstStateDir ? "first" : "second"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    }));
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: firstStateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: secondStateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: firstStateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir: secondStateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates source-stale memo entries when stale persisted plugin files appear", () => {
+    const stateDir = tempStateDir();
+    const staleSourcePath = path.join(stateDir, "extensions", "stale", "index.js");
+    writePersistedIndex({ pluginId: "stale", source: staleSourcePath, stateDir });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: makeIndex("stable"),
+      diagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "source changed",
+        },
+      ],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    writeJson(staleSourcePath, "restored");
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts the least recently used snapshot memo entry after the cap", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    for (let index = 0; index < 8; index += 1) {
+      loadPluginMetadataSnapshot({
+        config: {},
+        env: {},
+        stateDir,
+        workspaceDir: `/workspace-${index}`,
+      });
+    }
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace-0" });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace-8" });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace-0" });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir: "/workspace-1" });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(10);
+  });
+
   it("refreshes policy-stale derived snapshots when derived plugin files change", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
