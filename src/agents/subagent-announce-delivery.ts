@@ -633,7 +633,8 @@ async function sendSubagentAnnounceDirectly(params: {
       expectsCompletionMessage: params.expectsCompletionMessage,
       sourceTool: params.sourceTool,
     });
-    const requiresMessageToolDelivery = agentMediatedCompletion;
+    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
+    const requiresMessageToolDelivery = agentMediatedCompletion && expectedMediaUrls.length > 0;
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
@@ -766,7 +767,6 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not deliver through the message tool",
       };
     }
-    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
     if (
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
