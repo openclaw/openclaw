@@ -338,6 +338,78 @@ describe("session store writer queue", () => {
     expect(store["agent:main:array"]).toBeUndefined();
   });
 
+  it("strips malformed pending final-delivery fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:bad-pending": {
+        sessionId: "s-bad-pending",
+        updatedAt: 100,
+        pendingFinalDelivery: "yes",
+        pendingFinalDeliveryText: { text: "would crash display sanitizers" },
+        pendingFinalDeliveryCreatedAt: "100",
+        pendingFinalDeliveryLastAttemptAt: -1,
+        pendingFinalDeliveryAttemptCount: "2",
+        pendingFinalDeliveryLastError: { message: "boom" },
+        pendingFinalDeliveryContext: {
+          channel: "telegram",
+          to: ["chat"],
+          accountId: { id: "default" },
+          threadId: {},
+        },
+        pendingFinalDeliveryIntentId: 123,
+      },
+      "agent:main:good-pending": {
+        sessionId: "s-good-pending",
+        updatedAt: 100,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "hello",
+        pendingFinalDeliveryCreatedAt: 10,
+        pendingFinalDeliveryLastAttemptAt: 20,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryContext: {
+          channel: "Telegram",
+          to: " chat-1 ",
+          accountId: "Default",
+          threadId: 42.5,
+        },
+        pendingFinalDeliveryIntentId: "intent-1",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const bad = store["agent:main:bad-pending"];
+    const good = store["agent:main:good-pending"];
+
+    expect(bad).toMatchObject({
+      sessionId: "s-bad-pending",
+      updatedAt: 100,
+    });
+    expect(bad?.pendingFinalDelivery).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryText).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    expect(good).toMatchObject({
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "hello",
+      pendingFinalDeliveryCreatedAt: 10,
+      pendingFinalDeliveryLastAttemptAt: 20,
+      pendingFinalDeliveryAttemptCount: 2,
+      pendingFinalDeliveryLastError: null,
+      pendingFinalDeliveryContext: {
+        channel: "telegram",
+        to: "chat-1",
+        accountId: "default",
+        threadId: 42,
+      },
+      pendingFinalDeliveryIntentId: "intent-1",
+    });
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({

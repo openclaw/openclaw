@@ -326,7 +326,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
       }
       delete defaults.llm;
       changes.push(
-        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
       );
     },
   }),

@@ -239,6 +239,33 @@ describe("doctor health contributions", () => {
       );
     });
 
+    it("skips plugin schema validation during update doctor writes", async () => {
+      const ctx = buildWriteConfigCtx({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      });
+      await writeConfigContribution.run(ctx);
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            skipPluginValidation: true,
+          }),
+        }),
+      );
+    });
+
+    it("keeps plugin schema validation for ordinary doctor writes", async () => {
+      const ctx = buildWriteConfigCtx({});
+      await writeConfigContribution.run(ctx);
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            skipPluginValidation: false,
+          }),
+        }),
+      );
+    });
+
     it("points update-time config rewrites at the pre-update backup", async () => {
       vi.mocked(fs.existsSync).mockImplementation((value) => String(value).endsWith(".pre-update"));
       const ctx = buildWriteConfigCtx({

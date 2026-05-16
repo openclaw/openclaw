@@ -14,6 +14,7 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
+import { isPathInsideWithRealpath, safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   normalizePluginDependencySpecs,
@@ -34,9 +35,13 @@ function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | un
     return undefined;
   }
   const rootDir = resolveInstalledPluginRootDir(record);
-  const packageJsonPath = path.resolve(rootDir, record.packageJson.path);
-  const relative = path.relative(rootDir, packageJsonPath);
+  const realRootDir = safeRealpathSync(rootDir) ?? path.resolve(rootDir);
+  const packageJsonPath = path.resolve(realRootDir, record.packageJson.path);
+  const relative = path.relative(realRootDir, packageJsonPath);
   if (!isRelativePathInsideOrEqual(relative)) {
+    return undefined;
+  }
+  if (!isPathInsideWithRealpath(realRootDir, packageJsonPath)) {
     return undefined;
   }
   return packageJsonPath;
@@ -128,15 +133,8 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
         channel: record.packageChannel,
       }
     : undefined;
-  const rootDir = resolveInstalledPluginRootDir(record);
-  const packageJsonPath = record.packageJson?.path
-    ? path.resolve(rootDir, record.packageJson.path)
-    : undefined;
+  const packageJsonPath = record.packageJson?.path ? resolvePackageJsonPath(record) : undefined;
   if (!packageJsonPath) {
-    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
-  }
-  const relative = path.relative(rootDir, packageJsonPath);
-  if (!isRelativePathInsideOrEqual(relative)) {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   const packageJson = tryReadJsonSync<PackageManifest>(packageJsonPath);

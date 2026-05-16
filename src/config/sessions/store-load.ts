@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import {
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   cloneSessionStoreRecord,
@@ -35,6 +38,104 @@ function isSessionStoreRecord(value: unknown): value is Record<string, SessionEn
 
 function isSessionEntryRecord(value: unknown): value is SessionEntry {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeOptionalAttemptCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeOptionalStringOrNull(value: unknown): string | null | undefined {
+  if (value === null || typeof value === "string") {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeOptionalDeliveryContext(
+  value: unknown,
+): SessionEntry["pendingFinalDeliveryContext"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized = normalizeDeliveryContext({
+    channel: typeof value.channel === "string" ? value.channel : undefined,
+    to: typeof value.to === "string" ? value.to : undefined,
+    accountId: typeof value.accountId === "string" ? value.accountId : undefined,
+    threadId:
+      typeof value.threadId === "string" || typeof value.threadId === "number"
+        ? value.threadId
+        : undefined,
+  });
+  return normalized?.channel && normalized.to ? normalized : undefined;
+}
+
+function sameDeliveryContext(
+  left: SessionEntry["pendingFinalDeliveryContext"],
+  right: SessionEntry["pendingFinalDeliveryContext"],
+): boolean {
+  return (
+    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
+    (left?.to ?? undefined) === (right?.to ?? undefined) &&
+    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
+    (left?.threadId ?? undefined) === (right?.threadId ?? undefined)
+  );
+}
+
+function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry {
+  let next = entry;
+
+  const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
+    if (entry[key] === value) {
+      return;
+    }
+    if (next === entry) {
+      next = { ...entry };
+    }
+    if (value === undefined) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+  };
+
+  assign("pendingFinalDelivery", entry.pendingFinalDelivery === true ? true : undefined);
+  assign("pendingFinalDeliveryText", normalizeOptionalStringOrNull(entry.pendingFinalDeliveryText));
+  assign(
+    "pendingFinalDeliveryCreatedAt",
+    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryCreatedAt),
+  );
+  assign(
+    "pendingFinalDeliveryLastAttemptAt",
+    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryLastAttemptAt),
+  );
+  assign(
+    "pendingFinalDeliveryAttemptCount",
+    normalizeOptionalAttemptCount(entry.pendingFinalDeliveryAttemptCount),
+  );
+  assign(
+    "pendingFinalDeliveryLastError",
+    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryLastError),
+  );
+  const pendingFinalDeliveryContext = normalizeOptionalDeliveryContext(
+    entry.pendingFinalDeliveryContext,
+  );
+  if (!sameDeliveryContext(entry.pendingFinalDeliveryContext, pendingFinalDeliveryContext)) {
+    assign("pendingFinalDeliveryContext", pendingFinalDeliveryContext);
+  }
+  assign(
+    "pendingFinalDeliveryIntentId",
+    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
+  );
+
+  return next;
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -94,7 +195,9 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       continue;
     }
     const normalized = stripPersistedSkillsCache(
-      normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
+      normalizePendingFinalDeliveryFields(
+        normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
+      ),
     );
     if (normalized !== entry) {
       store[key] = normalized;
