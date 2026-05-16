@@ -11,6 +11,7 @@ const SECRET_TARGET_CALLSITES = [
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",
+  "src/cli/capability-cli.ts",
   "src/commands/models/load-config.ts",
   "src/commands/status-all.ts",
   "src/commands/status.scan.ts",
