@@ -341,6 +341,7 @@ function convertAnthropicMessages(
     }
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
+      let reasoningContent: string | undefined;
       for (const block of msg.content) {
         if (block.type === "text") {
           if (block.text.trim().length > 0) {
@@ -373,6 +374,7 @@ function convertAnthropicMessages(
               thinking: sanitizeTransportPayloadText(block.thinking),
               signature: block.thinkingSignature,
             });
+            if (block.thinkingSignature === "reasoning_content") reasoningContent = block.thinking;
           }
           continue;
         }
@@ -387,8 +389,7 @@ function convertAnthropicMessages(
       }
       if (blocks.length > 0) {
         const assistantMsg: Record<string, unknown> = { role: "assistant", content: blocks };
-        if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0)
-          assistantMsg.reasoning_content = msg.reasoning_content;
+        if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
         params.push(assistantMsg);
       }
       continue;
