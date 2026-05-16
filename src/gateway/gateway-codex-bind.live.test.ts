@@ -319,10 +319,12 @@ async function writePluginBindingApproval(params: {
 async function writeGatewayConfig(params: {
   configPath: string;
   model: string;
+  modelProvider?: string;
   port: number;
   token: string;
   workspace: string;
 }): Promise<void> {
+  const modelProvider = params.modelProvider?.trim() || "codex";
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -348,7 +350,7 @@ async function writeGatewayConfig(params: {
       defaults: {
         workspace: params.workspace,
         agentRuntime: { id: "codex" },
-        model: { primary: `codex/${params.model}` },
+        model: { primary: `${modelProvider}/${params.model}` },
         skipBootstrap: true,
         heartbeat: { every: "0m" },
         sandbox: { mode: "off" },
@@ -356,6 +358,14 @@ async function writeGatewayConfig(params: {
     },
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
+function resolveCodexBindModelProvider(): string | undefined {
+  const configured = process.env.OPENCLAW_LIVE_CODEX_BIND_PROVIDER?.trim();
+  if (configured) {
+    return configured;
+  }
+  return process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "openai" : undefined;
 }
 
 describeLive("gateway live (native Codex conversation binding)", () => {
@@ -386,6 +396,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       const conversationId = `user:${slackUserId}`;
       const bindModel =
         process.env.OPENCLAW_LIVE_CODEX_BIND_MODEL?.trim() || DEFAULT_CODEX_BIND_MODEL;
+      const bindProvider = resolveCodexBindModelProvider();
       const outboundReplies: CapturedOutboundReply[] = [];
 
       await fs.mkdir(workspace, { recursive: true });
@@ -400,7 +411,14 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       );
       await fs.mkdir(tempHome, { recursive: true });
       await fs.mkdir(stateDir, { recursive: true });
-      await writeGatewayConfig({ configPath, model: bindModel, port, token, workspace });
+      await writeGatewayConfig({
+        configPath,
+        model: bindModel,
+        modelProvider: bindProvider,
+        port,
+        token,
+        workspace,
+      });
 
       clearConfigCache();
       clearRuntimeConfigSnapshot();
@@ -449,7 +467,9 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           client,
           sessionKey,
           idempotencyKey: `idem-codex-bind-${randomUUID()}`,
-          message: `/codex bind --cwd ${workspace} --model ${bindModel}`,
+          message: `/codex bind --cwd ${workspace} --model ${bindModel}${
+            bindProvider ? ` --provider ${bindProvider}` : ""
+          }`,
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,

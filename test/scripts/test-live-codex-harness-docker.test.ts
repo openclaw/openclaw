@@ -47,4 +47,12 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
       script.indexOf("CODEX_API_KEY=%s"),
     );
   });
+
+  it("forwards the live Codex bind provider override into Docker", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_BIND_PROVIDER="${OPENCLAW_LIVE_CODEX_BIND_PROVIDER:-}"',
+    );
+  });
 });
