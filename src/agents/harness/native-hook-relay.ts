@@ -232,6 +232,10 @@ type NativeHookRelayBridgeRecord = {
 let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprovalRequester =
   requestNativeHookRelayPermissionApproval;
 
+const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
+  exec_command: "exec",
+};
+
 const nativeHookRelayProviderAdapters: Record<
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter
@@ -1426,7 +1430,8 @@ function readCodexToolResponse(rawPayload: JsonValue): unknown {
 }
 
 function normalizeNativeHookToolName(toolName: string | undefined): string {
-  return normalizeToolName(toolName ?? "tool");
+  const normalized = normalizeToolName(toolName ?? "tool");
+  return NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
 async function requestNativeHookRelayPermissionApproval(

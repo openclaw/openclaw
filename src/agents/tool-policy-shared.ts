@@ -12,7 +12,6 @@ type ToolProfilePolicy = {
 
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
-  exec_command: "exec",
   "apply-patch": "apply_patch",
 };
 

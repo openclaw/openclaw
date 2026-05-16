@@ -341,9 +341,6 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   if (nativeRelayOutcome?.approved) {
     return { outcome: "approved-once" };
   }
-  if (nativeRelayOutcome?.handled) {
-    return { outcome: "no-decision" };
-  }
   const outcome = await runBeforeToolCallHook({
     toolName: policyRequest.toolName,
     params: policyRequest.params,
