@@ -59,9 +59,10 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
   workspace: 1,
   global: 2,
   bundled: 3,
+  system: 4,
 };
 
-const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
+const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.system + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
 
 type ExternalCatalogEntry = {
