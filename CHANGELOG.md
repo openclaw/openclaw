@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - TTS: preserve channel-derived voice-note delivery for `/tts audio` replies even when the provider output is not natively voice-compatible. (#82174) Thanks @xuruiray.
 - Codex app-server: preserve inbound sender metadata and source-channel provenance on mirrored user prompts, including failure snapshots, so channel history keeps the original sender identity. (#82184) Thanks @zknicker.
 - Codex app-server: yield projector work to the event loop between embedded-run notifications while preserving pre-turn rate-limit capture, reducing gateway stalls from account and MCP status notifications. Fixes #81936. (#82333) Thanks @joshavant.
+- Plugins/web search: start the configured web_search provider plugin during gateway startup, including auto-enabled external providers behind allowlists. Fixes #82313. (#82376) Thanks @joshavant.
 - Codex account/status: treat metadata-only rate-limit buckets as returned but empty so `/codex status` and `/codex account` report `none returned` instead of counting phantom limits.
 - Codex/Lossless: keep Codex explicit compaction on native app-server threads while allowing Lossless through the context-engine slot; `openclaw doctor --fix` now migrates legacy `compaction.provider: "lossless-claw"` config to `plugins.slots.contextEngine`.
 - Cron/doctor: report scheduled jobs with explicit `payload.model` overrides, including provider namespace counts and default-model mismatches, so stale cron model pins are visible during auth or billing investigations. Fixes #82151. Thanks @mgonto.
