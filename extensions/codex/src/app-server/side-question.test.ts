@@ -8,6 +8,7 @@ const getSharedCodexAppServerClientMock = vi.fn();
 const refreshCodexAppServerAuthTokensMock = vi.fn();
 const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
+const handleCodexAppServerApprovalRequestMock = vi.fn();
 
 vi.mock("./session-binding.js", () => ({
   clearCodexAppServerBinding: vi.fn(),
@@ -24,6 +25,11 @@ vi.mock("./shared-client.js", () => ({
 vi.mock("./auth-bridge.js", () => ({
   refreshCodexAppServerAuthTokens: (...args: unknown[]) =>
     refreshCodexAppServerAuthTokensMock(...args),
+}));
+
+vi.mock("./approval-bridge.js", () => ({
+  handleCodexAppServerApprovalRequest: (...args: unknown[]) =>
+    handleCodexAppServerApprovalRequestMock(...args),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -270,6 +276,7 @@ describe("runCodexAppServerSideQuestion", () => {
     refreshCodexAppServerAuthTokensMock.mockReset();
     createOpenClawCodingToolsMock.mockReset();
     toolExecuteMock.mockReset();
+    handleCodexAppServerApprovalRequestMock.mockReset();
 
     toolExecuteMock.mockResolvedValue({
       content: [{ type: "text", text: "tool output" }],
@@ -471,7 +478,94 @@ describe("runCodexAppServerSideQuestion", () => {
     const preToolUseState = codexHookStateForEvent(hookState, "pre_tool_use");
     expect(preToolUseState?.enabled).toBe(true);
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
+    const turnConfig = (turnStartCall?.[1] as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(turnConfig).toMatchObject(config ?? {});
+    expect(codexHookCommand(turnConfig, "hooks.PreToolUse")?.command).toBe(
+      preToolUseCommand?.command,
+    );
     expect(relayIdDuringFork).toBeDefined();
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
+    ).toBeUndefined();
+  });
+
+  it("forwards side-thread command approvals through the active native hook relay", async () => {
+    const client = createFakeClient();
+    let relayIdDuringFork: string | undefined;
+    let approvalResponse: unknown;
+    handleCodexAppServerApprovalRequestMock.mockResolvedValueOnce({ decision: "decline" });
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const config = (requestParams as { config?: Record<string, unknown> }).config;
+        relayIdDuringFork = extractRelayIdFromThreadConfig(config);
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(async () => {
+          approvalResponse = await client.handleRequest({
+            id: 42,
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              itemId: "cmd-side",
+              command: "/bin/bash -lc 'node -v'",
+              cwd: "/tmp/workspace",
+            },
+          });
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          opts: { runId: "run-side-approval" },
+        }),
+        { nativeHookRelay: { enabled: true } },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(approvalResponse).toEqual({ decision: "decline" });
+    expect(handleCodexAppServerApprovalRequestMock).toHaveBeenCalledTimes(1);
+    const approvalArgs = handleCodexAppServerApprovalRequestMock.mock.calls[0]?.[0] as
+      | {
+          method?: string;
+          requestParams?: Record<string, unknown>;
+          threadId?: string;
+          turnId?: string;
+          nativeHookRelay?: { relayId?: string; allowedEvents?: readonly string[] };
+        }
+      | undefined;
+    expect(approvalArgs).toMatchObject({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        itemId: "cmd-side",
+        command: "/bin/bash -lc 'node -v'",
+        cwd: "/tmp/workspace",
+      },
+      threadId: "side-thread",
+      turnId: "turn-1",
+    });
+    expect(approvalArgs?.nativeHookRelay).toMatchObject({
+      relayId: relayIdDuringFork,
+      allowedEvents: expect.arrayContaining(["pre_tool_use"]),
+    });
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
     ).toBeUndefined();

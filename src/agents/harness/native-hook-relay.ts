@@ -1391,12 +1391,33 @@ function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
-    return toolInput as Record<string, JsonValue>;
+    const toolName = readOptionalString(payload.tool_name);
+    return normalizeCodexToolInput(
+      normalizeNativeHookToolName(toolName),
+      toolInput as Record<string, JsonValue>,
+    );
   }
   if (toolInput === undefined) {
     return {};
   }
   return { value: toolInput as JsonValue };
+}
+
+function normalizeCodexToolInput(
+  toolName: string,
+  toolInput: Record<string, JsonValue>,
+): Record<string, JsonValue> {
+  if (
+    toolName !== "exec" ||
+    typeof toolInput.cmd !== "string" ||
+    typeof toolInput.command === "string"
+  ) {
+    return toolInput;
+  }
+  return {
+    ...toolInput,
+    command: toolInput.cmd,
+  };
 }
 
 function readCodexToolResponse(rawPayload: JsonValue): unknown {

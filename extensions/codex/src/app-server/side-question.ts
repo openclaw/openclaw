@@ -190,6 +190,7 @@ export async function runCodexAppServerSideQuestion(
           paramsForRun: sideRunParams,
           threadId: childThreadId,
           turnId,
+          nativeHookRelay,
           signal: runAbortController.signal,
         });
       }
@@ -248,6 +249,10 @@ export async function runCodexAppServerSideQuestion(
     const runtimeThreadConfig = buildCodexRuntimeThreadConfig(undefined);
     const threadConfig =
       mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
+    const turnConfig =
+      nativeHookRelayConfig || options.nativeHookRelay?.enabled === false
+        ? threadConfig
+        : undefined;
     const modelProvider = resolveCodexAppServerModelProvider({
       provider: params.provider,
       authProfileId,
@@ -295,6 +300,7 @@ export async function runCodexAppServerSideQuestion(
           cwd,
           model: params.model,
           ...(serviceTier ? { serviceTier } : {}),
+          ...(turnConfig ? { config: turnConfig } : {}),
           effort,
           collaborationMode: {
             mode: "default",

@@ -75,6 +75,7 @@ describe("tool-policy", () => {
 
   it("normalizes tool names and aliases", () => {
     expect(normalizeToolName(" BASH ")).toBe("exec");
+    expect(normalizeToolName("exec_command")).toBe("exec");
     expect(normalizeToolName("apply-patch")).toBe("apply_patch");
     expect(normalizeToolName("READ")).toBe("read");
   });

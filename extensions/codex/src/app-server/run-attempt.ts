@@ -1703,6 +1703,7 @@ export async function runCodexAppServerAttempt(
             paramsForRun: params,
             threadId: thread.threadId,
             turnId,
+            nativeHookRelay,
             signal: runAbortController.signal,
           });
         }
@@ -3911,6 +3912,7 @@ function handleApprovalRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
+  nativeHookRelay?: NativeHookRelayRegistrationHandle;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   return handleCodexAppServerApprovalRequest({
@@ -3919,6 +3921,7 @@ function handleApprovalRequest(params: {
     paramsForRun: params.paramsForRun,
     threadId: params.threadId,
     turnId: params.turnId,
+    nativeHookRelay: params.nativeHookRelay,
     signal: params.signal,
   });
 }

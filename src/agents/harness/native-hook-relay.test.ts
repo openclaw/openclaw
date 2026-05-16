@@ -787,6 +787,55 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("normalizes Codex exec_command cmd input before running OpenClaw policy", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "shell command blocked",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-exec-command-1",
+        tool_input: { cmd: "cat /tmp/private_key", yield_time_ms: 1000 },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "shell command blocked",
+      },
+    });
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: {
+        cmd: "cat /tmp/private_key",
+        command: "cat /tmp/private_key",
+        yield_time_ms: 1000,
+      },
+      runId: "run-1",
+      toolCallId: "native-exec-command-1",
+    });
+  });
+
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
     const storePath = path.join(stateDir, "sessions.json");
