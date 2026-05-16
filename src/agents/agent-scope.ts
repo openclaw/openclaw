@@ -46,7 +46,7 @@ function stripNullBytes(s: string): string {
   return s.replace(/\0/g, "");
 }
 
-const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 15 * 60 * 1000;
+const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS = 4096;
 const autoFallbackPrimaryProbeState = new Map<string, number>();
 
