@@ -467,7 +467,9 @@ function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
   let cleanText = sanitizeInput(payload.text);
   if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
     const stripped = cleanText.slice(payload.trigger_word.length).trim();
-    if (stripped) cleanText = stripped;
+    if (stripped) {
+      cleanText = stripped;
+    }
   }
   return cleanText;
 }
