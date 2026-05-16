@@ -202,6 +202,13 @@ openclaw onboard --non-interactive \
 
 ## Flow notes
 
+Interactive local onboarding can configure more than one model provider in a
+single run. After the first provider/model setup, answer **yes** to
+`Configure another model provider?` to repeat provider setup before continuing
+to gateway, channel, search, skills, and hook setup. Non-interactive onboarding
+and explicit `--auth-choice` flows remain single-pass so scripted setup behavior
+does not change.
+
 <AccordionGroup>
   <Accordion title="Flow types">
     - `quickstart`: minimal prompts, auto-generates a gateway token.

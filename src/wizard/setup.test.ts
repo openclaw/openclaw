@@ -854,6 +854,182 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("can configure another provider during interactive onboarding", async () => {
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("demo-provider-one")
+      .mockResolvedValueOnce("demo-provider-two");
+    applyAuthChoice.mockReset();
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "demo-provider-one/model",
+              },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "demo-provider-two/model",
+              },
+            },
+          },
+        },
+      });
+    warnIfModelConfigLooksOff.mockClear();
+    const confirm = vi.fn(async () => false);
+    confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const prompter = buildWizardPrompter({
+      confirm: confirm as unknown as WizardPrompter["confirm"],
+    });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledTimes(2);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Configure another model provider?",
+      initialValue: false,
+    });
+    expectRecordFields(
+      getMockCallArg(applyAuthChoice, 1, 0, "second auth choice"),
+      {
+        authChoice: "demo-provider-two",
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "demo-provider-one/model",
+              },
+            },
+          },
+        },
+      },
+      "second auth choice params",
+    );
+  });
+
+  it("returns from custom provider setup to the provider picker when requested", async () => {
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped.mockResolvedValueOnce("custom-api-key").mockResolvedValueOnce("ollama");
+    promptCustomApiConfig.mockReset();
+    promptCustomApiConfig.mockResolvedValueOnce({
+      config: {
+        models: {
+          default: "custom/model",
+        },
+      },
+    });
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        models: {
+          default: "ollama/model",
+        },
+      },
+    });
+    const confirm = vi.fn(async () => false);
+    confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const prompter = buildWizardPrompter({
+      confirm: confirm as unknown as WizardPrompter["confirm"],
+    });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(promptCustomApiConfig).toHaveBeenCalledTimes(1);
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expectRecordFields(
+      getMockCallArg(applyAuthChoice, 0, 0, "post-custom auth choice"),
+      {
+        authChoice: "ollama",
+        config: {
+          models: {
+            default: "custom/model",
+          },
+        },
+      },
+      "post-custom auth choice params",
+    );
+  });
+
+  it("keeps explicit auth-choice onboarding single-pass", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "ollama/model",
+            },
+          },
+        },
+      },
+    });
+    const confirm = vi.fn(async () => true);
+    const prompter = buildWizardPrompter({
+      confirm: confirm as unknown as WizardPrompter["confirm"],
+    });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "ollama",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("forwards provider-specific auth flags to applyAuthChoice opts", async () => {
     applyAuthChoice.mockReset();
     applyAuthChoice.mockResolvedValueOnce({

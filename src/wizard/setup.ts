@@ -600,6 +600,15 @@ export async function runSetupWizard(
       allowKeychainPrompt: false,
     });
   }
+  const promptConfigureAnotherProvider = async (): Promise<boolean> => {
+    if (!authChoiceFromPrompt) {
+      return false;
+    }
+    return await prompter.confirm({
+      message: "Configure another model provider?",
+      initialValue: false,
+    });
+  };
   while (true) {
     if (authChoiceFromPrompt) {
       authChoice = await promptAuthChoiceGrouped!({
@@ -623,6 +632,12 @@ export async function runSetupWizard(
         secretInputMode: opts.secretInputMode,
       });
       nextConfig = customResult.config;
+
+      if (await promptConfigureAnotherProvider()) {
+        authChoice = undefined;
+        continue;
+      }
+
       break;
     }
     if (authChoice === "skip") {
@@ -708,6 +723,12 @@ export async function runSetupWizard(
     }
 
     await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
+
+    if (await promptConfigureAnotherProvider()) {
+      authChoice = undefined;
+      continue;
+    }
+
     break;
   }
 
