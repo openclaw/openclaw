@@ -4,7 +4,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerContextEngine } from "../../context-engine/registry.js";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  registerContextEngine,
+  registerContextEngineForOwner,
+} from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { __testing as cliBackendsTesting } from "../cli-backends.js";
@@ -617,10 +621,70 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("cleans up prepared CLI backend when context-engine resolution fails", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const cleanup = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({ cleanup }));
+    registerContextEngineForOwner(
+      "legacy",
+      () => {
+        throw new Error("context engine failed");
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            systemPromptArg: "--system-prompt",
+            systemPromptWhen: "first",
+            sessionMode: "existing",
+            output: "text",
+            input: "arg",
+          },
+        },
+      ],
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-context-engine-resolution-failure",
+          config: createCliBackendConfig(),
+        }),
+      ).rejects.toThrow("context engine failed");
+
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledOnce();
+    } finally {
+      registerLegacyContextEngine();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses runtime config when resolving the CLI context engine", async () => {
     const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-runtime-config-engine-${Date.now().toString(36)}`;
+    const runtimeAgentDir = path.join(dir, "runtime-agent");
     const runtimeConfig = {
+      agents: {
+        list: [{ id: "main", default: true, agentDir: runtimeAgentDir }],
+      },
       plugins: { slots: { contextEngine: engineId } },
     } satisfies OpenClawConfig;
     const factory = vi.fn((_ctx: unknown): ContextEngine => {
@@ -670,6 +734,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.params.config).toBe(runtimeConfig);
       expect(factory).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentDir: runtimeAgentDir,
           config: runtimeConfig,
           workspaceDir: dir,
         }),

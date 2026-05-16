@@ -479,43 +479,65 @@ export async function prepareCliRunContext(
     },
   });
   const contextEngineConfig = params.config ?? getRuntimeConfig();
-  ensureContextEnginesInitialized();
-  const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
-    agentDir,
-    workspaceDir,
-  });
-  const contextEngine =
-    resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
-  const hadSessionFile = await pathExists(params.sessionFile);
-  const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
-  const preparedParams: RunCliAgentParams = {
-    ...params,
-    config: contextEngineConfig,
-    prompt: preparedPrompt,
-  };
+  let contextEngine: PreparedCliRunContext["contextEngine"];
+  try {
+    ensureContextEnginesInitialized();
+    const { sessionAgentId: contextEngineSessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: contextEngineConfig,
+      agentId: params.agentId,
+    });
+    const contextEngineAgentDir = resolveAgentDir(contextEngineConfig, contextEngineSessionAgentId);
+    const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
+      agentDir: contextEngineAgentDir,
+      workspaceDir,
+    });
+    contextEngine = resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
+    const hadSessionFile = await pathExists(params.sessionFile);
+    const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
+    const preparedParams: RunCliAgentParams = {
+      ...params,
+      config: contextEngineConfig,
+      prompt: preparedPrompt,
+    };
 
-  return {
-    params: preparedParams,
-    effectiveAuthProfileId,
-    started,
-    workspaceDir,
-    backendResolved,
-    preparedBackend: preparedBackendFinal,
-    reusableCliSession,
-    hadSessionFile,
-    contextEngineConfig,
-    contextEngine,
-    contextEngineTurnPrompt,
-    modelId,
-    normalizedModel,
-    contextWindowInfo,
-    systemPrompt,
-    systemPromptReport,
-    bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
-    ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
-    heartbeatPrompt,
-    authEpoch,
-    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-    extraSystemPromptHash,
-  };
+    return {
+      params: preparedParams,
+      effectiveAuthProfileId,
+      started,
+      workspaceDir,
+      backendResolved,
+      preparedBackend: preparedBackendFinal,
+      reusableCliSession,
+      hadSessionFile,
+      contextEngineConfig,
+      contextEngine,
+      contextEngineTurnPrompt,
+      modelId,
+      normalizedModel,
+      contextWindowInfo,
+      systemPrompt,
+      systemPromptReport,
+      bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
+      ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
+      heartbeatPrompt,
+      authEpoch,
+      authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+      extraSystemPromptHash,
+    };
+  } catch (err) {
+    try {
+      await contextEngine?.dispose?.();
+    } catch (disposeErr) {
+      cliBackendLog.warn(
+        `cli context-engine cleanup after prepare failure failed: ${String(disposeErr)}`,
+      );
+    }
+    try {
+      await preparedBackendFinal.cleanup?.();
+    } catch (cleanupErr) {
+      cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
+    }
+    throw err;
+  }
 }
