@@ -20,6 +20,7 @@ const isGatewayTransportError = vi.hoisted(() =>
   }),
 );
 const agentCommand = vi.hoisted(() => vi.fn());
+const ensureEmbeddedGatewayContextInstalledForProcess = vi.hoisted(() => vi.fn(() => () => {}));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -145,6 +146,9 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 vi.mock("./agent.js", () => ({ agentCommand }));
+vi.mock("../agents/embedded-gateway-context.js", () => ({
+  ensureEmbeddedGatewayContextInstalledForProcess,
+}));
 
 let originalForceConsoleToStderr = false;
 
@@ -502,6 +506,41 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("installs embedded gateway context before --local agent runs (#82140 regression)", async () => {
+    // #82140: subagent completion announce dispatch happens asynchronously after
+    // agentCommand returns from sessions_yield; the embedded context must be
+    // installed BEFORE agentCommand so the async dispatch finds it.
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+      expect(ensureEmbeddedGatewayContextInstalledForProcess).toHaveBeenCalledTimes(1);
+      // Lock the install ordering: install must happen before agentCommand so the
+      // fallback context is live when async subagent announces fire.
+      const installOrder =
+        ensureEmbeddedGatewayContextInstalledForProcess.mock.invocationCallOrder[0];
+      const agentOrder = agentCommand.mock.invocationCallOrder[0];
+      expect(installOrder).toBeLessThan(agentOrder);
+    });
+  });
+
+  it("installs embedded gateway context before gateway-error embedded fallback (#82140)", async () => {
+    // Same regression coverage for the gateway-transport-error fallback path.
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayClosedError());
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(ensureEmbeddedGatewayContextInstalledForProcess).toHaveBeenCalledTimes(1);
+      const installOrder =
+        ensureEmbeddedGatewayContextInstalledForProcess.mock.invocationCallOrder[0];
+      const agentOrder = agentCommand.mock.invocationCallOrder[0];
+      expect(installOrder).toBeLessThan(agentOrder);
     });
   });
 
