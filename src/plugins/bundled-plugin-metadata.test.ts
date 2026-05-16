@@ -132,10 +132,11 @@ function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
 
 function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
-  return listRepoBundledPluginManifestDirs().flatMap((dirName) => {
-    const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
-    return result.ok ? [{ dirName, manifest: result.manifest }] : [];
-  });
+  return listRepoBundledPluginManifestDirs()
+    .flatMap((dirName) => {
+      const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
+      return result.ok ? [{ dirName, manifest: result.manifest }] : [];
+    });
 }
 
 function listRepoBundledPluginManifestDirs(): string[] {

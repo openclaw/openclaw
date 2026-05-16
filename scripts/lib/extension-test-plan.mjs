@@ -70,9 +70,7 @@ function isPathInsideRepo(relativePath) {
 }
 
 function isSkippedTrackedTestFile(relativePath) {
-  return relativePath
-    .split("/")
-    .some((segment) => segment === "dist" || segment === "node_modules");
+  return relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules");
 }
 
 function listTrackedTestFiles(rootPath) {

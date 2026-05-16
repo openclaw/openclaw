@@ -90,9 +90,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
       (!isNonStandard &&
-        (isLocalEndpoint ||
-          !usesConfiguredNonOpenAIEndpoint ||
-          supportsNativeStreamingUsageCompat)),
+        (isLocalEndpoint || !usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat:
       isDeepSeek || isXiaomi

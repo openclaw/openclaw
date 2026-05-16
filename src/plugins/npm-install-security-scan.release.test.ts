@@ -300,9 +300,7 @@ describe("publishable plugin npm package install security scan", () => {
 
       expect(packages.length).toBeGreaterThan(0);
       expect(
-        packages.every((plugin) =>
-          plugin.packageDir.split(sep).join("/").startsWith("extensions/"),
-        ),
+        packages.every((plugin) => plugin.packageDir.split(sep).join("/").startsWith("extensions/")),
       ).toBe(true);
       expect(readDir).not.toHaveBeenCalled();
     } finally {

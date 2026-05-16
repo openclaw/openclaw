@@ -327,9 +327,7 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
 }
 
 function listTrackedRepoTsFiles(dir: string): string[] | null {
-  const relativeDir = relative(REPO_ROOT, dir)
-    .split(/[\\/]+/u)
-    .join("/");
+  const relativeDir = relative(REPO_ROOT, dir).split(/[\\/]+/u).join("/");
   if (!relativeDir || relativeDir.startsWith("..")) {
     return null;
   }
@@ -346,7 +344,9 @@ function listTrackedRepoTsFiles(dir: string): string[] | null {
     .map((line) => line.trim().replaceAll("\\", "/"))
     .filter(
       (line) =>
-        line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
+        line.endsWith(".ts") &&
+        !line.includes("/dist/") &&
+        !line.includes("/node_modules/"),
     )
     .map((line) => resolve(REPO_ROOT, ...line.split("/")))
     .toSorted();

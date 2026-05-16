@@ -178,8 +178,7 @@ export function collectBundledPluginBuildEntries(params = {}) {
   for (const candidate of collectBundledPluginCandidates(cwd, extensionsRoot)) {
     const { dirName, pluginDir, relativeFiles, topLevelPublicSurfaceEntries } = candidate;
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    const hasManifest =
-      relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);
+    const hasManifest = relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);
     const packageJsonPath = path.join(pluginDir, "package.json");
     const packageJson = readBundledPluginPackageJson(packageJsonPath, {
       hasPackageJson: relativeFiles?.includes("package.json"),

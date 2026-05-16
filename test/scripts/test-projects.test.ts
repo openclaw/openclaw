@@ -1180,7 +1180,9 @@ describe("scripts/test-projects full-suite sharding", () => {
       gatewayTreeReads = readdirSync.mock.calls
         .slice(before)
         .filter(([target]) =>
-          typeof target === "string" ? normalizeRepoPath(target).includes("src/gateway") : false,
+          typeof target === "string"
+            ? normalizeRepoPath(target).includes("src/gateway")
+            : false,
         );
     } finally {
       readdirSync.mockRestore();

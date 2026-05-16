@@ -200,7 +200,9 @@ describe("bundled channel entry shape guards", () => {
       const roots = listSourceBundledPluginRoots();
 
       expect(roots.length).toBeGreaterThan(0);
-      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(true);
+      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(
+        true,
+      );
       expect(readDir).not.toHaveBeenCalled();
     } finally {
       readDir.mockRestore();

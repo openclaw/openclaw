@@ -64,7 +64,9 @@ function listBundledPluginDirs(): string[] {
 }
 
 function listExternalBundledPluginDirs(): string[] | null {
-  const files = listGitPluginMetadataFiles() ?? listFindPluginMetadataFiles();
+  const files =
+    listGitPluginMetadataFiles() ??
+    listFindPluginMetadataFiles();
   if (!files) {
     return null;
   }
@@ -82,9 +84,8 @@ function listExternalBundledPluginDirs(): string[] | null {
   }
 
   return [...metadataByDir.entries()]
-    .filter(
-      ([, metadataFiles]) =>
-        metadataFiles.has("package.json") && metadataFiles.has("openclaw.plugin.json"),
+    .filter(([, metadataFiles]) =>
+      metadataFiles.has("package.json") && metadataFiles.has("openclaw.plugin.json"),
     )
     .map(([dirName]) => dirName)
     .toSorted();
@@ -147,32 +148,33 @@ function listFindPluginMetadataFiles(): string[] | null {
 }
 
 function readBundledPluginRecords(): BundledPluginRecord[] {
-  return listBundledPluginDirs().flatMap((dirName) => {
-    const rootDir = path.join(EXTENSIONS_ROOT, dirName);
-    const packagePath = path.join(rootDir, "package.json");
-    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-    if (!fs.existsSync(packagePath) || !fs.existsSync(manifestPath)) {
-      return [];
-    }
+  return listBundledPluginDirs()
+    .flatMap((dirName) => {
+      const rootDir = path.join(EXTENSIONS_ROOT, dirName);
+      const packagePath = path.join(rootDir, "package.json");
+      const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+      if (!fs.existsSync(packagePath) || !fs.existsSync(manifestPath)) {
+        return [];
+      }
 
-    const manifest = readJsonFile<PluginManifestShape>(manifestPath);
-    const pkg = readJsonFile<OpenClawPackageShape>(packagePath);
-    const manifestId = normalizeText(manifest.id);
-    const packageName = normalizeText(pkg.name);
-    if (!manifestId || !packageName) {
-      return [];
-    }
+      const manifest = readJsonFile<PluginManifestShape>(manifestPath);
+      const pkg = readJsonFile<OpenClawPackageShape>(packagePath);
+      const manifestId = normalizeText(manifest.id);
+      const packageName = normalizeText(pkg.name);
+      if (!manifestId || !packageName) {
+        return [];
+      }
 
-    return [
-      {
-        dirName,
-        packageName,
-        manifestId,
-        installNpmSpec: normalizeText(pkg.openclaw?.install?.npmSpec),
-        channelId: normalizeText(pkg.openclaw?.channel?.id),
-      },
-    ];
-  });
+      return [
+        {
+          dirName,
+          packageName,
+          manifestId,
+          installNpmSpec: normalizeText(pkg.openclaw?.install?.npmSpec),
+          channelId: normalizeText(pkg.openclaw?.channel?.id),
+        },
+      ];
+    });
 }
 
 function resolveAllowedPackageNamesForId(pluginId: string): string[] {

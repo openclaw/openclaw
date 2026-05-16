@@ -452,9 +452,10 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
 }
 
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
-  const source = fs
-    .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
-    .trim();
+  const source = fs.readFileSync(
+    resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"),
+    "utf8",
+  ).trim();
   return source === 'export * from "../../../src/plugin-sdk/testing.js";'
     ? []
     : ["packages/plugin-sdk/src/testing.ts"];

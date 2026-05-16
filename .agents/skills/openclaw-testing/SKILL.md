@@ -27,7 +27,7 @@ Prove the touched surface first. Do not reflexively run the whole suite.
      use the Crabbox wrapper with the provider that matches the proof surface.
      For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
      Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
---provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+     --provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
      Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested

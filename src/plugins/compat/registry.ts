@@ -33,11 +33,11 @@ export const PLUGIN_COMPAT_RECORDS = [
     removeAfter: "2026-08-16",
     replacement: "`gateway_stop` hook",
     docsPath: "/plugins/hooks#upcoming-deprecations",
-    surfaces: ['api.on("deactivate", ...)', "plugin typed hook registration"],
+    surfaces: ["api.on(\"deactivate\", ...)", "plugin typed hook registration"],
     diagnostics: ["plugin runtime compatibility warning"],
     tests: ["src/plugins/loader.test.ts"],
     releaseNote:
-      '`api.on("deactivate", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.',
+      "`api.on(\"deactivate\", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.",
   },
   {
     code: "hook-only-plugin-shape",

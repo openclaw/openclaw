@@ -53,9 +53,7 @@ function readOwnDmAllowFrom(params: { channelName: string; account: ChannelRecor
   );
 }
 
-function findGeneratedChannelConfigSchema(
-  channelName: string,
-): Record<string, unknown> | undefined {
+function findGeneratedChannelConfigSchema(channelName: string): Record<string, unknown> | undefined {
   const normalizedChannelId = normalizeAnyChannelId(channelName);
   return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
     (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,

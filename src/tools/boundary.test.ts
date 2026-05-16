@@ -97,7 +97,9 @@ describe("tool system boundary", () => {
       const files = listProductionToolModuleFiles();
 
       expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))).toBe(true);
+      expect(files.every((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))).toBe(
+        true,
+      );
       expect(readDir).not.toHaveBeenCalled();
     } finally {
       readDir.mockRestore();

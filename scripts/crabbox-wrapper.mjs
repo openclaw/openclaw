@@ -72,7 +72,9 @@ const knownProviders = [
   "cloudflare",
 ];
 const providers = knownProviders.filter((provider) =>
-  new RegExp(`\\b${provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(help.text),
+  new RegExp(`\\b${provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
+    help.text,
+  ),
 );
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args);

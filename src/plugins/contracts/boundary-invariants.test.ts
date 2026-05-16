@@ -164,9 +164,7 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
 }
 
 function listExternalTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
-  return (
-    listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter)
-  );
+  return listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter);
 }
 
 function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {

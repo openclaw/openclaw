@@ -270,8 +270,8 @@ describe("outbound cfg-threading guard", () => {
       expect(coreAdapterFiles.length).toBeGreaterThan(0);
       expect(extensionFiles.adapterEntrypoints.length).toBeGreaterThan(0);
       expect(
-        coreAdapterFiles.every(
-          (file) => file.startsWith("src/channels/plugins/outbound/") && file.endsWith(".ts"),
+        coreAdapterFiles.every((file) =>
+          file.startsWith("src/channels/plugins/outbound/") && file.endsWith(".ts"),
         ),
       ).toBe(true);
       expect(readDir).not.toHaveBeenCalled();
