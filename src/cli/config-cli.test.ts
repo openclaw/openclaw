@@ -57,6 +57,21 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog: async () => [
+      { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
+      {
+        provider: "google",
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      },
+    ],
+  };
+});
+
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;

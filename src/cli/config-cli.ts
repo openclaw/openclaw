@@ -1771,9 +1771,11 @@ async function runConfigOperations(params: {
       });
     }
   }
-  for (const operation of operations) {
-    if (isModelConfigPath(operation.requestedPath)) {
-      await warnIfModelNotInCatalog(operation.value, runtime);
+  if (params.successMode === "set") {
+    for (const operation of operations) {
+      if (isModelConfigPath(operation.requestedPath)) {
+        await warnIfModelNotInCatalog(operation.value, runtime);
+      }
     }
   }
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
