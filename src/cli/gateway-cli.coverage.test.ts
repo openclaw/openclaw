@@ -12,6 +12,7 @@ type DiscoveredBeacon = Awaited<
 >[number];
 
 const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
   (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
 >(async () => ({
@@ -44,6 +45,7 @@ vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
   () => ({
     callGateway: (opts: unknown) => callGateway(opts),
+    formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
     randomIdempotencyKey: () => "rk_test",
   }),
 );
@@ -143,6 +145,8 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
+    formatGatewayTransportErrorJson.mockReset();
+    formatGatewayTransportErrorJson.mockReturnValue(null);
   });
 
   it("registers call/health commands and routes to callGateway", async () => {
@@ -182,6 +186,30 @@ describe("gateway-cli coverage", () => {
       limit: 5,
       type: "payload.large",
     });
+  });
+
+  it("writes JSON for gateway health transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(["gateway", "health", "--json"]);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors.join("\n")).not.toContain("gateway closed");
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {
