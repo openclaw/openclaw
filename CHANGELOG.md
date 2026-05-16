@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway/media: prevent image filenames from overriding generic non-image byte sniffing, so zip/octet-stream payloads mislabeled as images are offloaded or rejected before they become inline image attachments.
 - Plugins/web search: downgrade stale optional provider installs to warnings so Gateway and doctor repair paths keep running after startup provider selection. Refs #82313. Thanks @crackmac.
+- Telegram/Gateway: route targeted Telegram `/stop@bot` messages onto the control lane without cached bot metadata and match gateway stop requests across raw/canonical session aliases. (#82298) Thanks @VACInc.
 - MS Teams/media: sniff inline `data:image/*` attachment bytes before staging them, skipping payloads that are not actually images.
 - Update: let package-swap `doctor --fix` persist core config repairs while plugin schemas are still converging, preventing update failures on externalized channel configs.
 - Agents/subagents: warn and continue completion announce cleanup when lifecycle cleanup fails, preventing ended subagent runs from becoming silent ghosts. Fixes #82306. Thanks @SebTardif.
