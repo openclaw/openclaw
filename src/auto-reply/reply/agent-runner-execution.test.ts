@@ -10,6 +10,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildContextOverflowRecoveryText,
   MAX_LIVE_SWITCH_RETRIES,
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -153,7 +154,14 @@ vi.mock("./agent-runner-utils.js", () => ({
     },
   }),
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
-  resolveModelFallbackOptions: vi.fn(() => ({})),
+  resolveModelFallbackOptions: vi.fn(
+    (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
+      provider: run.provider,
+      model: run.model,
+      cfg: run.config,
+      agentDir: run.agentDir,
+    }),
+  ),
 }));
 
 vi.mock("./reply-delivery.js", () => ({
@@ -177,6 +185,8 @@ async function getApplyFallbackCandidateSelectionToEntry() {
 }
 
 type FallbackRunnerParams = {
+  provider: string;
+  model: string;
   run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
@@ -484,6 +494,614 @@ describe("runAgentTurnWithFallback", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("rechecks queued auto fallback primary probes before running", async () => {
+    const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+      fallbackAuthProfileId: "google:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    markAutoFallbackPrimaryProbe({
+      probe,
+      sessionKey: "main",
+      now: Date.now(),
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "google:fallback",
+      authProfileOverrideSource: "auto",
+    };
+    const run = createFollowupRun().run;
+    run.provider = "anthropic";
+    run.model = "claude-sonnet-4-6";
+    run.authProfileId = "anthropic:primary";
+    run.authProfileIdSource = "auto";
+    run.autoFallbackPrimaryProbe = probe;
+
+    expect(
+      resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+        run,
+        entry: sessionEntry,
+        sessionKey: "main",
+      }),
+    ).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      authProfileId: "google:fallback",
+      authProfileIdSource: "auto",
+      autoFallbackPrimaryProbe: undefined,
+    });
+  });
+
+  it("drops stale queued primary probes after a user model switch", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      modelOverride: "openai/gpt-5.4",
+      modelOverrideSource: "user",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    };
+    const run = createFollowupRun().run;
+    run.provider = "anthropic";
+    run.model = "claude-sonnet-4-6";
+    run.autoFallbackPrimaryProbe = probe;
+
+    expect(
+      resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+        run,
+        entry: sessionEntry,
+        sessionKey: "main",
+      }),
+    ).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+      modelOverrideSource: "user",
+      autoFallbackPrimaryProbe: undefined,
+    });
+  });
+
+  it("propagates rechecked user selections to post-run state", async () => {
+    const sessionKey = "rechecked-user-selection";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    };
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    const staleAutoEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.autoFallbackPrimaryProbe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+    };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "user model" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => staleAutoEntry,
+    });
+
+    expectRecordFields(followupRun.run as unknown as Record<string, unknown>, {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+      modelOverrideSource: "user",
+    });
+    expect(followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
+    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+    });
+  });
+
+  it("drops stale queued probe metadata after the auto fallback pin is cleared", () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      authProfileOverride: "google:fallback",
+      authProfileOverrideSource: "user",
+    };
+    const run = createFollowupRun().run;
+    run.provider = "anthropic";
+    run.model = "claude-sonnet-4-6";
+    run.hasSessionModelOverride = true;
+    run.modelOverrideSource = "auto";
+    run.hasAutoFallbackProvenance = true;
+    run.autoFallbackPrimaryProbe = probe;
+
+    expect(
+      resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+        run,
+        entry: sessionEntry,
+        sessionKey: "main",
+      }),
+    ).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      autoFallbackPrimaryProbe: undefined,
+    });
+    const rechecked = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+      run,
+      entry: sessionEntry,
+      sessionKey: "main",
+    });
+    expect(rechecked.authProfileId).toBeUndefined();
+    expect(rechecked.authProfileIdSource).toBeUndefined();
+    expect(rechecked.hasSessionModelOverride).toBeUndefined();
+    expect(rechecked.modelOverrideSource).toBeUndefined();
+    expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
+  });
+
+  it("keeps fallback auth available when a primary probe falls back", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+      fallbackAuthProfileId: "google:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.authProfileId = "anthropic:primary";
+    followupRun.run.authProfileIdSource = "auto";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("google", "gemini-3-pro"),
+      provider: "google",
+      model: "gemini-3-pro",
+      attempts: [{ provider: "anthropic", model: "claude-sonnet-4-6", error: "rate limit" }],
+    }));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded run", {
+      provider: "google",
+      model: "gemini-3-pro",
+      authProfileId: "google:fallback",
+      authProfileIdSource: "auto",
+    });
+  });
+
+  it("keeps fallback auth available for later same-provider fallback models", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+      fallbackAuthProfileId: "openai:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.authProfileId = "anthropic:primary";
+    followupRun.run.authProfileIdSource = "auto";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const sessionKey = "same-provider-fallback-auth";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideSource: "auto",
+    };
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.5"),
+      provider: "openai",
+      model: "gpt-5.5",
+      attempts: [
+        { provider: "anthropic", model: "claude-sonnet-4-6", error: "rate limit" },
+        { provider: "openai", model: "gpt-5.4", error: "rate limit" },
+      ],
+    }));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded run", {
+      provider: "openai",
+      model: "gpt-5.5",
+      authProfileId: "openai:fallback",
+      authProfileIdSource: "auto",
+    });
+    expectRecordFields(sessionEntry as unknown as Record<string, unknown>, {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideSource: "auto",
+    });
+  });
+
+  it("keeps the primary origin when an auto pin is cleared before fallback persists", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+      fallbackAuthProfileId: "openai:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const sessionKey = "cleared-before-fallback-persists";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideSource: "auto",
+    };
+    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      activeSessionStore[sessionKey] = {
+        sessionId: "session",
+        updatedAt: 2,
+      };
+      return {
+        result: await params.run("openai", "gpt-5.5"),
+        provider: "openai",
+        model: "gpt-5.5",
+        attempts: [{ provider: "anthropic", model: "claude-sonnet-4-6", error: "rate limit" }],
+      };
+    });
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideSource: "auto",
+    });
+  });
+
+  it("re-persists cross-provider same-model fallback pins after an in-flight clear", async () => {
+    const probe = {
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbackProvider: "azure",
+      fallbackModel: "gpt-5.5",
+      fallbackAuthProfileId: "azure:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const sessionKey = "cleared-cross-provider-same-model";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "azure",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
+      authProfileOverride: "azure:fallback",
+      authProfileOverrideSource: "auto",
+    };
+    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      activeSessionStore[sessionKey] = {
+        sessionId: "session",
+        updatedAt: 2,
+      };
+      return {
+        result: await params.run("azure", "gpt-5.5"),
+        provider: "azure",
+        model: "gpt-5.5",
+        attempts: [{ provider: "openai", model: "gpt-5.5", error: "rate limit" }],
+      };
+    });
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
+      providerOverride: "azure",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
+      authProfileOverride: "azure:fallback",
+      authProfileOverrideSource: "auto",
+    });
+  });
+
+  it("keeps primary auth on same-provider primary probes", async () => {
+    const probe = {
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+      fallbackAuthProfileId: "openai:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    followupRun.run.authProfileId = "openai:primary";
+    followupRun.run.authProfileIdSource = "auto";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("openai", "gpt-5.5");
+      return {
+        result: await params.run("openai", "gpt-5.4"),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [{ provider: "openai", model: "gpt-5.5", error: "rate limit" }],
+      };
+    });
+    state.runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({ payloads: [], meta: {} })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback" }], meta: {} });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "primary run", {
+      provider: "openai",
+      model: "gpt-5.5",
+      authProfileId: "openai:primary",
+      authProfileIdSource: "auto",
+    });
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 1, "fallback run", {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:fallback",
+      authProfileIdSource: "auto",
+    });
+  });
+
+  it("does not clear a concurrent user selection after primary probe success", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+    };
+    const sessionKey = "concurrent-user-switch-during-probe";
+    const staleAutoEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+    };
+    const activeSessionStore = { [sessionKey]: staleAutoEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.sessionKey = sessionKey;
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      activeSessionStore[sessionKey] = {
+        sessionId: "session",
+        updatedAt: 2,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+      };
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "primary recovered" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => staleAutoEntry,
+    });
+
+    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+    });
+  });
+
+  it("keeps rechecked primary probe runs in sync after live model switches", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.5",
+      fallbackAuthProfileId: "openai:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+    };
+    const sessionKey = "live-switch-probe";
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.sessionKey = sessionKey;
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const attemptedProviders: Array<string | undefined> = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      attemptedProviders.push(params.provider);
+      const provider = params.provider ?? "anthropic";
+      const model = params.model ?? "claude-sonnet-4-6";
+      return {
+        result: await params.run(provider, model),
+        provider,
+        model,
+        attempts: [],
+      };
+    });
+    state.runEmbeddedPiAgentMock
+      .mockImplementationOnce(async () => {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:primary",
+          authProfileIdSource: "auto",
+        });
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "switched" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+        },
+      });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expect(result.kind).toBe("success");
+    expect(attemptedProviders).toEqual(["anthropic", "openai"]);
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 1, "embedded run", {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:primary",
+      authProfileIdSource: "auto",
+    });
   });
 
   it("forwards the static extra system prompt to CLI backends", async () => {
