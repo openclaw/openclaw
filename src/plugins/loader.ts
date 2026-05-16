@@ -2104,6 +2104,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         (!enableState.enabled || forceSetupOnlyChannelPlugins);
       const canLoadScopedSetupOnlyChannelPlugin =
         scopedSetupOnlyChannelPluginRequested &&
+        (candidate.origin !== "workspace" || enableState.enabled) &&
         (!requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
       const registrationPlan = resolvePluginRegistrationPlan({
         canLoadScopedSetupOnlyChannelPlugin,
