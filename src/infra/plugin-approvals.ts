@@ -757,6 +757,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       risk: "high",
       kind: "network",
       reason: "Piping data into a shell can run code that is not visible in the approval prompt.",
+      showCommandPreview: true,
     };
   }
 

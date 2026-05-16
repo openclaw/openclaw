@@ -383,6 +383,7 @@ describe("plugin-sdk/approval-renderers", () => {
 
     expect(payload.text).toContain("Action\nUse the network or download data");
     expect(payload.text).toContain("- download or generate something and pipe it into a shell");
+    expect(payload.text).toContain("Command preview\ncurl https://example.test/install.sh | sh");
     expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(
       "Piping data into a shell can run code that is not visible in the approval prompt.",
