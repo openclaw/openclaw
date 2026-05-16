@@ -7,11 +7,13 @@ import {
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_DEVICE_VERIFICATION_URL = "https://github.com/login/device";
+const GITHUB_DEVICE_FLOW_SSRF_POLICY = { allowedHostnames: ["github.com"] };
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -71,26 +73,46 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+async function postGitHubDeviceFlowJson<T>(
+  url: string,
+  body: URLSearchParams,
+  failurePrefix: string,
+): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    policy: GITHUB_DEVICE_FLOW_SSRF_POLICY,
+    auditContext: "github-copilot-device-flow",
+    init: {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    },
+  });
+
+  try {
+    if (!response.ok) {
+      throw new Error(`${failurePrefix}: HTTP ${response.status}`);
+    }
+    return parseJsonResponse(await response.json()) as T;
+  } finally {
+    await release();
+  }
+}
+
 async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
     scope: params.scope,
   });
 
-  const res = await fetch(DEVICE_CODE_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+  const json = await postGitHubDeviceFlowJson<DeviceCodeResponse>(
+    DEVICE_CODE_URL,
     body,
-  });
-
-  if (!res.ok) {
-    throw new Error(`GitHub device code failed: HTTP ${res.status}`);
-  }
-
-  const json = parseJsonResponse(await res.json()) as DeviceCodeResponse;
+    "GitHub device code failed",
+  );
   if (!json.device_code || !json.user_code || !json.verification_uri) {
     throw new Error("GitHub device code response missing fields");
   }
@@ -109,20 +131,11 @@ async function pollForAccessToken(params: {
   });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(ACCESS_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: bodyBase,
-    });
-
-    if (!res.ok) {
-      throw new Error(`GitHub device token failed: HTTP ${res.status}`);
-    }
-
-    const json = parseJsonResponse(await res.json()) as DeviceTokenResponse;
+    const json = await postGitHubDeviceFlowJson<DeviceTokenResponse>(
+      ACCESS_TOKEN_URL,
+      bodyBase,
+      "GitHub device token failed",
+    );
     if ("access_token" in json && typeof json.access_token === "string") {
       return json.access_token;
     }
