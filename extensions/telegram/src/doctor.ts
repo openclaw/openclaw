@@ -35,6 +35,10 @@ type TelegramApiRootBotEndpointHit = {
   value: string;
   normalized: string;
 };
+type TelegramRootGroupsMissingAccountGroupsHit = {
+  accountId: string;
+  groupsPath: string;
+};
 type DoctorAllowFromList = Array<string | number>;
 type DoctorAccountRecord = Record<string, unknown>;
 
@@ -56,6 +60,11 @@ function sanitizeForLog(value: string): string {
 
 function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
   return Array.isArray(values) && values.some((entry) => normalizeOptionalString(String(entry)));
+}
+
+function hasObjectEntries(value: unknown): boolean {
+  const object = asObjectRecord(value);
+  return Boolean(object) && Object.keys(object ?? {}).length > 0;
 }
 
 function collectTelegramAccountScopes(
@@ -249,6 +258,63 @@ export function collectTelegramApiRootWarnings(params: {
   return [
     `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.`,
     `- Run "${params.doctorFixCommand}" to remove the trailing /bot<TOKEN> path from Telegram apiRoot.`,
+  ];
+}
+
+export function scanTelegramRootGroupsMissingAccountGroups(
+  cfg: OpenClawConfig,
+): TelegramRootGroupsMissingAccountGroupsHit[] {
+  const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  if (!telegram || !hasObjectEntries(telegram.groups)) {
+    return [];
+  }
+  if (telegram.enabled === false) {
+    return [];
+  }
+  const accounts = asObjectRecord(telegram.accounts);
+  if (!accounts) {
+    return [];
+  }
+
+  const baseGroupPolicy = typeof telegram.groupPolicy === "string" ? telegram.groupPolicy : "";
+  let enabledAccountCount = 0;
+  const accountsThatNeedGroupRules: Array<[string, Record<string, unknown>]> = [];
+  for (const [accountId, rawAccount] of Object.entries(accounts)) {
+    const account = asObjectRecord(rawAccount);
+    if (!account || account.enabled === false) {
+      continue;
+    }
+    enabledAccountCount += 1;
+    const effectiveGroupPolicy =
+      typeof account.groupPolicy === "string" ? account.groupPolicy : baseGroupPolicy;
+    if (effectiveGroupPolicy === "disabled" || effectiveGroupPolicy === "open") {
+      continue;
+    }
+    accountsThatNeedGroupRules.push([accountId, account]);
+  }
+  if (enabledAccountCount < 2) {
+    return [];
+  }
+
+  return accountsThatNeedGroupRules
+    .filter(([, account]) => !hasObjectEntries(account.groups))
+    .map(([accountId]) => ({
+      accountId,
+      groupsPath: `channels.telegram.accounts.${accountId}.groups`,
+    }));
+}
+
+export function collectTelegramRootGroupsMissingAccountGroupsWarnings(params: {
+  hits: TelegramRootGroupsMissingAccountGroupsHit[];
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const paths = params.hits
+    .map((hit) => `${sanitizeForLog(hit.accountId)} (${sanitizeForLog(hit.groupsPath)})`)
+    .join(", ");
+  return [
+    `- channels.telegram.groups is set in a multi-account Telegram config, but these enabled accounts have no account-local group rules: ${paths}. Telegram group rules are account-scoped in multi-account setups; move or copy group entries to channels.telegram.accounts.<accountId>.groups for each bot account that should respond in groups.`,
   ];
 }
 
@@ -617,6 +683,9 @@ export const telegramDoctor: ChannelDoctorAdapter = {
     ...collectTelegramApiRootWarnings({
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
+    }),
+    ...collectTelegramRootGroupsMissingAccountGroupsWarnings({
+      hits: scanTelegramRootGroupsMissingAccountGroups(cfg),
     }),
     ...collectTelegramSelectedQuoteToolProgressWarnings({
       hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),

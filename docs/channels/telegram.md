@@ -161,7 +161,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Tab title="Group policy and allowlists">
     Two controls apply together:
 
-    1. **Which groups are allowed** (`channels.telegram.groups`)
+    1. **Which groups are allowed** (`channels.telegram.groups`, or `channels.telegram.accounts.<accountId>.groups` in multi-account configs)
        - no `groups` config:
          - with `groupPolicy: "open"`: any group can pass group-ID checks
          - with `groupPolicy: "allowlist"` (default): groups are blocked until you add `groups` entries (or `"*"`)
@@ -180,6 +180,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
     If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
     Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
+    In multi-account Telegram configs, put group rules under the active bot account, for example `channels.telegram.accounts.default.groups` or `channels.telegram.accounts.alerts.groups`. A root `channels.telegram.groups` entry is useful for single-account configs, but it can be misleading once multiple bot accounts exist because named accounts need account-local group rules.
     Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
     Owner-only group setup:
@@ -203,6 +204,41 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ```
 
     Test it from the group with `@<bot_username> ping`. Plain group messages do not trigger the bot while `requireMention: true`.
+
+    Multi-account group setup:
+
+```json5
+{
+  channels: {
+    telegram: {
+      accounts: {
+        default: {
+          botToken: "123456:ABC...",
+          allowFrom: ["111111111"],
+          groupPolicy: "allowlist",
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+              allowFrom: ["111111111", "222222222"], // trusted user/bot sender IDs
+            },
+          },
+        },
+        alerts: {
+          botToken: "987654:XYZ...",
+          allowFrom: ["333333333"],
+          groupPolicy: "allowlist",
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+              allowFrom: ["333333333"],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
 
     Example: allow any member in one specific group:
 
@@ -993,6 +1029,7 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
   <Accordion title="Bot not seeing group messages at all">
 
     - when `channels.telegram.groups` exists, group must be listed (or include `"*"`)
+    - in multi-account configs, check the active account path too: `channels.telegram.accounts.<accountId>.groups`
     - verify bot membership in group
     - review logs: `openclaw logs --follow` for skip reasons
 
@@ -1096,11 +1133,11 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 <Accordion title="High-signal Telegram fields">
 
 - startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*` (`tokenFile` must point to a regular file; symlinks are rejected)
-- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
+- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `accounts.*.groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - topic defaults: `groups.<chatId>.topics."*"` applies to unmatched forum topics; exact topic IDs override it
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
-- threading/replies: `replyToMode`
+- threading/replies: `replyToMode`, `dm.threadReplies`, `direct.*.threadReplies`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
@@ -1114,7 +1151,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 </Accordion>
 
 <Note>
-Multi-account precedence: when two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Named accounts inherit `channels.telegram.allowFrom` / `groupAllowFrom`, but not `accounts.default.*` values.
+Multi-account precedence: when two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Named accounts inherit `channels.telegram.allowFrom` / `groupAllowFrom`, but not `accounts.default.*` values. Put group allowlists for named bot accounts under `channels.telegram.accounts.<accountId>.groups`.
 </Note>
 
 ## Related

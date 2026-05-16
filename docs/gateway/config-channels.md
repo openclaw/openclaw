@@ -216,6 +216,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `apiRoot` is the Telegram Bot API root only. Use `https://api.telegram.org` or your self-hosted/proxy root, not `https://api.telegram.org/bot<TOKEN>`; `openclaw doctor --fix` removes an accidental trailing `/bot<TOKEN>` suffix.
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
+- In multi-account Telegram setups, put group allowlists under the active account, for example `channels.telegram.accounts.default.groups` or `channels.telegram.accounts.alerts.groups`. A root `channels.telegram.groups` entry can document single-account/default behavior, but it does not prove every named bot account is authorized for that group; `openclaw doctor` warns when root groups exist and enabled allowlisted accounts have no account-local groups.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
@@ -776,7 +777,7 @@ Run multiple accounts per channel (each with its own `accountId`):
 
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
-- Base channel settings apply to all accounts unless overridden per account.
+- Base channel settings apply to all accounts unless overridden per account. Telegram group allowlists are the important exception in multi-account setups: configure `channels.telegram.accounts.<accountId>.groups` for each bot account that should respond in groups.
 - Use `bindings[].match.accountId` to route each account to a different agent.
 - If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead.
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
