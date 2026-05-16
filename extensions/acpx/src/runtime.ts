@@ -28,6 +28,7 @@ import {
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawOwnedAcpxProcessCommand,
+  isProcessAlive,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 
@@ -770,7 +771,18 @@ export class AcpxRuntime implements AcpRuntime {
       typeof existing === "object" && existing !== null
         ? (existing as { acpSessionId?: unknown }).acpSessionId
         : undefined;
-    return !params.resumeSessionId || existingSessionId === params.resumeSessionId;
+    if (params.resumeSessionId && existingSessionId !== params.resumeSessionId) {
+      return false;
+    }
+    // Reject reuse when the persisted subprocess is no longer alive — a dead
+    // PID means the prior gateway process exited and the session must be
+    // relaunched rather than reattached. Without this guard, warm-restore
+    // (catalog #2) would silently attach to a dead PID (catalog #13).
+    const pid = readRecordAgentPid(existing);
+    if (pid !== undefined && !isProcessAlive(pid)) {
+      return false;
+    }
+    return true;
   }
 
   private async runWithLaunchLease<T>(params: {

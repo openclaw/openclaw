@@ -255,10 +255,17 @@ export class AcpSessionManager {
         continue;
       }
       const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
-      if (
-        !isSessionIdentityPending(currentIdentity) ||
-        !identityHasStableSessionId(currentIdentity)
-      ) {
+      const isPendingWithStableId =
+        isSessionIdentityPending(currentIdentity) && identityHasStableSessionId(currentIdentity);
+      // Also warm-restore sessions whose identity is already resolved (e.g. after
+      // a gateway restart where the subprocess PID is stale but the ACP session
+      // record on disk still shows closed: false). These need ensureSession called
+      // with resumeSessionId so the ACP server can replay history via session/load.
+      const isResumableResolved =
+        !isSessionIdentityPending(currentIdentity) &&
+        identityHasStableSessionId(currentIdentity) &&
+        session.acp.state !== "error";
+      if (!isPendingWithStableId && !isResumableResolved) {
         continue;
       }
 

@@ -3179,7 +3179,9 @@ describe("AcpSessionManager", () => {
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-stale");
   });
 
-  it("skips startup identity reconciliation for already resolved sessions", async () => {
+  it("warm-restores already resolved sessions on startup by calling ensureSession with resumeSessionId", async () => {
+    // Resolved-identity sessions (e.g. after gateway restart) are now included
+    // in the startup scan so their ACP server can replay history via session/load.
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -3210,13 +3212,22 @@ describe("AcpSessionManager", () => {
         acp: resolvedMeta,
       },
     ]);
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: resolvedMeta,
+    });
 
     const manager = new AcpSessionManager();
     const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
 
-    expect(result).toEqual({ checked: 0, resolved: 0, failed: 0 });
-    expect(runtimeState.getStatus).not.toHaveBeenCalled();
-    expect(runtimeState.ensureSession).not.toHaveBeenCalled();
+    expect(result).toEqual({ checked: 1, resolved: 1, failed: 0 });
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        resumeSessionId: expect.stringMatching(/^(agent-sid-1|acpx-sid-1)$/),
+      }),
+    );
   });
 
   it("preserves existing ACP session identifiers when ensure returns none", async () => {
