@@ -494,6 +494,12 @@ describe("native hook relay registry", () => {
         toolUseId: "call-1",
       }),
     ).toBe(false);
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+      }),
+    ).toBe(false);
   });
 
   it("retains bounded payload snapshots in invocation history", async () => {
@@ -956,6 +962,45 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "exec_command",
         tool_use_id: "native-report-rewrite-1",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks ordinary Codex native pre-tool calls when policy rewrites params", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      params: { command: "echo rewritten" },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-rewrite-1",
         tool_input: { cmd: "cat /tmp/private_key" },
       },
     });

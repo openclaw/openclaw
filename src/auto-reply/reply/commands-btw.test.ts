@@ -155,6 +155,8 @@ describe("handleBtwCommand", () => {
       sessionEntry: params.sessionEntry,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
+      messageChannel: "whatsapp",
+      messageProvider: "whatsapp",
     });
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({

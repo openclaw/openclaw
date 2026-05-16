@@ -428,6 +428,7 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionId: "session-1",
           sessionKey: "agent:main:session-1",
           runId: "run-side-1",
+          channelId: "discord",
           allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
         });
         return threadResult("side-thread");
@@ -453,6 +454,8 @@ describe("runCodexAppServerSideQuestion", () => {
       runCodexAppServerSideQuestion(
         sideParams({
           sessionKey: "agent:main:session-1",
+          messageChannel: "discord",
+          messageProvider: "discord-voice",
           opts: { runId: "run-side-1" },
         }),
         { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },
@@ -533,6 +536,8 @@ describe("runCodexAppServerSideQuestion", () => {
       runCodexAppServerSideQuestion(
         sideParams({
           sessionKey: "agent:main:session-1",
+          messageChannel: "discord",
+          messageProvider: "discord-voice",
           opts: { runId: "run-side-approval" },
         }),
         { nativeHookRelay: { enabled: true } },
@@ -547,6 +552,7 @@ describe("runCodexAppServerSideQuestion", () => {
           requestParams?: Record<string, unknown>;
           threadId?: string;
           turnId?: string;
+          paramsForRun?: { messageChannel?: string; messageProvider?: string };
           nativeHookRelay?: { relayId?: string; allowedEvents?: readonly string[] };
         }
       | undefined;
@@ -561,6 +567,10 @@ describe("runCodexAppServerSideQuestion", () => {
       },
       threadId: "side-thread",
       turnId: "turn-1",
+      paramsForRun: {
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+      },
     });
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId: relayIdDuringFork,

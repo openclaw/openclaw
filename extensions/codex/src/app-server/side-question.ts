@@ -229,6 +229,9 @@ export async function runCodexAppServerSideQuestion(
           sessionKey: params.sessionKey,
           config: params.cfg,
           runId: sideRunParams.runId,
+          ...(params.messageChannel || params.messageProvider
+            ? { channelId: params.messageChannel ?? params.messageProvider }
+            : {}),
           requestTimeoutMs: appServer.requestTimeoutMs,
           completionTimeoutMs: Math.max(
             appServer.turnCompletionIdleTimeoutMs,
@@ -373,6 +376,7 @@ function registerCodexSideNativeHookRelay(params: {
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
+  channelId?: string;
   requestTimeoutMs: number;
   completionTimeoutMs: number;
   signal: AbortSignal;
@@ -387,6 +391,7 @@ function registerCodexSideNativeHookRelay(params: {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,
     ttlMs: resolveCodexSideNativeHookRelayTtlMs({
       explicitTtlMs: params.options.ttlMs,
@@ -430,6 +435,9 @@ function buildSideRunAttemptParams(
     sessionFile: params.sessionFile,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
+    ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+    ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
     workspaceDir: options.cwd,
     authProfileId: options.authProfileId,
     authProfileIdSource: params.authProfileIdSource,
@@ -501,6 +509,10 @@ async function createCodexSideToolBridge(input: {
       modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
         workspaceDir: input.cwd,
       }),
+      ...(input.params.messageChannel || input.params.messageProvider
+        ? { messageProvider: input.params.messageChannel ?? input.params.messageProvider }
+        : {}),
+      ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       sandbox,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
@@ -521,6 +533,9 @@ async function createCodexSideToolBridge(input: {
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+      ...(input.params.messageChannel || input.params.messageProvider
+        ? { channelId: input.params.messageChannel ?? input.params.messageProvider }
+        : {}),
     },
   });
 }

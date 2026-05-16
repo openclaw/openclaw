@@ -952,14 +952,13 @@ async function runNativeHookRelayPreToolUse(params: {
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
   }
-  if (approvalMode === "report" && nativeHookRelayParamsWereRewritten(toolInput, outcome.params)) {
+  if (nativeHookRelayParamsWereRewritten(toolInput, outcome.params)) {
     return params.adapter.renderPreToolUseBlockResponse(
       "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
     );
   }
-  // Ordinary Codex PreToolUse supports block/allow, not argument mutation. The
-  // app-server approval bridge opts into report mode above so rewrites fail
-  // closed before this no-op path.
+  // Codex native PreToolUse supports block/allow, not argument mutation, so a
+  // policy rewrite must fail closed instead of allowing the original params.
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 

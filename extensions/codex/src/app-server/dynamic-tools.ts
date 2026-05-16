@@ -34,6 +34,7 @@ type CodexDynamicToolHookContext = {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
+  channelId?: string;
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
