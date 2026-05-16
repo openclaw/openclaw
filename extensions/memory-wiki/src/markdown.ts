@@ -28,6 +28,7 @@ export type WikiClaimEvidence = {
   privacyTier?: string;
   note?: string;
   updatedAt?: string;
+  hash?: string;
 };
 
 export type WikiClaim = {
@@ -209,6 +210,7 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   const weight =
     typeof record.weight === "number" && Number.isFinite(record.weight) ? record.weight : undefined;
   const confidence = normalizeOptionalNumber(record.confidence);
+  const hash = normalizeOptionalString(record.hash);
   if (
     !kind &&
     !sourceId &&
@@ -218,7 +220,8 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
     weight === undefined &&
     confidence === undefined &&
     !privacyTier &&
-    !updatedAt
+    !updatedAt &&
+    !hash
   ) {
     return null;
   }
@@ -232,6 +235,7 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
     ...(privacyTier ? { privacyTier } : {}),
     ...(note ? { note } : {}),
     ...(updatedAt ? { updatedAt } : {}),
+    ...(hash ? { hash } : {}),
   };
 }
 
