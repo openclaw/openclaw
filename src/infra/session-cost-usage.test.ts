@@ -1962,4 +1962,49 @@ example
     expect(lastPoint?.cumulativeTokens).toBe(165);
     expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
   });
+
+  it("returns no timeseries points for non-positive and non-finite maxPoints", async () => {
+    const root = await makeSessionCostRoot("timeseries-invalid-max-points");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-invalid-max-points.jsonl");
+
+    const entries = [1, 2].map((idx) => ({
+      type: "message",
+      timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx, 0)).toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: idx,
+          output: idx,
+          totalTokens: idx * 2,
+          cost: { total: idx * 0.001 },
+        },
+      },
+    }));
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    for (const maxPoints of [
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]) {
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionFile,
+        maxPoints,
+      });
+
+      const series = requireValue(timeseries, "session usage timeseries missing");
+      expect(series.points).toEqual([]);
+    }
+  });
 });
