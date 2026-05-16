@@ -73,24 +73,6 @@ const isWithinCompileCacheRoot = (currentDirectory, desiredDirectory) => {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 };
 
-const resolveCompileCacheBaseDirectory = () => {
-  if (isNodeCompileCacheRequested()) {
-    return path.resolve(process.env.NODE_COMPILE_CACHE);
-  }
-  return path.resolve(path.join(os.tmpdir(), "node-compile-cache"));
-};
-
-const isCompatiblePackagedCompileCacheDirectory = (currentDirectory, desiredDirectory) => {
-  if (isWithinCompileCacheRoot(currentDirectory, desiredDirectory)) {
-    return true;
-  }
-  const baseDirectory = resolveCompileCacheBaseDirectory();
-  return (
-    isWithinCompileCacheRoot(currentDirectory, baseDirectory) &&
-    isWithinCompileCacheRoot(desiredDirectory, baseDirectory)
-  );
-};
-
 const resolvePackagedCompileCacheDirectory = () => {
   const packageJsonUrl = new URL("./package.json", import.meta.url);
   const version = sanitizeCompileCachePathSegment(readPackageVersion());
@@ -104,12 +86,16 @@ const resolvePackagedCompileCacheDirectory = () => {
   const baseDirectory = isNodeCompileCacheRequested()
     ? process.env.NODE_COMPILE_CACHE
     : path.join(os.tmpdir(), "node-compile-cache");
-  return path.join(
-    baseDirectory,
+  const scopedSuffix = path.join(
     "openclaw",
     version,
     sanitizeCompileCachePathSegment(installMarker),
   );
+  const resolvedBase = path.resolve(baseDirectory);
+  if (resolvedBase.endsWith(`${path.sep}${scopedSuffix}`)) {
+    return resolvedBase;
+  }
+  return path.join(baseDirectory, scopedSuffix);
 };
 
 const respawnSignals =
@@ -243,7 +229,7 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
     return false;
   }
   const desiredDirectory = resolvePackagedCompileCacheDirectory();
-  if (isCompatiblePackagedCompileCacheDirectory(currentDirectory, desiredDirectory)) {
+  if (isWithinCompileCacheRoot(currentDirectory, desiredDirectory)) {
     return false;
   }
   const env = {

@@ -349,25 +349,27 @@ describe("openclaw launcher", () => {
     },
   );
 
-  it("does not respawn on every packaged launcher invoke when compile cache is already scoped", async () => {
+  it("does not respawn when the active compile cache is nested under the packaged desired directory", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addPackagedCompileCacheProbe(fixtureRoot);
     const cacheRoot = path.join(fixtureRoot, ".node-compile-cache");
+    const scopedCacheDirectory = path.join(cacheRoot, "openclaw", "unknown", "no-package-json");
     const launcher = path.join(fixtureRoot, "openclaw.mjs");
 
     const first = spawnSync(process.execPath, [launcher], {
       cwd: fixtureRoot,
       env: launcherEnv({
-        NODE_COMPILE_CACHE: cacheRoot,
+        NODE_COMPILE_CACHE: scopedCacheDirectory,
       }),
       encoding: "utf8",
     });
     expect(first.status).toBe(0);
+    expect(first.stdout).toBe("cache:enabled;respawn:0");
 
     const second = spawnSync(process.execPath, [launcher], {
       cwd: fixtureRoot,
       env: launcherEnv({
-        NODE_COMPILE_CACHE: cacheRoot,
+        NODE_COMPILE_CACHE: scopedCacheDirectory,
       }),
       encoding: "utf8",
     });

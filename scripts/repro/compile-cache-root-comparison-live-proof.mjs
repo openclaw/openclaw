@@ -11,11 +11,17 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compile-cache-proof-"));
+const scopedCacheDirectory = path.join(cacheRoot, "openclaw", "unknown", "no-package-json");
 const launcher = path.join(repoRoot, "openclaw.mjs");
 
 const probeEntry = `
+import module from "node:module";
+const current = module.getCompileCacheDir?.() ?? "cache:disabled";
 process.stdout.write(
-  "respawn:" + (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED ?? "0"),
+  JSON.stringify({
+    current,
+    respawn: process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED ?? "0",
+  }),
 );
 `;
 
@@ -27,12 +33,21 @@ fs.writeFileSync(path.join(fixtureRoot, "dist", "entry.js"), probeEntry, "utf8")
 function runLauncher(label) {
   const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
     cwd: fixtureRoot,
-    env: { ...process.env, NODE_COMPILE_CACHE: cacheRoot },
+    env: { ...process.env, NODE_COMPILE_CACHE: scopedCacheDirectory },
     encoding: "utf8",
   });
-  console.log(`${label}: exit=${result.status} stdout=${(result.stdout || "").trim()}`);
+  const payload = JSON.parse((result.stdout || "{}").trim() || "{}");
+  console.log(
+    `${label}: exit=${result.status} respawn=${payload.respawn} current=${payload.current}`,
+  );
+  return payload;
 }
 
-console.log("NODE_COMPILE_CACHE=", cacheRoot);
-runLauncher("first invoke");
-runLauncher("second invoke (should not respawn again)");
+console.log("NODE_COMPILE_CACHE (scoped)=", scopedCacheDirectory);
+const first = runLauncher("first invoke");
+const second = runLauncher("second invoke");
+const nestedUnderScoped =
+  typeof first.current === "string" &&
+  first.current.includes(path.join("openclaw", "unknown", "no-package-json"));
+console.log("active cache nested under scoped directory:", nestedUnderScoped);
+console.log("no repeat respawn:", first.respawn === "0" && second.respawn === "0");
