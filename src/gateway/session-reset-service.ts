@@ -21,7 +21,11 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import {
+  resolveRotatedGeneratedSessionFilePath,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -683,14 +687,27 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
-      nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+    const sessionFilePathOptions = resolveSessionFilePathOptions({
+      storePath,
+      agentId: sessionAgentId,
+    });
+    const rotatedGeneratedSessionFile =
+      currentEntry?.sessionId && currentEntry?.sessionFile
+        ? resolveRotatedGeneratedSessionFilePath({
+            previousSessionId: currentEntry.sessionId,
+            nextSessionId,
+            previousSessionFile: currentEntry.sessionFile,
+            sessionsDir: path.dirname(storePath),
+            agentId: sessionAgentId,
+          })
+        : undefined;
+    const sessionFile =
+      rotatedGeneratedSessionFile ??
+      resolveSessionFilePath(
+        nextSessionId,
+        currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
+        sessionFilePathOptions,
+      );
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
@@ -718,8 +735,8 @@ export async function performGatewaySessionReset(params: {
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
-      compactionCount: currentEntry?.compactionCount,
-      compactionCheckpoints: currentEntry?.compactionCheckpoints,
+      compactionCount: 0,
+      compactionCheckpoints: undefined,
       sendPolicy: currentEntry?.sendPolicy,
       queueMode: currentEntry?.queueMode,
       queueDebounceMs: currentEntry?.queueDebounceMs,
