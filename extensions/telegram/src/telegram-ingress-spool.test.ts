@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   claimTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
+  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
@@ -111,6 +112,23 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+  it("does not claim an update after the pending file is gone", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 35, message: { text: "already handled" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      await deleteTelegramSpooledUpdate(update);
+
+      await expect(claimTelegramSpooledUpdate(update)).resolves.toBeNull();
+      expect(await fs.readdir(spoolDir)).toEqual([]);
+    });
+  });
+
   it("recovers stale processing claims without replaying fresh claims", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({
@@ -150,5 +168,23 @@ describe("Telegram ingress spool", () => {
         "0000000000000041.json",
       ]);
     });
+  });
+
+  it("does not treat stale claims with reused pids as live-owned", () => {
+    const now = Date.now();
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
+        updateId: 50,
+        path: path.join(os.tmpdir(), "50.json.processing"),
+        pendingPath: path.join(os.tmpdir(), "50.json"),
+        update: { update_id: 50 },
+        receivedAt: now,
+        claim: {
+          processId: "other-process",
+          processPid: process.pid,
+          claimedAt: now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1,
+        },
+      }),
+    ).toBe(false);
   });
 });

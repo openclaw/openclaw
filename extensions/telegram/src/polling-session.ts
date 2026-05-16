@@ -21,6 +21,7 @@ import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   claimTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
+  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
@@ -48,6 +49,7 @@ const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 const ISOLATED_INGRESS_BACKLOG_STALL_MS = 25 * 60_000;
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
+const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
@@ -421,7 +423,9 @@ export class TelegramPollingSession {
     await recoverStaleTelegramSpooledUpdateClaims({
       spoolDir: params.spoolDir,
       staleMs: 0,
-      shouldRecover: (claim) => !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)),
+      shouldRecover: (claim) =>
+        !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
+        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
     });
     const claimedLaneKeys = new Set(
       (
@@ -432,7 +436,7 @@ export class TelegramPollingSession {
     );
     const updates = await listTelegramSpooledUpdates({
       spoolDir: params.spoolDir,
-      limit: "all",
+      limit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
     });
     const blockedByLane = new Set<string>();
     let started = 0;

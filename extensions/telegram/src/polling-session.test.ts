@@ -755,6 +755,63 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("keeps claims owned by another live process blocked", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const events: string[] = [];
+      const interruptedUpdate = topicUpdate(42, 10, "active topic 10 turn");
+      await writeSpooledTestUpdates(tempDir, [
+        interruptedUpdate,
+        topicUpdate(43, 10, "later topic 10 turn"),
+      ]);
+      const interrupted = (await listTelegramSpooledUpdates({ spoolDir: tempDir })).find(
+        (update) => update.updateId === 42,
+      );
+      if (!interrupted) {
+        throw new Error("Expected interrupted update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(interrupted);
+      if (!claimed) {
+        throw new Error("Expected claimed update");
+      }
+      await fs.writeFile(
+        claimed.path,
+        `${JSON.stringify({
+          version: 1,
+          updateId: 42,
+          receivedAt: interrupted.receivedAt,
+          update: interruptedUpdate,
+          claim: {
+            processId: "other-process",
+            processPid: process.pid,
+            claimedAt: Date.now(),
+          },
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      const { createWorker, runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        handleUpdate: async (update) => {
+          events.push(`handled:${update.update_id}`);
+        },
+      });
+
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(events).toEqual([]);
+      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
+      expect((await fs.readdir(tempDir)).toSorted()).toEqual([
+        "0000000000000042.json.processing",
+        "0000000000000043.json",
+      ]);
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
   it("scans past active-lane backlogs to start unrelated lanes", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();

@@ -7,12 +7,20 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const SPOOL_VERSION = 1;
 export const TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS = 6 * 60 * 60 * 1000;
+const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = `${process.pid}:${randomUUID()}`;
+
+type TelegramSpooledUpdateClaimOwner = {
+  processId: string;
+  processPid: number;
+  claimedAt: number;
+};
 
 type TelegramSpooledUpdatePayload = {
   version: number;
   updateId: number;
   receivedAt: number;
   update: unknown;
+  claim?: TelegramSpooledUpdateClaimOwner;
 };
 
 export type TelegramSpooledUpdate = {
@@ -20,6 +28,7 @@ export type TelegramSpooledUpdate = {
   path: string;
   update: unknown;
   receivedAt: number;
+  claim?: TelegramSpooledUpdateClaimOwner;
 };
 
 export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
@@ -105,12 +114,59 @@ function parseSpooledUpdate(value: unknown, filePath: string): TelegramSpooledUp
   if (payload.version !== SPOOL_VERSION || !isValidUpdateId(payload.updateId)) {
     return null;
   }
-  return {
+  const update: TelegramSpooledUpdate = {
     updateId: payload.updateId,
     path: filePath,
     update: payload.update,
     receivedAt: typeof payload.receivedAt === "number" ? payload.receivedAt : 0,
   };
+  if (
+    payload.claim &&
+    typeof payload.claim.processId === "string" &&
+    isValidUpdateId(payload.claim.processPid) &&
+    typeof payload.claim.claimedAt === "number"
+  ) {
+    update.claim = payload.claim;
+  }
+  return update;
+}
+
+function buildClaimedPayload(update: TelegramSpooledUpdate): TelegramSpooledUpdatePayload {
+  return {
+    version: SPOOL_VERSION,
+    updateId: update.updateId,
+    receivedAt: update.receivedAt,
+    update: update.update,
+    claim: {
+      processId: TELEGRAM_SPOOLED_UPDATE_PROCESS_ID,
+      processPid: process.pid,
+      claimedAt: Date.now(),
+    },
+  };
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code !== "ESRCH";
+  }
+}
+
+function isFreshClaimOwner(claim: TelegramSpooledUpdateClaimOwner): boolean {
+  return Date.now() - claim.claimedAt < TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS;
+}
+
+export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+  claim: ClaimedTelegramSpooledUpdate,
+): boolean {
+  return Boolean(
+    claim.claim &&
+    claim.claim.processId !== TELEGRAM_SPOOLED_UPDATE_PROCESS_ID &&
+    isFreshClaimOwner(claim.claim) &&
+    processExists(claim.claim.processPid),
+  );
 }
 
 export async function writeTelegramSpooledUpdate(params: {
@@ -183,26 +239,32 @@ export async function claimTelegramSpooledUpdate(
   update: TelegramSpooledUpdate,
 ): Promise<ClaimedTelegramSpooledUpdate | null> {
   const claimedPath = processingPath(path.dirname(update.path), update.updateId);
-  try {
-    // A hard link is an atomic non-overwriting claim in the same spool directory.
-    await fs.link(update.path, claimedPath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return null;
-    }
-    if (code === "EEXIST") {
-      await unlinkIfPresent(update.path);
-      return null;
-    }
-    throw err;
-  }
+  const holdPath = path.join(
+    path.dirname(update.path),
+    `${spoolFileName(update.updateId)}.${randomUUID()}.claim`,
+  );
+  const tempPath = path.join(
+    path.dirname(update.path),
+    `${processingFileName(update.updateId)}.${randomUUID()}.tmp`,
+  );
   try {
     const claimedAt = new Date();
+    await fs.writeFile(tempPath, `${JSON.stringify(buildClaimedPayload(update))}\n`, {
+      mode: 0o600,
+    });
+    await fs.link(update.path, holdPath);
+    await fs.link(tempPath, claimedPath);
+    await unlinkIfPresent(tempPath);
+    await unlinkIfPresent(holdPath);
     await fs.utimes(claimedPath, claimedAt, claimedAt);
     await unlinkIfPresent(update.path);
   } catch (err) {
-    await unlinkIfPresent(claimedPath);
+    const code = (err as { code?: string }).code;
+    await unlinkIfPresent(tempPath);
+    await unlinkIfPresent(holdPath);
+    if (code === "ENOENT" || code === "EEXIST") {
+      return null;
+    }
     throw err;
   }
   return {
