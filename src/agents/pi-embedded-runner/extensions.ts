@@ -34,6 +34,10 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
     : {};
 }
 
+// Only checks "error" and "timeout" — the status values emitted by the
+// adapter's buildToolExecutionErrorResult. The subscribe-side classifier
+// (isErrorLikeStatus) uses a broader regex because it handles arbitrary
+// external tool results; this bridge only elevates adapter-produced statuses.
 function hasErrorToolResultStatus(result: AgentToolResult<unknown>): boolean {
   const details = recordFromUnknown(result.details);
   const status = normalizeOptionalLowercaseString(details.status);
