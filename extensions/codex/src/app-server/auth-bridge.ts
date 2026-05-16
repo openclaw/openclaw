@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -477,6 +478,19 @@ async function resolveOAuthCredentialForCodexAppServer(
     isCodexAppServerAuthProvider(ownerCredential.provider, params.config)
       ? ownerCredential
       : undefined;
+  if (params.forceRefresh) {
+    const refreshCredential = persistedOAuthCredential ?? overlaidOAuthCredential ?? credential;
+    embeddedAgentLog.warn("codex app-server OAuth refresh diagnostic", {
+      agentDir: params.agentDir,
+      ownerAgentDir,
+      profileId,
+      refreshPath:
+        !persistedOAuthCredential && overlaidOAuthCredential ? "runtime-external" : "profile-store",
+      hasAccess: Boolean(refreshCredential.access?.trim()),
+      hasRefresh: Boolean(refreshCredential.refresh?.trim()),
+      hasOAuthRef: Boolean(refreshCredential.oauthRef),
+    });
+  }
   if (params.forceRefresh && !persistedOAuthCredential && overlaidOAuthCredential) {
     const refreshedRuntimeCredential = await refreshOAuthCredentialForRuntime({
       credential: overlaidOAuthCredential,

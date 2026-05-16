@@ -39,12 +39,27 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   ),
 }));
 
+const harnessRuntimeMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
 vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(),
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
   refreshOpenAICodexToken: oauthMocks.refreshOpenAICodexToken,
 }));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    embeddedAgentLog: {
+      ...actual.embeddedAgentLog,
+      warn: harnessRuntimeMocks.warn,
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
@@ -122,6 +137,7 @@ afterEach(() => {
   oauthMocks.refreshOpenAICodexToken.mockReset();
   providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
+  harnessRuntimeMocks.warn.mockReset();
 });
 
 function createStartOptions(
@@ -1194,6 +1210,48 @@ describe("bridgeCodexAppServerStartOptions", () => {
         chatgptPlanType: null,
       });
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs non-secret Codex OAuth refresh diagnostics before refreshing", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:default",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          expires: Date.now() + 60_000,
+          accountId: "account-123",
+          email: "codex@example.test",
+          oauthRef: {
+            source: "openclaw-credentials",
+            provider: "openai-codex",
+            id: "0123456789abcdef0123456789abcdef",
+          },
+        } as never,
+      });
+
+      await expect(refreshCodexAppServerAuthTokens({ agentDir })).rejects.toThrow(
+        'Codex app-server auth profile "openai-codex:default" does not contain usable credentials.',
+      );
+
+      expect(harnessRuntimeMocks.warn).toHaveBeenCalledWith(
+        "codex app-server OAuth refresh diagnostic",
+        expect.objectContaining({
+          profileId: "openai-codex:default",
+          refreshPath: "profile-store",
+          hasAccess: false,
+          hasRefresh: false,
+          hasOAuthRef: true,
+        }),
+      );
+      expect(JSON.stringify(harnessRuntimeMocks.warn.mock.calls)).not.toContain(
+        "0123456789abcdef0123456789abcdef",
+      );
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
