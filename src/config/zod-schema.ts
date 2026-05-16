@@ -60,6 +60,29 @@ const LegacyCanvasHostSchema = z
   .strict()
   .optional();
 
+const SecuritySchema = z
+  .object({
+    audit: z
+      .object({
+        suppressions: z
+          .array(
+            z
+              .object({
+                checkId: z.string().min(1),
+                titleIncludes: z.string().min(1).optional(),
+                detailIncludes: z.string().min(1).optional(),
+                reason: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const AccessGroupsSchema = z
   .record(
     z.string().min(1),
@@ -676,6 +699,7 @@ export const OpenClawSchema = z
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
     tools: ToolsSchema,
+    security: SecuritySchema,
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
     audio: AudioSchema,
