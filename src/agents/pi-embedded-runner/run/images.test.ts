@@ -314,6 +314,43 @@ what is this?`);
     expectNoImageReferences("See file://attacker/share/evil.png");
   });
 
+  it("detects LCM externalized image refs without treating them as workspace paths", () => {
+    const prompt = `
+      [file_ref:file_0123456789abcdef]
+      [externalized file_fedcba9876543210]
+      [LCM File: file_aaaaaaaaaaaaaaaa | photo.webp | image/webp | 123 bytes]
+      /tmp/file_0123456789abcdef.png
+    `;
+
+    expect(detectImageReferences(prompt)).toStrictEqual([
+      {
+        raw: "file_0123456789abcdef",
+        type: "lcm-file-ref",
+        resolved: "file_0123456789abcdef",
+      },
+      {
+        raw: "file_fedcba9876543210",
+        type: "lcm-file-ref",
+        resolved: "file_fedcba9876543210",
+      },
+      {
+        raw: "file_aaaaaaaaaaaaaaaa",
+        type: "lcm-file-ref",
+        resolved: "file_aaaaaaaaaaaaaaaa",
+      },
+      {
+        raw: "/tmp/file_0123456789abcdef.png",
+        type: "path",
+        resolved: "/tmp/file_0123456789abcdef.png",
+      },
+    ]);
+  });
+
+  it("ignores short or path-shaped LCM-like refs", () => {
+    expectNoImageReferences("[file_ref:file_abc]");
+    expectNoImageReferences("/tmp/file_0123456789abcdef");
+  });
+
   it("ignores Windows network paths from attachment-style references", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
@@ -517,6 +554,39 @@ describe("detectAndLoadPromptImages", () => {
       });
 
       expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads managed LCM image refs when workspaceOnly is enabled", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-lcm-"));
+    const workspaceDir = path.join(stateDir, "workspace-agent");
+    const lcmDir = path.join(stateDir, "lcm-files", "conversation-a");
+    const fileRef = "file_0123456789abcdef";
+    const imagePath = path.join(lcmDir, `${fileRef}.webp`);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(lcmDir, { recursive: true });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect [file_ref:${fileRef}]`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toStrictEqual([
+        { raw: fileRef, type: "lcm-file-ref", resolved: fileRef },
+      ]);
       expect(result.loadedCount).toBe(1);
       expect(result.skippedCount).toBe(0);
       expect(result.images).toHaveLength(1);

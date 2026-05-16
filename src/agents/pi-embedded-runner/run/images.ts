@@ -2,6 +2,10 @@ import path from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import {
+  LCM_FILE_REF_SCAN_PATTERN,
+  resolveLcmImageFileReference,
+} from "../../../media/lcm-file-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
@@ -84,7 +88,7 @@ export interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
   /** The type of reference */
-  type: "path" | "media-uri";
+  type: "path" | "media-uri" | "lcm-file-ref";
   /** The resolved/normalized path, or the raw media URI for media-uri type */
   resolved: string;
 }
@@ -231,6 +235,7 @@ async function sanitizeImagesWithLog(
  * - file:// URLs: file:///path/to/image.png
  * - Message attachments: [Image: source: /path/to/image.jpg]
  * - Gateway claim-check URIs: [media attached: media://inbound/<id>]
+ * - LCM externalized image references: [file_ref:file_<16hex>]
  *
  * @param prompt The user prompt text to scan
  * @returns Array of detected image references
@@ -270,6 +275,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   FILE_URL_PATTERN.lastIndex = 0;
   WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
   PATH_PATTERN.lastIndex = 0;
+  LCM_FILE_REF_SCAN_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
     const content = match[1];
@@ -312,6 +318,22 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   }
 
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
+
+  // LCM/lossless can externalize images into ~/.openclaw/lcm-files and leave only
+  // an opaque file_<16hex> reference in the rewritten prompt. Keep these refs out
+  // of normal workspace-relative path resolution.
+  while ((match = LCM_FILE_REF_SCAN_PATTERN.exec(prompt)) !== null) {
+    const raw = match[1]?.trim().toLowerCase();
+    if (!raw) {
+      continue;
+    }
+    const dedupeKey = normalizeRefForDedupe(raw);
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    refs.push({ raw, type: "lcm-file-ref", resolved: raw });
+  }
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
   while ((match = FILE_URL_PATTERN.exec(prompt)) !== null) {
@@ -372,9 +394,20 @@ export async function loadImageFromRef(
 ): Promise<ImageContent | null> {
   try {
     let targetPath = ref.resolved;
+    let lcmRoot: string | undefined;
+
+    if (ref.type === "lcm-file-ref") {
+      const resolved = await resolveLcmImageFileReference(ref.resolved);
+      if (!resolved) {
+        log.debug(`Native image: managed LCM image not found: ${ref.resolved}`);
+        return null;
+      }
+      targetPath = resolved.path;
+      lcmRoot = resolved.root;
+    }
 
     // Resolve paths relative to sandbox or workspace as needed
-    if (options?.sandbox) {
+    if (options?.sandbox && ref.type !== "lcm-file-ref") {
       try {
         const resolved = await resolveSandboxedBridgeMediaPath({
           sandbox: {
@@ -396,7 +429,7 @@ export async function loadImageFromRef(
     }
 
     // loadWebMedia handles local file paths (including file:// URLs)
-    const media = options?.sandbox
+    const media = options?.sandbox && ref.type !== "lcm-file-ref"
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
@@ -404,9 +437,11 @@ export async function loadImageFromRef(
         })
       : await loadWebMedia(
           targetPath,
-          options?.workspaceOnly
-            ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
-            : options?.maxBytes,
+          lcmRoot
+            ? { maxBytes: options?.maxBytes, localRoots: [lcmRoot] }
+            : options?.workspaceOnly
+              ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
+              : options?.maxBytes,
         );
 
     if (media.kind !== "image") {

@@ -16,6 +16,10 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
+import {
+  extractLcmImageFileReference,
+  resolveLcmImageFileReference,
+} from "../../media/lcm-file-reference.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
   describeImageWithModel,
@@ -531,6 +535,29 @@ export function createImageTool(options?: {
         }
 
         const normalizedRef = normalizeMediaReferenceSource(imageRaw);
+
+        const lcmFileRef = extractLcmImageFileReference(normalizedRef);
+        if (lcmFileRef) {
+          const resolved = await resolveLcmImageFileReference(normalizedRef);
+          if (!resolved) {
+            throw new Error(`Managed LCM image file not found: ${lcmFileRef}`);
+          }
+          const media = await loadWebMedia(resolved.path, {
+            maxBytes,
+            localRoots: [resolved.root],
+            ssrfPolicy: remoteMediaSsrfPolicy,
+          });
+          if (media.kind !== "image") {
+            throw new Error(`Unsupported media type: ${media.kind}`);
+          }
+          loadedImages.push({
+            buffer: media.buffer,
+            mimeType: media.contentType ?? "image/png",
+            resolvedImage: resolved.path,
+            rewrittenFrom: normalizedRef,
+          });
+          continue;
+        }
 
         // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
         // agent/model contexts, images can be referenced as pseudo-URIs like

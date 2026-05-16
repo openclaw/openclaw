@@ -1781,6 +1781,23 @@ describe("image tool managed inbound media", () => {
     }
   }
 
+  async function withManagedLcmPng(
+    run: (params: { stateDir: string; fileRef: string; mediaPath: string }) => Promise<void>,
+  ) {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-managed-lcm-"));
+    const lcmDir = path.join(stateDir, "lcm-files", "conversation-a");
+    const fileRef = "file_0123456789abcdef";
+    const mediaPath = path.join(lcmDir, `${fileRef}.webp`);
+    await fs.mkdir(lcmDir, { recursive: true });
+    await fs.writeFile(mediaPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      await run({ stateDir, fileRef, mediaPath });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  }
+
   it("resolves media://inbound refs", async () => {
     await withManagedInboundPng(async ({ mediaId }) => {
       installImageUnderstandingProviderStubs();
@@ -1810,6 +1827,24 @@ describe("image tool managed inbound media", () => {
         });
 
         await expectImageToolExecOk(tool, mediaPath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("resolves managed LCM file refs before workspace-relative path fallback", async () => {
+    await withManagedLcmPng(async ({ fileRef }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          workspaceDir: path.join(os.tmpdir(), "empty-workspace"),
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, `[file_ref:${fileRef}]`);
         expect(fetch).toHaveBeenCalledTimes(1);
       });
     });
