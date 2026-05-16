@@ -97,7 +97,7 @@ requester chat when the run finishes.
     internal context (not user-authored text) and includes:
 
     - `Result` — latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text. Terminal failed runs do not reuse captured reply text.
-    - `Status` — `completed successfully` / `failed` / `timed out` / `unknown`.
+    - `Status` — `completed; ready for parent review` / `failed` / `timed out` / `unknown`.
     - Compact runtime/token stats.
     - A review instruction telling the requester agent to verify the result before deciding whether the original task is done.
     - Follow-up guidance telling the requester agent to continue the task or record a follow-up when the child result leaves more action.
