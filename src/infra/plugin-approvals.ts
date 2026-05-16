@@ -1283,8 +1283,18 @@ function summarizePackageManagerCommand(
   command: string,
   args: readonly string[],
 ): CommandActionSummary {
-  const subcommand = args.find((arg) => !arg.startsWith("-")) ?? "";
-  if (["install", "i", "add", "update", "upgrade"].includes(subcommand)) {
+  const { ambiguous, subcommand } = parsePackageManagerSubcommand(args);
+  if (ambiguous) {
+    return {
+      text: `use the ${command} package manager with options I cannot fully summarize`,
+      risk: "high",
+      kind: "unknown",
+      reason:
+        "I cannot fully summarize this package-manager command, so review it before approving.",
+      showCommandPreview: true,
+    };
+  }
+  if (PACKAGE_MANAGER_INSTALL_SUBCOMMANDS.has(subcommand)) {
     return {
       text: `install or update project packages with ${command}`,
       risk: "high",
@@ -1292,7 +1302,7 @@ function summarizePackageManagerCommand(
       reason: "Package installs can run dependency scripts and change project files.",
     };
   }
-  if (["run", "exec", "dlx"].includes(subcommand)) {
+  if (PACKAGE_MANAGER_SCRIPT_SUBCOMMANDS.has(subcommand)) {
     return {
       text: `run a project/package script with ${command}`,
       risk: "medium",
@@ -1306,6 +1316,108 @@ function summarizePackageManagerCommand(
     kind: "package",
     reason: "Package manager commands can execute project tooling or change dependencies.",
   };
+}
+
+const PACKAGE_MANAGER_INSTALL_SUBCOMMANDS = new Set(["install", "i", "add", "update", "upgrade"]);
+
+const PACKAGE_MANAGER_SCRIPT_SUBCOMMANDS = new Set(["run", "exec", "dlx"]);
+
+const PACKAGE_MANAGER_GLOBAL_FLAGS = new Set([
+  "--all",
+  "--color",
+  "--frozen-lockfile",
+  "--global",
+  "--help",
+  "--ignore-scripts",
+  "--json",
+  "--lockfile-only",
+  "--no-color",
+  "--no-frozen-lockfile",
+  "--no-lockfile",
+  "--no-save",
+  "--offline",
+  "--prefer-offline",
+  "--recursive",
+  "--silent",
+  "--verbose",
+  "--version",
+  "--workspace-root",
+  "--workspaces",
+  "-g",
+  "-h",
+  "-r",
+  "-v",
+  "-W",
+]);
+
+const PACKAGE_MANAGER_GLOBAL_VALUE_OPTIONS = new Set([
+  "--cache",
+  "--cache-dir",
+  "--cache-folder",
+  "--config",
+  "--cwd",
+  "--dir",
+  "--filter",
+  "--global-bin-dir",
+  "--global-dir",
+  "--global-folder",
+  "--lockfile-dir",
+  "--modules-folder",
+  "--mutex",
+  "--prefix",
+  "--registry",
+  "--scope",
+  "--store-dir",
+  "--userconfig",
+  "--virtual-store-dir",
+  "--workspace",
+  "-C",
+  "-F",
+  "-c",
+  "-w",
+]);
+
+function parsePackageManagerSubcommand(args: readonly string[]): {
+  ambiguous: boolean;
+  subcommand: string;
+} {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg) {
+      continue;
+    }
+    if (arg === "--") {
+      return { ambiguous: false, subcommand: "" };
+    }
+    if (!arg.startsWith("-")) {
+      return { ambiguous: false, subcommand: arg };
+    }
+
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (PACKAGE_MANAGER_GLOBAL_FLAGS.has(arg) || PACKAGE_MANAGER_GLOBAL_FLAGS.has(optionName)) {
+      continue;
+    }
+    if (
+      (arg.startsWith("-C") && arg.length > 2) ||
+      (arg.startsWith("-F") && arg.length > 2) ||
+      (arg.startsWith("-c") && arg.length > 2) ||
+      (arg.startsWith("-w") && arg.length > 2)
+    ) {
+      continue;
+    }
+    if (PACKAGE_MANAGER_GLOBAL_VALUE_OPTIONS.has(optionName)) {
+      if (!arg.includes("=")) {
+        index += 1;
+        if (index >= args.length) {
+          return { ambiguous: true, subcommand: "" };
+        }
+      }
+      continue;
+    }
+
+    return { ambiguous: true, subcommand: "" };
+  }
+  return { ambiguous: false, subcommand: "" };
 }
 
 const GIT_GLOBAL_FLAGS = new Set([

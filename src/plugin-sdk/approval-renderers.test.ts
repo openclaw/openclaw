@@ -1843,6 +1843,54 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Medium");
   });
 
+  it.each([
+    {
+      command: "npm --prefix app install",
+      id: "plugin-command-npm-prefix-install",
+      manager: "npm",
+    },
+    {
+      command: "pnpm --dir app install",
+      id: "plugin-command-pnpm-dir-install",
+      manager: "pnpm",
+    },
+    {
+      command: "yarn --cwd app add lodash",
+      id: "plugin-command-yarn-cwd-add",
+      manager: "yarn",
+    },
+    {
+      command: "bun --cwd app update",
+      id: "plugin-command-bun-cwd-update",
+      manager: "bun",
+    },
+  ])(
+    "detects package installs after value-taking global options: $command",
+    ({ command, id, manager }) => {
+      const payload = buildPluginApprovalPendingReplyPayload({
+        request: {
+          id,
+          request: {
+            title: "Codex app-server command approval",
+            description: `Command: ${command}`,
+            toolName: "codex_command_approval",
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 121_000,
+        },
+        nowMs: 1_000,
+        language: "simple",
+      });
+
+      expect(payload.text).toContain(`- install or update project packages with ${manager}`);
+      expect(payload.text).toContain("Risk: High");
+      expect(payload.text).toContain(
+        "Package installs can run dependency scripts and change project files.",
+      );
+      expect(payload.text).not.toContain("Risk: Medium");
+    },
+  );
+
   it("treats interpreter command execution as high risk", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
