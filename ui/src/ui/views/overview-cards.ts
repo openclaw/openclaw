@@ -69,9 +69,12 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
   );
   const secondaryHint = secondary
-    ? `${secondary.label ? `${secondary.label} ` : ""}${t("overview.cards.modelAuthUsageLeft", {
-        pct: String(secondary.remaining),
-      })}`
+    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${t(
+        "overview.cards.modelAuthUsageLeft",
+        {
+          pct: String(secondary.remaining),
+        },
+      )}`
     : null;
   const valueClass = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "";
 

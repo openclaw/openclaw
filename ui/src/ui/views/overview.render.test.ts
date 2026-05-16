@@ -203,6 +203,15 @@ describe("overview view rendering", () => {
               ],
             },
           },
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            status: "ok",
+            profiles: [{ profileId: "anthropic", type: "token", status: "ok" }],
+            usage: {
+              windows: [{ label: "5h", usedPercent: 60 }],
+            },
+          },
         ],
       },
     });
@@ -211,6 +220,6 @@ describe("overview view rendering", () => {
     await Promise.resolve();
 
     const quota = container.querySelector('[data-kind="quota"]');
-    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · 3h 82% left");
+    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · Claude · 5h 40% left");
   });
 });

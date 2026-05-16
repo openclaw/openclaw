@@ -413,6 +413,23 @@ describe("refreshActiveTab", () => {
     expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
   });
 
+  it("does not wait for quota status before scrolling the chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    const quotaRefresh = createDeferred();
+    mocks.loadModelAuthStatusStateMock.mockReturnValueOnce(quotaRefresh.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await raceWithNextMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+
+    quotaRefresh.resolve();
+    await quotaRefresh.promise;
+  });
+
   it("preserves chat refresh failures while loading quota status", async () => {
     const host = createHost();
     host.tab = "chat";
