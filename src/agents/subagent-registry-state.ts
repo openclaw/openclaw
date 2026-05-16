@@ -38,7 +38,9 @@ export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
-  const shouldReadDisk = !(process.env.VITEST || process.env.NODE_ENV === "test");
+  const shouldReadDisk =
+    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK === "1" ||
+    !(process.env.VITEST || process.env.NODE_ENV === "test");
   if (shouldReadDisk) {
     try {
       // Persisted state lets other worker processes observe active runs.

@@ -1,22 +1,21 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { ChannelGroupPolicy } from "../../../src/config/group-policy.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../src/config/runtime-group-policy.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../../../src/config/types.js";
-import { evaluateMatchedGroupAccessForPolicy } from "../../../src/plugin-sdk/group-access.js";
+} from "openclaw/plugin-sdk/config-contracts";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { isSenderAllowed, type NormalizedAllowFrom } from "./bot-access.js";
 import { firstDefined } from "./bot-access.js";
 
-export type TelegramGroupBaseBlockReason =
+type TelegramGroupBaseBlockReason =
   | "group-disabled"
   | "topic-disabled"
   | "group-override-unauthorized";
 
-export type TelegramGroupBaseAccessResult =
+type TelegramGroupBaseAccessResult =
   | { allowed: true }
   | { allowed: false; reason: TelegramGroupBaseBlockReason };
 
@@ -91,14 +90,14 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   return { allowed: true };
 };
 
-export type TelegramGroupPolicyBlockReason =
+type TelegramGroupPolicyBlockReason =
   | "group-policy-disabled"
   | "group-policy-allowlist-no-sender"
   | "group-policy-allowlist-empty"
   | "group-policy-allowlist-unauthorized"
   | "group-chat-not-allowed";
 
-export type TelegramGroupPolicyAccessResult =
+type TelegramGroupPolicyAccessResult =
   | { allowed: true; groupPolicy: "open" | "disabled" | "allowlist" }
   | {
       allowed: false;
@@ -175,29 +174,24 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   }
   if (groupPolicy === "allowlist" && params.enforceAllowlistAuthorization) {
     const senderId = params.senderId ?? "";
-    const senderAuthorization = evaluateMatchedGroupAccessForPolicy({
-      groupPolicy,
-      requireMatchInput: params.requireSenderForAllowlistAuthorization,
-      hasMatchInput: Boolean(senderId),
-      allowlistConfigured:
-        chatExplicitlyAllowed ||
-        params.allowEmptyAllowlistEntries ||
-        params.effectiveGroupAllow.hasEntries,
-      allowlistMatched:
-        (chatExplicitlyAllowed && !params.effectiveGroupAllow.hasEntries) ||
-        isSenderAllowed({
-          allow: params.effectiveGroupAllow,
-          senderId,
-          senderUsername: params.senderUsername ?? "",
-        }),
-    });
-    if (!senderAuthorization.allowed && senderAuthorization.reason === "missing_match_input") {
+    const allowlistConfigured =
+      chatExplicitlyAllowed ||
+      params.allowEmptyAllowlistEntries ||
+      params.effectiveGroupAllow.hasEntries;
+    const allowlistMatched =
+      (chatExplicitlyAllowed && !params.effectiveGroupAllow.hasEntries) ||
+      isSenderAllowed({
+        allow: params.effectiveGroupAllow,
+        senderId,
+        senderUsername: params.senderUsername ?? "",
+      });
+    if (params.requireSenderForAllowlistAuthorization && !senderId) {
       return { allowed: false, reason: "group-policy-allowlist-no-sender", groupPolicy };
     }
-    if (!senderAuthorization.allowed && senderAuthorization.reason === "empty_allowlist") {
+    if (!allowlistConfigured) {
       return { allowed: false, reason: "group-policy-allowlist-empty", groupPolicy };
     }
-    if (!senderAuthorization.allowed && senderAuthorization.reason === "not_allowlisted") {
+    if (!allowlistMatched) {
       return { allowed: false, reason: "group-policy-allowlist-unauthorized", groupPolicy };
     }
   }

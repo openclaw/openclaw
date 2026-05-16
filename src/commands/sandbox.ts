@@ -7,7 +7,9 @@ import {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "../agents/sandbox.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   displayBrowsers,
   displayContainers,
@@ -48,7 +50,7 @@ export async function sandboxListCommand(
   const browsers = opts.browser ? await listSandboxBrowsers().catch(() => []) : [];
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ containers, browsers }, null, 2));
+    writeRuntimeJson(runtime, { containers, browsers });
     return;
   }
 
@@ -74,7 +76,9 @@ export async function sandboxRecreateCommand(
   const filtered = await fetchAndFilterContainers(opts);
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
-    runtime.log("No containers found matching the criteria.");
+    runtime.log(
+      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes.`,
+    );
     return;
   }
 
@@ -97,14 +101,16 @@ export async function sandboxRecreateCommand(
 
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
-    runtime.error("Please specify --all, --session <key>, or --agent <id>");
+    runtime.error(
+      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes first.`,
+    );
     runtime.exit(1);
     return false;
   }
 
   const exclusiveCount = [opts.all, opts.session, opts.agent].filter(Boolean).length;
   if (exclusiveCount > 1) {
-    runtime.error("Please specify only one of: --all, --session, --agent");
+    runtime.error("Choose only one sandbox scope: --all, --session, or --agent.");
     runtime.exit(1);
     return false;
   }
@@ -154,7 +160,7 @@ async function removeContainers(
   filtered: FilteredContainers,
   runtime: RuntimeEnv,
 ): Promise<{ successCount: number; failCount: number }> {
-  runtime.log("\nRemoving containers...\n");
+  runtime.log("\nRemoving sandbox runtimes...\n");
 
   let successCount = 0;
   let failCount = 0;
@@ -194,7 +200,9 @@ async function removeContainer(
     runtime.log(`✓ Removed ${containerName}`);
     return { success: true };
   } catch (err) {
-    runtime.error(`✗ Failed to remove ${containerName}: ${String(err)}`);
+    runtime.error(
+      `Failed to remove ${containerName}: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw sandbox list")} to inspect what remains.`,
+    );
     return { success: false };
   }
 }

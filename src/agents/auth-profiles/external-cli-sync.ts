@@ -1,154 +1,345 @@
 import {
+  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
-  readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
+import { normalizeProviderId } from "../provider-id.js";
 import {
-  EXTERNAL_CLI_NEAR_EXPIRY_MS,
+  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
-  QWEN_CLI_PROFILE_ID,
   MINIMAX_CLI_PROFILE_ID,
-  log,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
-import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
+import { log } from "./constants.js";
+import {
+  areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  shouldBootstrapFromExternalCliCredential,
+} from "./oauth-shared.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+export {
+  areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToOverwriteStoredOAuthIdentity,
+  shouldBootstrapFromExternalCliCredential,
+  shouldReplaceStoredOAuthCredential,
+} from "./oauth-shared.js";
 
-function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
-  if (!a) {
+export type ExternalCliResolvedProfile = {
+  profileId: string;
+  credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
+};
+
+export type ExternalCliAuthProfileOptions = {
+  allowKeychainPrompt?: boolean;
+  providerIds?: Iterable<string>;
+  profileIds?: Iterable<string>;
+};
+
+type ExternalCliSyncProvider = {
+  profileId: string;
+  provider: string;
+  aliases?: readonly string[];
+  readCredentials: (
+    options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
+  ) => OAuthCredential | null;
+  // bootstrapOnly providers adopt the external CLI credential only to
+  // seed an empty slot; once a local OAuth credential exists for the
+  // profile, the local refresh token is treated as canonical and the
+  // CLI state must not replace or shadow it. Codex requires this to
+  // avoid clobbering a locally refreshed token with stale CLI state.
+  bootstrapOnly?: boolean;
+};
+
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+// Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+export function isSafeToUseExternalCliCredential(
+  existing: OAuthCredential | undefined,
+  imported: OAuthCredential,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+  if (existing.provider !== imported.provider) {
     return false;
   }
-  if (a.type !== "oauth") {
+
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const importedEmail = normalizeAuthEmailToken(imported.email);
+
+  if (existingAccountId !== undefined && importedAccountId !== undefined) {
+    return existingAccountId === importedAccountId;
+  }
+  if (existingEmail !== undefined && importedEmail !== undefined) {
+    return existingEmail === importedEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
     return false;
   }
-  return (
-    a.provider === b.provider &&
-    a.access === b.access &&
-    a.refresh === b.refresh &&
-    a.expires === b.expires &&
-    a.email === b.email &&
-    a.enterpriseUrl === b.enterpriseUrl &&
-    a.projectId === b.projectId &&
-    a.accountId === b.accountId
+  return true;
+}
+
+const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
+  {
+    profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    provider: "openai-codex",
+    aliases: ["codex", "codex-cli", "codex-app-server"],
+    readCredentials: (options) =>
+      readCodexCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      }),
+    bootstrapOnly: true,
+  },
+  {
+    profileId: CLAUDE_CLI_PROFILE_ID,
+    provider: "claude-cli",
+    readCredentials: (options) => {
+      const credential = readClaudeCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      });
+      if (credential?.type !== "oauth") {
+        return null;
+      }
+      return { ...credential, provider: "claude-cli" };
+    },
+  },
+  {
+    profileId: MINIMAX_CLI_PROFILE_ID,
+    provider: "minimax-portal",
+    aliases: ["minimax", "minimax-cli"],
+    readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+  },
+];
+
+function resolveExternalCliSyncProvider(params: {
+  profileId: string;
+  credential?: OAuthCredential;
+}): ExternalCliSyncProvider | null {
+  const provider = EXTERNAL_CLI_SYNC_PROVIDERS.find(
+    (entry) => entry.profileId === params.profileId,
+  );
+  if (!provider) {
+    return null;
+  }
+  if (params.credential && provider.provider !== params.credential.provider) {
+    return null;
+  }
+  return provider;
+}
+
+function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
+  return [credential.access, credential.refresh, credential.idToken].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
   );
 }
 
-function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
-  if (!cred) {
-    return false;
-  }
-  if (cred.type !== "oauth" && cred.type !== "token") {
-    return false;
+export function readExternalCliBootstrapCredential(params: {
+  profileId: string;
+  credential: OAuthCredential;
+  allowInlineOAuthTokenMaterial?: boolean;
+  allowKeychainPrompt?: boolean;
+}): OAuthCredential | null {
+  const provider = resolveExternalCliSyncProvider(params);
+  if (!provider) {
+    return null;
   }
   if (
-    cred.provider !== "qwen-portal" &&
-    cred.provider !== "minimax-portal" &&
-    cred.provider !== "openai-codex"
+    provider.bootstrapOnly &&
+    !params.allowInlineOAuthTokenMaterial &&
+    hasInlineOAuthTokenMaterial(params.credential)
   ) {
-    return false;
+    return null;
   }
-  if (typeof cred.expires !== "number") {
-    return true;
-  }
-  return cred.expires > now + EXTERNAL_CLI_NEAR_EXPIRY_MS;
+  return provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt });
 }
 
-/** Sync external CLI credentials into the store for a given provider. */
-function syncExternalCliCredentialsForProvider(
-  store: AuthProfileStore,
-  profileId: string,
-  provider: string,
-  readCredentials: () => OAuthCredential | null,
-  now: number,
-): boolean {
-  const existing = store.profiles[profileId];
-  const shouldSync =
-    !existing || existing.provider !== provider || !isExternalProfileFresh(existing, now);
-  const creds = shouldSync ? readCredentials() : null;
-  if (!creds) {
-    return false;
+export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
+
+export function readExternalCliFallbackCredential(params: {
+  profileId: string;
+  credential: OAuthCredential;
+  allowKeychainPrompt?: boolean;
+}): OAuthCredential | null {
+  const provider =
+    resolveExternalCliSyncProvider(params) ??
+    EXTERNAL_CLI_SYNC_PROVIDERS.find((entry) => entry.provider === params.credential.provider);
+  if (!provider) {
+    return null;
   }
-
-  const existingOAuth = existing?.type === "oauth" ? existing : undefined;
-  const shouldUpdate =
-    !existingOAuth ||
-    existingOAuth.provider !== provider ||
-    existingOAuth.expires <= now ||
-    creds.expires > existingOAuth.expires;
-
-  if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, creds)) {
-    store.profiles[profileId] = creds;
-    log.info(`synced ${provider} credentials from external cli`, {
-      profileId,
-      expires: new Date(creds.expires).toISOString(),
-    });
-    return true;
-  }
-
-  return false;
+  return provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt });
 }
 
-/**
- * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI, Codex CLI)
- * into the store.
- *
- * Returns true if any credentials were updated.
- */
-export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
-  let mutated = false;
-  const now = Date.now();
-
-  // Sync from Qwen Code CLI
-  const existingQwen = store.profiles[QWEN_CLI_PROFILE_ID];
-  const shouldSyncQwen =
-    !existingQwen ||
-    existingQwen.provider !== "qwen-portal" ||
-    !isExternalProfileFresh(existingQwen, now);
-  const qwenCreds = shouldSyncQwen
-    ? readQwenCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
-    : null;
-  if (qwenCreds) {
-    const existing = store.profiles[QWEN_CLI_PROFILE_ID];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
-    const shouldUpdate =
-      !existingOAuth ||
-      existingOAuth.provider !== "qwen-portal" ||
-      existingOAuth.expires <= now ||
-      qwenCreds.expires > existingOAuth.expires;
-
-    if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, qwenCreds)) {
-      store.profiles[QWEN_CLI_PROFILE_ID] = qwenCreds;
-      mutated = true;
-      log.info("synced qwen credentials from qwen cli", {
-        profileId: QWEN_CLI_PROFILE_ID,
-        expires: new Date(qwenCreds.expires).toISOString(),
-      });
+function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const out = new Set<string>();
+  for (const value of values) {
+    const raw = value.trim();
+    if (!raw) {
+      continue;
+    }
+    out.add(raw.toLowerCase());
+    const normalized = normalizeProviderId(raw);
+    if (normalized) {
+      out.add(normalized);
     }
   }
+  return out;
+}
 
-  // Sync from MiniMax Portal CLI
-  if (
-    syncExternalCliCredentialsForProvider(
-      store,
-      MINIMAX_CLI_PROFILE_ID,
-      "minimax-portal",
-      () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
-      now,
-    )
-  ) {
-    mutated = true;
+function normalizeProfileScope(values: Iterable<string> | undefined): Set<string> | undefined {
+  if (values === undefined) {
+    return undefined;
   }
-  if (
-    syncExternalCliCredentialsForProvider(
-      store,
-      OPENAI_CODEX_DEFAULT_PROFILE_ID,
-      "openai-codex",
-      () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
-      now,
-    )
-  ) {
-    mutated = true;
+  const out = new Set<string>();
+  for (const value of values) {
+    const raw = value.trim().toLowerCase();
+    if (raw) {
+      out.add(raw);
+    }
   }
+  return out;
+}
 
-  return mutated;
+function isExternalCliProviderInScope(params: {
+  providerConfig: ExternalCliSyncProvider;
+  store: AuthProfileStore;
+  options?: ExternalCliAuthProfileOptions;
+}): boolean {
+  const { providerConfig, options, store } = params;
+  const providerScope = normalizeProviderScope(options?.providerIds);
+  const profileScope = normalizeProfileScope(options?.profileIds);
+  if (providerScope === undefined && profileScope === undefined) {
+    const existing = store.profiles[providerConfig.profileId];
+    return existing?.type === "oauth" && existing.provider === providerConfig.provider;
+  }
+  if (profileScope?.has(providerConfig.profileId.toLowerCase())) {
+    return true;
+  }
+  if (!providerScope || providerScope.size === 0) {
+    return false;
+  }
+  const aliases = [providerConfig.provider, ...(providerConfig.aliases ?? [])];
+  return aliases.some((alias) => {
+    const raw = alias.trim().toLowerCase();
+    const normalized = normalizeProviderId(alias);
+    return providerScope.has(raw) || (normalized ? providerScope.has(normalized) : false);
+  });
+}
+
+export function resolveExternalCliAuthProfiles(
+  store: AuthProfileStore,
+  options?: ExternalCliAuthProfileOptions,
+): ExternalCliResolvedProfile[] {
+  const profiles: ExternalCliResolvedProfile[] = [];
+  const now = Date.now();
+  for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
+    if (!isExternalCliProviderInScope({ providerConfig, store, options })) {
+      continue;
+    }
+    const existing = store.profiles[providerConfig.profileId];
+    const existingOAuth =
+      existing?.type === "oauth" && existing.provider === providerConfig.provider
+        ? existing
+        : undefined;
+    if (existing && !existingOAuth) {
+      log.debug("kept explicit local auth over external cli bootstrap", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+        localType: existing.type,
+        localProvider: existing.provider,
+      });
+      continue;
+    }
+    if (
+      providerConfig.bootstrapOnly &&
+      existingOAuth &&
+      hasInlineOAuthTokenMaterial(existingOAuth)
+    ) {
+      log.debug("kept local oauth over external cli bootstrap-only provider", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
+    if (
+      existingOAuth &&
+      !providerConfig.bootstrapOnly &&
+      hasUsableOAuthCredential(existingOAuth, now)
+    ) {
+      continue;
+    }
+    const creds = providerConfig.readCredentials({
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+    });
+    if (!creds) {
+      continue;
+    }
+    if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
+      log.warn("refused external cli oauth bootstrap: identity mismatch", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
+    if (
+      existingOAuth &&
+      !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds) &&
+      !areOAuthCredentialsEquivalent(existingOAuth, creds)
+    ) {
+      log.warn("refused external cli oauth bootstrap: identity mismatch or missing binding", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
+    if (
+      !shouldBootstrapFromExternalCliCredential({
+        existing: existingOAuth,
+        imported: creds,
+        now,
+      })
+    ) {
+      if (existingOAuth) {
+        log.debug("kept usable local oauth over external cli bootstrap", {
+          profileId: providerConfig.profileId,
+          provider: providerConfig.provider,
+          localExpires: existingOAuth.expires,
+          externalExpires: creds.expires,
+        });
+      }
+      continue;
+    }
+    log.debug("used external cli oauth bootstrap because local oauth was missing or unusable", {
+      profileId: providerConfig.profileId,
+      provider: providerConfig.provider,
+      localExpires: existingOAuth?.expires,
+      externalExpires: creds.expires,
+    });
+    profiles.push({
+      profileId: providerConfig.profileId,
+      credential: creds,
+      persistence: providerConfig.bootstrapOnly ? "runtime-only" : "persisted",
+    });
+  }
+  return profiles;
 }

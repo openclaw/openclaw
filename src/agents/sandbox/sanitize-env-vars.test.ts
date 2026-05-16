@@ -14,7 +14,7 @@ describe("sanitizeEnvVars", () => {
       NODE_ENV: "test",
       FOO: "bar",
     });
-    expect(result.blocked).toEqual(expect.arrayContaining(["OPENAI_API_KEY", "GITHUB_TOKEN"]));
+    expect(result.blocked).toStrictEqual(["OPENAI_API_KEY", "GITHUB_TOKEN"]);
   });
 
   it("blocks credentials even when suffix pattern matches", () => {
@@ -25,7 +25,7 @@ describe("sanitizeEnvVars", () => {
     });
 
     expect(result.allowed).toEqual({ USER: "alice" });
-    expect(result.blocked).toEqual(expect.arrayContaining(["MY_TOKEN", "MY_SECRET"]));
+    expect(result.blocked).toStrictEqual(["MY_TOKEN", "MY_SECRET"]);
   });
 
   it("adds warnings for suspicious values", () => {
@@ -53,5 +53,16 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ NODE_ENV: "test" });
     expect(result.blocked).toEqual(["FOO"]);
+  });
+
+  it("skips undefined values when sanitizing process-style env maps", () => {
+    const result = sanitizeEnvVars({
+      NODE_ENV: "test",
+      OPTIONAL_SECRET: undefined,
+      OPENAI_API_KEY: undefined,
+    });
+
+    expect(result.allowed).toEqual({ NODE_ENV: "test" });
+    expect(result.blocked).toStrictEqual([]);
   });
 });

@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { saveAuthProfileStore } from "./auth-profiles.js";
+import { describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "./pi-auth-json.js";
+
+vi.mock("./auth-profiles/external-auth.js", () => ({
+  overlayExternalAuthProfiles: <T>(store: T) => store,
+  shouldPersistExternalAuthProfile: () => true,
+}));
 
 type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
 
@@ -26,6 +31,37 @@ async function readAuthJson(agentDir: string) {
   return JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
 }
 
+function requireAuthEntry(
+  auth: Record<string, unknown>,
+  provider: string,
+): Record<string, unknown> {
+  const entry = auth[provider];
+  if (!entry || typeof entry !== "object") {
+    throw new Error(`expected auth entry ${provider}`);
+  }
+  return entry as Record<string, unknown>;
+}
+
+function expectApiKeyAuth(auth: Record<string, unknown>, provider: string, key: string): void {
+  const entry = requireAuthEntry(auth, provider);
+  expect(entry.type).toBe("api_key");
+  expect(entry.key).toBe(key);
+}
+
+function expectOAuthAuth(
+  auth: Record<string, unknown>,
+  provider: string,
+  access: string,
+  refresh?: string,
+): void {
+  const entry = requireAuthEntry(auth, provider);
+  expect(entry.type).toBe("oauth");
+  expect(entry.access).toBe(access);
+  if (refresh !== undefined) {
+    expect(entry.refresh).toBe(refresh);
+  }
+}
+
 describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("writes openai-codex oauth credentials into auth.json for pi-coding-agent discovery", async () => {
     const agentDir = await createAgentDir();
@@ -44,11 +80,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     expect(first.wrote).toBe(true);
 
     const auth = await readAuthJson(agentDir);
-    expect(auth["openai-codex"]).toMatchObject({
-      type: "oauth",
-      access: "access-token",
-      refresh: "refresh-token",
-    });
+    expectOAuthAuth(auth, "openai-codex", "access-token", "refresh-token");
 
     const second = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(second.wrote).toBe(false);
@@ -69,10 +101,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     expect(result.wrote).toBe(true);
 
     const auth = await readAuthJson(agentDir);
-    expect(auth["openrouter"]).toMatchObject({
-      type: "api_key",
-      key: "sk-or-v1-test-key",
-    });
+    expectApiKeyAuth(auth, "openrouter", "sk-or-v1-test-key");
   });
 
   it("writes token credentials as api_key into auth.json", async () => {
@@ -90,10 +119,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     expect(result.wrote).toBe(true);
 
     const auth = await readAuthJson(agentDir);
-    expect(auth["anthropic"]).toMatchObject({
-      type: "api_key",
-      key: "sk-ant-test-token",
-    });
+    expectApiKeyAuth(auth, "anthropic", "sk-ant-test-token");
   });
 
   it("syncs multiple providers at once", async () => {
@@ -124,9 +150,9 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
 
     const auth = await readAuthJson(agentDir);
 
-    expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "sk-or-key" });
-    expect(auth["anthropic"]).toMatchObject({ type: "api_key", key: "sk-ant-token" });
-    expect(auth["openai-codex"]).toMatchObject({ type: "oauth", access: "access" });
+    expectApiKeyAuth(auth, "openrouter", "sk-or-key");
+    expectApiKeyAuth(auth, "anthropic", "sk-ant-token");
+    expectOAuthAuth(auth, "openai-codex", "access");
   });
 
   it("skips profiles with empty keys", async () => {
@@ -175,7 +201,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     expect(result.wrote).toBe(true);
 
     const auth = await readAuthJson(agentDir);
-    expect(auth["zai"]).toMatchObject({ type: "api_key", key: "sk-zai" });
+    expectApiKeyAuth(auth, "zai", "sk-zai");
     expect(auth["z.ai"]).toBeUndefined();
   });
 
@@ -200,7 +226,29 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     await ensurePiAuthJsonFromAuthProfiles(agentDir);
 
     const auth = await readAuthJson(agentDir);
-    expect(auth["legacy-provider"]).toMatchObject({ type: "api_key", key: "legacy-key" });
-    expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "new-key" });
+    expectApiKeyAuth(auth, "legacy-provider", "legacy-key");
+    expectApiKeyAuth(auth, "openrouter", "new-key");
+  });
+
+  it("treats malformed existing provider entries as stale and replaces them", async () => {
+    const agentDir = await createAgentDir();
+    const authPath = path.join(agentDir, "auth.json");
+
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(authPath, JSON.stringify({ openrouter: { type: "api_key", key: 123 } }));
+
+    writeProfiles(agentDir, {
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "new-key",
+      },
+    });
+
+    const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
+    expect(result.wrote).toBe(true);
+
+    const auth = await readAuthJson(agentDir);
+    expectApiKeyAuth(auth, "openrouter", "new-key");
   });
 });

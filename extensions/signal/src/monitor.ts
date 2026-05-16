@@ -1,29 +1,40 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-contracts";
+import {
+  detectMime,
+  estimateBase64DecodedBytes,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
-} from "../../../src/auto-reply/chunk.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-} from "../../../src/auto-reply/reply/history.js";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadConfig } from "../../../src/config/config.js";
+  createNonExitingRuntime,
+  type BackoffPolicy,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../src/config/runtime-group-policy.js";
-import type { SignalReactionNotificationMode } from "../../../src/config/types.js";
-import type { BackoffPolicy } from "../../../src/infra/backoff.js";
-import { waitForTransportReady } from "../../../src/infra/transport-ready.js";
-import { saveMediaBuffer } from "../../../src/media/store.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../src/runtime.js";
-import { normalizeStringEntries } from "../../../src/shared/string-normalization.js";
-import { normalizeE164 } from "../../../src/utils.js";
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalCheck, signalRpcRequest } from "./client.js";
+import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
@@ -55,10 +66,29 @@ export type MonitorSignalOpts = {
   groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
   reconnectPolicy?: Partial<BackoffPolicy>;
+  waitForTransportReady?: typeof waitForTransportReady;
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
+}
+
+function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
+  const inFlight = new Set<Promise<void>>();
+  return {
+    runEventTask(task: () => Promise<void>): void {
+      const trackedTask = Promise.resolve()
+        .then(task)
+        .catch((err) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .finally(() => inFlight.delete(trackedTask));
+      inFlight.add(trackedTask);
+    },
+    async waitForIdle(): Promise<void> {
+      while (inFlight.size > 0) {
+        await Promise.allSettled(Array.from(inFlight));
+      }
+    },
+  };
 }
 
 function mergeAbortSignals(
@@ -159,7 +189,10 @@ function isSignalReactionMessage(
   }
   const emoji = reaction.emoji?.trim();
   const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim());
+  const hasTarget = Boolean(
+    normalizeOptionalString(reaction.targetAuthor) ||
+    normalizeOptionalString(reaction.targetAuthorUuid),
+  );
   return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
 }
 
@@ -216,8 +249,10 @@ async function waitForSignalDaemonReady(params: {
   logAfterMs: number;
   logIntervalMs?: number;
   runtime: RuntimeEnv;
+  waitForTransportReadyFn?: typeof waitForTransportReady;
 }): Promise<void> {
-  await waitForTransportReady({
+  const waitForTransportReadyFn = params.waitForTransportReadyFn ?? waitForTransportReady;
+  await waitForTransportReadyFn({
     label: "signal daemon",
     timeoutMs: params.timeoutMs,
     logAfterMs: params.logAfterMs,
@@ -238,9 +273,24 @@ async function waitForSignalDaemonReady(params: {
   });
 }
 
+const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
+const SIGNAL_BASE64_OVERHEAD_NUMERATOR = 4;
+const SIGNAL_BASE64_OVERHEAD_DENOMINATOR = 3;
+
+function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | undefined {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    return undefined;
+  }
+  const base64Bytes = Math.ceil(
+    (maxBytes * SIGNAL_BASE64_OVERHEAD_NUMERATOR) / SIGNAL_BASE64_OVERHEAD_DENOMINATOR,
+  );
+  return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
+}
+
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
+  apiMode?: "native" | "container" | "auto";
   attachment: SignalAttachment;
   sender?: string;
   groupId?: string;
@@ -250,7 +300,7 @@ async function fetchAttachment(params: {
   if (!attachment?.id) {
     return null;
   }
-  if (attachment.size && attachment.size > params.maxBytes) {
+  if (typeof attachment.size === "number" && attachment.size > params.maxBytes) {
     throw new Error(
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
@@ -271,21 +321,34 @@ async function fetchAttachment(params: {
 
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
+    maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
+    apiMode: params.apiMode,
   });
   if (!result?.data) {
     return null;
   }
+  if (estimateBase64DecodedBytes(result.data) > params.maxBytes) {
+    throw new Error(
+      `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+    );
+  }
   const buffer = Buffer.from(result.data, "base64");
+  const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
+  const contentType =
+    normalizeOptionalString(attachment.contentType ?? undefined) ??
+    (await detectMime({ buffer, filePath: originalFilename }));
   const saved = await saveMediaBuffer(
     buffer,
-    attachment.contentType ?? undefined,
+    contentType,
     "inbound",
     params.maxBytes,
+    originalFilename,
   );
   return { path: saved.path, contentType: saved.contentType };
 }
 
 async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   baseUrl: string;
@@ -299,41 +362,40 @@ async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
-    if (!text && mediaList.length === 0) {
-      continue;
-    }
-    if (mediaList.length === 0) {
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const delivered = await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
+          cfg: params.cfg,
           baseUrl,
           account,
           maxBytes,
           accountId,
         });
-      }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSignal(target, caption, {
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageSignal(target, caption ?? "", {
+          cfg: params.cfg,
           baseUrl,
           account,
-          mediaUrl: url,
+          mediaUrl,
           maxBytes,
           accountId,
         });
-      }
+      },
+    });
+    if (delivered !== "empty") {
+      runtime.log?.(`delivered reply to ${target}`);
     }
-    runtime.log?.(`delivered reply to ${target}`);
   }
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -347,8 +409,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
   const chunkMode = resolveChunkMode(cfg, "signal", accountInfo.accountId);
-  const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
-  const account = opts.account?.trim() || accountInfo.config.account?.trim();
+  const baseUrl = normalizeOptionalString(opts.baseUrl) ?? accountInfo.baseUrl;
+  const account =
+    normalizeOptionalString(opts.account) ?? normalizeOptionalString(accountInfo.config.account);
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -376,15 +439,24 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
+  const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
+  const configuredApiMode = cfg.channels?.signal?.apiMode ?? "auto";
   const startupTimeoutMs = Math.min(
     120_000,
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
-  const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
+  const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
+
+  if (autoStart && configuredApiMode === "container") {
+    throw new Error(
+      "channels.signal.autoStart=true is incompatible with channels.signal.apiMode=container",
+    );
+  }
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
@@ -418,6 +490,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,
+        waitForTransportReadyFn,
       });
       const daemonExitError = daemonLifecycle.getExitError();
       if (daemonExitError) {
@@ -446,8 +519,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment,
-      deliverReplies: (params) => deliverReplies({ ...params, chunkMode }),
+      fetchAttachment: (params) => fetchAttachment({ ...params, apiMode: configuredApiMode }),
+      deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,
@@ -459,11 +532,12 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       abortSignal: daemonLifecycle.abortSignal,
       runtime,
+      // signal-cli can keep the SSE event endpoint idle until the next inbound event.
+      timeoutMs: 0,
+      apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
-        void handleEvent(event).catch((err) => {
-          runtime.error?.(`event handler failed: ${String(err)}`);
-        });
+        monitorTaskRunner.runEventTask(() => handleEvent(event));
       },
     });
     const daemonExitError = daemonLifecycle.getExitError();
@@ -477,6 +551,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
+    await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
     daemonLifecycle.stop();

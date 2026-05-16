@@ -1,6 +1,11 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
 import { convertHeicToJpeg } from "./image-ops.js";
 import { detectMime } from "./mime.js";
@@ -105,7 +110,7 @@ export const DEFAULT_INPUT_FILE_MIMES = [
 ];
 export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_INPUT_FILE_MAX_BYTES = 5 * 1024 * 1024;
-export const DEFAULT_INPUT_FILE_MAX_CHARS = 200_000;
+export const DEFAULT_INPUT_FILE_MAX_CHARS = 60_000;
 export const DEFAULT_INPUT_MAX_REDIRECTS = 3;
 export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
@@ -128,12 +133,8 @@ function rejectOversizedBase64Payload(params: {
 }
 
 export function normalizeMimeType(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const [raw] = value.split(";");
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
+  const [raw] = value?.split(";") ?? [];
+  return normalizeOptionalLowercaseString(raw);
 }
 
 export function parseContentType(value: string | undefined): {
@@ -146,7 +147,7 @@ export function parseContentType(value: string | undefined): {
   const parts = value.split(";").map((part) => part.trim());
   const mimeType = normalizeMimeType(parts[0]);
   const charset = parts
-    .map((part) => part.match(/^charset=(.+)$/i)?.[1]?.trim())
+    .map((part) => normalizeOptionalString(part.match(/^charset=(.+)$/i)?.[1]))
     .find((part) => part && part.length > 0);
   return { mimeType, charset };
 }
@@ -214,7 +215,7 @@ export async function fetchWithGuard(params: {
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
-  const encoding = charset?.trim().toLowerCase() || "utf-8";
+  const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
   try {
     return new TextDecoder(encoding).decode(buffer);
   } catch {
@@ -271,6 +272,20 @@ async function normalizeInputImage(params: {
   };
 }
 
+async function resolveInputFileMime(params: {
+  buffer: Buffer;
+  declaredMime?: string;
+}): Promise<string | undefined> {
+  const sniffedMime = normalizeMimeType(await detectMime({ buffer: params.buffer }));
+  if (!sniffedMime) {
+    return params.declaredMime;
+  }
+  if (sniffedMime === "application/octet-stream") {
+    return params.declaredMime ?? sniffedMime;
+  }
+  return sniffedMime;
+}
+
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
@@ -322,6 +337,7 @@ export async function extractImageContentFromSource(
 export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
+  config?: OpenClawConfig;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
   const filename = source.filename || "file";
@@ -365,6 +381,8 @@ export async function extractFileContentFromSource(params: {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
 
+  mimeType = await resolveInputFileMime({ buffer, declaredMime: mimeType });
+
   if (!mimeType) {
     throw new Error("input_file missing media type");
   }
@@ -378,6 +396,7 @@ export async function extractFileContentFromSource(params: {
       maxPages: limits.pdf.maxPages,
       maxPixels: limits.pdf.maxPixels,
       minTextChars: limits.pdf.minTextChars,
+      ...(params.config ? { config: params.config } : {}),
       onImageExtractionError: (err) => {
         logWarn(`media: PDF image extraction skipped, ${String(err)}`);
       },

@@ -109,6 +109,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
     .option("--channel-id <id>", "Channel id")
     .option("--location <text>", "Event location")
     .option("--event-type <stage|external|voice>", "Event type")
+    .option("--image <url>", "Cover image URL or local file path")
     .action(async (opts) => {
       await helpers.runMessageAction("event-create", opts);
     });

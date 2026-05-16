@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/voice-call";
+import { fetchWithSsrFGuard } from "../../../api.js";
 
 type GuardedJsonApiRequestParams = {
   url: string;
@@ -35,7 +35,14 @@ export async function guardedJsonApiRequest<T = unknown>(
     }
 
     const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
+    if (!text) {
+      return undefined as T;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`${params.errorPrefix}: malformed JSON response`);
+    }
   } finally {
     await release();
   }

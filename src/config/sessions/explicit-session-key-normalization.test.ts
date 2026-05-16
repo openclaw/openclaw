@@ -1,15 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeExplicitSessionKey } from "./explicit-session-key-normalization.js";
+import { installDiscordSessionKeyNormalizerFixture, makeCtx } from "./session-key.test-helpers.js";
 
-function makeCtx(overrides: Partial<MsgContext>): MsgContext {
-  return {
-    Body: "",
-    From: "",
-    To: "",
-    ...overrides,
-  } as MsgContext;
-}
+installDiscordSessionKeyNormalizerFixture();
 
 describe("normalizeExplicitSessionKey", () => {
   it("dispatches discord keys through the provider normalizer", () => {

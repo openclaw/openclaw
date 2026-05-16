@@ -1,3 +1,5 @@
+export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+
 export type AgentMediaPayload = {
   MediaPath?: string;
   MediaType?: string;
@@ -7,6 +9,7 @@ export type AgentMediaPayload = {
   MediaTypes?: string[];
 };
 
+/** Convert outbound media descriptors into the legacy agent payload field layout. */
 export function buildAgentMediaPayload(
   mediaList: Array<{ path: string; contentType?: string | null }>,
 ): AgentMediaPayload {

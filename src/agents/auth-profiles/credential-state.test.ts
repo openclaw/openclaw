@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   evaluateStoredCredentialEligibility,
+  hasUsableOAuthCredential,
   resolveTokenExpiryState,
 } from "./credential-state.js";
 
@@ -24,6 +26,33 @@ describe("resolveTokenExpiryState", () => {
 
   it("returns valid when expires is in the future", () => {
     expect(resolveTokenExpiryState(now + 1, now)).toBe("valid");
+  });
+
+  it("returns expiring when expires falls within the configured margin", () => {
+    expect(
+      resolveTokenExpiryState(now + DEFAULT_OAUTH_REFRESH_MARGIN_MS - 1, now, {
+        expiringWithinMs: DEFAULT_OAUTH_REFRESH_MARGIN_MS,
+      }),
+    ).toBe("expiring");
+  });
+});
+
+describe("hasUsableOAuthCredential", () => {
+  const now = 1_700_000_000_000;
+
+  it("treats near-expiry oauth credentials as no longer usable", () => {
+    expect(
+      hasUsableOAuthCredential(
+        {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: now + DEFAULT_OAUTH_REFRESH_MARGIN_MS - 1,
+        },
+        { now },
+      ),
+    ).toBe(false);
   });
 });
 
@@ -73,5 +102,24 @@ describe("evaluateStoredCredentialEligibility", () => {
       now,
     });
     expect(result).toEqual({ eligible: false, reasonCode: "invalid_expires" });
+  });
+
+  it("marks oauth with oauthRef as eligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "",
+        refresh: "",
+        expires: now + 60_000,
+        oauthRef: {
+          source: "openclaw-credentials",
+          provider: "openai-codex",
+          id: "0123456789abcdef0123456789abcdef",
+        },
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
   });
 });

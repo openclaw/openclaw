@@ -61,7 +61,7 @@ struct GatewayEndpointStoreTests {
         #expect(token == nil)
     }
 
-    @Test func resolveGatewayTokenUsesRemoteConfigToken() {
+    @Test func `resolve gateway token uses remote config token`() {
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: true,
             root: [
@@ -76,7 +76,7 @@ struct GatewayEndpointStoreTests {
         #expect(token == "remote-token")
     }
 
-    @Test func resolveGatewayPasswordFallsBackToLaunchd() {
+    @Test func `resolve gateway password falls back to launchd`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
             token: nil,
@@ -214,7 +214,7 @@ struct GatewayEndpointStoreTests {
             launchdSnapshot: snapshot,
             tailscaleIP: "100.64.1.8")
 
-        #expect(config.url.absoluteString == "wss://100.64.1.8:18789")
+        #expect(config.url.absoluteString == "wss://100.64.1.8:\(GatewayEnvironment.gatewayPort())")
         #expect(config.token == "launchd-token")
         #expect(config.password == "launchd-pass")
     }
@@ -286,5 +286,37 @@ struct GatewayEndpointStoreTests {
     @Test func `normalize gateway url rejects prefix bypass loopback host`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
         #expect(url == nil)
+    }
+
+    @Test func `resolve tls fingerprint trims remote config value`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": " sha256:ABC123 ",
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: root) == "sha256:ABC123")
+    }
+
+    @Test func `resolve tls fingerprint ignores blank or non string values`() {
+        let blank: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": "   ",
+                ],
+            ],
+        ]
+        let nonString: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": 123,
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: blank) == nil)
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: nonString) == nil)
     }
 }

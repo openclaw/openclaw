@@ -1,0 +1,44 @@
+{
+  "id": "cloudflare-ai-gateway",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["cloudflare-ai-gateway"],
+  "modelPricing": {
+    "providers": {
+      "cloudflare-ai-gateway": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "cloudflare-ai-gateway",
+      "method": "api-key",
+      "choiceId": "cloudflare-ai-gateway-api-key",
+      "choiceLabel": "Cloudflare AI Gateway",
+      "choiceHint": "Account ID + Gateway ID + API key",
+      "groupId": "cloudflare-ai-gateway",
+      "groupLabel": "Cloudflare AI Gateway",
+      "groupHint": "Account ID + Gateway ID + API key",
+      "optionKey": "cloudflareAiGatewayApiKey",
+      "cliFlag": "--cloudflare-ai-gateway-api-key",
+      "cliOption": "--cloudflare-ai-gateway-api-key <key>",
+      "cliDescription": "Cloudflare AI Gateway API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

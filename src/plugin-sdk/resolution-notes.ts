@@ -1,3 +1,4 @@
+/** Format a short note that separates successfully resolved targets from unresolved passthrough values. */
 export function formatResolvedUnresolvedNote(params: {
   resolved: string[];
   unresolved: string[];

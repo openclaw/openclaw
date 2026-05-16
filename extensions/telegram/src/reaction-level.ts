@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveReactionLevel,
   type ReactionLevel,
   type ResolvedReactionLevel as BaseResolvedReactionLevel,
-} from "../../../src/utils/reaction-level.js";
+} from "openclaw/plugin-sdk/status-helpers";
 import { resolveTelegramAccount } from "./accounts.js";
 
 export type TelegramReactionLevel = ReactionLevel;

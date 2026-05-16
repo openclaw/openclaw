@@ -1,3 +1,4 @@
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
 import {
   DEFAULT_LOCALE,
@@ -22,8 +23,8 @@ class I18nManager {
   }
 
   private readStoredLocale(): string | null {
-    const storage = globalThis.localStorage;
-    if (!storage || typeof storage.getItem !== "function") {
+    const storage = getSafeLocalStorage();
+    if (!storage) {
       return null;
     }
     try {
@@ -34,8 +35,8 @@ class I18nManager {
   }
 
   private persistLocale(locale: Locale) {
-    const storage = globalThis.localStorage;
-    if (!storage || typeof storage.setItem !== "function") {
+    const storage = getSafeLocalStorage();
+    if (!storage) {
       return;
     }
     try {

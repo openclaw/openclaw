@@ -1,10 +1,6 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it } from "vitest";
-import {
-  isMSTeamsGroupAllowed,
-  resolveMSTeamsReplyPolicy,
-  resolveMSTeamsRouteConfig,
-} from "./policy.js";
+import type { MSTeamsConfig } from "../runtime-api.js";
+import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 
 function resolveNamedTeamRouteConfig(allowNameMatching = false) {
   const cfg: MSTeamsConfig = {
@@ -47,8 +43,11 @@ describe("msteams policy", () => {
         conversationId: "chan456",
       });
 
-      expect(res.teamConfig?.requireMention).toBe(false);
-      expect(res.channelConfig?.requireMention).toBe(true);
+      if (!res.teamConfig || !res.channelConfig) {
+        throw new Error("expected matched team and channel config");
+      }
+      expect(res.teamConfig.requireMention).toBe(false);
+      expect(res.channelConfig.requireMention).toBe(true);
       expect(res.allowlistConfigured).toBe(true);
       expect(res.allowed).toBe(true);
       expect(res.channelMatchKey).toBe("chan456");
@@ -82,8 +81,11 @@ describe("msteams policy", () => {
     it("matches team and channel by name when dangerous name matching is enabled", () => {
       const res = resolveNamedTeamRouteConfig(true);
 
-      expect(res.teamConfig?.requireMention).toBe(true);
-      expect(res.channelConfig?.requireMention).toBe(false);
+      if (!res.teamConfig || !res.channelConfig) {
+        throw new Error("expected matched named team and channel config");
+      }
+      expect(res.teamConfig.requireMention).toBe(true);
+      expect(res.channelConfig.requireMention).toBe(false);
       expect(res.allowed).toBe(true);
     });
   });
@@ -149,86 +151,6 @@ describe("msteams policy", () => {
         globalConfig: { requireMention: false, replyStyle: "thread" },
       });
       expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
-    });
-  });
-
-  describe("isMSTeamsGroupAllowed", () => {
-    it("allows when policy is open", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "open",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(true);
-    });
-
-    it("blocks when policy is disabled", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "disabled",
-          allowFrom: ["user-id"],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("blocks allowlist when empty", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("allows allowlist when sender matches", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["User-Id"],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(true);
-    });
-
-    it("blocks sender-name allowlist matches by default", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("allows sender-name allowlist matches when explicitly enabled", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-          allowNameMatching: true,
-        }),
-      ).toBe(true);
-    });
-
-    it("allows allowlist wildcard", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["*"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(true);
     });
   });
 });

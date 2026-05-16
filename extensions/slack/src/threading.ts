@@ -1,7 +1,7 @@
-import type { ReplyToMode } from "../../../src/config/types.js";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "./types.js";
 
-export type SlackThreadContext = {
+type SlackThreadContext = {
   incomingThreadTs?: string;
   messageTs?: string;
   isThreadReply: boolean;

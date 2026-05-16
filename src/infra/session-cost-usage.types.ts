@@ -51,7 +51,7 @@ export type CostUsageTotals = {
   missingCostEntries: number;
 };
 
-export type CostUsageDailyEntry = CostUsageTotals & {
+type CostUsageDailyEntry = CostUsageTotals & {
   date: string;
 };
 
@@ -60,7 +60,16 @@ export type CostUsageSummary = {
   days: number;
   daily: CostUsageDailyEntry[];
   totals: CostUsageTotals;
+  cacheStatus?: {
+    status: "fresh" | "partial" | "stale" | "refreshing";
+    cachedFiles: number;
+    pendingFiles: number;
+    staleFiles: number;
+    refreshedAt?: number;
+  };
 };
+
+export type UsageCacheStatus = NonNullable<CostUsageSummary["cacheStatus"]>;
 
 export type SessionDailyUsage = {
   date: string; // YYYY-MM-DD
@@ -76,6 +85,32 @@ export type SessionDailyMessageCounts = {
   toolCalls: number;
   toolResults: number;
   errors: number;
+};
+
+export type SessionUtcQuarterHourMessageCounts = {
+  date: string; // YYYY-MM-DD (UTC)
+  quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
+  total: number;
+  user: number;
+  assistant: number;
+  toolCalls: number;
+  toolResults: number;
+  errors: number;
+};
+
+export type SessionUtcQuarterHourTokenUsage = {
+  date: string; // YYYY-MM-DD (UTC)
+  quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  // Uses the same token total basis as CostUsageTotals: usage.total when present,
+  // otherwise input + output + cacheRead + cacheWrite. This intentionally differs
+  // from legacy dailyBreakdown.tokens, which preserves its existing component-sum
+  // behavior until daily usage buckets are refactored separately.
+  totalTokens: number;
+  totalCost: number;
 };
 
 export type SessionLatencyStats = {
@@ -130,6 +165,8 @@ export type SessionCostSummary = CostUsageTotals & {
   activityDates?: string[]; // YYYY-MM-DD dates when session had activity
   dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
   dailyMessageCounts?: SessionDailyMessageCounts[];
+  utcQuarterHourMessageCounts?: SessionUtcQuarterHourMessageCounts[]; // UTC quarter-hour buckets for precise hourly stats
+  utcQuarterHourTokenUsage?: SessionUtcQuarterHourTokenUsage[]; // UTC quarter-hour buckets for precise token mosaic stats
   dailyLatency?: SessionDailyLatency[];
   dailyModelUsage?: SessionDailyModelUsage[];
   messageCounts?: SessionMessageCounts;

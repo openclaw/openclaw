@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
@@ -10,17 +10,34 @@ import {
 
 const runCommandWithTimeoutMock = vi.fn();
 const TEMP_DIR_PREFIX = "openclaw-install-source-utils-";
+const tempDirs = createTrackedTempDirs();
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-const tempDirs: string[] = [];
-
 async function createTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
+  return await tempDirs.make(prefix);
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
 async function createFixtureDir() {
@@ -84,18 +101,22 @@ async function expectPackFallsBackToDetectedArchive(params: {
   });
 }
 
+function expectPackError(result: { ok: boolean; error?: string }, expected: string[]): void {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    return;
+  }
+  for (const part of expected) {
+    expect(result.error ?? "").toContain(part);
+  }
+}
+
 beforeEach(() => {
   runCommandWithTimeoutMock.mockClear();
 });
 
 afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      break;
-    }
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+  await tempDirs.cleanup();
 });
 
 describe("withTempDir", () => {
@@ -106,35 +127,35 @@ describe("withTempDir", () => {
     const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
-      await expect(fs.stat(path.join(tmpDir, markerFile))).resolves.toBeDefined();
+      await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");
       return "done";
     });
 
     expect(value).toBe("done");
-    await expect(fs.stat(observedDir)).rejects.toThrow();
+    await expectPathMissing(observedDir);
   });
 });
 
 describe("resolveArchiveSourcePath", () => {
-  it("returns not found error for missing archive paths", async () => {
-    const result = await resolveArchiveSourcePath("/tmp/does-not-exist-openclaw-archive.tgz");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("archive not found");
-    }
-  });
-
-  it("rejects unsupported archive extensions", async () => {
-    const { filePath } = await createFixtureFile({
-      fileName: "plugin.txt",
-      contents: "not-an-archive",
-    });
-
-    const result = await resolveArchiveSourcePath(filePath);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("unsupported archive");
-    }
+  it.each([
+    {
+      name: "returns not found error for missing archive paths",
+      path: async () => "/tmp/does-not-exist-openclaw-archive.tgz",
+      expected: "archive not found",
+    },
+    {
+      name: "rejects unsupported archive extensions",
+      path: async () =>
+        (
+          await createFixtureFile({
+            fileName: "plugin.txt",
+            contents: "not-an-archive",
+          })
+        ).filePath,
+      expected: "unsupported archive",
+    },
+  ])("$name", async ({ path: resolvePath, expected }) => {
+    expectPackError(await resolveArchiveSourcePath(await resolvePath()), [expected]);
   });
 
   it.each(["plugin.zip", "plugin.tgz", "plugin.tar.gz"])(
@@ -184,10 +205,14 @@ describe("packNpmSpecToArchive", () => {
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
       ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
-      expect.objectContaining({
+      {
         cwd,
         timeoutMs: 300_000,
-      }),
+        env: {
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+          NPM_CONFIG_IGNORE_SCRIPTS: "true",
+        },
+      },
     );
   });
 
@@ -217,12 +242,7 @@ describe("packNpmSpecToArchive", () => {
     });
 
     const result = await runPack("bad-spec", cwd, 5000);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("npm pack failed");
-      expect(result.error).toContain("registry timeout");
-    }
+    expectPackError(result, ["npm pack failed", "registry timeout"]);
   });
 
   it.each([
@@ -259,13 +279,11 @@ describe("packNpmSpecToArchive", () => {
     });
 
     const result = await runPack("@openclaw/whatsapp", cwd);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("Package not found on npm");
-      expect(result.error).toContain("@openclaw/whatsapp");
-      expect(result.error).toContain("docs.openclaw.ai/tools/plugin");
-    }
+    expectPackError(result, [
+      "Package not found on npm",
+      "@openclaw/whatsapp",
+      "docs.openclaw.ai/tools/plugin",
+    ]);
   });
 
   it("returns explicit error when npm pack produces no archive name", async () => {

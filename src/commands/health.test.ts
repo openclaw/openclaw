@@ -56,6 +56,30 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
+function requireFirstRuntimeLog(): string {
+  const [call] = runtime.log.mock.calls;
+  if (!call) {
+    throw new Error("expected health command log output");
+  }
+  const [message] = call;
+  if (message === undefined) {
+    throw new Error("expected health command log output");
+  }
+  return String(message);
+}
+
+function requireFirstGatewayRequest(): Record<string, unknown> {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected gateway request");
+  }
+  return request as Record<string, unknown>;
+}
+
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -87,37 +111,68 @@ describe("healthCommand", () => {
     });
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    const logged = runtime.log.mock.calls[0]?.[0] as string;
-    const parsed = JSON.parse(logged) as HealthSummary;
+    const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
   });
 
-  it("prints text summary when not json", async () => {
-    callGatewayMock.mockResolvedValueOnce(
-      createHealthSummary({
-        channels: {
-          whatsapp: { accountId: "default", linked: false, authAgeMs: null },
-          telegram: { accountId: "default", configured: false },
-          discord: { accountId: "default", configured: false },
-        },
-        channelOrder: ["whatsapp", "telegram", "discord"],
-        channelLabels: {
-          whatsapp: "WhatsApp",
-          telegram: "Telegram",
-          discord: "Discord",
-        },
-      }),
+  it("passes explicit gateway credentials through to the gateway call", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      {
+        json: true,
+        timeoutMs: 5000,
+        config: {},
+        token: "setup-token",
+        password: "setup-password",
+      },
+      runtime as never,
     );
 
-    await healthCommand({ json: false }, runtime as never);
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    const gatewayRequest = requireFirstGatewayRequest();
+    expect(gatewayRequest.method).toBe("health");
+    expect(gatewayRequest.token).toBe("setup-token");
+    expect(gatewayRequest.password).toBe("setup-password");
+  });
+
+  it("prints degraded model-pricing health without failing the command", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.modelPricing = {
+      state: "degraded",
+      sources: [
+        {
+          source: "openrouter",
+          state: "degraded",
+          lastFailureAt: Date.now(),
+          detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+        },
+      ],
+      detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      lastFailureAt: Date.now(),
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalled();
+    expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
+      "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
+    );
   });
 
   it("formats per-account probe timings", () => {
@@ -151,8 +206,48 @@ describe("healthCommand", () => {
     });
 
     const lines = formatHealthChannelLines(summary, { accountMode: "all" });
-    expect(lines).toContain(
+    expect(lines).toStrictEqual([
       "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
+    ]);
+  });
+
+  it("formats statusState without inferring from linked", () => {
+    const summary = createHealthSummary({
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          statusState: "unstable",
+          configured: true,
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
+  });
+
+  it("formats iMessage probe failures as failed health lines", () => {
+    const summary = createHealthSummary({
+      channels: {
+        imessage: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: false,
+            error:
+              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+          },
+        },
+      },
+      channelOrder: ["imessage"],
+      channelLabels: { imessage: "iMessage" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toContain(
+      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
   });
 });

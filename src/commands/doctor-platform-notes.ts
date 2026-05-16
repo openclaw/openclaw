@@ -3,8 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -34,10 +37,39 @@ export async function noteMacLaunchAgentOverrides() {
   note(lines.join("\n"), "Gateway (macOS)");
 }
 
+export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
+  platform?: NodeJS.Platform;
+  findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  noteFn?: typeof note;
+}) {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return;
+  }
+  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)().catch(() => []);
+  if (jobs.length === 0) {
+    return;
+  }
+
+  const lines = [
+    "- Stale OpenClaw updater launchd job(s) detected.",
+    ...jobs.map((job) => {
+      const exitStatus =
+        job.lastExitStatus !== undefined ? `, last exit ${job.lastExitStatus}` : "";
+      const pid = job.pid !== undefined ? `, pid ${job.pid}` : "";
+      return `- ${job.label}${pid}${exitStatus}`;
+    }),
+    "- Fix after confirming no update is running:",
+    "  launchctl remove <label>",
+    `  ${formatCliCommand("openclaw gateway restart")}`,
+  ];
+  (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
+}
+
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
     const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
-    const value = String(result.stdout ?? "").trim();
+    const value = normalizeOptionalString(result.stdout ?? "") ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -48,11 +80,11 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   const localPassword = cfg.gateway?.auth?.password;
   const remoteToken = cfg.gateway?.remote?.token;
   const remotePassword = cfg.gateway?.remote?.password;
-  return Boolean(
+  return (
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(localPassword, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(remoteToken, cfg.secrets?.defaults) ||
-    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults),
+    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults)
   );
 }
 
@@ -73,31 +105,16 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 
   const getenv = deps?.getenv ?? launchctlGetenv;
-  const deprecatedLaunchctlEntries = [
-    ["CLAWDBOT_GATEWAY_TOKEN", await getenv("CLAWDBOT_GATEWAY_TOKEN")],
-    ["CLAWDBOT_GATEWAY_PASSWORD", await getenv("CLAWDBOT_GATEWAY_PASSWORD")],
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]?.trim()));
-  if (deprecatedLaunchctlEntries.length > 0) {
-    const lines = [
-      "- Deprecated launchctl environment variables detected (ignored).",
-      ...deprecatedLaunchctlEntries.map(
-        ([key]) =>
-          `- \`${key}\` is set; use \`OPENCLAW_${key.slice(key.indexOf("_") + 1)}\` instead.`,
-      ),
-    ];
-    (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
-  }
-
   const tokenEntries = [
     ["OPENCLAW_GATEWAY_TOKEN", await getenv("OPENCLAW_GATEWAY_TOKEN")],
   ] as const;
   const passwordEntries = [
     ["OPENCLAW_GATEWAY_PASSWORD", await getenv("OPENCLAW_GATEWAY_PASSWORD")],
   ] as const;
-  const tokenEntry = tokenEntries.find(([, value]) => value?.trim());
-  const passwordEntry = passwordEntries.find(([, value]) => value?.trim());
-  const envToken = tokenEntry?.[1]?.trim() ?? "";
-  const envPassword = passwordEntry?.[1]?.trim() ?? "";
+  const tokenEntry = tokenEntries.find(([, value]) => normalizeOptionalString(value));
+  const passwordEntry = passwordEntries.find(([, value]) => normalizeOptionalString(value));
+  const envToken = normalizeOptionalString(tokenEntry?.[1]) ?? "";
+  const envPassword = normalizeOptionalString(passwordEntry?.[1]) ?? "";
   const envTokenKey = tokenEntry?.[0];
   const envPasswordKey = passwordEntry?.[0];
   if (!envToken && !envPassword) {
@@ -105,12 +122,13 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 
   const lines = [
-    "- launchctl environment overrides detected (can cause confusing unauthorized errors).",
+    "- Host-wide launchctl gateway auth overrides detected.",
+    "- Current managed Gateway installs do not need these values unless config intentionally references the env var.",
     envToken && envTokenKey
-      ? `- \`${envTokenKey}\` is set; it overrides config tokens.`
+      ? `- \`${envTokenKey}\` is set; it can make local clients use a different token than gateway.auth.token.`
       : undefined,
     envPassword
-      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; it overrides config passwords.`
+      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; it can make local clients use a different password than gateway.auth.password.`
       : undefined,
     "- Clear overrides and restart the app/gateway:",
     envTokenKey ? `  launchctl unsetenv ${envTokenKey}` : undefined,
@@ -120,30 +138,8 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
 }
 
-export function noteDeprecatedLegacyEnvVars(
-  env: NodeJS.ProcessEnv = process.env,
-  deps?: { noteFn?: typeof note },
-) {
-  const entries = Object.entries(env)
-    .filter(([key, value]) => key.startsWith("CLAWDBOT_") && value?.trim())
-    .map(([key]) => key);
-  if (entries.length === 0) {
-    return;
-  }
-
-  const lines = [
-    "- Deprecated legacy environment variables detected (ignored).",
-    "- Use OPENCLAW_* equivalents instead:",
-    ...entries.map((key) => {
-      const suffix = key.slice(key.indexOf("_") + 1);
-      return `  ${key} -> OPENCLAW_${suffix}`;
-    }),
-  ];
-  (deps?.noteFn ?? note)(lines.join("\n"), "Environment");
-}
-
 function isTruthyEnvValue(value: string | undefined): boolean {
-  return typeof value === "string" && value.trim().length > 0;
+  return Boolean(normalizeOptionalString(value));
 }
 
 function isTmpCompileCachePath(cachePath: string): boolean {
@@ -180,9 +176,9 @@ export function noteStartupOptimizationHints(
   }
 
   const noteFn = deps?.noteFn ?? note;
-  const compileCache = env.NODE_COMPILE_CACHE?.trim() ?? "";
-  const disableCompileCache = env.NODE_DISABLE_COMPILE_CACHE?.trim() ?? "";
-  const noRespawn = env.OPENCLAW_NO_RESPAWN?.trim() ?? "";
+  const compileCache = normalizeOptionalString(env.NODE_COMPILE_CACHE) ?? "";
+  const disableCompileCache = normalizeOptionalString(env.NODE_DISABLE_COMPILE_CACHE) ?? "";
+  const noRespawn = normalizeOptionalString(env.OPENCLAW_NO_RESPAWN) ?? "";
   const lines: string[] = [];
 
   if (!compileCache) {
