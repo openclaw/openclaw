@@ -75,6 +75,10 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
   return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
 }
 
+function isGuidedConfigAction(actionCommand: Command): boolean {
+  return actionCommand.name() === "config" && actionCommand.parent?.parent === undefined;
+}
+
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -101,7 +105,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (shouldBypassConfigGuardForCommandPath(commandPath)) {
+    if (shouldBypassConfigGuardForCommandPath(commandPath) || isGuidedConfigAction(actionCommand)) {
       return;
     }
     await ensureCliExecutionBootstrap({
