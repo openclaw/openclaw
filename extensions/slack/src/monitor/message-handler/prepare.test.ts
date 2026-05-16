@@ -1527,6 +1527,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.route.sessionKey).toBe("agent:main:slack:direct:u1");
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1");
     expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadLabel).toBeUndefined();
+    expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared.ctxPayload.ReplyToId).toBe("500.000");
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
     ).toEqual({
@@ -1561,6 +1565,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(prepared);
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main");
     expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadLabel).toBeUndefined();
+    expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared.ctxPayload.ReplyToId).toBe("600.000");
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
     ).toEqual({
