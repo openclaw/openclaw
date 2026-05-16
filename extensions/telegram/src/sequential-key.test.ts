@@ -91,7 +91,7 @@ describe("getTelegramSequentialKey", () => {
     ],
     [
       {
-        me: { username: "openclaw_bot" },
+        me: { username: "openclaw_bot" } as never,
         message: mockMessage({
           chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
           is_topic_message: true,
@@ -103,7 +103,7 @@ describe("getTelegramSequentialKey", () => {
     ],
     [
       {
-        me: { username: "openclaw_bot" },
+        me: { username: "openclaw_bot" } as never,
         message: mockMessage({
           chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
           is_topic_message: true,
