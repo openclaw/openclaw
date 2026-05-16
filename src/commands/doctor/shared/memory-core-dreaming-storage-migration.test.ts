@@ -73,7 +73,9 @@ describe("maybeMigrateMemoryCoreDreamingStorage (#70407)", () => {
     const cfg = configWithStorage("both");
     // Sanity check: pre-migration config is invalid.
     const before = validateConfigObjectWithPlugins(cfg);
-    expect(before.ok).toBe(false);
+    if (before.ok) {
+      throw new Error("expected pre-migration config to fail validation");
+    }
     expect(
       before.issues.some((issue) =>
         issue.path.startsWith("plugins.entries.memory-core.config.dreaming.storage"),
@@ -82,12 +84,13 @@ describe("maybeMigrateMemoryCoreDreamingStorage (#70407)", () => {
 
     const result = maybeMigrateMemoryCoreDreamingStorage(cfg);
     const after = validateConfigObjectWithPlugins(result.config);
-    expect(
-      after.ok
-        ? []
-        : after.issues.filter((issue) =>
-            issue.path.startsWith("plugins.entries.memory-core.config.dreaming.storage"),
-          ),
-    ).toEqual([]);
+    if (after.ok) {
+      // No issues at all — definitely no remaining storage issues.
+      return;
+    }
+    const remainingStorageIssues = after.issues.filter((issue) =>
+      issue.path.startsWith("plugins.entries.memory-core.config.dreaming.storage"),
+    );
+    expect(remainingStorageIssues).toEqual([]);
   });
 });
