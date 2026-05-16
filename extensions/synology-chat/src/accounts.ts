@@ -142,6 +142,7 @@ export function resolveAccount(
       accountConfig: accountOverrides,
     }),
     dangerouslyAllowInheritedWebhookPath,
+    triggerWord: merged.triggerWord,
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
     rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,

@@ -547,10 +547,10 @@ describe("createWebhookHandler", () => {
     expect(res2._status).toBe(429);
   });
 
-  it("strips trigger word from message", async () => {
+  it("strips configured triggerWord prefix from message", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "trigger-test-" + Date.now() }),
+      account: makeAccount({ accountId: "trigger-test-" + Date.now(), triggerWord: "!bot" }),
       deliver,
       log,
     });
@@ -560,7 +560,6 @@ describe("createWebhookHandler", () => {
       user_id: "123",
       username: "testuser",
       text: "!bot Hello there",
-      trigger_word: "!bot",
     });
 
     const req = makeReq("POST", body);
@@ -568,8 +567,54 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    // deliver should have been called with the stripped text
     expect(deliveredMessage(deliver).body).toBe("Hello there");
+  });
+
+  it("preserves full text when triggerWord equals entire message", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "trigger-eq-test-" + Date.now(), triggerWord: "!bot" }),
+      deliver,
+      log,
+    });
+
+    const body = makeFormBody({
+      token: "valid-token",
+      user_id: "123",
+      username: "testuser",
+      text: "!bot",
+    });
+
+    const req = makeReq("POST", body);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(deliveredMessage(deliver).body).toBe("!bot");
+  });
+
+  it("delivers full text when no triggerWord is configured", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "no-trigger-test-" + Date.now(), triggerWord: undefined }),
+      deliver,
+      log,
+    });
+
+    const body = makeFormBody({
+      token: "valid-token",
+      user_id: "123",
+      username: "testuser",
+      text: "hello",
+      trigger_word: "hello",
+    });
+
+    const req = makeReq("POST", body);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(deliveredMessage(deliver).body).toBe("hello");
   });
 
   it("responds 204 immediately and delivers async", async () => {

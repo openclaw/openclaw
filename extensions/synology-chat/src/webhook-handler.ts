@@ -463,10 +463,16 @@ async function authorizeSynologyWebhook(params: {
   return { ok: true, commandAuthorized: auth.senderAccess.allowed };
 }
 
-function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
+function sanitizeSynologyWebhookText(
+  payload: SynologyWebhookPayload,
+  account: ResolvedSynologyChatAccount,
+): string {
   let cleanText = sanitizeInput(payload.text);
-  if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
-    cleanText = cleanText.slice(payload.trigger_word.length).trim();
+  if (account.triggerWord && cleanText.startsWith(account.triggerWord)) {
+    const stripped = cleanText.slice(account.triggerWord.length).trim();
+    if (stripped) {
+      cleanText = stripped;
+    }
   }
   return cleanText;
 }
@@ -498,7 +504,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
     return { ok: false };
   }
 
-  const cleanText = sanitizeSynologyWebhookText(parsed.payload);
+  const cleanText = sanitizeSynologyWebhookText(parsed.payload, params.account);
   if (!cleanText) {
     respondNoContent(params.res);
     return { ok: false };
