@@ -100,6 +100,9 @@ async function maybeApplyAcpTts(params: {
   if (params.skipTts) {
     return params.payload;
   }
+  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+    return params.payload;
+  }
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
@@ -311,19 +314,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     let visiblePayload = payload;
     const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
     if (rawBlockText) {
+      const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
       const joinsBufferedTtsDirective =
         state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
+      if (!isStatusNotice) {
+        if (state.accumulatedBlockText.length > 0) {
+          state.accumulatedBlockText += "\n";
+        }
+        state.accumulatedBlockText += rawBlockText;
+        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+          state.accumulatedBlockTtsText += "\n";
+        }
+        state.accumulatedBlockTtsText += rawBlockText;
+        state.blockCount += 1;
       }
-      state.accumulatedBlockText += rawBlockText;
-      if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-        state.accumulatedBlockTtsText += "\n";
-      }
-      state.accumulatedBlockTtsText += rawBlockText;
-      state.blockCount += 1;
 
-      if (state.cleanBlockTtsDirectiveText && !payload.isCompactionNotice) {
+      if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
         const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
         visiblePayload = { ...payload, text: text.trim() ? text : undefined };
       }
@@ -334,7 +340,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
     }
-    const rawFinalText = kind === "final" ? normalizeOptionalString(payload.text) : undefined;
+    const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+    const rawFinalText =
+      kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
     if (rawFinalText) {
       if (state.accumulatedFinalText.length > 0) {
         state.accumulatedFinalText += "\n";

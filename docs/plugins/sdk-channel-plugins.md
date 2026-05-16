@@ -357,9 +357,7 @@ If you only need `implicitMentionKindWhen` and
 `openclaw/plugin-sdk/channel-mention-gating` to avoid loading unrelated inbound
 runtime helpers.
 
-The older `resolveMentionGating*` helpers remain on
-`openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code
-should use `resolveInboundMentionDecision({ facts, policy })`.
+Use `resolveInboundMentionDecision({ facts, policy })` for mention gating.
 
 ## Walkthrough
 
@@ -739,7 +737,7 @@ Write colocated tests in `src/channel.test.ts`:
     TTS, STT, media, subagent via api.runtime
   </Card>
   <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
-    Shared inbound turn lifecycle: ingest, resolve, record, dispatch, finalize
+    Shared inbound event lifecycle: ingest, resolve, record, dispatch, finalize
   </Card>
 </CardGroup>
 

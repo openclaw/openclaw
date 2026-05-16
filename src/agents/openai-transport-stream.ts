@@ -840,7 +840,16 @@ function convertResponsesMessages(
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (shouldReplayReasoningItems && block.thinkingSignature) {
+          if (
+            shouldReplayReasoningItems &&
+            block.thinkingSignature &&
+            block.thinkingSignature.startsWith("{")
+          ) {
+            // openai-completions plain-text reasoning paths persist a
+            // provenance tag (e.g. "reasoning", "reasoning_details", "content")
+            // as thinkingSignature rather than a JSON-encoded reasoning item.
+            // Replaying those values would corrupt the next request payload
+            // (OpenRouter returns HTTP 500), so skip non-JSON signatures.
             const reasoningItem = JSON.parse(
               block.thinkingSignature,
             ) as ReplayableResponseReasoningItem;
@@ -2878,6 +2887,14 @@ function shouldPreserveReasoningContentReplay(
   );
 }
 
+function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolean {
+  if (model.provider !== "openrouter") {
+    return true;
+  }
+  const normalizedModelId = model.id.trim().toLowerCase();
+  return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
+}
+
 // OpenAI Chat Completions assistant-message input does not define reasoning
 // replay fields, while OpenRouter and DeepSeek-style providers document
 // compatible pass-back contracts. Keep valid provider-owned replay fields, but
@@ -2923,7 +2940,8 @@ export function buildOpenAICompletionsParams(
   let messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   sanitizeCompletionsReasoningReplayFields(messages, {
-    preserveOpenRouterReasoning: compat.thinkingFormat === "openrouter",
+    preserveOpenRouterReasoning:
+      compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),
     preserveReasoningContent: shouldPreserveReasoningContentReplay(model, compat),
   });
   if (compat.strictMessageKeys) {

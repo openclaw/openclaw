@@ -178,6 +178,30 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hello" });
   });
 
+  it("bypasses TTS for final status notices", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { tts: { enabled: true } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    const notice = { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true };
+    await coordinator.deliver("final", notice);
+    await coordinator.settleVisibleText();
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+  });
+
   it("tracks successful final delivery separately from routed counters", async () => {
     const coordinator = createCoordinator();
 
@@ -245,6 +269,65 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getAccumulatedBlockTtsText()).toBe(
       "Intro [[tts:text]]hidden[[/tts:text]] visible",
     );
+  });
+
+  it("keeps status notices out of ACP block TTS accumulation", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { tts: { enabled: true } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    await coordinator.deliver("block", { text: "Visible answer" });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(1, {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(2, { text: "Visible answer" });
+    expect(coordinator.getAccumulatedBlockText()).toBe("Visible answer");
+    expect(coordinator.getAccumulatedBlockTtsText()).toBe("Visible answer");
+    expect(coordinator.getBlockCount()).toBe(1);
+  });
+
+  it("keeps final fallback notices out of ACP transcript accumulation", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    expect(coordinator.getAccumulatedFinalText()).toBe("");
   });
 
   it("prefers provider over surface when detecting direct channel visibility", async () => {

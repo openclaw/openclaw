@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
-import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
+import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -387,11 +387,11 @@ describe("handleTelegramAction", () => {
     });
   });
 
-  it("marks the matching inbound turn delivered after a successful send", async () => {
+  it("marks the matching inbound event delivered after a successful send", async () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation("telegram-session", {
+    const end = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
       outboundTo: "@testchannel",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         count += 1;
       },
     });
@@ -411,19 +411,19 @@ describe("handleTelegramAction", () => {
   it("marks room-event delivery correlations separately", async () => {
     let roomEventCount = 0;
     let userRequestCount = 0;
-    const endRoomEvent = beginTelegramInboundTurnDeliveryCorrelation(
+    const endRoomEvent = beginTelegramInboundEventDeliveryCorrelation(
       "telegram-session",
       {
         outboundTo: "@testchannel",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           roomEventCount += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
-    const endUserRequest = beginTelegramInboundTurnDeliveryCorrelation("telegram-session", {
+    const endUserRequest = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
       outboundTo: "@testchannel",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         userRequestCount += 1;
       },
     });
@@ -435,7 +435,7 @@ describe("handleTelegramAction", () => {
         content: "Hello from a room event",
       },
       telegramConfig(),
-      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+      { sessionKey: "telegram-session", inboundEventKind: "room_event" },
     );
 
     expect(roomEventCount).toBe(1);
@@ -446,15 +446,15 @@ describe("handleTelegramAction", () => {
 
   it("marks topic room-event delivery when send uses a separate thread id", async () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation(
+    const end = beginTelegramInboundEventDeliveryCorrelation(
       "telegram-session",
       {
         outboundTo: "-100123:topic:77",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           count += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
     await handleTelegramAction(
@@ -465,7 +465,7 @@ describe("handleTelegramAction", () => {
         content: "Hello from a room event topic",
       },
       telegramConfig(),
-      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+      { sessionKey: "telegram-session", inboundEventKind: "room_event" },
     );
 
     expect(count).toBe(1);
@@ -474,15 +474,15 @@ describe("handleTelegramAction", () => {
 
   it("marks topic room-event delivery when send uses topic shorthand", async () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation(
+    const end = beginTelegramInboundEventDeliveryCorrelation(
       "telegram-session",
       {
         outboundTo: "-100123:topic:77",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           count += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
     await handleTelegramAction(
@@ -492,7 +492,7 @@ describe("handleTelegramAction", () => {
         content: "Hello from a room event topic",
       },
       telegramConfig(),
-      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+      { sessionKey: "telegram-session", inboundEventKind: "room_event" },
     );
 
     expect(count).toBe(1);
@@ -521,20 +521,20 @@ describe("handleTelegramAction", () => {
     },
   ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation(
+    const end = beginTelegramInboundEventDeliveryCorrelation(
       "telegram-session",
       {
         outboundTo: "@testchannel",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           count += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
     await handleTelegramAction(params, cfg, {
       sessionKey: "telegram-session",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
 
     expect(count).toBe(1);

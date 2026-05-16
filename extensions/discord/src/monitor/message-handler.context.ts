@@ -1,5 +1,5 @@
 import {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   toInboundMediaFacts,
@@ -327,7 +327,7 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = buildChannelTurnContext({
+  const ctxPayload = buildChannelInboundEventContext({
     channel: "discord",
     provider: "discord",
     surface: "discord",
@@ -369,6 +369,7 @@ export async function buildDiscordMessageProcessContext(params: {
       originatingTo,
     },
     message: {
+      inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
       rawBody: preflightAudioTranscript ?? baseText,
       bodyForAgent: preflightAudioTranscript ?? baseText ?? text,

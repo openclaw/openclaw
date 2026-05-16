@@ -153,6 +153,7 @@ const ttsMocks = vi.hoisted(() => {
           ...params.payload,
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
         };
       }
       return params.payload;
@@ -1647,6 +1648,31 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("bypasses final TTS for status notices", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+    const notice = {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    } satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async () => notice,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+  });
+
   it("renders plain-text plan updates and concise approval progress when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
@@ -2722,6 +2748,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
     expect(finalPayload?.audioAsVoice).toBe(true);
     expect(finalPayload?.spokenText).toBe("Hello from block streaming.");
+    expect(finalPayload?.trustedLocalMedia).toBe(true);
   });
 
   it("closes oneshot ACP sessions after the turn completes", async () => {
@@ -4830,7 +4857,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
     const ctx = buildTestCtx({
       ChatType: "group",
-      InboundTurnKind: "room_event",
+      InboundEventKind: "room_event",
       SessionKey: "test:session",
     });
 
@@ -4930,7 +4957,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps group/channel final replies private when message-tool-only turns miss the message tool", async () => {
+  it("keeps group/channel final replies private when message-tool-only events miss the message tool", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -4997,7 +5024,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
-        InboundTurnKind: "room_event",
+        InboundEventKind: "room_event",
         SessionKey: "test:discord:channel:C1",
       }),
       cfg: emptyConfig,
@@ -5154,7 +5181,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("requested fallback");
   });
 
-  it("keeps native command replies visible in group/channel turns", async () => {
+  it("keeps native command replies visible in group/channel events", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {

@@ -18,6 +18,7 @@ type SlackAssistantMessageRecord = {
   thread_ts?: unknown;
   files?: unknown;
   attachments?: unknown;
+  assistant_thread?: unknown;
   metadata?: unknown;
   blocks?: unknown;
 };
@@ -123,6 +124,11 @@ function resolveAssistantMessageChangedInbound(params: {
     ts: asString(message.ts) ?? asString(changed.event_ts),
     thread_ts: asString(message.thread_ts),
     event_ts: changed.event_ts,
+    assistant_thread:
+      asRecord(message.assistant_thread) ??
+      asRecord(
+        (changed as SlackMessageChangedEvent & { assistant_thread?: unknown }).assistant_thread,
+      ),
     files: Array.isArray(message.files) ? (message.files as SlackMessageEvent["files"]) : undefined,
     attachments: Array.isArray(message.attachments)
       ? (message.attachments as SlackMessageEvent["attachments"])
