@@ -597,7 +597,13 @@ describe("plugin-sdk/approval-renderers", () => {
       language: "simple",
     });
 
-    expect(payload.text).toContain("- run custom-tool");
+    expect(payload.text).toContain(
+      "- run command with environment overrides: GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY",
+    );
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "Environment prefixes can change how a command loads code, credentials, or libraries.",
+    );
     expect(payload.text).toContain(
       "Command preview\nGITHUB_TOKEN=[redacted] AWS_SECRET_ACCESS_KEY=[redacted] custom-tool --token [redacted] --send https://[redacted]@example.test/path",
     );
@@ -837,6 +843,46 @@ describe("plugin-sdk/approval-renderers", () => {
     );
   });
 
+  it.each([
+    {
+      command: "LD_PRELOAD=./hook.so ls",
+      id: "plugin-command-env-prefix",
+      target: "LD_PRELOAD",
+    },
+    {
+      command: "env LD_PRELOAD=./hook.so ls",
+      id: "plugin-command-env-wrapper-prefix",
+      target: "LD_PRELOAD",
+    },
+  ])(
+    "fails closed on environment prefixes before hiding details: $command",
+    ({ command, id, target }) => {
+      const payload = buildPluginApprovalPendingReplyPayload({
+        request: {
+          id,
+          request: {
+            title: "Codex app-server command approval",
+            description: `Command: ${command}`,
+            toolName: "codex_command_approval",
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 121_000,
+        },
+        nowMs: 1_000,
+        language: "simple",
+      });
+
+      expect(payload.text).toContain(`- run command with environment overrides: ${target}`);
+      expect(payload.text).toContain(`Command preview\n${command}`);
+      expect(payload.text).toContain("Risk: High");
+      expect(payload.text).toContain(
+        "Environment prefixes can change how a command loads code, credentials, or libraries.",
+      );
+      expect(payload.text).not.toContain("- list files or folders");
+      expect(payload.text).not.toContain("Risk: Low");
+    },
+  );
+
   it("flags destructive find predicates before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
@@ -1011,6 +1057,28 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Low");
   });
 
+  it("preserves leading input redirection targets before summarizing reads", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-leading-input-redirect",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: < .env cat",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- read file contents: .env");
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).toContain("It may print secrets or credentials.");
+    expect(payload.text).not.toContain("Risk: Low");
+  });
+
   it("treats sed in-place edits as writes", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
@@ -1031,6 +1099,29 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).toContain("Risk: Medium");
     expect(payload.text).toContain("sed -i can overwrite files in place.");
     expect(payload.text).not.toContain("- read file contents");
+  });
+
+  it("surfaces text-processor input files before hiding details", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-jq-input-file",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: jq . .env",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- filter data from files: .env");
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).toContain("It may read secret or credential files.");
+    expect(payload.text).not.toContain("- filter command output");
+    expect(payload.text).not.toContain("Risk: Low");
   });
 
   it("treats sourced scripts as shell execution", () => {

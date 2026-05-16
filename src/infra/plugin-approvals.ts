@@ -148,6 +148,26 @@ const GREP_OPTION_VALUE_FLAGS = new Set([
 ]);
 const HEAD_TAIL_OPTION_VALUE_FLAGS = new Set(["-c", "-n", "--bytes", "--lines"]);
 const SED_OPTION_VALUE_FLAGS = new Set(["-e", "-f", "--expression", "--file"]);
+const JQ_OPTION_VALUE_FLAGS = new Set([
+  "-L",
+  "--arg",
+  "--argjson",
+  "--rawfile",
+  "--run-tests",
+  "--slurpfile",
+]);
+const AWK_OPTION_VALUE_FLAGS = new Set(["-F", "-f", "-v", "--field-separator", "--file"]);
+const CUT_OPTION_VALUE_FLAGS = new Set([
+  "-b",
+  "-c",
+  "-d",
+  "-f",
+  "--bytes",
+  "--characters",
+  "--delimiter",
+  "--fields",
+]);
+const SORT_UNIQ_OPTION_VALUE_FLAGS = new Set(["-o", "-S", "-T", "-k", "-t", "--output"]);
 const ENV_SEPARATE_VALUE_FLAGS = new Set(["-a", "-C", "-u", "--argv0", "--chdir", "--unset"]);
 const ENV_INLINE_VALUE_FLAGS = new Set(["--argv0", "--chdir", "--unset"]);
 const ENV_BOOLEAN_FLAGS = new Set([
@@ -767,6 +787,19 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       sudoPrefix,
     );
   }
+  if (resolved.envAssignments.length > 0) {
+    return withSudo(
+      {
+        text: `run command with environment overrides${formatTargets(resolved.envAssignments)}`,
+        risk: "high",
+        kind: "unknown",
+        reason:
+          "Environment prefixes can change how a command loads code, credentials, or libraries.",
+        showCommandPreview: true,
+      },
+      sudoPrefix,
+    );
+  }
   const command = cleanCommandName(basename(resolved.words[0] ?? ""));
   const args = resolved.words.slice(1);
   const nonOptionArgs = getCommandTargetArgs(command, args);
@@ -774,6 +807,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
   const sensitiveTarget = nonOptionArgs.some(isSensitivePath);
   const systemTarget = nonOptionArgs.some(isSystemPath);
   const redirectionTargets = getShellOutputRedirectionTargets(segment);
+  const inputRedirectionTargets = getShellInputRedirection(segment).targets;
   const redirected = redirectionTargets.length > 0;
 
   if (hasShellExecutionExpansion(segment)) {
@@ -983,7 +1017,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "head":
     case "less":
     case "sed":
-    case "tail":
+    case "tail": {
       if (redirected) {
         return summarizeRedirectedWrite(redirectionTargets, sudoPrefix);
       }
@@ -1003,19 +1037,23 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
           sudoPrefix,
         );
       }
+      const readTargets = uniqueStrings([...nonOptionArgs, ...inputRedirectionTargets]);
+      const readSensitiveTarget = readTargets.some(isSensitivePath);
+      const readSystemTarget = readTargets.some(isSystemPath);
       return withSudo(
         {
-          text: formatReadFileAction(command, nonOptionArgs),
-          risk: sensitiveTarget || systemTarget ? "medium" : "low",
+          text: formatReadFileAction(command, readTargets),
+          risk: readSensitiveTarget || readSystemTarget ? "medium" : "low",
           kind: "read",
-          reason: sensitiveTarget
+          reason: readSensitiveTarget
             ? "It may print secrets or credentials."
-            : systemTarget
+            : readSystemTarget
               ? "It may read system-level files."
               : undefined,
         },
         sudoPrefix,
       );
+    }
     case "wc":
     case "stat":
     case "file":
@@ -1208,32 +1246,60 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         },
         sudoPrefix,
       );
-    case "jq":
+    case "jq": {
+      const textInputTargets = getTextProcessorInputTargets(command, args, inputRedirectionTargets);
+      const textSensitiveTarget = textInputTargets.some(isSensitivePath);
+      const textSystemTarget = textInputTargets.some(isSystemPath);
       return withSudo(
         {
-          text: redirected ? "filter data and write the result" : "filter command output",
-          risk: redirected ? "medium" : "low",
-          kind: redirected ? "write" : "format",
-          reason: redirected ? "Shell redirection writes to a file." : undefined,
-          hideWhenGrouped: !redirected,
+          text: redirected
+            ? "filter data and write the result"
+            : textInputTargets.length > 0
+              ? `filter data from files${formatTargets(textInputTargets)}`
+              : "filter command output",
+          risk: redirected || textSensitiveTarget || textSystemTarget ? "medium" : "low",
+          kind: redirected ? "write" : textInputTargets.length > 0 ? "read" : "format",
+          reason: redirected
+            ? "Shell redirection writes to a file."
+            : textSensitiveTarget
+              ? "It may read secret or credential files."
+              : textSystemTarget
+                ? "It may read system-level files."
+                : undefined,
+          hideWhenGrouped: !redirected && textInputTargets.length === 0,
         },
         sudoPrefix,
       );
+    }
     case "awk":
     case "cut":
     case "sort":
     case "tr":
-    case "uniq":
+    case "uniq": {
+      const textInputTargets = getTextProcessorInputTargets(command, args, inputRedirectionTargets);
+      const textSensitiveTarget = textInputTargets.some(isSensitivePath);
+      const textSystemTarget = textInputTargets.some(isSystemPath);
       return withSudo(
         {
-          text: redirected ? "process text and write the result" : "process text output",
-          risk: redirected ? "medium" : "low",
-          kind: redirected ? "write" : "format",
-          reason: redirected ? "Shell redirection writes to a file." : undefined,
-          hideWhenGrouped: !redirected,
+          text: redirected
+            ? "process text and write the result"
+            : textInputTargets.length > 0
+              ? `process text from files${formatTargets(textInputTargets)}`
+              : "process text output",
+          risk: redirected || textSensitiveTarget || textSystemTarget ? "medium" : "low",
+          kind: redirected ? "write" : textInputTargets.length > 0 ? "read" : "format",
+          reason: redirected
+            ? "Shell redirection writes to a file."
+            : textSensitiveTarget
+              ? "It may read secret or credential files."
+              : textSystemTarget
+                ? "It may read system-level files."
+                : undefined,
+          hideWhenGrouped: !redirected && textInputTargets.length === 0,
         },
         sudoPrefix,
       );
+    }
     default:
       return withSudo(
         {
@@ -1743,11 +1809,13 @@ function buildCommandHeadline(summaries: readonly CommandActionSummary[]): strin
 }
 
 function resolveCommandWords(segment: string): {
+  envAssignments: string[];
   words: string[];
   usedSudo: boolean;
   wrapperParseFailed?: boolean;
 } {
   const words = splitShellWords(segment);
+  const envAssignments: string[] = [];
   let usedSudo = false;
   while (words.length > 0) {
     stripLeadingShellRedirectionWords(words);
@@ -1775,9 +1843,10 @@ function resolveCommandWords(segment: string): {
     if (first === "env") {
       const stripped = stripEnvWrapperWords(words);
       if (!stripped) {
-        return { words, usedSudo, wrapperParseFailed: true };
+        return { envAssignments, words, usedSudo, wrapperParseFailed: true };
       }
-      words.splice(0, words.length, ...stripped);
+      envAssignments.push(...stripped.envAssignments);
+      words.splice(0, words.length, ...stripped.words);
       continue;
     }
     if (first === "timeout" || first === "gtimeout") {
@@ -1793,13 +1862,15 @@ function resolveCommandWords(segment: string): {
       }
       continue;
     }
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
+    const envAssignment = parseEnvAssignmentName(words[0] ?? "");
+    if (envAssignment) {
+      envAssignments.push(envAssignment);
       words.shift();
       continue;
     }
     break;
   }
-  return { words, usedSudo };
+  return { envAssignments, words, usedSudo };
 }
 
 function stripLeadingShellRedirectionWords(words: string[]): void {
@@ -1827,8 +1898,16 @@ function parseLeadingShellRedirectionWord(word: string): { consumesNext: boolean
   return null;
 }
 
-function stripEnvWrapperWords(words: readonly string[]): string[] | null {
+function parseEnvAssignmentName(word: string): string | null {
+  return /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(stripShellWordQuotes(word))?.[1] ?? null;
+}
+
+function stripEnvWrapperWords(words: readonly string[]): {
+  envAssignments: string[];
+  words: string[];
+} | null {
   const rest = words.slice(1);
+  const envAssignments: string[] = [];
   while (rest.length > 0) {
     const arg = rest[0] ?? "";
     if (!arg) {
@@ -1839,7 +1918,9 @@ function stripEnvWrapperWords(words: readonly string[]): string[] | null {
       rest.shift();
       break;
     }
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+    const envAssignment = parseEnvAssignmentName(arg);
+    if (envAssignment) {
+      envAssignments.push(envAssignment);
       rest.shift();
       continue;
     }
@@ -1867,7 +1948,7 @@ function stripEnvWrapperWords(words: readonly string[]): string[] | null {
     }
     break;
   }
-  return rest;
+  return { envAssignments, words: rest };
 }
 
 function isEnvInlineValueFlag(arg: string): boolean {
@@ -2041,6 +2122,113 @@ function buildDefaultRiskReason(
     return "This can make sensitive or hard-to-reverse changes. Review carefully before approving.";
   }
   return "May read sensitive data or change local state. Review before approving.";
+}
+
+function getTextProcessorInputTargets(
+  command: string,
+  args: readonly string[],
+  inputRedirectionTargets: readonly string[],
+): string[] {
+  const targets = [...inputRedirectionTargets];
+  if (command === "jq") {
+    targets.push(...getJqInputTargets(args));
+  } else if (command === "awk") {
+    targets.push(...getProgramThenFileTargets(args, AWK_OPTION_VALUE_FLAGS));
+  } else if (command === "cut") {
+    targets.push(...getOptionAwarePositionalArgs(args, CUT_OPTION_VALUE_FLAGS));
+  } else if (command === "sort" || command === "uniq") {
+    targets.push(...getOptionAwarePositionalArgs(args, SORT_UNIQ_OPTION_VALUE_FLAGS));
+  }
+  return uniqueStrings(targets.filter((target) => target && target !== "-"));
+}
+
+function getJqInputTargets(args: readonly string[]): string[] {
+  const positionals: string[] = [];
+  const fileTargets: string[] = [];
+  let filterFromFile = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg || /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      continue;
+    }
+    if (arg === "--") {
+      positionals.push(...args.slice(index + 1).filter(Boolean));
+      break;
+    }
+    if (arg === "-f" || arg === "--from-file") {
+      const value = args[index + 1];
+      if (value) {
+        fileTargets.push(value);
+        index += 1;
+      }
+      filterFromFile = true;
+      continue;
+    }
+    const fromFileValue = getInlineOptionValue(arg, new Set(["--from-file"]));
+    if (fromFileValue) {
+      fileTargets.push(fromFileValue);
+      filterFromFile = true;
+      continue;
+    }
+    if (arg === "--rawfile" || arg === "--slurpfile") {
+      const value = args[index + 2];
+      if (value) {
+        fileTargets.push(value);
+      }
+      index += 2;
+      continue;
+    }
+    if (arg === "--arg" || arg === "--argjson") {
+      index += 2;
+      continue;
+    }
+    if (JQ_OPTION_VALUE_FLAGS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    positionals.push(arg);
+  }
+  fileTargets.push(...(filterFromFile ? positionals : positionals.slice(1)));
+  return fileTargets;
+}
+
+function getProgramThenFileTargets(
+  args: readonly string[],
+  optionValueFlags: ReadonlySet<string>,
+): string[] {
+  const positionals = getOptionAwarePositionalArgs(args, optionValueFlags);
+  return positionals.slice(1);
+}
+
+function getOptionAwarePositionalArgs(
+  args: readonly string[],
+  optionValueFlags: ReadonlySet<string>,
+): string[] {
+  const positionals: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg || /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      continue;
+    }
+    if (arg === "--") {
+      positionals.push(...args.slice(index + 1).filter(Boolean));
+      break;
+    }
+    if (arg.startsWith("-")) {
+      if (getInlineOptionValue(arg, optionValueFlags)) {
+        continue;
+      }
+      if (optionValueFlags.has(arg) && args[index + 1]) {
+        index += 1;
+      }
+      continue;
+    }
+    positionals.push(arg);
+  }
+  return positionals;
 }
 
 function getCommandTargetArgs(command: string, args: readonly string[]): string[] {
