@@ -4280,6 +4280,44 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("returns a session reset hint for OpenAI missing custom tool output errors on external chat channels", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("Custom tool call output is missing for call id: call_live_123."),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "discord",
+        ChannelId: "channel-1",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
+      );
+    }
+  });
+
   it("keeps raw generic errors on internal control surfaces", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(

@@ -459,10 +459,11 @@ function isPureBillingSummary(err: unknown): boolean {
 function isToolResultTurnMismatchError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   return (
-    lower.includes("toolresult") &&
-    lower.includes("tooluse") &&
-    lower.includes("exceeds the number") &&
-    lower.includes("previous turn")
+    (lower.includes("toolresult") &&
+      lower.includes("tooluse") &&
+      lower.includes("exceeds the number") &&
+      lower.includes("previous turn")) ||
+    (lower.includes("custom tool call output is missing") && lower.includes("call id"))
   );
 }
 
