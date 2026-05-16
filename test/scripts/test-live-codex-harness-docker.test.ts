@@ -37,4 +37,14 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
       script.indexOf('OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR"'),
     );
   });
+
+  it("forwards API-key auth through both OpenAI and Codex env names", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('printf \'OPENAI_API_KEY=%s\\n\' "${OPENAI_API_KEY}"');
+    expect(script).toContain('printf \'CODEX_API_KEY=%s\\n\' "${CODEX_API_KEY:-$OPENAI_API_KEY}"');
+    expect(script.indexOf("OPENAI_API_KEY=%s")).toBeLessThan(
+      script.indexOf("CODEX_API_KEY=%s"),
+    );
+  });
 });

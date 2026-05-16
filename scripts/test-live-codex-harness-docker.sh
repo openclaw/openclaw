@@ -153,6 +153,7 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
   docker_env_file="$docker_env_dir/openai.env"
   {
     printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY}"
+    printf 'CODEX_API_KEY=%s\n' "${CODEX_API_KEY:-$OPENAI_API_KEY}"
     if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
       printf 'OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL}"
     fi
