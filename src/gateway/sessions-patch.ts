@@ -125,7 +125,6 @@ export async function applySessionsPatchToStore(params: {
         updatedAt: Math.max(existing.updatedAt ?? 0, now),
       }
     : {
-        ...existing,
         sessionId: randomUUID(),
         sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
