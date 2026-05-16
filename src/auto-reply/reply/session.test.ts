@@ -2036,8 +2036,6 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     const storePath = await createStorePath("openclaw-group-activation-backfill-");
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
-        sessionId: "activation-only",
-        updatedAt: 0,
         groupActivation: "always",
       },
     });
