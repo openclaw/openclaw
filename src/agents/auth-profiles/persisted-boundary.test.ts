@@ -1,8 +1,89 @@
 import { describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { coercePersistedAuthProfileStore } from "./persisted.js";
+import { __testing, coercePersistedAuthProfileStore } from "./persisted.js";
 
 describe("persisted auth profile boundary", () => {
+  it("reads an existing macOS oauth profile master key before file fallback", () => {
+    const calls: string[] = [];
+
+    const seed = __testing.resolveOAuthProfileSecretKeySeedWithDeps(
+      { create: true },
+      {
+        env: {},
+        platform: "darwin",
+        readMacKeychain: () => {
+          calls.push("readMacKeychain");
+          return "existing-keychain-key";
+        },
+        readFile: () => {
+          calls.push("readFile");
+          return "file-key";
+        },
+        createFile: () => {
+          calls.push("createFile");
+          return "created-file-key";
+        },
+      },
+    );
+
+    expect(seed).toBe("existing-keychain-key");
+    expect(calls).toEqual(["readMacKeychain"]);
+  });
+
+  it("creates the fallback oauth profile key file when macOS Keychain has no entry", () => {
+    const calls: string[] = [];
+
+    const seed = __testing.resolveOAuthProfileSecretKeySeedWithDeps(
+      { create: true },
+      {
+        env: {},
+        platform: "darwin",
+        readMacKeychain: () => {
+          calls.push("readMacKeychain");
+          return undefined;
+        },
+        readFile: () => {
+          calls.push("readFile");
+          return undefined;
+        },
+        createFile: () => {
+          calls.push("createFile");
+          return "created-file-key";
+        },
+      },
+    );
+
+    expect(seed).toBe("created-file-key");
+    expect(calls).toEqual(["readMacKeychain", "readFile", "createFile"]);
+  });
+
+  it("skips macOS Keychain reads under Vitest and on non-macOS platforms", () => {
+    expect(
+      __testing.shouldReadMacKeychainForOAuthProfileSecrets({
+        env: {},
+        platform: "darwin",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldReadMacKeychainForOAuthProfileSecrets({
+        env: { VITEST: "true" },
+        platform: "darwin",
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldReadMacKeychainForOAuthProfileSecrets({
+        env: { VITEST_WORKER_ID: "1" },
+        platform: "darwin",
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldReadMacKeychainForOAuthProfileSecrets({
+        env: {},
+        platform: "linux",
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes malformed persisted credentials and state before runtime use", () => {
     const store = coercePersistedAuthProfileStore({
       version: "not-a-version",

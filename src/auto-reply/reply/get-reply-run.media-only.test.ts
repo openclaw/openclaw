@@ -1942,6 +1942,38 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingAccountId).toBe("work");
   });
 
+  it("uses transport thread metadata for followup originatingThreadId", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          ChatType: "direct",
+          MessageThreadId: undefined,
+          TransportThreadId: "650.000",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          TransportThreadId: "650.000",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingThreadId).toBe("650.000");
+  });
+
   it("passes suppressTyping through typing mode resolution", async () => {
     await runPreparedReply(
       baseParams({

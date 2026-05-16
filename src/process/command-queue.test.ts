@@ -391,6 +391,72 @@ describe("command queue", () => {
     }
   });
 
+  it("task timeout renews from progress timestamps", async () => {
+    const lane = `timeout-progress-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      let progressAtMs = Date.now();
+      const blocker = createDeferred();
+      const first = enqueueCommandInLane(
+        lane,
+        async () => {
+          await blocker.promise;
+          return "first";
+        },
+        {
+          taskTimeoutMs: 25,
+          taskTimeoutProgressAtMs: () => progressAtMs,
+        },
+      );
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      progressAtMs = Date.now();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(secondRan).toBe(false);
+
+      blocker.resolve();
+      await expect(first).resolves.toBe("first");
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout falls back when progress timestamp callback throws", async () => {
+    const lane = `timeout-progress-throw-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+        taskTimeoutProgressAtMs: () => {
+          throw new Error("progress failed");
+        },
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await firstRejected;
+
+      expect(
+        diagnosticMocks.diag.warn.mock.calls.some(([message]) =>
+          String(message).includes("lane task timeout progress callback failed"),
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps work queued while a lane has zero concurrency and drains after resume", async () => {
     const lane = `suspended-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 0);
