@@ -186,6 +186,7 @@ async function expectTtsPayloadResult(params: {
   audioAsVoice: true | undefined;
   providerResult?: MockSpeechSynthesisResult;
   mediaExtension?: string;
+  kind?: "tool" | "block" | "final";
 }) {
   if (params.providerResult) {
     synthesizeMock.mockResolvedValueOnce(params.providerResult);
@@ -197,7 +198,7 @@ async function expectTtsPayloadResult(params: {
       payload: { text: params.text },
       cfg,
       channel: params.channel,
-      kind: "final",
+      kind: params.kind ?? "final",
     });
 
     expect(synthesizeMock).toHaveBeenCalled();
@@ -209,6 +210,7 @@ async function expectTtsPayloadResult(params: {
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
+    expect(result.trustedLocalMedia).toBe(true);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {
@@ -438,6 +440,32 @@ describe("speech-core native voice-note routing", () => {
         rmSync(mediaDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it("applies TTS for block delivery kind in final mode (#82628)", async () => {
+    await expectTtsPayloadResult({
+      channel: "webchat",
+      prefsName: "openclaw-speech-core-block-kind-tts-test",
+      text: "WebChat block replies should synthesize audio for auto TTS.",
+      target: "audio-file",
+      audioAsVoice: undefined,
+      kind: "block",
+    });
+  });
+
+  it("skips tool delivery kind in final mode", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-tool-kind-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Intermediate tool output should not be spoken." },
+      cfg,
+      channel: "webchat",
+      kind: "tool",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result.trustedLocalMedia).toBeUndefined();
+    expect(result.text).toBe("Intermediate tool output should not be spoken.");
   });
 
   it("keeps skipping untagged short TTS text", async () => {
