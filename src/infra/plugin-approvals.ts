@@ -619,6 +619,9 @@ function expandCommandSegment(segment: string): ExpandedCommandSegment[] {
   const resolved = resolveCommandWords(segment);
   const nested = extractShellWrapperCommand(resolved.words);
   if (nested) {
+    if (hasVariableShellCommandHead(nested)) {
+      return [{ segment }];
+    }
     return splitCommandSegments(nested).flatMap((innerSegment) =>
       expandCommandSegment(innerSegment),
     );
@@ -2068,6 +2071,13 @@ function hasShellExecutionExpansion(segment: string): boolean {
     escaped = false;
   }
   return false;
+}
+
+function hasVariableShellCommandHead(segment: string): boolean {
+  const firstSegment = splitCommandSegments(segment)[0] ?? segment;
+  const resolved = resolveCommandWords(firstSegment);
+  const command = stripShellWordQuotes(resolved.words[0] ?? "").trim();
+  return /^\$(?:\{[^}]+}|[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/.test(command);
 }
 
 function withSudo(

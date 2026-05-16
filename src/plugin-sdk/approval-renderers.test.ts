@@ -417,6 +417,30 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("format a short status message");
   });
 
+  it("fails closed on variable-backed shell wrapper bodies", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-variable-shell-wrapper",
+        request: {
+          title: "Codex app-server command approval",
+          description: 'Command: bash -c "$RUN_CMD"',
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nRun a terminal command");
+    expect(payload.text).toContain("- run code or a script: $RUN_CMD");
+    expect(payload.text).toContain('Command preview\nbash -c "$RUN_CMD"');
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Interpreter commands can run arbitrary code or scripts.");
+    expect(payload.text).not.toContain("- run $RUN_CMD");
+  });
+
   it.each([
     {
       command: "(rm -rf /tmp/x)",
