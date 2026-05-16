@@ -33,6 +33,8 @@ type AgentHarnessSelectionDecision = {
   selectedReason:
     | "forced_pi"
     | "forced_plugin"
+    // Implicit Codex preference found no registered Codex harness, so PI handled the run.
+    | "implicit_plugin_unavailable_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -106,6 +108,14 @@ function selectAgentHarnessDecision(params: {
         harness: forced,
         policy,
         selectedReason: "forced_plugin",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (runtime === "codex" && policy.runtimeSource === "implicit") {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy,
+        selectedReason: "implicit_plugin_unavailable_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
