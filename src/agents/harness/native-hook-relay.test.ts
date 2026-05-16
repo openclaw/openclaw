@@ -861,7 +861,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "exec_command",
         tool_use_id: "native-exec-command-array-1",
-        tool_input: { cmd: ["cat", "/tmp/private_key"] },
+        tool_input: { cmd: ["cat", "/tmp/private key"] },
       },
     });
 
@@ -876,8 +876,8 @@ describe("native hook relay registry", () => {
     expectRecordFields(event, {
       toolName: "exec",
       params: {
-        cmd: ["cat", "/tmp/private_key"],
-        command: "cat /tmp/private_key",
+        cmd: ["cat", "/tmp/private key"],
+        command: "cat '/tmp/private key'",
       },
       runId: "run-1",
       toolCallId: "native-exec-command-array-1",

@@ -338,9 +338,6 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   if (nativeRelayOutcome?.blocked) {
     return { outcome: "denied", reason: nativeRelayOutcome.reason };
   }
-  if (nativeRelayOutcome?.approved) {
-    return { outcome: "approved-once" };
-  }
   if (nativeRelayOutcome?.handled) {
     return { outcome: "no-decision" };
   }
@@ -427,7 +424,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     if (decision.blocked) {
       return { handled: true, blocked: true, reason: decision.reason };
     }
-    return { handled: true, approved: decision.approved };
+    return { handled: true, approved: false };
   } catch (error) {
     return {
       handled: true,
@@ -496,9 +493,6 @@ function readNativeRelayPreToolUseDecision(
         readString(output, "permissionDecisionReason") ||
         "OpenClaw native hook policy denied Codex app-server approval.",
     };
-  }
-  if (output?.permissionDecision === "allow") {
-    return { blocked: false, approved: true };
   }
   return {
     blocked: true,

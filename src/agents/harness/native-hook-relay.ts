@@ -1442,7 +1442,7 @@ function normalizeCodexCommand(value: JsonValue | undefined): string | undefined
     return value;
   }
   if (Array.isArray(value) && value.every((part): part is string => typeof part === "string")) {
-    return value.join(" ");
+    return shellQuoteArgs(value);
   }
   return undefined;
 }
