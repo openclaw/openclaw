@@ -1115,6 +1115,41 @@ describe("handleSendChat", () => {
     expect(feedback.content).toBe("Command `/think` failed unexpectedly.");
   });
 
+  it("runs /status immediately while a chat run is active", async () => {
+    executeSlashCommandMock.mockResolvedValue({
+      content: "**Session Status**\nModel: `openai/gpt-5.4-mini`",
+    });
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/status",
+      sessionKey: "agent:main:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(executeSlashCommandMock).toHaveBeenCalledWith(
+      host.client,
+      "agent:main:main",
+      "status",
+      "",
+      expect.any(Object),
+    );
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMessages).toContainEqual({
+      role: "system",
+      content: "**Session Status**\nModel: `openai/gpt-5.4-mini`",
+      timestamp: expect.any(Number),
+    });
+  });
+
   it("sends /btw immediately while a main run is active without queueing it", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {

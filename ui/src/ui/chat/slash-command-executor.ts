@@ -31,6 +31,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
+  ToolsInvokeResult,
 } from "../types.ts";
 import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
@@ -119,6 +120,8 @@ export async function executeSlashCommand(
       return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
+    case "status":
+      return await executeStatus(client, sessionKey);
     case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
@@ -138,6 +141,40 @@ export async function executeSlashCommand(
 
 // ── Command Implementations ──
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readTextBlocks(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const text = value
+    .map((entry) => (isRecord(entry) && typeof entry.text === "string" ? entry.text : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+function readStatusToolText(output: unknown): string | null {
+  if (typeof output === "string") {
+    return output.trim() || null;
+  }
+  if (!isRecord(output)) {
+    return null;
+  }
+  const details = isRecord(output.details) ? output.details : null;
+  if (typeof details?.statusText === "string" && details.statusText.trim()) {
+    return details.statusText;
+  }
+  const contentText = readTextBlocks(output.content);
+  if (contentText) {
+    return contentText;
+  }
+  return typeof output.text === "string" && output.text.trim() ? output.text : null;
+}
+
 function executeHelp(): SlashCommandResult {
   const lines = ["**Available Commands**\n"];
   let currentCategory = "";
@@ -155,6 +192,30 @@ function executeHelp(): SlashCommandResult {
 
   lines.push("\nType `/` to open the command menu.");
   return { content: lines.join("\n") };
+}
+
+async function executeStatus(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+): Promise<SlashCommandResult> {
+  try {
+    const result = await client.request<ToolsInvokeResult>("tools.invoke", {
+      name: "session_status",
+      args: {},
+      sessionKey,
+    });
+    if (!result.ok) {
+      return {
+        content: `Failed to get status: ${result?.error?.message ?? "session_status failed"}`,
+      };
+    }
+    const statusText = readStatusToolText(result.output);
+    return {
+      content: statusText ?? "Session status returned no displayable output.",
+    };
+  } catch (err) {
+    return { content: `Failed to get status: ${String(err)}` };
+  }
 }
 
 async function executeCompact(

@@ -759,6 +759,8 @@ export type ToolsEffectiveGroup =
   import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveGroup;
 export type ToolsEffectiveResult =
   import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveResult;
+export type ToolsInvokeResult =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsInvokeResult;
 
 export type ModelAuthExpiry =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthExpiry;

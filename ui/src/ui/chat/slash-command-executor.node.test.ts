@@ -35,6 +35,63 @@ function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) 
   expect(request.mock.calls.some(([calledMethod]) => calledMethod === method)).toBe(false);
 }
 
+describe("executeSlashCommand /status", () => {
+  it("uses the canonical session_status tool output", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "tools.invoke") {
+        expect(payload).toEqual({
+          name: "session_status",
+          args: {},
+          sessionKey: "agent:main:main",
+        });
+        return {
+          ok: true,
+          toolName: "session_status",
+          output: {
+            content: [{ type: "text", text: "fallback status text" }],
+            details: {
+              statusText: "**Session Status**\nModel: `openai/gpt-5.4-mini`",
+            },
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    expect(result.content).toBe("**Session Status**\nModel: `openai/gpt-5.4-mini`");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces session_status tool errors", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "tools.invoke") {
+        return {
+          ok: false,
+          toolName: "session_status",
+          error: { code: "not_found", message: "Tool not available: session_status" },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    expect(result.content).toBe("Failed to get status: Tool not available: session_status");
+  });
+});
+
 describe("executeSlashCommand /kill", () => {
   it("aborts every sub-agent session for /kill all", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {

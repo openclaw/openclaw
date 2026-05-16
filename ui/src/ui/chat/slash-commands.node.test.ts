@@ -71,10 +71,10 @@ describe("parseSlashCommand", () => {
     expectParsedSlash("/fast:on", { name: "fast" }, "on");
   });
 
-  it("keeps /status on the agent path", () => {
+  it("executes /status locally so a single Enter submits it", () => {
     const status = SLASH_COMMANDS.find((entry) => entry.name === "status");
-    expect(status?.executeLocal).not.toBe(true);
-    expectParsedSlash("/status", { name: "status" }, "");
+    expect(status?.executeLocal).toBe(true);
+    expectParsedSlash("/status", { name: "status", executeLocal: true }, "");
   });
 
   it("includes shared /tools with shared arg hints", () => {
