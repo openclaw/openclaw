@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import {
+  hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveSessionAgentId,
@@ -186,7 +187,12 @@ function resolveConfiguredFallbackModel(params: {
   fallbackStateEntry?: SessionEntry;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
   const entry = params.fallbackStateEntry;
-  if (entry?.modelOverrideSource === "auto") {
+  const isAutoFallbackOverride =
+    entry?.modelOverrideSource === "auto" ||
+    (entry !== undefined &&
+      entry.modelOverrideSource === undefined &&
+      hasSessionAutoModelFallbackProvenance(entry));
+  if (isAutoFallbackOverride && entry !== undefined) {
     const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
     const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
     if (originProvider && originModel) {

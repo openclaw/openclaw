@@ -1266,6 +1266,7 @@ export async function runCodexAppServerAttempt(
       notification,
       activeOpenClawDynamicToolCallIds,
     );
+    const rawToolOutputCompletion = isRawToolOutputCompletionNotification(notification);
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
@@ -1290,6 +1291,10 @@ export async function runCodexAppServerAttempt(
       // bridge then goes quiet, reset the short completion-idle guard from that
       // final completion so the remaining silent-turn gap fails fast.
       armTurnCompletionIdleWatch();
+    } else if (isCurrentTurnNotification && rawToolOutputCompletion) {
+      // Raw OpenAI response streams can report the tool-output handoff without
+      // a matching app-server `item/completed`; keep the post-tool guard alive.
+      armTurnCompletionIdleWatch();
     } else if (
       isCurrentTurnNotification &&
       shouldDisarmAssistantCompletionIdleWatch(notification)
@@ -1302,6 +1307,7 @@ export async function runCodexAppServerAttempt(
       notification.method !== "turn/completed" &&
       isCurrentTurnNotification &&
       !trackedDynamicToolCompletion &&
+      !rawToolOutputCompletion &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
@@ -2782,6 +2788,14 @@ function isTrackedOpenClawDynamicToolCompletionNotification(
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
   const itemType = item ? readString(item, "type") : undefined;
   return itemType === undefined || itemType === "dynamicToolCall";
+}
+
+function isRawToolOutputCompletionNotification(notification: CodexServerNotification): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "custom_tool_call_output" : false;
 }
 
 function readRawAssistantTextPreview(item: JsonObject): string | undefined {

@@ -412,7 +412,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: { primary: "openai/gpt-5.4" },

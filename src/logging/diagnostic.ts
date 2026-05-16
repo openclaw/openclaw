@@ -466,6 +466,33 @@ function isStalledEmbeddedRunRecoveryEligible(params: {
   );
 }
 
+function isBlockedToolCallRecoveryEligible(params: {
+  classification: SessionAttentionClassification | undefined;
+  activity?: DiagnosticSessionActivitySnapshot;
+  stuckSessionAbortMs: number;
+}): boolean {
+  const toolAgeMs = params.activity?.activeToolAgeMs;
+  const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  return (
+    params.classification?.eventType === "session.stalled" &&
+    params.classification.classification === "blocked_tool_call" &&
+    params.classification.activeWorkKind === "tool_call" &&
+    typeof toolAgeMs === "number" &&
+    typeof lastProgressAgeMs === "number" &&
+    toolAgeMs >= params.stuckSessionAbortMs &&
+    lastProgressAgeMs >= params.stuckSessionAbortMs
+  );
+}
+
+function isActiveAbortRecoveryEligible(params: {
+  classification: SessionAttentionClassification | undefined;
+  activity?: DiagnosticSessionActivitySnapshot;
+  ageMs: number;
+  stuckSessionAbortMs: number;
+}): boolean {
+  return isStalledEmbeddedRunRecoveryEligible(params) || isBlockedToolCallRecoveryEligible(params);
+}
+
 export function logWebhookReceived(params: {
   channel: string;
   updateType?: string;
@@ -766,8 +793,9 @@ export function logSessionAttention(
   });
   const recoveryEligible =
     classification.recoveryEligible ||
-    isStalledEmbeddedRunRecoveryEligible({
+    isActiveAbortRecoveryEligible({
       classification,
+      activity,
       ageMs: params.ageMs,
       stuckSessionAbortMs:
         params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
@@ -1007,6 +1035,10 @@ export function startDiagnosticHeartbeat(
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
       if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
+        const activity = getDiagnosticSessionActivitySnapshot(
+          { sessionId: state.sessionId, sessionKey: state.sessionKey },
+          now,
+        );
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,
@@ -1029,8 +1061,9 @@ export function startDiagnosticHeartbeat(
           });
         } else if (
           classification &&
-          isStalledEmbeddedRunRecoveryEligible({
+          isActiveAbortRecoveryEligible({
             classification,
+            activity,
             ageMs,
             stuckSessionAbortMs,
           })
