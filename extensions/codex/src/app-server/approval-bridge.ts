@@ -341,6 +341,9 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   if (nativeRelayOutcome?.approved) {
     return { outcome: "approved-once" };
   }
+  if (nativeRelayOutcome?.handled) {
+    return { outcome: "no-decision" };
+  }
   const outcome = await runBeforeToolCallHook({
     toolName: policyRequest.toolName,
     params: policyRequest.params,
@@ -392,6 +395,8 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     }
   | undefined
 > {
+  // Only command approvals correspond to Codex PreToolUse execution. File-change
+  // and permission approvals stay on the app-server approval route below.
   if (
     params.method !== "item/commandExecution/requestApproval" ||
     !params.nativeHookRelay?.allowedEvents.includes("pre_tool_use")
@@ -452,6 +457,7 @@ function buildNativeRelayPreToolUsePayload(params: {
   }
   return {
     hook_event_name: "PreToolUse",
+    openclaw_approval_mode: "report",
     tool_name: "exec_command",
     ...(params.context.itemId ? { tool_use_id: params.context.itemId } : {}),
     ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -521,7 +527,7 @@ function buildOpenClawToolPolicyRequest(
   if (method === "item/commandExecution/requestApproval") {
     const command = readPolicyCommand(requestParams);
     return {
-      toolName: "bash",
+      toolName: "exec",
       params: {
         ...(command ? { command } : {}),
         ...(readString(requestParams, "cwd") ? { cwd: readString(requestParams, "cwd") } : {}),

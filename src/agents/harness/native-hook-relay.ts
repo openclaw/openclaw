@@ -16,6 +16,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
+import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
@@ -139,6 +140,7 @@ type NativeHookRelayInvocationMetadata = Partial<
 
 type NativeHookRelayProviderAdapter = {
   normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
+  readPreToolUseApprovalMode?: (rawPayload: JsonValue) => "report" | undefined;
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
@@ -242,6 +244,7 @@ const nativeHookRelayProviderAdapters: Record<
 > = {
   codex: {
     normalizeMetadata: normalizeCodexHookMetadata,
+    readPreToolUseApprovalMode: readCodexPreToolUseApprovalMode,
     readToolInput: readCodexToolInput,
     readToolResponse: readCodexToolResponse,
     renderNoopResponse: () => {
@@ -909,10 +912,12 @@ async function runNativeHookRelayPreToolUse(params: {
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
+  const approvalMode = params.adapter.readPreToolUseApprovalMode?.(params.invocation.rawPayload);
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
+    ...(approvalMode ? { approvalMode } : {}),
     signal: params.registration.signal,
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
@@ -926,8 +931,14 @@ async function runNativeHookRelayPreToolUse(params: {
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
   }
-  // Codex PreToolUse supports block/allow, not argument mutation. If an
-  // OpenClaw plugin returns adjusted params here, we intentionally ignore them.
+  if (approvalMode === "report" && nativeHookRelayParamsWereRewritten(toolInput, outcome.params)) {
+    return params.adapter.renderPreToolUseBlockResponse(
+      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    );
+  }
+  // Ordinary Codex PreToolUse supports block/allow, not argument mutation. The
+  // app-server approval bridge opts into report mode above so rewrites fail
+  // closed before this no-op path.
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
@@ -1407,21 +1418,43 @@ function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   return { value: toolInput as JsonValue };
 }
 
+function readCodexPreToolUseApprovalMode(rawPayload: JsonValue): "report" | undefined {
+  const payload = isJsonObject(rawPayload) ? rawPayload : {};
+  return payload.openclaw_approval_mode === "report" ? "report" : undefined;
+}
+
 function normalizeCodexToolInput(
   toolName: string,
   toolInput: Record<string, JsonValue>,
 ): Record<string, JsonValue> {
-  if (
-    toolName !== "exec" ||
-    typeof toolInput.cmd !== "string" ||
-    typeof toolInput.command === "string"
-  ) {
+  const command = normalizeCodexCommand(toolInput.cmd);
+  if (toolName !== "exec" || command === undefined || typeof toolInput.command === "string") {
     return toolInput;
   }
   return {
     ...toolInput,
-    command: toolInput.cmd,
+    command,
   };
+}
+
+function normalizeCodexCommand(value: JsonValue | undefined): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value) && value.every((part): part is string => typeof part === "string")) {
+    return value.join(" ");
+  }
+  return undefined;
+}
+
+function nativeHookRelayParamsWereRewritten(
+  original: Record<string, JsonValue>,
+  candidate: unknown,
+): boolean {
+  if (candidate === undefined || candidate === original) {
+    return false;
+  }
+  return stableStringify(candidate) !== stableStringify(original);
 }
 
 function readCodexToolResponse(rawPayload: JsonValue): unknown {
