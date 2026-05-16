@@ -1,5 +1,6 @@
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
@@ -23,6 +24,7 @@ export function createModelVisibilityPolicy(params: {
   defaultProvider: string;
   defaultModel?: string;
   agentId?: string;
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 }): ModelVisibilityPolicy {
   return createModelVisibilityPolicyWithFallbacks({
     cfg: params.cfg,
@@ -33,6 +35,7 @@ export function createModelVisibilityPolicy(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
