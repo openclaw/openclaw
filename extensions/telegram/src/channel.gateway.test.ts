@@ -49,7 +49,7 @@ async function useTempStateDir(): Promise<string> {
 
 function installTelegramRuntime() {
   const runtime = createPluginRuntimeMock();
-  setTelegramRuntime({
+  const telegramRuntime = {
     ...runtime,
     channel: {
       ...runtime.channel,
@@ -59,7 +59,17 @@ function installTelegramRuntime() {
         sendMessageTelegram,
       },
     },
-  } as unknown as TelegramRuntime);
+  } as unknown as TelegramRuntime;
+  setTelegramRuntime(telegramRuntime);
+  return telegramRuntime;
+}
+
+function createRuntimeEnvMock() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
 }
 
 function createTelegramConfig(
@@ -297,6 +307,7 @@ describe("telegramPlugin gateway startup", () => {
 
   it("deletes cached startup botInfo when the account token changes", async () => {
     await useTempStateDir();
+    installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
       botToken: "123456:bad-token",
@@ -307,6 +318,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
+      runtime: createRuntimeEnvMock(),
     });
 
     await expect(
@@ -319,6 +331,7 @@ describe("telegramPlugin gateway startup", () => {
 
   it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {
     await useTempStateDir();
+    installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
       botToken: "123456:bad-token",
@@ -329,6 +342,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
+      runtime: createRuntimeEnvMock(),
     });
 
     await expect(
@@ -341,13 +355,18 @@ describe("telegramPlugin gateway startup", () => {
 
   it("deletes cached startup botInfo when the account is removed", async () => {
     await useTempStateDir();
+    installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
       botToken: "123456:bad-token",
       botInfo: startupBotInfo,
     });
 
-    await telegramPlugin.lifecycle?.onAccountRemoved?.({ accountId: "ops" });
+    await telegramPlugin.lifecycle?.onAccountRemoved?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      runtime: createRuntimeEnvMock(),
+    });
 
     await expect(
       readCachedTelegramBotInfo({
@@ -360,6 +379,8 @@ describe("telegramPlugin gateway startup", () => {
   it("deletes cached startup botInfo when logout clears the account token", async () => {
     await useTempStateDir();
     installTelegramRuntime();
+    const cfg = createTelegramConfig("ops");
+    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
     await writeCachedTelegramBotInfo({
       accountId: "ops",
       botToken: "123456:bad-token",
@@ -368,7 +389,9 @@ describe("telegramPlugin gateway startup", () => {
 
     await telegramPlugin.gateway?.logoutAccount?.({
       accountId: "ops",
-      cfg: createTelegramConfig("ops"),
+      account,
+      cfg,
+      runtime: createRuntimeEnvMock(),
     });
 
     await expect(
