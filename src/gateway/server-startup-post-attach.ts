@@ -20,6 +20,7 @@ import {
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
+import type { StartupGateBarrier } from "./server-startup-gate-barrier.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
@@ -760,6 +761,7 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unavailableGatewayMethods: Set<string>;
+    startupGateBarrier?: StartupGateBarrier;
     loadStartupPlugins?: () => Awaitable<{
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
@@ -868,6 +870,7 @@ export async function startGatewayPostAttachRuntime(
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
+        params.startupGateBarrier?.open();
         params.onPluginServices?.(result.pluginServices);
         params.onPostReadySidecars?.(result.postReadySidecars);
         params.onSidecarsReady?.();

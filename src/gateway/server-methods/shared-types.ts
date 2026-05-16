@@ -16,6 +16,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { BufferedAgentEvent } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { StartupGateBarrier } from "../server-startup-gate-barrier.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -128,6 +129,7 @@ export type GatewayRequestContext = {
     config: import("../../infra/voicewake-routing.js").VoiceWakeRoutingConfig,
   ) => void;
   unavailableGatewayMethods?: ReadonlySet<string>;
+  startupGateBarrier?: StartupGateBarrier;
 };
 
 export type GatewayRequestOptions = {

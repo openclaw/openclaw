@@ -87,6 +87,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import { createStartupGateBarrier } from "./server-startup-gate-barrier.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -1303,6 +1304,10 @@ export async function startGatewayServer(
     const unavailableGatewayMethods = new Set<string>(
       minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
     );
+    const startupGateBarrier = createStartupGateBarrier();
+    if (minimalTestGateway) {
+      startupGateBarrier.open();
+    }
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
@@ -1368,6 +1373,7 @@ export async function startGatewayServer(
       wizardRunner,
       broadcastVoiceWakeChanged,
       unavailableGatewayMethods,
+      startupGateBarrier,
       broadcastVoiceWakeRoutingChanged,
     });
 
@@ -1491,6 +1497,7 @@ export async function startGatewayServer(
             logHooks,
             logChannels,
             unavailableGatewayMethods,
+            startupGateBarrier,
             loadStartupPlugins: runtimePluginsLoaded
               ? undefined
               : async () => {

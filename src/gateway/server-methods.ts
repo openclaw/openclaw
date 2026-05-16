@@ -62,6 +62,7 @@ import { voicewakeRoutingHandlers } from "./server-methods/voicewake-routing.js"
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
+import { STARTUP_GATE_WAIT_MS } from "./server-startup-gate-barrier.js";
 
 function authorizeGatewayMethod(
   method: string,
@@ -188,16 +189,25 @@ export async function handleGatewayRequest(
     return;
   }
   if (context.unavailableGatewayMethods?.has(req.method)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-        details: { ...gatewayStartupUnavailableDetails(), method: req.method },
-      }),
-    );
-    return;
+    // Hold the request until post-attach opens the barrier instead of failing
+    // fast. An already-open browser tab on a pre-fix bundle has no retry-aware
+    // client logic, so a server-side wait fixes the startup race independent of
+    // the UI bundle. Fall back to the retryable UNAVAILABLE response only on
+    // barrier timeout, or for legacy contexts without a barrier.
+    const barrier = context.startupGateBarrier;
+    const opened = barrier ? await barrier.waitWithTimeout(STARTUP_GATE_WAIT_MS) : false;
+    if (!opened || context.unavailableGatewayMethods.has(req.method)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: req.method },
+        }),
+      );
+      return;
+    }
   }
   if (methodRegistry.isControlPlaneWrite(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });
