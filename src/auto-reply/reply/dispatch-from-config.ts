@@ -829,7 +829,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
-    strictMessageToolOnly: ctx.InboundTurnKind === "room_event",
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1628,7 +1628,7 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
-      ctx.InboundTurnKind !== "room_event" &&
+      ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
@@ -1646,7 +1646,7 @@ export async function dispatchReplyFromConfig(
               `provider=${ctx.Provider ?? "unknown"}`,
               `surface=${ctx.Surface ?? "unknown"}`,
               `chatType=${chatType ?? "unknown"}`,
-              `turn=${ctx.InboundTurnKind ?? "unknown"}`,
+              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
               `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
               `${formatSuppressedReplyPayloadForLog(reply)})`,
             ].join(" "),

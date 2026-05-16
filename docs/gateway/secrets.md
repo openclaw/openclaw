@@ -88,6 +88,13 @@ Use one object shape everywhere:
     { source: "env", provider: "default", id: "OPENAI_API_KEY" }
     ```
 
+    Supported SecretInput fields also accept exact string shorthands:
+
+    ```json5
+    "${OPENAI_API_KEY}"
+    "$OPENAI_API_KEY"
+    ```
+
     Validation:
 
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`

@@ -6,7 +6,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
-import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
+import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -1601,7 +1601,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createContext({
         statusReactionController: statusReactionController as never,
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: "99",
@@ -1683,7 +1683,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const createRoomContext = (messageId: number, body: string) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1758,7 +1758,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const createRoomContext = (messageId: number, body: string) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1783,10 +1783,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "partial",
     });
     await firstStartGate;
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "agent:main:telegram:group:-100123",
       to: "telegram:-100123",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
     const secondPromise = dispatchWithContext({
       context: createRoomContext(100, "ambient two"),
@@ -1839,7 +1839,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const createRoomContext = (messageId: number, body: string) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1865,10 +1865,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "partial",
     });
     await firstStartGate;
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "agent:main:telegram:group:-100123",
       to: "telegram:group:-100123:topic:88",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
     const secondPromise = dispatchWithContext({
       context: createRoomContext(100, "ambient two"),
@@ -1923,7 +1923,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: kind,
+          InboundEventKind: kind,
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -2009,7 +2009,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: kind,
+          InboundEventKind: kind,
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -2084,7 +2084,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: kind,
+          InboundEventKind: kind,
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -2130,7 +2130,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: "101",

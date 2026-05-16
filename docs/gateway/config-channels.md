@@ -812,6 +812,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
     visibleReplies: "automatic", // global default for direct/source chats; Codex harness defaults unset direct chats to message_tool
     groupChat: {
       historyLimit: 50,
+      unmentionedInbound: "room_event", // always-on unmentioned room chatter becomes quiet context
       visibleReplies: "message_tool", // default; use "automatic" for legacy final replies
     },
   },
@@ -823,7 +824,9 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 
 `messages.groupChat.historyLimit` sets the global default. Channels can override with `channels.<channel>.historyLimit` (or per-account). Set `0` to disable.
 
-`messages.visibleReplies` is the global source-turn default; `messages.groupChat.visibleReplies` overrides it for group/channel source turns. When `messages.visibleReplies` is unset, a harness can provide its own direct/source default; the Codex harness defaults to `message_tool`. Channel allowlists and mention gating still decide whether a turn is processed.
+`messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context. Mentioned messages, commands, and direct messages remain user requests.
+
+`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, a harness can provide its own direct/source default; the Codex harness defaults to `message_tool`. Channel allowlists and mention gating still decide whether an event is processed.
 
 #### DM history limits
 
