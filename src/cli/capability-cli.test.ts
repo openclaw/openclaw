@@ -2100,9 +2100,11 @@ describe("capability cli", () => {
       argv: ["infer", "web", "search", "--query", "ping", "--json"],
     });
 
+    const { getCapabilityWebCommandSecretTargetIds } = await import("./command-secret-targets.js");
     expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
       expect.objectContaining({
         commandName: "infer web search",
+        targetIds: getCapabilityWebCommandSecretTargetIds(),
       }),
     );
     expect(webSearchRuntime.runWebSearch).toHaveBeenCalledWith(

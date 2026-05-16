@@ -58,8 +58,16 @@ type CommandSecretTargets = {
   securityAudit: string[];
 };
 
+const STATIC_CAPABILITY_WEB_TARGET_IDS = ["tools.web.search.apiKey"] as const;
+const CAPABILITY_WEB_TARGET_ID_PREFIXES = [
+  "tools.web.search",
+  "tools.web.fetch",
+  "plugins.entries.",
+] as const;
+
 let cachedCommandSecretTargets: CommandSecretTargets | undefined;
 let cachedAgentRuntimeBaseTargetIds: string[] | undefined;
+let cachedCapabilityWebTargetIds: string[] | undefined;
 let cachedChannelSecretTargetIds: string[] | undefined;
 
 function getChannelSecretTargetIds(): string[] {
@@ -74,6 +82,30 @@ function isPluginWebCredentialTargetId(id: string): boolean {
   }
   const configPath = segments.slice(4).join(".");
   return configPath === "webSearch.apiKey" || configPath === "webFetch.apiKey";
+}
+
+function isCapabilityWebSecretTargetId(id: string): boolean {
+  if ((STATIC_CAPABILITY_WEB_TARGET_IDS as readonly string[]).includes(id)) {
+    return true;
+  }
+  if (isPluginWebCredentialTargetId(id)) {
+    return true;
+  }
+  return CAPABILITY_WEB_TARGET_ID_PREFIXES.some(
+    (prefix) => id === prefix || id.startsWith(`${prefix}.`),
+  );
+}
+
+function getCapabilityWebTargetIds(): string[] {
+  cachedCapabilityWebTargetIds ??= [
+    ...new Set([
+      ...STATIC_CAPABILITY_WEB_TARGET_IDS,
+      ...listSecretTargetRegistryEntries()
+        .map((entry) => entry.id)
+        .filter(isCapabilityWebSecretTargetId),
+    ]),
+  ].toSorted();
+  return cachedCapabilityWebTargetIds;
 }
 
 function getAgentRuntimeBaseTargetIds(): string[] {
@@ -243,6 +275,10 @@ export function getAgentRuntimeCommandSecretTargetIds(params?: {
     return toTargetIdSet(getAgentRuntimeBaseTargetIds());
   }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
+}
+
+export function getCapabilityWebCommandSecretTargetIds(): Set<string> {
+  return toTargetIdSet(getCapabilityWebTargetIds());
 }
 
 export function getStatusCommandSecretTargetIds(

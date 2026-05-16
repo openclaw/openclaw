@@ -21,6 +21,7 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*getCapabilityWebCommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
     source.includes("collectStatusScanOverview({")
   );

@@ -88,7 +88,7 @@ import {
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
-import { getAgentRuntimeCommandSecretTargetIds } from "./command-secret-targets.js";
+import { getCapabilityWebCommandSecretTargetIds } from "./command-secret-targets.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -1536,7 +1536,7 @@ async function resolveCapabilityCommandConfig(params: {
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getCapabilityWebCommandSecretTargetIds(),
     runtime: params.runtime,
     autoEnable: true,
   });

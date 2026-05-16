@@ -54,6 +54,7 @@ vi.mock("../secrets/target-registry.js", () => ({
 
 import {
   getAgentRuntimeCommandSecretTargetIds,
+  getCapabilityWebCommandSecretTargetIds,
   getModelsCommandSecretTargetIds,
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
@@ -79,6 +80,18 @@ describe("command secret target ids", () => {
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("scopes capability web commands to web credential surfaces only", () => {
+    const ids = getCapabilityWebCommandSecretTargetIds();
+    expect(ids.has("tools.web.search.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
+    expect(ids.has("models.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(false);
+    expect(ids.has("messages.tts.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("skills.entries.demo.apiKey")).toBe(false);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
