@@ -5024,7 +5024,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
-        InboundTurnKind: "room_event",
+        InboundEventKind: "room_event",
         SessionKey: "test:discord:channel:C1",
       }),
       cfg: emptyConfig,
