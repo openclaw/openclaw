@@ -69,6 +69,20 @@ function stripDeprecatedValidationKeys(raw: unknown): unknown {
   };
 }
 
+function stripPreservedLegacyRootKeysForValidation(
+  raw: unknown,
+  keys?: readonly string[],
+): unknown {
+  if (!keys || keys.length === 0 || !isRecord(raw)) {
+    return raw;
+  }
+  const next = { ...raw };
+  for (const key of keys) {
+    delete next[key];
+  }
+  return next;
+}
+
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
@@ -650,9 +664,13 @@ export function validateConfigObjectRaw(
     sourceRaw?: unknown;
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
     validateBundledChannels?: boolean;
+    preservedLegacyRootKeys?: readonly string[];
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
+    stripDeprecatedValidationKeys(raw),
+    opts?.preservedLegacyRootKeys,
+  );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
@@ -741,6 +759,7 @@ type ValidateConfigWithPluginsParams = {
     config: OpenClawConfig,
   ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   sourceRaw?: unknown;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 export function validateConfigObjectWithPlugins(
@@ -754,6 +773,7 @@ export function validateConfigObjectWithPlugins(
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
+    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
   });
 }
 
@@ -768,6 +788,7 @@ export function validateConfigObjectRawWithPlugins(
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
+    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
   });
 }
 
@@ -775,7 +796,10 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
+  const base = validateConfigObjectRaw(raw, {
+    sourceRaw: opts.sourceRaw,
+    preservedLegacyRootKeys: opts.preservedLegacyRootKeys,
+  });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }

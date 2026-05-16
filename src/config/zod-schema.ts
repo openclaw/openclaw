@@ -384,7 +384,6 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
-    defaultModel: z.string().optional(),
     env: z
       .object({
         shellEnv: z
