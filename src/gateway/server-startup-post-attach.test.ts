@@ -383,6 +383,48 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
   });
 
+  it("starts sidecars while startup logging is still pending", async () => {
+    const events: string[] = [];
+    let finishStartupLog: (() => void) | undefined;
+    const logGatewayStartup = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          events.push("startup-log-start");
+          finishStartupLog = () => {
+            events.push("startup-log-end");
+            resolve();
+          };
+        }),
+    );
+    const startGatewaySidecars = vi.fn(async () => {
+      events.push("sidecars");
+      return { pluginServices: null, postReadySidecars: [] };
+    });
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({
+        logGatewayStartup,
+        refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
+        startGatewaySidecars,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(logGatewayStartup).toHaveBeenCalledTimes(1);
+      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+    });
+    expect(events).toEqual(["startup-log-start", "sidecars"]);
+
+    if (!finishStartupLog) {
+      throw new Error("Expected startup log release callback to be initialized");
+    }
+    finishStartupLog();
+    await runtimePromise;
+
+    expect(events).toEqual(["startup-log-start", "sidecars", "startup-log-end"]);
+  });
+
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -796,6 +838,50 @@ describe("startGatewayPostAttachRuntime", () => {
         }
         resolvePrewarm();
         await Promise.resolve();
+      },
+    );
+  });
+
+  it("starts and reports plugin services before channel startup completion", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        let releaseChannels: (() => void) | undefined;
+        const pluginServices = { stop: vi.fn(async () => {}) } as never;
+        const onPluginServices = vi.fn();
+        const onSidecarsReady = vi.fn();
+        const startChannels = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseChannels = resolve;
+            }),
+        );
+        hoisted.startPluginServices.mockResolvedValueOnce(pluginServices);
+
+        await startGatewayPostAttachRuntime({
+          ...createPostAttachParams({
+            deferSidecars: true,
+            onPluginServices,
+            onSidecarsReady,
+          }),
+          startChannels,
+        });
+
+        await vi.waitFor(() => {
+          expect(startChannels).toHaveBeenCalledTimes(1);
+          expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
+          expect(onPluginServices).toHaveBeenCalledWith(pluginServices);
+        });
+        expect(onSidecarsReady).not.toHaveBeenCalled();
+
+        if (!releaseChannels) {
+          throw new Error("Expected channel startup release callback to be initialized");
+        }
+        releaseChannels();
+        await vi.waitFor(() => {
+          expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+        });
+        expect(onPluginServices).toHaveBeenCalledTimes(1);
       },
     );
   });

@@ -413,6 +413,7 @@ export async function startGatewaySidecars(params: {
   deps: CliDeps;
   startChannels: () => Promise<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
+  onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -444,6 +445,31 @@ export async function startGatewaySidecars(params: {
       params.logHooks.error(`failed to load hooks: ${String(err)}`);
     }
   });
+
+  const pluginServicesPromise = measureStartup(
+    params.startupTrace,
+    "sidecars.plugin-services",
+    async () => {
+      try {
+        const { startPluginServices } = await import("../plugins/services.js");
+        return await startPluginServices({
+          registry: params.pluginRegistry,
+          config: params.cfg,
+          workspaceDir: params.defaultWorkspaceDir,
+          startupTrace: params.startupTrace,
+        });
+      } catch (err) {
+        params.log.warn(`plugin services failed to start: ${String(err)}`);
+        return null;
+      }
+    },
+  );
+  const pluginServicesReportPromise = params.onPluginServices
+    ? pluginServicesPromise.then((pluginServices) => {
+        params.onPluginServices?.(pluginServices);
+        return pluginServices;
+      })
+    : pluginServicesPromise;
 
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -492,20 +518,7 @@ export async function startGatewaySidecars(params: {
     }, 250);
   }
 
-  let pluginServices: PluginServicesHandle | null = null;
-  await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
-    try {
-      const { startPluginServices } = await import("../plugins/services.js");
-      pluginServices = await startPluginServices({
-        registry: params.pluginRegistry,
-        config: params.cfg,
-        workspaceDir: params.defaultWorkspaceDir,
-        startupTrace: params.startupTrace,
-      });
-    } catch (err) {
-      params.log.warn(`plugin services failed to start: ${String(err)}`);
-    }
-  });
+  const pluginServices = await pluginServicesReportPromise;
 
   if (params.cfg.acp?.enabled) {
     void (async () => {
@@ -804,7 +817,7 @@ export async function startGatewayPostAttachRuntime(
     await params.onStartupPluginsLoaded?.(loaded);
   }
 
-  await measureStartup(params.startupTrace, "post-attach.log", () =>
+  const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       bindHost: params.bindHost,
@@ -849,6 +862,12 @@ export async function startGatewayPostAttachRuntime(
           }),
         );
 
+  let pluginServicesReported = false;
+  const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
+    pluginServicesReported = true;
+    params.onPluginServices?.(pluginServices);
+  };
+
   const sidecarsPromise = params.minimalTestGateway
     ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
@@ -865,6 +884,7 @@ export async function startGatewayPostAttachRuntime(
             logHooks: params.logHooks,
             logChannels: params.logChannels,
             startupTrace: params.startupTrace,
+            onPluginServices: reportPluginServices,
           }),
         );
         const loaderStatsAfter = getPluginModuleLoaderStats();
@@ -884,7 +904,9 @@ export async function startGatewayPostAttachRuntime(
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
-        params.onPluginServices?.(result.pluginServices);
+        if (!pluginServicesReported) {
+          reportPluginServices(result.pluginServices);
+        }
         params.onPostReadySidecars?.(result.postReadySidecars);
         params.onSidecarsReady?.();
         params.startupTrace?.detail("sidecars.ready", [
@@ -937,7 +959,8 @@ export async function startGatewayPostAttachRuntime(
     });
 
   if (params.deferSidecars !== true) {
-    const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
+    const [, stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
+      startupLogPromise,
       stopGatewayUpdateCheckPromise,
       tailscaleCleanupPromise,
       sidecarsPromise,
@@ -949,7 +972,8 @@ export async function startGatewayPostAttachRuntime(
     };
   }
 
-  const [stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
+  const [, stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
+    startupLogPromise,
     stopGatewayUpdateCheckPromise,
     tailscaleCleanupPromise,
   ]);
