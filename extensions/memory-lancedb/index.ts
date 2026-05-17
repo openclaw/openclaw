@@ -246,6 +246,13 @@ const DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT = 10;
 const DEFAULT_AUTO_RECALL_RESULT_CAP = 3;
 const DUPLICATE_SEARCH_LIMIT = 5;
 
+// Minimum similarity score for memory_refresh's conflict-preview search.
+// Mirrors the default minScore on MemoryDB.search so the preview only flags
+// entries that share meaningful similarity with the new text; lower values
+// (e.g. memory_recall's liberal 0.1) surface tangentially-related rows that
+// are poor replacement targets.
+const REFRESH_CONFLICT_MIN_SCORE = 0.5;
+
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -308,12 +315,22 @@ class MemoryDB {
     }
   }
 
-  async store(entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
+  async store(
+    entry: Omit<MemoryEntry, "id" | "createdAt">,
+    options: { id?: string } = {},
+  ): Promise<MemoryEntry> {
     await this.ensureInitialized();
+
+    // memory_refresh passes the existing id so a replace preserves the stable
+    // identifier callers may have cached. Validate the shape so a malformed id
+    // can never reach the SQL filter or the row payload.
+    if (options.id !== undefined && !UUID_RE.test(options.id)) {
+      throw new Error(`Invalid memory ID format: ${options.id}`);
+    }
 
     const fullEntry: MemoryEntry = {
       ...entry,
-      id: randomUUID(),
+      id: options.id ?? randomUUID(),
       createdAt: Date.now(),
     };
 
@@ -1833,7 +1850,7 @@ export default definePluginEntry({
         name: "memory_refresh",
         label: "Memory Refresh",
         description:
-          "Search for existing memories similar to new content, or atomically replace a specific memory by ID. Use for updating facts without data loss: call without memoryId to preview similar memories, then call with memoryId to atomically replace.",
+          "Search for existing memories similar to new content, or replace a specific memory by ID. Use for updating facts: call without memoryId to preview similar memories, then call with memoryId to perform a best-effort replace with process-level serialization. The replace path is NOT a storage-level transaction (LanceDB does not expose multi-statement transactions through this code path); it is a process-mutex-serialized delete-then-insert with best-effort rollback on insert failure. The replaced entry keeps its original id so any cached references stay valid.",
         parameters: Type.Object({
           text: Type.String({ description: "New memory content (required in execute mode)" }),
           category: Type.Optional(
@@ -1848,7 +1865,7 @@ export default definePluginEntry({
           memoryId: Type.Optional(
             Type.String({
               description:
-                "If provided: atomically replace this memory. If omitted: search-only mode.",
+                "If provided: best-effort replace of this memory (process-mutex serialized, not a storage-level transaction). If omitted: search-only mode.",
             }),
           ),
         }),
@@ -1863,10 +1880,17 @@ export default definePluginEntry({
           // ------------------------------------------------------------------
           // MODE 1: Search-only (no memoryId)
           // Embed first, then search — no existence check needed here.
+          // The minScore is intentionally stricter than memory_recall's
+          // liberal 0.1: a conflict preview is meant to surface plausible
+          // near-duplicates so the agent can decide whether to replace an
+          // existing entry. A loose threshold here drowns the agent in
+          // tangentially-related matches and encourages bad replace targets.
+          // Use the db.search default (0.5) so the preview only flags
+          // entries that share meaningful similarity with the new text.
           // ------------------------------------------------------------------
           if (!memoryId) {
             const vector = await embeddings.embed(text);
-            const results = await db.search(vector, 3, 0.1);
+            const results = await db.search(vector, 3, REFRESH_CONFLICT_MIN_SCORE);
             const matches = results.map((r) => ({
               id: r.entry.id,
               text: r.entry.text,
@@ -1892,7 +1916,30 @@ export default definePluginEntry({
           }
 
           // ------------------------------------------------------------------
-          // MODE 2: Atomic replace (memoryId provided)
+          // MODE 2: Best-effort replace (memoryId provided)
+          //
+          // ATOMICITY: This is NOT a storage-level atomic transaction.
+          // LanceDB's Table API does not expose multi-statement transactions
+          // through this code path, so the replace is implemented as a
+          // delete + insert sequence guarded by a per-id mutex.
+          //   - Serialized: concurrent memory_refresh/memory_forget calls on
+          //     the same id queue behind the mutex, so two concurrent
+          //     replaces never interleave their delete/insert pairs.
+          //   - Not serialized: cross-process writers (a second OpenClaw
+          //     process talking to the same LanceDB directory) can still
+          //     race; the mutex is process-local only.
+          //   - Not atomic: if the insert throws after the delete succeeds,
+          //     the entry is gone from the table. We attempt a best-effort
+          //     rollback by re-inserting the original row, but the rollback
+          //     itself can fail (network/disk error), in which case the
+          //     response carries restored_id: null and a rollbackWarning.
+          //
+          // ID PRESERVATION: The replace passes the existing memoryId through
+          // to db.store({ id: memoryId }) so the new row keeps the original
+          // stable identifier. Callers that cached the id before the refresh
+          // can keep using it after the refresh; old_id and new_id in the
+          // response will be equal on success.
+          //
           // Pre-check existence BEFORE calling embeddings.embed() so a typo
           // or stale ID returns immediately without a wasted API call.
           // Then embed OUTSIDE the per-id mutex so the slow remote call does
@@ -1941,12 +1988,17 @@ export default definePluginEntry({
             let rollbackWarning: string | undefined;
 
             try {
-              newEntry = await db.store({
-                text,
-                vector,
-                importance: resolvedImportance,
-                category: resolvedCategory,
-              });
+              // Preserve the original memoryId so callers that cached the id
+              // before the refresh keep a valid reference afterwards.
+              newEntry = await db.store(
+                {
+                  text,
+                  vector,
+                  importance: resolvedImportance,
+                  category: resolvedCategory,
+                },
+                { id: memoryId },
+              );
             } catch (insertErr) {
               // Best-effort rollback: restore the original entry with its
               // original ID so callers are never left with a stale reference
@@ -2022,11 +2074,15 @@ export default definePluginEntry({
               api.logger.warn(`memory-lancedb: audit log write failed: ${String(auditErr)}`);
             }
 
+            // The id is preserved across a successful replace, so render a
+            // single id rather than implying it changed. old_id and new_id
+            // are kept in details for callers/audit consumers that already
+            // depend on the field shape; on success they will be equal.
             return {
               content: [
                 {
                   type: "text",
-                  text: `Replaced memory ${memoryId.slice(0, 8)}… → ${newEntry.id.slice(0, 8)}…\n\nOld: "${oldTextPreview}"\nNew: "${text.slice(0, 80)}"`,
+                  text: `Replaced memory ${memoryId.slice(0, 8)}… (id preserved)\n\nOld: "${oldTextPreview}"\nNew: "${text.slice(0, 80)}"`,
                 },
               ],
               details: {
