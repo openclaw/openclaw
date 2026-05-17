@@ -803,7 +803,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 Symptom: a group/channel @mention shows the typing indicator and the gateway log reports `dispatch complete (queuedFinal=false, replies=0)`, but no message lands in the room. DMs to the same agent reply normally.
 
-Cause: the `messages.groupChat.visibleReplies` default is `"message_tool"`, so OpenClaw runs the turn but suppresses the final assistant text unless the agent calls `message(action=send)`. There is no error because suppression is the configured behavior. DMs use a different default, which is why direct chats still reply.
+Cause: the `messages.groupChat.visibleReplies` default is `"message_tool"`, so OpenClaw runs the turn but suppresses the final assistant text unless the agent calls `message(action=send)`. There is no error because suppression is the configured behavior. Direct chats reply normally only when their visible-reply mode resolves to `"automatic"`; harnesses that set `defaultVisibleReplies: "message_tool"` (for example, the Codex harness) suppress direct-chat finals the same way.
 
 Fix: either pick a stronger tool-calling model, or set `messages.groupChat.visibleReplies: "automatic"` to restore legacy visible replies. The gateway hot-reloads `messages` config after the file is saved; only restart the gateway when file watching or config reload is disabled in the deployment.
 
