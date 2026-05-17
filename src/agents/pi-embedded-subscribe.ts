@@ -29,6 +29,7 @@ import {
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   hasAssistantVisibleReply,
+  readAttemptToolMediaReply,
   readPendingToolMediaReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import {
@@ -188,6 +189,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
     visibleBlockReplyCount: 0,
+    attemptToolMediaUrls: Array.from(new Set(initialPendingToolMediaUrls)),
+    attemptToolAudioAsVoice: false,
+    attemptToolTrustedLocalMedia: false,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
@@ -955,6 +959,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
+    state.attemptToolMediaUrls = [];
+    state.attemptToolAudioAsVoice = false;
+    state.attemptToolTrustedLocalMedia = false;
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -1112,6 +1119,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getAttemptToolMediaReply: () => readAttemptToolMediaReply(state),
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),

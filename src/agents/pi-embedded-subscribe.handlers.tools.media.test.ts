@@ -33,6 +33,9 @@ function createMockContext(overrides?: {
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: false,
+      attemptToolMediaUrls: [],
+      attemptToolAudioAsVoice: false,
+      attemptToolTrustedLocalMedia: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -211,6 +214,7 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/screenshot.png"]);
+    expect(ctx.state.attemptToolMediaUrls).toEqual(["/tmp/screenshot.png"]);
   });
 
   it("preserves audio_as_voice when queuing trusted text MEDIA tool output", async () => {

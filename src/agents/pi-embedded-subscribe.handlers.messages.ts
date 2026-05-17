@@ -185,8 +185,8 @@ function clearPendingToolMedia(
   state.pendingToolTrustedLocalMedia = false;
 }
 
-function hasReplyMedia(payload: BlockReplyPayload): boolean {
-  return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
+function normalizeMediaUrls(mediaUrls: readonly string[] | undefined): string[] {
+  return Array.from(new Set(mediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []));
 }
 
 export function consumePendingToolMediaIntoReply(
@@ -206,15 +206,12 @@ export function consumePendingToolMediaIntoReply(
   ) {
     return payload;
   }
-  if (hasReplyMedia(payload)) {
-    // Pending tool media is a fallback delivery queue; explicit final media is
-    // the assistant's user-visible selection, while tool output remains in the transcript.
-    clearPendingToolMedia(state);
-    return payload;
-  }
-  const mergedMediaUrls = Array.from(
-    new Set([...(payload.mediaUrls ?? []), ...state.pendingToolMediaUrls]),
-  );
+  const toolMediaUrls = normalizeMediaUrls(state.pendingToolMediaUrls);
+  const payloadMediaUrls = normalizeMediaUrls(payload.mediaUrls);
+  // Tool-produced media points at the actual captured/generated artifact. If the
+  // assistant also wrote MEDIA directives, treat them as explanatory text-level
+  // intent and keep the tool artifact authoritative.
+  const mergedMediaUrls = toolMediaUrls.length ? toolMediaUrls : payloadMediaUrls;
   const mergedPayload: BlockReplyPayload = {
     ...payload,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
@@ -252,12 +249,81 @@ export function readPendingToolMediaReply(
   ) {
     return null;
   }
+  const mediaUrls = normalizeMediaUrls(state.pendingToolMediaUrls);
   return {
-    mediaUrls: state.pendingToolMediaUrls.length
-      ? Array.from(new Set(state.pendingToolMediaUrls))
-      : undefined,
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
+  };
+}
+
+export function readAttemptToolMediaReply(
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    | "attemptToolMediaUrls"
+    | "attemptToolAudioAsVoice"
+    | "attemptToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
+  >,
+): BlockReplyPayload | null {
+  const mediaUrls = normalizeMediaUrls(state.attemptToolMediaUrls);
+  if (
+    mediaUrls.length === 0 &&
+    !state.attemptToolAudioAsVoice &&
+    !state.attemptToolTrustedLocalMedia
+  ) {
+    return readPendingToolMediaReply(state);
+  }
+  return {
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    audioAsVoice: state.attemptToolAudioAsVoice || state.pendingToolAudioAsVoice || undefined,
+    trustedLocalMedia:
+      state.attemptToolTrustedLocalMedia || state.pendingToolTrustedLocalMedia || undefined,
+  };
+}
+
+function collectAssistantReplyMediaUrls(assistantTexts: readonly string[] | undefined): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const text of assistantTexts ?? []) {
+    const parsed = parseReplyDirectives(text);
+    for (const mediaUrl of parsed.mediaUrls ?? []) {
+      const url = mediaUrl.trim();
+      if (!url || seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+export function buildReplyMediaTrace(
+  toolMediaReply: BlockReplyPayload | null | undefined,
+  assistantTexts: readonly string[] | undefined,
+): {
+  toolMediaUrls: string[];
+  assistantMediaUrls: string[];
+  droppedAssistantMediaUrls: string[];
+  finalMediaUrls: string[];
+  mediaSource?: "tool" | "assistant";
+} {
+  const toolMediaUrls = normalizeMediaUrls(toolMediaReply?.mediaUrls);
+  const assistantMediaUrls = collectAssistantReplyMediaUrls(assistantTexts);
+  const finalMediaUrls = toolMediaUrls.length ? toolMediaUrls : assistantMediaUrls;
+  return {
+    toolMediaUrls,
+    assistantMediaUrls,
+    droppedAssistantMediaUrls: toolMediaUrls.length ? assistantMediaUrls : [],
+    finalMediaUrls,
+    mediaSource: toolMediaUrls.length
+      ? "tool"
+      : assistantMediaUrls.length
+        ? "assistant"
+        : undefined,
   };
 }
 

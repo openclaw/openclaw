@@ -27,6 +27,29 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it("uses tool media instead of assistant-provided media when both exist", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [
+          {
+            text: "done",
+            mediaUrls: ["/tmp/made-up.png"],
+            mediaUrl: "/tmp/made-up.png",
+          },
+        ],
+        toolMediaUrls: ["/tmp/real-screenshot.png"],
+        toolTrustedLocalMedia: true,
+      }),
+    ).toEqual([
+      {
+        text: "done",
+        mediaUrls: ["/tmp/real-screenshot.png"],
+        mediaUrl: "/tmp/real-screenshot.png",
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
   it("creates a media-only reply when no visible reply exists", () => {
     expect(
       mergeAttemptToolMediaPayloads({

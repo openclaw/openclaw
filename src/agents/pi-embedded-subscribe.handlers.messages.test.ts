@@ -3,12 +3,14 @@ import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streami
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
+  buildReplyMediaTrace,
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  readAttemptToolMediaReply,
   readPendingToolMediaReply,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
@@ -393,7 +395,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
-  it("does not append queued image tool media when the reply already names media", () => {
+  it("prefers queued image tool media over assistant-named media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/generated.png"],
       pendingToolAudioAsVoice: false,
@@ -407,14 +409,16 @@ describe("consumePendingToolMediaIntoReply", () => {
       }),
     ).toEqual({
       text: "done",
-      mediaUrls: ["./selected.png"],
+      mediaUrls: ["/tmp/generated.png"],
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
 
-  it("does not append queued voice media when the reply already names media", () => {
+  it("prefers queued voice media over assistant-named media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
@@ -428,7 +432,9 @@ describe("consumePendingToolMediaIntoReply", () => {
       }),
     ).toEqual({
       text: "done",
-      mediaUrls: ["/tmp/assistant-provided.opus"],
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
@@ -453,6 +459,45 @@ describe("consumePendingToolMediaIntoReply", () => {
     });
     expect(state.pendingToolMediaUrls).toEqual(["/tmp/a.png"]);
     expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+});
+
+describe("readAttemptToolMediaReply", () => {
+  it("keeps attempt-level media available after pending media was consumed", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/screenshot.png"],
+      pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: true,
+      attemptToolMediaUrls: ["/tmp/screenshot.png"],
+      attemptToolAudioAsVoice: false,
+      attemptToolTrustedLocalMedia: true,
+    };
+
+    expect(consumePendingToolMediaIntoReply(state, { text: "done" })).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/screenshot.png"],
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+    });
+    expect(readAttemptToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/screenshot.png"],
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+    });
+  });
+
+  it("records assistant media dropped in favor of tool media", () => {
+    expect(
+      buildReplyMediaTrace({ mediaUrls: ["/tmp/screenshot.png"], trustedLocalMedia: true }, [
+        "done\nMEDIA:/tmp/made-up.png",
+      ]),
+    ).toEqual({
+      toolMediaUrls: ["/tmp/screenshot.png"],
+      assistantMediaUrls: ["/tmp/made-up.png"],
+      droppedAssistantMediaUrls: ["/tmp/made-up.png"],
+      finalMediaUrls: ["/tmp/screenshot.png"],
+      mediaSource: "tool",
+    });
   });
 });
 

@@ -67,6 +67,11 @@ type BuildTrajectoryArtifactsParams = {
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: unknown[];
   lastToolError?: unknown;
+  toolMediaUrls?: string[];
+  assistantMediaUrls?: string[];
+  droppedAssistantMediaUrls?: string[];
+  finalMediaUrls?: string[];
+  mediaSource?: "tool" | "assistant";
 };
 
 function toSortedUniqueStrings(values: readonly string[] | undefined): string[] | undefined {
@@ -322,5 +327,10 @@ export function buildTrajectoryArtifacts(
     messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
     messagingToolSentTargets: params.messagingToolSentTargets,
     lastToolError: params.lastToolError,
+    toolMediaUrls: params.toolMediaUrls,
+    assistantMediaUrls: params.assistantMediaUrls,
+    droppedAssistantMediaUrls: params.droppedAssistantMediaUrls,
+    finalMediaUrls: params.finalMediaUrls,
+    mediaSource: params.mediaSource,
   };
 }

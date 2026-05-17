@@ -112,6 +112,7 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../../pi-embedded-helpers.js";
+import { buildReplyMediaTrace } from "../../pi-embedded-subscribe.handlers.messages.js";
 import { countActiveToolExecutions } from "../../pi-embedded-subscribe.handlers.tools.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -2939,6 +2940,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         getHeartbeatToolResponse,
         getPendingToolMediaReply,
+        getAttemptToolMediaReply,
         getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
         getReplayState,
@@ -4274,6 +4276,8 @@ export async function runEmbeddedAttempt(
         successfulCronAdds: getSuccessfulCronAdds(),
       });
       const pendingToolMediaReply = getPendingToolMediaReply();
+      const attemptToolMediaReply = getAttemptToolMediaReply();
+      const replyMediaTrace = buildReplyMediaTrace(attemptToolMediaReply, assistantTexts);
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
@@ -4405,6 +4409,7 @@ export async function runEmbeddedAttempt(
           messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
           messagingToolSentTargets: getMessagingToolSentTargets(),
           lastToolError,
+          ...replyMediaTrace,
         }),
       );
       trajectoryRecorder?.recordEvent("session.ended", {
@@ -4452,9 +4457,9 @@ export async function runEmbeddedAttempt(
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
         heartbeatToolResponse,
-        toolMediaUrls: pendingToolMediaReply?.mediaUrls,
-        toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
-        toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
+        toolMediaUrls: attemptToolMediaReply?.mediaUrls,
+        toolAudioAsVoice: attemptToolMediaReply?.audioAsVoice,
+        toolTrustedLocalMedia: attemptToolMediaReply?.trustedLocalMedia,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
