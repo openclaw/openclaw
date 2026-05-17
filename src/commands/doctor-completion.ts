@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
+  COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
@@ -32,7 +33,10 @@ async function generateCompletionCache(): Promise<boolean> {
   const binPath = path.join(root, "openclaw.mjs");
   const result = spawnSync(process.execPath, [binPath, "completion", "--write-state"], {
     cwd: root,
-    env: process.env,
+    env: {
+      ...process.env,
+      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
+    },
     encoding: "utf-8",
     timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
