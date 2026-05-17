@@ -232,6 +232,20 @@ describe("startPluginServices", () => {
     ]);
   });
 
+  it("passes startup trace through service context for owned subspans", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (_name, run) => await run(),
+    };
+
+    await startTrackingServices({
+      services: [createTrackingService("service-a", { contexts })],
+      startupTrace,
+    });
+
+    expect(contexts[0]?.startupTrace).toBe(startupTrace);
+  });
+
   it("keeps distinct service trace ownership keys non-colliding", async () => {
     const measured: string[] = [];
     const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
