@@ -73,6 +73,12 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 ] as const;
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
+const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
+  "ssrf_blocked",
+  "http_unreachable",
+  "http_status_failed",
+  "invalid_json",
+]);
 
 export type { BrowserExecutable } from "./chrome.executables.js";
 export {
@@ -99,6 +105,16 @@ function exists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | null): boolean {
+  if (!diagnostic) {
+    return false;
+  }
+  if (diagnostic.ok) {
+    return true;
+  }
+  return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
 }
 
 function processExists(pid: number): boolean {
@@ -555,7 +571,7 @@ export async function launchOpenClawChrome(
         } catch (err) {
           diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
         }
-        if (finalDiagnostic?.ok) {
+        if (diagnosticShowsChromeHttpDiscovery(finalDiagnostic)) {
           launchHttpReachable = true;
         }
         const diagnosticText = finalDiagnostic

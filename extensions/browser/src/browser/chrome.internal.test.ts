@@ -548,6 +548,66 @@ describe("chrome.ts internal", () => {
       });
     });
 
+    it("keeps the launched process when fallback diagnostic sees HTTP before WS readiness", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+      const fakeProc = makeFakeProc();
+      spawnMock.mockImplementation(() => fakeProc);
+
+      const originalFetch = globalThis.fetch;
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      let discoveryCalls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (url.includes("/json/version")) {
+            discoveryCalls += 1;
+            if (discoveryCalls === 1) {
+              now += 2;
+              throw new Error("ECONNREFUSED");
+            }
+          }
+          return await originalFetch(input, init);
+        }),
+      );
+
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/WS_WARMING",
+        onConnection: (wss) => {
+          wss.on("connection", () => {
+            // HTTP discovery is enough for launch; caller owns WS readiness.
+          });
+        },
+        run: async (baseUrl) => {
+          const port = new URL(baseUrl).port;
+          const profile = makeProfile(Number(port));
+          const running = await launchOpenClawChrome(
+            makeResolved({ localLaunchTimeoutMs: 1 }),
+            profile,
+          );
+          expect(running.pid).toBe(4242);
+          expect(discoveryCalls).toBeGreaterThan(1);
+          expect(fakeProc.kill).not.toHaveBeenCalledWith("SIGKILL");
+          running.proc.kill?.("SIGTERM");
+        },
+      });
+    });
+
     it("uses profile executablePath over global executablePath when launching", async () => {
       const originalPlatform = process.platform;
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
