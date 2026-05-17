@@ -27,6 +27,7 @@ import {
   mockedResolveAuthProfileOrder,
   mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
+  mockedResolveModelAsync,
   mockedRunContextEngineMaintenance,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
@@ -496,7 +497,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai",
+      provider: "openai-codex",
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
     });
@@ -520,6 +521,107 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     >;
     expect(successParams.provider).toBe("openai-codex");
     expect(successParams.profileId).toBe("openai-codex:work");
+  });
+
+  it("bootstraps OAuth credentials for forced openai/* Codex response runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const codexAuthStorage = {
+      setRuntimeApiKey: vi.fn(),
+      getApiKey: vi.fn(async () => "stored-test-key"),
+    };
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai-codex",
+        authProfileProviderForAuth: "openai-codex",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
+    const codexAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "openai-codex:work": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
+    mockedResolveModelAsync
+      .mockResolvedValueOnce({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai",
+          contextWindow: 200000,
+          api: "openai-responses",
+        },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      })
+      .mockResolvedValueOnce({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai-codex",
+          contextWindow: 200000,
+          api: "openai-codex-responses",
+        },
+        error: null,
+        authStorage: codexAuthStorage,
+        modelRegistry: {},
+      });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        authProfileId: "openai-codex:work",
+        authProfileIdSource: "user",
+        runId: "forced-openai-codex-responses-bootstrap-oauth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
+    expectMockCallFields(mockedGetApiKeyForModel, {
+      profileId: "openai-codex:work",
+    });
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenCalledWith("openai-codex", "test-key");
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    expectMockCallFields(pluginRunAttempt, {
+      provider: "openai-codex",
+      authProfileId: "openai-codex:work",
+      authProfileIdSource: "user",
+      resolvedApiKey: "test-key",
+    });
   });
 
   it("keeps auto-selected OpenAI Codex auth profiles for forced codex harness runs", async () => {
@@ -573,7 +675,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai",
+      provider: "openai-codex",
       authProfileId: "openai-codex:default",
       authProfileIdSource: "auto",
     });
@@ -646,7 +748,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai",
+      provider: "openai-codex",
       authProfileId: "openai-codex:default",
       authProfileIdSource: "auto",
     });
@@ -731,7 +833,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai",
+      provider: "openai-codex",
       authProfileId: "openai:personal",
       authProfileIdSource: "auto",
     });
@@ -863,14 +965,14 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
     expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
     const firstAttempt = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai",
+      provider: "openai-codex",
       authProfileId: "openai-codex:sub",
       authProfileIdSource: "auto",
     });
     const secondAttempt = expectMockCallFields(
       pluginRunAttempt,
       {
-        provider: "openai",
+        provider: "openai-codex",
         authProfileId: "openai:backup",
         authProfileIdSource: "auto",
       },
