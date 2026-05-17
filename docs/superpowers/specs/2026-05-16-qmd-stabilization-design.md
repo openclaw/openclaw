@@ -25,6 +25,9 @@ The current memory system is intentionally QMD MCP-only, with native OpenClaw me
   - controlled `search` baseline on `memory-dir-main`: about `1s`
   - first controlled `vsearch` run on `memory-dir-main`: about `14s`
   - second warm `vsearch` run on `memory-dir-main`: about `2s`
+- Automatic QMD maintenance was missing on this architecture:
+  - native `memory.backend = "qmd"` startup and interval maintenance was disabled
+  - no replacement cron or startup worker was maintaining the MCP-only QMD index
 
 One earlier semantic probe also exceeded `45s`, but that test used a heavier path and became confounded by a stray long-lived process. Because of that, boot-time semantic warmup must not be rolled out until the slow-path cause is understood well enough to avoid making gateway boot unpredictable.
 
@@ -146,6 +149,31 @@ Success criteria:
 - We know whether it is safe to reduce the backlog on this host.
 - We have a chosen remediation path for embeddings.
 
+### Step 1 — Findings and implemented remediation
+
+Status: implemented in code, restart still pending on the live gateway.
+
+Findings:
+
+- The backlog is structural, not random drift.
+- SQLite inspection showed the pending set is dominated by the `app` collection, while smaller collections were partially or fully embedded.
+- The automatic embed/update loop in `extensions/memory-core/src/memory/qmd-manager.ts` only runs when native QMD memory is active.
+- In the current MCP-only deployment (`plugins.slots.memory = "none"` with `mcp.servers.qmd`), that native manager never opens, so no background embed/update work happens.
+- Controlled live `qmd embed` probes did persist new vectors and reduced some smaller pending collections, which proved that incremental catch-up is possible on this VPS.
+- The same probes also showed that `app` remains the dominant backlog driver, so one-shot full catch-up would be a poor operational default on this CPU-only host.
+
+Implemented remediation:
+
+- Added a QMD MCP-only maintenance service in `extensions/memory-core/src/qmd-mcp-maintenance.ts`.
+- Wired it from `extensions/memory-core/index.ts` using `gateway_start` / `gateway_stop` hooks.
+- The service only arms in the MCP-only architecture:
+  - `plugins.slots.memory = "none"`
+  - native `memory.backend` is not `qmd`
+  - a managed stdio `mcp.servers.qmd` entry exists
+- It reuses the managed MCP server's `command`, `cwd`, and XDG env so maintenance targets the same QMD index used by MCP tools.
+- It runs bounded `qmd update` and `qmd embed` work on boot and intervals, with embed batches capped to `20` docs / `64` MB to avoid large CPU spikes.
+- It does not re-enable native OpenClaw memory recall or `memory_search`.
+
 ### Step 2 — Boot warmup protocol
 
 Blocked on Step 1.
@@ -176,6 +204,11 @@ Update infra/runtime docs after the final behavior is chosen:
 - backup / restore notes if embedding or warmup changes add new operational steps
 - QMD-specific troubleshooting notes if the backlog cause or warmup caveats are non-obvious
 
+Current status:
+
+- QMD concept docs updated to describe MCP-only maintenance behavior.
+- QMD config reference updated so `memory.qmd.update.*` semantics match both native-QMD and MCP-only maintenance paths.
+
 ### Step 4 — Restart policy
 
 Restart only when needed:
@@ -183,6 +216,10 @@ Restart only when needed:
 - embedding-only investigation may not require restart
 - QMD environment or startup-hook changes likely will
 - documentation-only work will not
+
+Current status:
+
+- The implemented MCP-only maintenance hook does require a gateway restart before the live deployment benefits from it.
 
 ---
 
@@ -193,6 +230,7 @@ For Step 1:
 - compare `qmd status` before and after controlled embed work
 - measure CPU and container load during embedding
 - confirm backlog reduction persists
+- verify the new MCP-only maintenance hook with targeted tests
 
 For Step 2:
 
@@ -208,6 +246,7 @@ For Step 2:
 - A badly chosen warmup query could reproduce the earlier pathological slow path at boot.
 - Broad `query` warmups may be much heavier than narrow `vsearch` warmups.
 - If the root cause of the large embedding backlog is structural, warmup alone will not solve perceived semantic unreliability.
+- The bounded MCP-only maintenance worker may still leave the `app` collection catching up slowly, so vector freshness should be observed after restart before changing warmup behavior.
 
 ---
 

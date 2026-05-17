@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
@@ -16,7 +17,7 @@ type RuntimeMock = {
   writeJson: ReturnType<typeof vi.fn>;
 };
 
-function createRuntime(): RuntimeMock {
+function createRuntime(): RuntimeMock & { writeJson: ReturnType<typeof vi.fn> } {
   return {
     log: vi.fn(),
     error: vi.fn(),
@@ -93,12 +94,15 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       }
       throw new Error(`unexpected fetch ${String(init?.method ?? "GET")} ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     const runtime = createRuntime();
 
     const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
 
-    await runQdrantWorkspaceReconcileCommand({ dryRun: true, workspaceDir }, runtime);
+    await runQdrantWorkspaceReconcileCommand(
+      { dryRun: true, workspaceDir },
+      runtime as unknown as RuntimeEnv,
+    );
 
     expect(spawnSyncMock).not.toHaveBeenCalled();
     expect(
@@ -131,12 +135,15 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       }
       throw new Error(`unexpected fetch ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     const runtime = createRuntime();
 
     const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
 
-    const result = await runQdrantWorkspaceReconcileCommand({ workspaceDir }, runtime);
+    const result = await runQdrantWorkspaceReconcileCommand(
+      { workspaceDir },
+      runtime as unknown as RuntimeEnv,
+    );
 
     expect(result.mode).toBe("dry-run");
     expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -147,7 +154,10 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
     const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
 
     await expect(
-      runQdrantWorkspaceReconcileCommand({ apply: true, dryRun: true, workspaceDir }, runtime),
+      runQdrantWorkspaceReconcileCommand(
+        { apply: true, dryRun: true, workspaceDir },
+        runtime as unknown as RuntimeEnv,
+      ),
     ).rejects.toThrow("Choose either --dry-run or --apply");
   });
 
@@ -237,7 +247,7 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       }
       throw new Error(`unexpected fetch ${String(init?.method ?? "GET")} ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     spawnSyncMock.mockReturnValue({
       status: 0,
       stdout: JSON.stringify({
@@ -252,7 +262,10 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
 
     const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
 
-    const result = await runQdrantWorkspaceReconcileCommand({ apply: true, workspaceDir }, runtime);
+    const result = await runQdrantWorkspaceReconcileCommand(
+      { apply: true, workspaceDir },
+      runtime as unknown as RuntimeEnv,
+    );
 
     expect(result.collection).toBe("agent-memory");
     expect(spawnSyncMock).toHaveBeenCalledWith(
@@ -314,7 +327,7 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       }
       throw new Error(`unexpected fetch ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     spawnSyncMock.mockReturnValue({
       status: 1,
       stdout: "",
@@ -325,7 +338,10 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
     const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
 
     await expect(
-      runQdrantWorkspaceReconcileCommand({ apply: true, workspaceDir }, runtime),
+      runQdrantWorkspaceReconcileCommand(
+        { apply: true, workspaceDir },
+        runtime as unknown as RuntimeEnv,
+      ),
     ).rejects.toThrow("embed failed");
     expect(
       fetchMock.mock.calls.some(([input]) =>

@@ -13,11 +13,13 @@
 ### Task 1: Pre-flight — snapshot current config and confirm no override keys
 
 **Files:**
+
 - Read: `/home/ubuntu/.openclaw/openclaw.json`
 
 - [ ] **Step 1: Confirm no existing `intents.voiceStates` override**
 
 Run:
+
 ```bash
 sudo cat /home/ubuntu/.openclaw/openclaw.json | python3 -c "
 import json,sys
@@ -27,11 +29,14 @@ print('intents:', discord.get('intents'))
 print('voice:', discord.get('voice'))
 "
 ```
+
 Expected output:
+
 ```
 intents: None
 voice: None
 ```
+
 If `intents` contains `voiceStates: true`, that key overrides `voice.enabled` and must also be removed/set to false. See Task 2 risk note.
 
 - [ ] **Step 2: Take config backup**
@@ -54,6 +59,7 @@ Note the `eventLoopDelayMaxMs` value. Target after fix: under 500ms.
 ### Task 2: Apply config change
 
 **Files:**
+
 - Modify: `/home/ubuntu/.openclaw/openclaw.json` (owned by `opc`, write via sudo + chown)
 
 - [ ] **Step 1: Write the updated config**
@@ -96,6 +102,7 @@ print(json.dumps({'voice': discord.get('voice'), 'intents': discord.get('intents
 ```
 
 Expected output:
+
 ```json
 {
   "voice": {
@@ -118,6 +125,7 @@ Expected: `opc opc` in the owner/group columns.
 ### Task 3: Restart gateway and verify
 
 **Files:**
+
 - None modified
 
 - [ ] **Step 1: Restart the gateway container**
@@ -127,6 +135,7 @@ cd /home/ubuntu/godwind-team-docker/openclaw && docker compose restart openclaw-
 ```
 
 Wait for it to come back up (watch logs):
+
 ```bash
 docker logs -f openclaw-openclaw-gateway-1 2>&1 | grep -m1 "gateway ready\|listening\|started"
 ```
@@ -186,6 +195,7 @@ Target: CPU under 5% at idle (was 43% utilization before fix).
 - [ ] **Step 1: Record outcome in the audit log**
 
 Append a brief result note to the workspace ops log:
+
 ```bash
 sudo bash -c 'cat >> /home/ubuntu/.openclaw/workspace/OPENCLAW-OPS-LOG.md << '"'"'EOF'"'"'
 

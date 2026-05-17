@@ -62,6 +62,18 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 Non-portable profiles remain available through read-through inheritance unless
 the target agent signs in separately and creates its own local profile.
 
+## Stored profile shadowing
+
+- Stored `auth-profiles.json` credentials are part of normal runtime auth
+  resolution. They are not just migration leftovers.
+- A stale inline `api_key` or `token` profile can therefore shadow a newer
+  env-backed or `models.providers.*` credential for the same provider.
+- Rotating `.env` or `models.providers.<id>.apiKey` alone does not repair a
+  stale stored profile if runtime auth still prefers that profile.
+- Preferred repair: replace stored static material with `keyRef` / `tokenRef`,
+  or delete the stale stored profile when you want env-backed provider config
+  to be authoritative again.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a

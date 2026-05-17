@@ -67,7 +67,7 @@ What the key fields do:
 - `config.agents: ["main"]` opts only the `main` agent into active memory
 - `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
 - `config.model` (optional) pins a dedicated recall model; unset inherits the current session model
-- `config.modelFallback` is used only when no explicit or inherited model resolves
+- `config.modelFallback` is used only when no explicit or inherited model resolves; it does not override a working `config.model`
 - `config.promptStyle: "balanced"` is the default for `recent` mode
 - Active memory still runs only for eligible interactive persistent chat sessions
 
@@ -82,11 +82,43 @@ instead of borrowing the main chat model. Recall quality matters, but latency
 matters more than for the main answer path, and Active Memory's tool surface
 is narrow (it only calls available memory recall tools).
 
+Prefer fast low-latency models over heavy reasoning-first models here. Active
+Memory runs in the blocking reply path, so a model that is great for the main
+chat surface can still be a bad fit for embedded recall if it tends to spend
+too long thinking before it emits the final summary.
+
 Good fast-model options:
 
+- `openrouter/google/gemini-3.1-flash-lite` as a dedicated low-latency recall primary
+- `openrouter/google/gemini-3-flash-preview` as a compatible fallback
 - `cerebras/gpt-oss-120b` for a dedicated low-latency recall model
-- `google/gemini-3-flash` as a low-latency fallback without changing your primary chat model
 - your normal session model, by leaving `config.model` unset
+
+If you are A/B testing recall models, replace `config.model` itself for each
+test. Leaving a slow primary in `config.model` and changing only
+`config.modelFallback` does not force Active Memory onto the fallback.
+
+### OpenRouter Gemini setup
+
+Point Active Memory at a lightweight Gemini model and keep a second Gemini
+route as the fallback:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "active-memory": {
+        enabled: true,
+        config: {
+          model: "openrouter/google/gemini-3.1-flash-lite",
+          modelFallback: "openrouter/google/gemini-3-flash-preview",
+          timeoutMs: 30000,
+        },
+      },
+    },
+  },
+}
+```
 
 ### Cerebras setup
 

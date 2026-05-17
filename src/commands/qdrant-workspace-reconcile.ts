@@ -88,8 +88,6 @@ const FASTEMBED_BRIDGE_SCRIPT = [
   'sys.stdout.write(json.dumps({"vectors": vectors}))',
 ].join("\n");
 
-const WORKSPACE_UUID_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
-
 export function workspaceIdToUuid(workspaceId: string): string {
   const hash = crypto.createHash("sha256").update(workspaceId).digest();
   hash[6] = (hash[6] & 0x0f) | 0x50;
@@ -164,13 +162,13 @@ async function fetchQdrantJson<T>(
   pathname: string,
   init?: RequestInit,
 ): Promise<T> {
-  const url = new URL(pathname, `${baseUrl}/`);
+  const url = new URL(pathname, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
   let response: Response;
   try {
     response = await fetch(url, {
       headers: {
         "content-type": "application/json",
-        ...(init?.headers ?? {}),
+        ...init?.headers,
       },
       ...init,
     });
@@ -178,11 +176,17 @@ async function fetchQdrantJson<T>(
     const cause = (err as { cause?: unknown })?.cause;
     const code = (err as { code?: string })?.code;
     const syscall = (err as { syscall?: string })?.syscall;
-    const details: string[] = [`${url.href}`];
-    if (code) details.push(`code=${code}`);
-    if (syscall) details.push(`syscall=${syscall}`);
-    if (cause) details.push(`cause=${String(cause)}`);
-    throw new Error(`Qdrant fetch failed: ${details.join(" ")}`);
+    const details: string[] = [url.href];
+    if (code) {
+      details.push(`code=${code}`);
+    }
+    if (syscall) {
+      details.push(`syscall=${syscall}`);
+    }
+    if (cause !== undefined) {
+      details.push(`cause=${String(cause)}`);
+    }
+    throw new Error(`Qdrant fetch failed: ${details.join(" ")}`, { cause: err });
   }
   return readQdrantResponseJson<T>(response);
 }
@@ -246,8 +250,12 @@ export async function scrollManagedWorkspacePoints(
 
 function resolveCollectionVectorName(info: QdrantCollectionInfo): string | undefined {
   const vectors = info.config?.params?.vectors;
-  if (!vectors || typeof vectors !== "object") return undefined;
-  if ("size" in vectors && "distance" in vectors) return undefined;
+  if (!vectors || typeof vectors !== "object") {
+    return undefined;
+  }
+  if ("size" in vectors && "distance" in vectors) {
+    return undefined;
+  }
   const names = Object.keys(vectors);
   return names.length > 0 ? names[0] : undefined;
 }
@@ -268,18 +276,23 @@ export async function upsertWorkspacePoints(
   const BATCH_SIZE = 100;
   for (let offset = 0; offset < points.length; offset += BATCH_SIZE) {
     const batch = points.slice(offset, offset + BATCH_SIZE);
-    if (batch.length === 0) continue;
+    if (batch.length === 0) {
+      continue;
+    }
     await fetchQdrantJson(
       qdrantUrl,
       `/collections/${encodeURIComponent(collection)}/points?wait=true`,
       {
         method: "PUT",
         body: JSON.stringify({
-          points: batch.map((point) => ({
-            id: workspaceIdToUuid(point.id),
-            vector: formatCollectionVector(point.vector, vectorName),
-            payload: { ...point.payload, workspace_id: point.id },
-          })),
+          points: batch.map((point) => {
+            const payload = Object.assign({}, point.payload, { workspace_id: point.id });
+            return {
+              id: workspaceIdToUuid(point.id),
+              vector: formatCollectionVector(point.vector, vectorName),
+              payload,
+            };
+          }),
         }),
       },
     );
@@ -294,7 +307,9 @@ export async function deleteManagedWorkspacePointIds(
   const DELETE_BATCH_SIZE = 200;
   for (let offset = 0; offset < ids.length; offset += DELETE_BATCH_SIZE) {
     const batch = ids.slice(offset, offset + DELETE_BATCH_SIZE);
-    if (batch.length === 0) continue;
+    if (batch.length === 0) {
+      continue;
+    }
     await fetchQdrantJson(
       qdrantUrl,
       `/collections/${encodeURIComponent(collection)}/points/delete?wait=true`,
@@ -352,7 +367,7 @@ export function embedWorkspaceTexts(texts: string[], pythonPath: string): number
     }
     if (result.status !== 0) {
       throw new Error(
-        typeof result.stderr === "string" && result.stderr.trim()
+        typeof result.stderr === "string" && result.stderr.trim() !== ""
           ? result.stderr.trim()
           : `embedding bridge failed with status ${result.status ?? "unknown"}`,
       );

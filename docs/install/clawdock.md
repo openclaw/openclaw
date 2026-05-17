@@ -97,6 +97,46 @@ ClawDock works with the same Docker config split described in [Docker](/install/
 
 Use `clawdock-show-config` when you want to inspect the `.env` files and `openclaw.json` quickly. It redacts `.env` values in its printed output.
 
+## Best practice for local code changes
+
+For this Docker stack, keep Docker as the runtime and prefer mounting the
+specific built artifact you changed over rebuilding the image for every code
+edit.
+
+Recommended setup:
+
+- add a `docker-compose.extra.yml` overlay that mounts the changed built file
+  onto its packaged `/app/dist/...` path
+- rebuild host artifacts with `pnpm build:docker`
+- recreate the gateway with `docker compose up -d --no-deps --force-recreate openclaw-gateway`
+
+Example override:
+
+```yaml
+services:
+  openclaw-gateway:
+    volumes:
+      - ./dist/channel-bootstrap.runtime.js:/app/dist/channel-bootstrap.runtime.js:ro
+  openclaw-cli:
+    volumes:
+      - ./dist/channel-bootstrap.runtime.js:/app/dist/channel-bootstrap.runtime.js:ro
+```
+
+Recommended loop:
+
+```bash
+pnpm build:docker
+docker compose up -d --no-deps --force-recreate openclaw-gateway
+```
+
+Use `clawdock-update` or `clawdock-rebuild` only when the change needs a new
+image, such as dependency updates, Dockerfile changes, new system packages, or
+other runtime changes outside `dist`.
+
+Do not make a whole-`dist` overlay the default loop. It can hide packaged
+Control UI assets unless you also run `pnpm ui:build`, and it can pull in
+checkout/image skew that forces bundled plugin runtime-dependency repair.
+
 ## Related pages
 
 - [Docker](/install/docker)

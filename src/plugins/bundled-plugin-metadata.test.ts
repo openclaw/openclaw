@@ -438,6 +438,16 @@ describe("bundled plugin metadata", () => {
     }
   });
 
+  it("declares memory-core tool contracts for memory tool allowlist activation", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "memory-core",
+    );
+
+    expect(entry?.manifest.contracts?.tools).toEqual(
+      expect.arrayContaining(["memory_search", "memory_get"]),
+    );
+  });
+
   it("declares explicit startup activation on all bundled plugin manifests", () => {
     const startupPluginIds: string[] = [];
 

@@ -497,16 +497,25 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
   <Accordion title="Update schedule">
     | Key                       | Type      | Default | Description                           |
     | ------------------------- | --------- | ------- | ------------------------------------- |
-    | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
+    | `update.interval`         | `string`  | `5m`    | Refresh interval for native QMD, and for MCP-only QMD maintenance when native memory is disabled |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh and MCP-only boot maintenance |
     | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
     | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
     | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
-    | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
-    | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
+    | `update.embedInterval`    | `string`  | --      | Separate embed cadence for native QMD, and for bounded MCP-only embed maintenance |
+    | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD maintenance commands across both native-QMD and MCP-only maintenance paths |
     | `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
     | `update.embedTimeoutMs`   | `number`  | --      | Timeout for QMD embed operations      |
+
+    <Note>
+    If native memory recall is disabled (`plugins.slots.memory = "none"`) but a
+    managed stdio `mcp.servers.qmd` entry still exists, OpenClaw reuses that
+    server's command and XDG env to run bounded `qmd update` / `qmd embed`
+    maintenance without switching `memory.backend` to `qmd`. This keeps the
+    MCP-only QMD index fresher, but it does not expose native `memory_search`.
+    </Note>
+
   </Accordion>
   <Accordion title="Limits">
     | Key                       | Type     | Default | Description                |

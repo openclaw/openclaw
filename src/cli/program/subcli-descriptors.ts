@@ -159,6 +159,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "qdrant",
+    description: "Qdrant maintenance and reconciliation",
+    hasSubcommands: true,
+  },
+  {
     name: "update",
     description: "Update OpenClaw and inspect update channel status",
     hasSubcommands: true,

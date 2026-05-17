@@ -48,6 +48,14 @@ Boot-time reconciliation also recreates stale managed collections back to their
 canonical patterns when an older QMD collection with the same name is still
 present.
 
+<Note>
+The fully managed lifecycle below describes the native QMD backend path
+(`memory.backend = "qmd"`). If you intentionally run QMD as MCP-only with
+native memory disabled (`plugins.slots.memory = "none"`), OpenClaw now keeps
+the shared QMD index fresh with a smaller maintenance path described below, but
+it still does not re-enable native `memory_search`.
+</Note>
+
 ## How the sidecar works
 
 - OpenClaw creates collections from your workspace memory files and any
@@ -77,6 +85,52 @@ present.
   Repeated chat-turn attempts back off briefly after an open failure so a
   missing binary or broken sidecar dependency does not create a retry storm;
   `openclaw memory status` and one-shot CLI probes still recheck QMD directly.
+
+## MCP-only QMD maintenance
+
+Some deployments intentionally disable native OpenClaw memory recall and expose
+QMD only through MCP tools. The common shape looks like this:
+
+```json5
+{
+  memory: {
+    backend: "builtin",
+  },
+  plugins: {
+    slots: {
+      memory: "none",
+    },
+  },
+  mcp: {
+    servers: {
+      qmd: {
+        command: "/absolute/path/to/qmd",
+        args: ["mcp"],
+        env: {
+          XDG_CACHE_HOME: "/path/to/agent/qmd/xdg-cache",
+          XDG_CONFIG_HOME: "/path/to/agent/qmd/xdg-config",
+        },
+      },
+    },
+  },
+}
+```
+
+In that architecture, the native QMD manager never opens, so the usual
+background `qmd update` / `qmd embed` loop would otherwise be absent. OpenClaw
+now compensates by having `memory-core` run a bounded maintenance worker on
+`gateway_start` when it sees this MCP-only shape:
+
+- it reuses the managed `mcp.servers.qmd` command and XDG env so the same index
+  used by MCP tools is maintained
+- it runs `qmd update` on boot and on `memory.qmd.update.interval`
+- it runs bounded `qmd embed` work on boot and on
+  `memory.qmd.update.embedInterval`
+- bounded embed batches currently use `20` docs / `64` MB per run to reduce CPU
+  spikes on smaller VPS hosts
+
+This maintenance path keeps the MCP-only QMD index fresher, but it does not
+change tool exposure and it does not turn native OpenClaw memory tools back on.
 
 <Info>
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for

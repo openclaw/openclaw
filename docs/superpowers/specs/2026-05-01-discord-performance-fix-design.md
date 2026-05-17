@@ -11,11 +11,11 @@
 
 Discord chat sessions take several minutes to respond to simple text messages. The bot is text-only — no voice used. Live diagnostics show three contributing causes:
 
-| Symptom | Evidence |
-|---|---|
-| Background CPU/event traffic from unused voice events | `eventLoopDelayMaxMs=8170ms`, `eventLoopUtilization=0.432` — event loop under sustained pressure |
-| Discord WebSocket reconnecting repeatedly | `Discord Message Content Intent is limited` log appears 7+ times — each is a full re-identify cycle |
-| Sessions getting stuck in `processing` | `gateway timeout after 60000ms` in logs; new messages queue behind stuck sessions |
+| Symptom                                               | Evidence                                                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Background CPU/event traffic from unused voice events | `eventLoopDelayMaxMs=8170ms`, `eventLoopUtilization=0.432` — event loop under sustained pressure    |
+| Discord WebSocket reconnecting repeatedly             | `Discord Message Content Intent is limited` log appears 7+ times — each is a full re-identify cycle |
+| Sessions getting stuck in `processing`                | `gateway timeout after 60000ms` in logs; new messages queue behind stuck sessions                   |
 
 All three were fixed in 4.28–4.30 upstream. This spec defines how to backport the fixes to 4.27 without upgrading.
 
@@ -48,6 +48,7 @@ All three were fixed in 4.28–4.30 upstream. This spec defines how to backport 
 **Application:** Live config edit (no rebuild). Gateway restart to apply.
 
 **Verification:**
+
 - Gateway startup logs must not show `GuildVoiceStates` in intent list
 - `eventLoopDelayMaxMs` should drop on next liveness report (30s interval)
 - If 4.27 code does not honor `voice.enabled: false` to suppress the intent, escalate to a dist patch (see risk note below)
@@ -69,6 +70,7 @@ All three were fixed in 4.28–4.30 upstream. This spec defines how to backport 
 **Application:** `Dockerfile.local` `RUN node -e "..."` patch. Requires image rebuild and stack restart.
 
 **Verification:**
+
 - `Discord Message Content Intent is limited` log should appear only once per deliberate restart (not repeatedly during normal operation)
 - If a stall is induced (e.g., momentary network interruption), the bot should reconnect within ~35s rather than hanging indefinitely
 
@@ -81,17 +83,20 @@ All three were fixed in 4.28–4.30 upstream. This spec defines how to backport 
 **Root cause:** In 4.27, when a gateway agent turn gets stuck (codex harness quiet after a dynamic-tool response, or a cron-isolated turn that times out), the session stays in `processing` state indefinitely. New Discord messages queue behind it. Depending on how many turns are stuck, this can block responses for several minutes.
 
 **Upstream fix references:**
+
 - 4.28–4.29: "Agents/Codex: bound embedded-run cleanup, trajectory flushing, and command-lane task timeouts after runtime failures, so Discord and other chat sessions return to idle instead of staying stuck in processing."
 - 4.28: "Cron/Gateway: abort and bounded-clean up timed-out isolated agent turns before recording the timeout, so stale cron sessions cannot leave Discord or other chat lanes stuck in processing after a timeout."
 - 4.29: "Codex harness: interrupt and release native app-server turns that go quiet after an OpenClaw dynamic-tool response without sending turn/completed, so Discord and other chat lanes do not stay stuck in processing."
 
 **Fix:** Patch the relevant gateway/codex harness dist bundle(s) to:
+
 1. Add an explicit abort signal with a bounded timeout to embedded-run cleanup
 2. Ensure isolated agent turns that exceed their timeout are aborted and their session state is reset to idle before the timeout is recorded
 
 **Application:** `Dockerfile.local` `RUN node -e "..."` patch(es). Bundled into the same image rebuild as Fix 2.
 
 **Verification:**
+
 - Send a simple Discord message; response time should be under 10 seconds
 - `gateway timeout` log entries should stop appearing for routine turns
 - Live `openclaw status` should not show stuck sessions in `processing` state
@@ -140,12 +145,12 @@ docker inspect openclaw-openclaw-gateway-1 --format '{{.Image}}' \
 
 ## Success Criteria
 
-| Metric | Current (4.27) | Target |
-|---|---|---|
-| Discord response time (simple message) | Several minutes | Under 10 seconds |
-| `eventLoopDelayMaxMs` | 8,170ms | Under 500ms |
-| Discord WebSocket reconnects (per hour, idle) | 7+ | 0–1 (deliberate only) |
-| Stuck sessions in `processing` | Observed | None during normal use |
+| Metric                                        | Current (4.27)  | Target                 |
+| --------------------------------------------- | --------------- | ---------------------- |
+| Discord response time (simple message)        | Several minutes | Under 10 seconds       |
+| `eventLoopDelayMaxMs`                         | 8,170ms         | Under 500ms            |
+| Discord WebSocket reconnects (per hour, idle) | 7+              | 0–1 (deliberate only)  |
+| Stuck sessions in `processing`                | Observed        | None during normal use |
 
 ---
 

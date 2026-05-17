@@ -64,6 +64,7 @@ The same `provider/model` can mean different things depending on where it came f
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
 - The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
+- Full refs are the model identity. If you expose the same family through multiple providers, such as `openrouter/google/...` and `github-copilot/...`, keep only the routes you actually want users to select.
 
 ## Quick model policy
 
