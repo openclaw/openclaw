@@ -421,7 +421,7 @@ describe("runCapability image skip", () => {
         },
       );
     } finally {
-      hasAvailableAuthForProvider.mockImplementation(() => true);
+      hasAvailableAuthForProvider.mockImplementation(async () => true);
     }
   });
 
