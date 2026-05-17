@@ -210,6 +210,7 @@ describeUnix("inspectPortUsage", () => {
           stdout:
             "p111\ncnode\nnTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
             "p222\ncnode\nnTCP 127.0.0.1:18789->127.0.0.1:50123 (ESTABLISHED)\n" +
+            "p444\ncnode\nnTCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)\n" +
             "p333\ncBrowser\nnTCP 127.0.0.1:50124->198.51.100.7:18789 (ESTABLISHED)\n",
           stderr: "",
           code: 0,
@@ -241,7 +242,7 @@ describeUnix("inspectPortUsage", () => {
 
     const result = await inspectPortConnections(18789);
 
-    expect(result.connections).toHaveLength(2);
+    expect(result.connections).toHaveLength(3);
     expect(result.connections[0]).toMatchObject({
       pid: 111,
       direction: "client",
@@ -250,6 +251,10 @@ describeUnix("inspectPortUsage", () => {
     expect(result.connections[1]).toMatchObject({
       pid: 222,
       direction: "server",
+    });
+    expect(result.connections[2]).toMatchObject({
+      pid: 444,
+      direction: "client",
     });
   });
 

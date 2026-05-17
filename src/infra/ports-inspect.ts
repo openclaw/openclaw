@@ -66,12 +66,17 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   return listeners;
 }
 
+function normalizeTcpHost(host: string): string {
+  const normalized = host.toLowerCase();
+  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+}
+
 function parseTcpEndpoint(raw: string): { host: string; port: number } | null {
   const endpoint = raw.trim();
   const bracketMatch = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
   if (bracketMatch) {
     const port = Number.parseInt(bracketMatch[2], 10);
-    return Number.isFinite(port) ? { host: bracketMatch[1].toLowerCase(), port } : null;
+    return Number.isFinite(port) ? { host: normalizeTcpHost(bracketMatch[1]), port } : null;
   }
   const lastColon = endpoint.lastIndexOf(":");
   if (lastColon <= 0 || lastColon >= endpoint.length - 1) {
@@ -81,7 +86,7 @@ function parseTcpEndpoint(raw: string): { host: string; port: number } | null {
   if (!Number.isFinite(port)) {
     return null;
   }
-  return { host: endpoint.slice(0, lastColon).toLowerCase(), port };
+  return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
 }
 
 function parseLsofTcpConnectionAddress(
