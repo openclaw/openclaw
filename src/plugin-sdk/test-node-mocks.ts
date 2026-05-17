@@ -9,5 +9,4 @@ export {
   withMockedPlatform,
   withMockedWindowsPlatform,
   withRestoredMocks,
-  type RestorableMock,
 } from "../test-utils/vitest-spies.js";
