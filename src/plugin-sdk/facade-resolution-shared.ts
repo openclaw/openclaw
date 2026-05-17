@@ -112,6 +112,19 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
       if (fs.existsSync(builtCandidate)) {
         return { modulePath: builtCandidate, boundaryRoot: rootDir };
       }
+      // Publishable npm-externalised plugins (e.g. @openclaw/anthropic-vertex-provider)
+      // emit their public surfaces under package-local `dist/`, not at the package
+      // root — `scripts/lib/plugin-npm-runtime-build.mjs` writes each entry to
+      // `./dist/<entry>.js` and the `package.json` `files` field only ships `dist/**`.
+      // The pre-#82781 resolver only checked the package root, so model calls to
+      // `anthropic-vertex/api.js` failed with `Unable to resolve bundled plugin
+      // public surface anthropic-vertex/api.js` even when the npm plugin was
+      // installed and loaded. Check `<rootDir>/dist/<artifactBasename>` here so
+      // the generic resolver covers the real published package layout.
+      const distCandidate = path.join(rootDir, "dist", artifactBasename);
+      if (fs.existsSync(distCandidate)) {
+        return { modulePath: distCandidate, boundaryRoot: rootDir };
+      }
       for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
         const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
         if (fs.existsSync(sourceCandidate)) {
