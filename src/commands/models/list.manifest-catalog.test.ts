@@ -110,7 +110,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     expect(
       loadStaticManifestCatalogRowsForList({
         cfg: {},
-        metadataSnapshot: metadataSnapshot as Parameters<
+        metadataSnapshot: metadataSnapshot as unknown as Parameters<
           typeof loadStaticManifestCatalogRowsForList
         >[0]["metadataSnapshot"],
       }).map((row) => row.ref),

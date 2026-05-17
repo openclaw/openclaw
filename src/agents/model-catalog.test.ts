@@ -568,7 +568,7 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({
       config: {} as OpenClawConfig,
       readOnly: true,
-      metadataSnapshot: modelIdNormalizationSnapshot() as NonNullable<
+      metadataSnapshot: modelIdNormalizationSnapshot() as unknown as NonNullable<
         Parameters<typeof loadModelCatalog>[0]
       >["metadataSnapshot"],
     });
@@ -609,7 +609,7 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({
       config: {} as OpenClawConfig,
       readOnly: true,
-      metadataSnapshot: metadataSnapshot as NonNullable<
+      metadataSnapshot: metadataSnapshot as unknown as NonNullable<
         Parameters<typeof loadModelCatalog>[0]
       >["metadataSnapshot"],
     });

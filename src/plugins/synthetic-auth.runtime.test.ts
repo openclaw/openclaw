@@ -142,7 +142,9 @@ describe("synthetic auth runtime refs", () => {
 
     expect(
       resolveRuntimeSyntheticAuthProviderRefs({
-        index,
+        index: index as unknown as NonNullable<
+          Parameters<typeof resolveRuntimeSyntheticAuthProviderRefs>[0]
+        >["index"],
         registryDiagnostics: [{ code: "persisted-registry-missing" }],
       }),
     ).toStrictEqual([]);
@@ -156,7 +158,9 @@ describe("synthetic auth runtime refs", () => {
 
     expect(
       resolveRuntimeExternalAuthProviderRefs({
-        index,
+        index: index as unknown as NonNullable<
+          Parameters<typeof resolveRuntimeExternalAuthProviderRefs>[0]
+        >["index"],
         registryDiagnostics: [{ code: "persisted-registry-missing" }],
       }),
     ).toStrictEqual([]);

@@ -158,7 +158,7 @@ describe("createModelListAuthIndex", () => {
       env: {
         GOOGLE_CLOUD_API_KEY: "gcp-test",
       },
-      metadataSnapshot: metadataSnapshot as Parameters<
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
         typeof createModelListAuthIndex
       >[0]["metadataSnapshot"],
     });
@@ -330,7 +330,7 @@ describe("createModelListAuthIndex", () => {
       cfg: {},
       authStore: emptyStore,
       env: {},
-      metadataSnapshot: metadataSnapshot as Parameters<
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
         typeof createModelListAuthIndex
       >[0]["metadataSnapshot"],
     });
@@ -360,7 +360,7 @@ describe("createModelListAuthIndex", () => {
       cfg: {},
       authStore: emptyStore,
       env: {},
-      metadataSnapshot: metadataSnapshot as Parameters<
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
         typeof createModelListAuthIndex
       >[0]["metadataSnapshot"],
     });

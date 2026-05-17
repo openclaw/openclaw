@@ -258,7 +258,7 @@ describe("loadProviderCatalogModelsForList", () => {
       ...baseParams,
       providerFilter: "moonshot",
       staticOnly: true,
-      metadataSnapshot: metadataSnapshot as Parameters<
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
         typeof loadProviderCatalogModelsForList
       >[0]["metadataSnapshot"],
     });
@@ -340,7 +340,7 @@ describe("loadProviderCatalogModelsForList", () => {
         cfg: baseParams.cfg,
         env: baseParams.env,
         providerFilter: "moonshot",
-        registryIndex: registryIndex as Parameters<
+        registryIndex: registryIndex as unknown as Parameters<
           typeof resolveProviderCatalogPluginIdsForFilter
         >[0]["registryIndex"],
       }),
