@@ -1,0 +1,58 @@
+{
+  "id": "agent-shield",
+  "name": "Agent Shield",
+  "description": "Multi-agent runtime security layer: scans agent-to-agent messages for prompt injection, identity spoofing, context poisoning, delegation loops, and confidence amplification. Includes automatic recovery routing for compromised agents and display-layer secret redaction.",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Master enable/disable for all scanning",
+        "default": true
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["monitor", "enforce"],
+        "description": "monitor = log threats without blocking; enforce = block and recover",
+        "default": "enforce"
+      },
+      "maxDelegationDepth": {
+        "type": "number",
+        "description": "Maximum allowed agent delegation depth before triggering a loop detection",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 10
+      },
+      "maxRecoveryAttempts": {
+        "type": "number",
+        "description": "Maximum self-repair attempts before generating an escalation artifact",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 5
+      },
+      "redactSecrets": {
+        "type": "boolean",
+        "description": "Strip secret-like patterns from agent output before channel delivery",
+        "default": true
+      },
+      "filterMcpEnv": {
+        "type": "boolean",
+        "description": "Filter environment variables before MCP subprocess spawn",
+        "default": true
+      },
+      "allowedEnvVars": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Additional env vars to pass through to MCP subprocesses (PATH, HOME, XDG_* always pass)",
+        "default": []
+      },
+      "threatLog": {
+        "type": "string",
+        "enum": ["file", "memory", "both"],
+        "description": "Where to persist threat detection events",
+        "default": "both"
+      }
+    },
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "@openclaw/agent-shield",
+  "version": "2026.5.17",
+  "description": "Multi-agent runtime security: threat scanning, secret redaction, recovery routing, and MCP environment hardening for OpenClaw.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.4.12"
+    },
+    "build": {
+      "openclawVersion": "2026.4.22",
+      "pluginSdkVersion": "2026.4.22"
+    }
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "agent-security",
+    "prompt-injection",
+    "multi-agent",
+    "runtime-security"
+  ]
+}
