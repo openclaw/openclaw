@@ -231,6 +231,9 @@ Host and Multipass suite runs execute multiple selected scenarios in parallel
 with isolated gateway workers by default. `qa-channel` defaults to concurrency
 4, capped by the selected scenario count. Use `--concurrency <count>` to tune
 the worker count, or `--concurrency 1` for serial execution.
+Use `--pack personal-agent` to run the personal assistant benchmark pack. The
+pack selector is additive with repeated `--scenario` flags: explicit scenarios
+run first, then pack scenarios run in pack order with duplicates removed.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the

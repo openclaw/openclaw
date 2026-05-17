@@ -367,6 +367,7 @@ describe("handleTelegramAction", () => {
         content: "Hello, Telegram!",
       },
       telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
     );
     const call = mockCall(sendMessageTelegram, 0, "text message");
     expect(call[0]).toBe("@testchannel");
@@ -550,6 +551,7 @@ describe("handleTelegramAction", () => {
         media: "https://example.com/image.jpg",
       },
       telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
     );
     const call = mockCall(sendMessageTelegram, 0, "send alias");
     expect(call[0]).toBe("@testchannel");
@@ -668,6 +670,39 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+  it("forwards gateway client scopes into Telegram send target resolution", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello from CLI",
+      },
+      telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
+    );
+    const call = mockCall(sendMessageTelegram, 0, "gateway-scoped send");
+    expect(requireRecord(call[2], "gateway-scoped send options").gatewayClientScopes).toEqual([
+      "operator.write",
+    ]);
+  });
+
+  it("forwards gateway client scopes into Telegram poll target resolution", async () => {
+    await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+      },
+      telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
+    );
+    const call = mockCall(sendPollTelegram, 0, "gateway-scoped poll");
+    expect(requireRecord(call[2], "gateway-scoped poll options").gatewayClientScopes).toEqual([
+      "operator.write",
+    ]);
+  });
+
   it.each([
     {
       name: "react",
@@ -738,22 +773,28 @@ describe("handleTelegramAction", () => {
         readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
       ) => readCallOpts(editForumTopicTelegram.mock.calls as unknown[][], 2),
     },
-  ])("forwards resolved cfg for $name action", async ({ params, cfg, assertCall }) => {
-    const readCallOpts = (calls: unknown[][], argIndex: number): Record<string, unknown> => {
-      const args = calls[0];
-      if (!Array.isArray(args)) {
-        throw new Error("Expected Telegram action call args");
-      }
-      const opts = args[argIndex];
-      if (!opts || typeof opts !== "object") {
-        throw new Error("Expected Telegram action options object");
-      }
-      return opts as Record<string, unknown>;
-    };
-    await handleTelegramAction(params as Record<string, unknown>, cfg);
-    const opts = assertCall(readCallOpts);
-    expect(opts.cfg).toBe(cfg);
-  });
+  ])(
+    "forwards resolved cfg and gateway scopes for $name action",
+    async ({ params, cfg, assertCall }) => {
+      const readCallOpts = (calls: unknown[][], argIndex: number): Record<string, unknown> => {
+        const args = calls[0];
+        if (!Array.isArray(args)) {
+          throw new Error("Expected Telegram action call args");
+        }
+        const opts = args[argIndex];
+        if (!opts || typeof opts !== "object") {
+          throw new Error("Expected Telegram action options object");
+        }
+        return opts as Record<string, unknown>;
+      };
+      await handleTelegramAction(params as Record<string, unknown>, cfg, {
+        gatewayClientScopes: ["operator.write"],
+      });
+      const opts = assertCall(readCallOpts);
+      expect(opts.cfg).toBe(cfg);
+      expect(opts.gatewayClientScopes).toEqual(["operator.write"]);
+    },
+  );
 
   it.each([
     {
@@ -875,6 +916,7 @@ describe("handleTelegramAction", () => {
         delivery: { pin: { enabled: true } },
       },
       telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
     );
 
     const call = mockCall(pinMessageTelegram, 0, "delivery pin");
@@ -883,6 +925,7 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "delivery pin options");
     expect(options.accountId).toBeUndefined();
     expect(options.verbose).toBe(false);
+    expect(options.gatewayClientScopes).toEqual(["operator.write"]);
   });
 
   it("passes delivery pin notify requests for action sends", async () => {

@@ -76,7 +76,23 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
 }
 
 function isGuidedConfigAction(actionCommand: Command): boolean {
-  return actionCommand.name() === "config" && actionCommand.parent?.parent === undefined;
+  return actionCommand.name() === "config" && !actionCommand.parent?.parent;
+}
+
+function isGuidedConfigCommandPath(commandPath: string[]): boolean {
+  const [primary, secondary, extra] = commandPath;
+  if (primary !== "config" || extra !== undefined) {
+    return false;
+  }
+  return (
+    secondary !== "get" &&
+    secondary !== "set" &&
+    secondary !== "patch" &&
+    secondary !== "unset" &&
+    secondary !== "file" &&
+    secondary !== "schema" &&
+    secondary !== "validate"
+  );
 }
 
 export function registerPreActionHooks(program: Command, programVersion: string) {
@@ -105,7 +121,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (shouldBypassConfigGuardForCommandPath(commandPath) || isGuidedConfigAction(actionCommand)) {
+    if (
+      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
     await ensureCliExecutionBootstrap({

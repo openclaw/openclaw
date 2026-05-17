@@ -7,6 +7,11 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  withMockedPlatform,
+  withMockedWindowsPlatform,
+  withRestoredMocks,
+} from "../test-utils/vitest-spies.js";
+import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./package-dist-inventory.js";
@@ -152,26 +157,23 @@ describe("update global helpers", () => {
   });
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const existsSyncSpy = vi
-      .spyOn(fsSync, "existsSync")
-      .mockImplementation((candidate) => candidate === "/bin/sh");
-    try {
-      const env = await createGlobalInstallEnv({
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-        PATH: "/home/peter/.npm-global/bin",
+    await withMockedPlatform("linux", async () => {
+      const existsSyncSpy = vi
+        .spyOn(fsSync, "existsSync")
+        .mockImplementation((candidate) => candidate === "/bin/sh");
+      await withRestoredMocks([existsSyncSpy], async () => {
+        const env = await createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          PATH: "/home/peter/.npm-global/bin",
+        });
+        expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+        expect(env?.NPM_CONFIG_SCRIPT_SHELL).toBe("/bin/sh");
       });
-      expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
-      expect(env?.NPM_CONFIG_SCRIPT_SHELL).toBe("/bin/sh");
-    } finally {
-      existsSyncSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("preserves explicit npm script shell config for global installs", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    try {
+    await withMockedPlatform("linux", async () => {
       const upperEnv = await createGlobalInstallEnv({
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
         NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
@@ -183,14 +185,11 @@ describe("update global helpers", () => {
         npm_config_script_shell: "/custom/lower-sh",
       });
       expect(lowerEnv?.npm_config_script_shell).toBe("/custom/lower-sh");
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("resolves portable Git paths from process-local app data only", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    await withMockedWindowsPlatform(async () => {
       await withTempDir({ prefix: "openclaw-update-portable-git-" }, async (base) => {
         envSnapshot = captureEnv(["LOCALAPPDATA"]);
         const injectedLocalAppData = path.join(base, "injected-local-app-data");
@@ -227,9 +226,7 @@ describe("update global helpers", () => {
         expect(trustedEnv?.PATH).toContain(trustedGitDir);
         expect(trustedEnv?.PATH).not.toContain(injectedGitDir);
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("classifies main and raw install specs separately from registry selectors", () => {
@@ -283,8 +280,7 @@ describe("update global helpers", () => {
   });
 
   it("prefers the owning npm prefix when PATH npm points at a different global root", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    try {
+    await withMockedPlatform("darwin", async () => {
       await withTempDir({ prefix: "openclaw-update-npm-prefix-" }, async (base) => {
         const brewPrefix = path.join(base, "opt", "homebrew");
         const brewBin = path.join(brewPrefix, "bin");
@@ -344,9 +340,7 @@ describe("update global helpers", () => {
           "--min-release-age=0",
         ]);
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
@@ -375,8 +369,7 @@ describe("update global helpers", () => {
   });
 
   it("prefers npm.cmd for win32-style global npm roots", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    await withMockedWindowsPlatform(async () => {
       await withTempDir({ prefix: "openclaw-update-win32-npm-prefix-" }, async (base) => {
         const npmPrefix = path.join(base, "Roaming", "npm");
         const npmRoot = path.join(npmPrefix, "node_modules");
@@ -407,9 +400,7 @@ describe("update global helpers", () => {
           "--min-release-age=0",
         ]);
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("detects custom pnpm global layouts from the running package root", async () => {

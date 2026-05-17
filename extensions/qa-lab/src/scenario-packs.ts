@@ -22,3 +22,21 @@ export const QA_SCENARIO_PACKS = [
     scenarioIds: QA_PERSONAL_AGENT_SCENARIO_IDS,
   },
 ] as const satisfies readonly QaScenarioPackDefinition[];
+
+export function resolveQaScenarioPackScenarioIds(params: {
+  pack?: string;
+  scenarioIds?: string[];
+}): string[] {
+  const normalizedPack = params.pack?.trim().toLowerCase();
+  const explicitScenarioIds = [...new Set(params.scenarioIds ?? [])];
+  if (!normalizedPack) {
+    return explicitScenarioIds;
+  }
+  const pack = QA_SCENARIO_PACKS.find((candidate) => candidate.id === normalizedPack);
+  if (!pack) {
+    throw new Error(
+      `--pack must be one of ${QA_SCENARIO_PACKS.map((candidate) => candidate.id).join(", ")}, got "${params.pack}"`,
+    );
+  }
+  return [...new Set([...explicitScenarioIds, ...pack.scenarioIds])];
+}

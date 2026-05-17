@@ -197,6 +197,7 @@ function createChannelActionContext(params: {
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
+    inboundEventKind: params.ctx.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,

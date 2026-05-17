@@ -141,6 +141,8 @@ type DispatchInboundParams = {
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
+    queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
+    suppressTyping?: boolean;
     onCompactionStart?: () => Promise<void> | void;
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
@@ -189,6 +191,7 @@ let createDiscordDirectMessageContextOverrides: typeof import("./message-handler
 let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
@@ -342,6 +345,7 @@ beforeAll(async () => {
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
+  ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
 });
 
 beforeEach(() => {
@@ -1326,6 +1330,115 @@ describe("processDiscordMessage session routing", () => {
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(getReactionEmojis()).toEqual([]);
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+  });
+
+  it("records Discord room events in history while source replies are tool-only", async () => {
+    const guildHistories = new Map();
+    const ctx = await createBaseContext({
+      guildHistories,
+      historyLimit: 10,
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getLastDispatchReplyOptions()?.suppressTyping).toBe(true);
+    expect(getLastDispatchReplyOptions()?.queuedDeliveryCorrelations).toHaveLength(1);
+    expect(guildHistories.get("c1")).toMatchObject([
+      {
+        body: "hi",
+        messageId: "m1",
+        sender: "Alice",
+      },
+    ]);
+  });
+
+  it("clears Discord room event history after a visible action send succeeds", async () => {
+    const guildHistories = new Map();
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      notifyDiscordInboundEventOutboundSuccess({
+        sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+        inboundEventKind: "room_event",
+        to: "channel:c1",
+        accountId: "default",
+      });
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      guildHistories,
+      historyLimit: 10,
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(guildHistories.get("c1")).toEqual([]);
+  });
+
+  it("clears Discord group DM room event history after a visible action send succeeds", async () => {
+    const guildHistories = new Map();
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      notifyDiscordInboundEventOutboundSuccess({
+        sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+        inboundEventKind: "room_event",
+        to: "channel:c1",
+        accountId: "default",
+      });
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      guildHistories,
+      historyLimit: 10,
+      isGuildMessage: false,
+      isGroupDm: true,
+      isDirectMessage: false,
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(guildHistories.get("c1")).toEqual([]);
+  });
+
+  it("clears Discord room event history after a queued core send succeeds", async () => {
+    const guildHistories = new Map();
+    const ctx = await createBaseContext({
+      guildHistories,
+      historyLimit: 10,
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const begin = getLastDispatchReplyOptions()?.queuedDeliveryCorrelations?.[0]?.begin;
+    expect(begin).toBeTypeOf("function");
+    const end = begin?.();
+    notifyDiscordInboundEventOutboundSuccess({
+      sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      inboundEventKind: "room_event",
+      to: "channel:c1",
+      accountId: "default",
+    });
+    end?.();
+
+    expect(guildHistories.get("c1")).toEqual([]);
   });
 
   it("uses PluralKit original ids for inbound dedupe while preserving the Discord message id", async () => {
