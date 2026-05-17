@@ -250,6 +250,75 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('but "codex" is disabled');
+    expect(output).toContain('Enable the "codex" plugin');
+    expect(output).not.toContain("openclaw plugins install @openclaw/codex");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports blocked configured Codex runtime without install advice", async () => {
+    const sourceConfig = {
+      plugins: {
+        deny: ["codex"],
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('but "codex" is blocked by plugin configuration');
+    expect(output).toContain('Remove "codex" from plugins.deny');
+    expect(output).not.toContain('Run "openclaw doctor --fix" to install');
+    expect(output).not.toContain("openclaw plugins install @openclaw/codex");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports disabled configured Codex runtime entry without install advice", async () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('but "codex" is blocked by plugin configuration');
+    expect(output).toContain("Set plugins.entries.codex.enabled=true");
+    expect(output).not.toContain('Run "openclaw doctor --fix" to install');
+    expect(output).not.toContain("openclaw plugins install @openclaw/codex");
     expect(output).not.toContain("No plugin issues detected.");
   });
 

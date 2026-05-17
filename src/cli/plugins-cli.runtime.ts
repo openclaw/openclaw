@@ -83,6 +83,38 @@ function formatConfiguredRuntimePluginInstallSpec(params: {
   return npmSpec ?? clawhubSpec ?? params.pluginId;
 }
 
+function pluginIdListIncludes(list: readonly string[] | undefined, pluginId: string): boolean {
+  return Array.isArray(list) && list.some((entry) => entry.trim() === pluginId);
+}
+
+function formatBlockedRuntimePluginGuidance(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+}): string | undefined {
+  const pluginId = params.pluginId;
+  if (params.cfg.plugins?.enabled === false) {
+    return `Enable plugin loading and the "${pluginId}" plugin, or change the runtime policy to "pi".`;
+  }
+  if (pluginIdListIncludes(params.cfg.plugins?.deny, pluginId)) {
+    return `Remove "${pluginId}" from plugins.deny and enable the "${pluginId}" plugin, or change the runtime policy to "pi".`;
+  }
+  if (params.cfg.plugins?.entries?.[pluginId]?.enabled === false) {
+    return `Set plugins.entries.${pluginId}.enabled=true or remove that disabled entry, or change the runtime policy to "pi".`;
+  }
+  return undefined;
+}
+
+function formatDisabledRuntimePluginGuidance(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+}): string {
+  const allow = params.cfg.plugins?.allow;
+  if (Array.isArray(allow) && allow.length > 0 && !allow.includes(params.pluginId)) {
+    return `Add "${params.pluginId}" to plugins.allow and enable the plugin, or change the runtime policy to "pi".`;
+  }
+  return `Enable the "${params.pluginId}" plugin, or change the runtime policy to "pi".`;
+}
+
 function collectConfiguredRuntimePluginWarnings(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -101,6 +133,21 @@ function collectConfiguredRuntimePluginWarnings(params: {
     const candidate = resolveConfiguredRuntimePluginInstallCandidate(runtimeId);
     if (!candidate || enabledPluginIds.has(runtimeId)) {
       return [];
+    }
+    const disabledPluginRecord = params.plugins.find((plugin) => plugin.id === runtimeId);
+    const blockedGuidance = formatBlockedRuntimePluginGuidance({
+      cfg: params.cfg,
+      pluginId: runtimeId,
+    });
+    if (blockedGuidance) {
+      return [
+        `- Configured agentRuntime.id="${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is blocked by plugin configuration. ${blockedGuidance}`,
+      ];
+    }
+    if (disabledPluginRecord) {
+      return [
+        `- Configured agentRuntime.id="${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is disabled. ${formatDisabledRuntimePluginGuidance({ cfg: params.cfg, pluginId: runtimeId })}`,
+      ];
     }
     const installSpec = formatConfiguredRuntimePluginInstallSpec(candidate);
     return [
