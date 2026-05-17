@@ -1,9 +1,11 @@
 import {
   type AgentApprovalEventData,
-  callGatewayTool,
+  buildAgentHookContextChannelFields,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
   type EmbeddedRunAttemptParams,
+  type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -21,7 +23,6 @@ const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
 const PERMISSION_SAMPLE_LIMIT = 2;
 const PERMISSION_VALUE_MAX_LENGTH = 48;
 const COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH = 80;
-const CODEX_APPROVAL_NATIVE_HOOK_TIMEOUT_MS = 30_000;
 const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
 const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
@@ -323,6 +324,13 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   if (nativeRelayOutcome?.handled) {
     return { outcome: "no-decision" };
   }
+  const hookChannelId = buildAgentHookContextChannelFields({
+    sessionKey: params.paramsForRun.sessionKey,
+    messageChannel: params.paramsForRun.messageChannel,
+    messageProvider: params.paramsForRun.messageProvider,
+    currentChannelId: params.paramsForRun.currentChannelId,
+    messageTo: params.paramsForRun.messageTo,
+  }).channelId;
   const outcome = await runBeforeToolCallHook({
     toolName: policyRequest.toolName,
     params: policyRequest.params,
@@ -336,16 +344,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       ...(params.paramsForRun.sessionKey ? { sessionKey: params.paramsForRun.sessionKey } : {}),
       ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
       ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
-      ...(params.paramsForRun.currentChannelId ||
-      params.paramsForRun.messageChannel ||
-      params.paramsForRun.messageProvider
-        ? {
-            channelId:
-              params.paramsForRun.currentChannelId ??
-              params.paramsForRun.messageChannel ??
-              params.paramsForRun.messageProvider,
-          }
-        : {}),
+      ...(hookChannelId ? { channelId: hookChannelId } : {}),
     },
   });
   if (outcome.blocked) {
@@ -407,16 +406,12 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     return { handled: true };
   }
   try {
-    const response = await callGatewayTool<NativeHookRelayProcessResponse>(
-      "nativeHook.invoke",
-      { timeoutMs: CODEX_APPROVAL_NATIVE_HOOK_TIMEOUT_MS },
-      {
-        provider: "codex",
-        relayId: params.nativeHookRelay.relayId,
-        event: "pre_tool_use",
-        rawPayload: payload,
-      },
-    );
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: params.nativeHookRelay.relayId,
+      event: "pre_tool_use",
+      rawPayload: payload,
+    });
     const decision = readNativeRelayPreToolUseDecision(response);
     if (decision.blocked) {
       return { handled: true, blocked: true, reason: decision.reason };
@@ -432,12 +427,6 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     };
   }
 }
-
-type NativeHookRelayProcessResponse = {
-  stdout?: string;
-  stderr?: string;
-  exitCode?: number;
-};
 
 function buildNativeRelayPreToolUsePayload(params: {
   requestParams: JsonObject | undefined;

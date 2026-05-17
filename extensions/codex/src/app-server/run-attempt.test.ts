@@ -3816,7 +3816,7 @@ describe("runCodexAppServerAttempt", () => {
       allowedEvents: expect.arrayContaining(["pre_tool_use"]),
     });
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
-      channelId: "channel:target",
+      channelId: "target",
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });

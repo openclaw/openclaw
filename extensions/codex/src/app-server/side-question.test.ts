@@ -1,4 +1,9 @@
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
 
@@ -313,6 +318,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   afterEach(() => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    resetGlobalHookRunner();
   });
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
@@ -464,7 +470,7 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
-          currentChannelId: "voice-room",
+          currentChannelId: "discord:voice-room",
           opts: { runId: "run-side-1" },
         }),
         { nativeHookRelay: { enabled: true, hookTimeoutSec: 9 } },
@@ -476,7 +482,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(config?.["features.hooks"]).toBe(true);
     expect(config?.["features.code_mode"]).toBe(true);
     expect(config?.["features.code_mode_only"]).toBe(true);
-    expect(config).not.toHaveProperty("hooks.PermissionRequest");
+    expect(config?.["hooks.PermissionRequest"]).toEqual([]);
     const preToolUseHooks = config?.["hooks.PreToolUse"] as
       | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
       | undefined;
@@ -490,6 +496,8 @@ describe("runCodexAppServerSideQuestion", () => {
     const preToolUseState = codexHookStateForEvent(hookState, "pre_tool_use");
     expect(preToolUseState?.enabled).toBe(true);
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const permissionRequestState = codexHookStateForEvent(hookState, "permission_request");
+    expect(permissionRequestState).toEqual({ enabled: false });
     const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
     expect(turnStartCall?.[1]).not.toHaveProperty("config");
     expect(relayIdDuringFork).toBeDefined();
@@ -656,9 +664,16 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(codexHookCommand(config, "hooks.PermissionRequest")?.command).toContain(
       "--event permission_request",
     );
-    expect(config).not.toHaveProperty("hooks.PreToolUse");
-    expect(config).not.toHaveProperty("hooks.PostToolUse");
-    expect(config).not.toHaveProperty("hooks.Stop");
+    expect(config?.["hooks.PreToolUse"]).toEqual([]);
+    expect(config?.["hooks.PostToolUse"]).toEqual([]);
+    expect(config?.["hooks.Stop"]).toEqual([]);
+    const hookState = config?.["hooks.state"] as
+      | Record<string, { enabled?: unknown; trusted_hash?: unknown }>
+      | undefined;
+    expect(codexHookStateForEvent(hookState, "permission_request")?.enabled).toBe(true);
+    expect(codexHookStateForEvent(hookState, "pre_tool_use")).toEqual({ enabled: false });
+    expect(codexHookStateForEvent(hookState, "post_tool_use")).toEqual({ enabled: false });
+    expect(codexHookStateForEvent(hookState, "stop")).toEqual({ enabled: false });
   });
 
   it("sends clearing native hook config when side-thread relay is disabled", async () => {
@@ -795,6 +810,61 @@ describe("runCodexAppServerSideQuestion", () => {
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
     });
+  });
+
+  it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {
+    const beforeToolCall = vi.fn((_event: unknown, context: { channelId?: string }) => {
+      expect(context.channelId).toBe("voice-room");
+      return undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(async () => {
+          await client.handleRequest({
+            id: 42,
+            method: "item/tool/call",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              callId: "tool-1",
+              tool: "wiki_status",
+              arguments: { topic: "AGENTS.md" },
+            },
+          });
+          client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          messageChannel: "discord",
+          messageProvider: "discord-voice",
+          currentChannelId: "discord:voice-room",
+        }),
+      ),
+    ).resolves.toEqual({ text: "Tool answer." });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns an empty response for side-thread user input requests", async () => {

@@ -1,4 +1,5 @@
 import {
+  buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
   resolveAgentDir,
@@ -229,12 +230,12 @@ export async function runCodexAppServerSideQuestion(
           sessionKey: params.sessionKey,
           config: params.cfg,
           runId: sideRunParams.runId,
-          ...(params.currentChannelId || params.messageChannel || params.messageProvider
-            ? {
-                channelId:
-                  params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
-              }
-            : {}),
+          channelId: buildAgentHookContextChannelFields({
+            sessionKey: params.sessionKey,
+            messageChannel: params.messageChannel,
+            messageProvider: params.messageProvider,
+            currentChannelId: params.currentChannelId,
+          }).channelId,
           requestTimeoutMs: appServer.requestTimeoutMs,
           completionTimeoutMs: Math.max(
             appServer.turnCompletionIdleTimeoutMs,
@@ -248,6 +249,7 @@ export async function runCodexAppServerSideQuestion(
           relay: nativeHookRelay,
           events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          clearOmittedEvents: true,
         })
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
@@ -521,6 +523,12 @@ async function createCodexSideToolBridge(input: {
       hasInboundImages: false,
     });
   }
+  const hookChannelFields = buildAgentHookContextChannelFields({
+    sessionKey: input.params.sessionKey,
+    messageChannel: input.params.messageChannel,
+    messageProvider: input.params.messageProvider,
+    currentChannelId: input.params.currentChannelId,
+  });
   return createCodexDynamicToolBridge({
     tools,
     signal: input.signal,
@@ -531,16 +539,7 @@ async function createCodexSideToolBridge(input: {
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
-      ...(input.params.currentChannelId ||
-      input.params.messageChannel ||
-      input.params.messageProvider
-        ? {
-            channelId:
-              input.params.currentChannelId ??
-              input.params.messageChannel ??
-              input.params.messageProvider,
-          }
-        : {}),
+      ...hookChannelFields,
     },
   });
 }

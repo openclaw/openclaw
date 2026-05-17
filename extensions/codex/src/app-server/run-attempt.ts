@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
+  buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   buildHarnessContextEngineRuntimeContextFromUsage,
   buildEmbeddedAttemptToolRunContext,
@@ -656,7 +657,13 @@ export async function runCodexAppServerAttempt(
     workspaceDir: params.workspaceDir,
     messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
-    channelId: params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
+    channelId: buildAgentHookContextChannelFields({
+      sessionKey: sandboxSessionKey,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: params.currentChannelId,
+      messageTo: params.messageTo,
+    }).channelId,
     ...hookContextWindowFields,
   };
   const activeContextEnginePluginId = activeContextEngine
@@ -857,7 +864,13 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
-      channelId: params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
+      channelId: buildAgentHookContextChannelFields({
+        sessionKey: sandboxSessionKey,
+        messageChannel: params.messageChannel,
+        messageProvider: params.messageProvider,
+        currentChannelId: params.currentChannelId,
+        messageTo: params.messageTo,
+      }).channelId,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,

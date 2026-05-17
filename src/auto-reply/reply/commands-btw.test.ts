@@ -183,6 +183,27 @@ describe("handleBtwCommand", () => {
     });
   });
 
+  it("keeps provider and conversation target separate for side-question approvals", async () => {
+    const params = buildParams("/btw what changed?");
+    params.command.channel = "telegram";
+    params.command.channelId = "telegram";
+    params.command.to = "+2000";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "targeted answer" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      currentChannelId: "+2000",
+    });
+  });
+
   it("accepts /side as a /btw alias", async () => {
     const params = buildParams("/side what changed?");
     params.agentDir = "/tmp/agent";

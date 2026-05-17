@@ -142,7 +142,6 @@ type NativeHookRelayInvocationMetadata = Partial<
 
 type NativeHookRelayProviderAdapter = {
   normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
-  readPreToolUseApprovalMode?: (rawPayload: JsonValue) => "report" | undefined;
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
@@ -246,7 +245,6 @@ const nativeHookRelayProviderAdapters: Record<
 > = {
   codex: {
     normalizeMetadata: normalizeCodexHookMetadata,
-    readPreToolUseApprovalMode: readCodexPreToolUseApprovalMode,
     readToolInput: readCodexToolInput,
     readToolResponse: readCodexToolResponse,
     renderNoopResponse: () => {
@@ -932,12 +930,13 @@ async function runNativeHookRelayPreToolUse(params: {
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
-  const approvalMode = params.adapter.readPreToolUseApprovalMode?.(params.invocation.rawPayload);
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-    ...(approvalMode ? { approvalMode } : {}),
+    ...(readNativeHookRelayApprovalMode(params.invocation.rawPayload) === "report"
+      ? { approvalMode: "report" }
+      : {}),
     signal: params.registration.signal,
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
@@ -1438,11 +1437,6 @@ function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   return { value: toolInput as JsonValue };
 }
 
-function readCodexPreToolUseApprovalMode(rawPayload: JsonValue): "report" | undefined {
-  const payload = isJsonObject(rawPayload) ? rawPayload : {};
-  return payload.openclaw_approval_mode === "report" ? "report" : undefined;
-}
-
 function normalizeCodexToolInput(
   toolName: string,
   toolInput: Record<string, JsonValue>,
@@ -1480,6 +1474,11 @@ function nativeHookRelayParamsWereRewritten(
 function readCodexToolResponse(rawPayload: JsonValue): unknown {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   return payload.tool_response;
+}
+
+function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report" | undefined {
+  const payload = isJsonObject(rawPayload) ? rawPayload : {};
+  return payload.openclaw_approval_mode === "report" ? "report" : undefined;
 }
 
 function normalizeNativeHookToolName(toolName: string | undefined): string {

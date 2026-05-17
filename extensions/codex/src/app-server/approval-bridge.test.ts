@@ -1,6 +1,7 @@
 import {
   callGatewayTool,
   hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
   runBeforeToolCallHook,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -11,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: vi.fn(),
   hasNativeHookRelayInvocation: vi.fn(() => false),
+  invokeNativeHookRelay: vi.fn(),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -19,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const mockHasNativeHookRelayInvocation = vi.mocked(hasNativeHookRelayInvocation);
+const mockInvokeNativeHookRelay = vi.mocked(invokeNativeHookRelay);
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -99,6 +102,7 @@ describe("Codex app-server approval bridge", () => {
     mockCallGatewayTool.mockReset();
     mockHasNativeHookRelayInvocation.mockReset();
     mockHasNativeHookRelayInvocation.mockReturnValue(false);
+    mockInvokeNativeHookRelay.mockReset();
     mockRunBeforeToolCallHook.mockReset();
     mockRunBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,
@@ -163,6 +167,38 @@ describe("Codex app-server approval bridge", () => {
     findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
   });
 
+  it("normalizes prefixed channel targets for OpenClaw tool policy context", async () => {
+    const params = createParams();
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.currentChannelId = "telegram:-100123";
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-prefixed", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-prefixed", decision: "allow-once" });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-prefixed",
+        command: "pnpm test extensions/codex/src/app-server",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          channelId: "-100123",
+        }),
+      }),
+    );
+    expect(gatewayRequestPayload().turnSourceTo).toBe("telegram:-100123");
+  });
+
   it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {
     const params = createParams();
     mockRunBeforeToolCallHook.mockResolvedValueOnce({
@@ -192,7 +228,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("routes command approvals through the active native hook relay before prompting", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -224,10 +260,8 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
-    expect(gatewayCallMethod()).toBe("nativeHook.invoke");
-    expect(gatewayCallAt(0)[1]).toEqual({ timeoutMs: 30_000 });
-    expect(gatewayRequestPayload()).toEqual({
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledWith({
       provider: "codex",
       relayId: "relay-1",
       event: "pre_tool_use",
@@ -260,12 +294,12 @@ describe("Codex app-server approval bridge", () => {
 
   it("falls through to plugin approval when the native hook relay has no decision", async () => {
     const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
     mockCallGatewayTool
-      .mockResolvedValueOnce({
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-      })
       .mockResolvedValueOnce({ id: "plugin:approval-native-noop", status: "accepted" })
       .mockResolvedValueOnce({ id: "plugin:approval-native-noop", decision: "allow-once" });
 
@@ -289,8 +323,8 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "accept" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "nativeHook.invoke",
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
@@ -344,7 +378,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("fails closed when the native hook relay returns unreadable approval output", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
       stdout: "not-json",
       stderr: "",
       exitCode: 0,
@@ -370,7 +404,8 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual(["nativeHook.invoke"]);
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
     findApprovalEvent(params, {
       status: "denied",
       message:
@@ -380,7 +415,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("fails closed when the native hook relay returns a non-deny decision", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
       stdout:
         JSON.stringify({
           hookSpecificOutput: {
@@ -412,7 +447,8 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual(["nativeHook.invoke"]);
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
     findApprovalEvent(params, {
       status: "denied",
       message: "OpenClaw native hook relay returned a non-deny Codex app-server approval decision.",
@@ -421,7 +457,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("fails closed when the native hook relay exits non-zero", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
       stdout: "ignored stdout",
       stderr: "blocked from stderr",
       exitCode: 1,
@@ -447,7 +483,8 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual(["nativeHook.invoke"]);
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
     findApprovalEvent(params, {
       status: "denied",
       message: "blocked from stderr",
@@ -456,7 +493,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("fails closed when the expected native hook relay cannot be invoked", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockRejectedValueOnce(new Error("native hook relay not found"));
+    mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -477,7 +514,8 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
     findApprovalEvent(params, {
       status: "denied",
       message:
