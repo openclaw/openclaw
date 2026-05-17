@@ -470,6 +470,10 @@ function messageMatches(message: WhatsAppObservedMessage, matchText: string | Re
     : matchText.test(message.text);
 }
 
+function isTransientWhatsAppQaDriverError(error: unknown) {
+  return /\bConnection Closed\b/iu.test(formatErrorMessage(error));
+}
+
 async function runWhatsAppScenario(params: {
   driver: WhatsAppQaDriverSession;
   driverPhoneE164: string;
@@ -754,7 +758,7 @@ export async function runWhatsAppQaLive(params: {
         parentDir: tempAuthRoot,
       }),
     ]);
-    const activeDriver = await startWhatsAppQaDriverSession({ authDir: driverAuthDir });
+    let activeDriver = await startWhatsAppQaDriverSession({ authDir: driverAuthDir });
     driver = activeDriver;
 
     for (const scenario of scenarios) {
@@ -768,32 +772,50 @@ export async function runWhatsAppQaLive(params: {
         );
         continue;
       }
-      try {
-        const result = await runWhatsAppScenario({
-          driver: activeDriver,
-          driverPhoneE164: runtimeEnv.driverPhoneE164,
-          gatewayDebugDirPath,
-          observedMessages,
-          providerMode,
-          primaryModel,
-          alternateModel,
-          fastMode: params.fastMode,
-          groupJid: runtimeEnv.groupJid,
-          repoRoot,
-          scenario,
-          sutAccountId,
-          sutAuthDir,
-          sutPhoneE164: runtimeEnv.sutPhoneE164,
-        });
-        scenarioResults.push(result);
-      } catch (error) {
-        preservedGatewayDebugArtifacts = true;
-        scenarioResults.push({
-          id: scenario.id,
-          title: scenario.title,
-          status: "fail",
-          details: formatErrorMessage(error),
-        });
+      let retriedDriver = false;
+      while (true) {
+        try {
+          const result = await runWhatsAppScenario({
+            driver: activeDriver,
+            driverPhoneE164: runtimeEnv.driverPhoneE164,
+            gatewayDebugDirPath,
+            observedMessages,
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode: params.fastMode,
+            groupJid: runtimeEnv.groupJid,
+            repoRoot,
+            scenario,
+            sutAccountId,
+            sutAuthDir,
+            sutPhoneE164: runtimeEnv.sutPhoneE164,
+          });
+          scenarioResults.push(
+            retriedDriver
+              ? { ...result, details: `${result.details}; driver reconnected` }
+              : result,
+          );
+          break;
+        } catch (error) {
+          if (!retriedDriver && isTransientWhatsAppQaDriverError(error)) {
+            retriedDriver = true;
+            await activeDriver.close().catch(() => {});
+            activeDriver = await startWhatsAppQaDriverSession({ authDir: driverAuthDir });
+            driver = activeDriver;
+            continue;
+          }
+          preservedGatewayDebugArtifacts = true;
+          scenarioResults.push({
+            id: scenario.id,
+            title: scenario.title,
+            status: "fail",
+            details: formatErrorMessage(error),
+          });
+          break;
+        }
+      }
+      if (scenarioResults.at(-1)?.status === "fail") {
         break;
       }
     }
@@ -921,6 +943,7 @@ export const __testing = {
   buildWhatsAppQaConfig,
   createMissingGroupJidScenarioResult,
   findScenarios,
+  isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
   resolveWhatsAppQaRuntimeEnv,
   resolveWhatsAppMetadataRedaction,
