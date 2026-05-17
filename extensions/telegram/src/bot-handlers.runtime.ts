@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -1535,11 +1536,15 @@ export const registerTelegramHandlers = ({
       promptContextMinTimestampMs,
     } = params;
 
+    const messageText = getTelegramTextParts(msg).text;
+    const botUsername = ctx.me?.username;
+    const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
+
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
     const isCommandLike = (text ?? "").trim().startsWith("/");
-    if (text && !isCommandLike) {
+    if (text && !isCommandLike && !isAbortControlMessage) {
       const nowMs = Date.now();
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
       // Use resolvedThreadId for forum groups, dmThreadId for DM topics
@@ -1601,6 +1606,15 @@ export const registerTelegramHandlers = ({
         textFragmentBuffer.set(key, entry);
         scheduleTextFragmentFlush(entry);
         return;
+      }
+    } else if (text && isAbortControlMessage) {
+      const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
+      const threadId = resolvedThreadId ?? dmThreadId;
+      const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
+      const existing = textFragmentBuffer.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        textFragmentBuffer.delete(key);
       }
     }
 
@@ -1743,15 +1757,27 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
+    if (isAbortControlMessage && senderId) {
+      for (const lane of ["default", "forward"] as const) {
+        inboundDebouncer.cancelKey(
+          buildTelegramInboundDebounceKey({
+            accountId,
+            conversationKey,
+            senderId,
+            debounceLane: lane,
+          }),
+        );
+      }
+    }
     await inboundDebouncer.enqueue({
       ctx,
       msg,
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey,
+      debounceKey: isAbortControlMessage ? null : debounceKey,
       debounceLane,
-      botUsername: ctx.me?.username,
+      botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),
     });
   };
