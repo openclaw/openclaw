@@ -6,9 +6,13 @@ import {
   markAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { runCliAgent } from "../../agents/cli-runner.js";
+import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -371,8 +375,58 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(candidateRun, provider, {
               config: runtimeConfig,
             });
+            const cliExecutionProvider =
+              resolveCliRuntimeExecutionProvider({
+                provider,
+                cfg: runtimeConfig,
+                agentId: run.agentId,
+                modelId: model,
+              }) ?? provider;
             let attemptCompactionCount = 0;
             try {
+              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+                return await runCliAgent({
+                  replyOperation,
+                  sessionId: run.sessionId,
+                  sessionKey: run.sessionKey,
+                  agentId: run.agentId,
+                  trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                  sessionFile: run.sessionFile,
+                  workspaceDir: run.workspaceDir,
+                  config: runtimeConfig,
+                  prompt: queued.prompt,
+                  transcriptPrompt: queued.transcriptPrompt,
+                  currentInboundEventKind: queued.currentInboundEventKind,
+                  currentInboundContext: queued.currentInboundContext,
+                  provider: cliExecutionProvider,
+                  model,
+                  ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
+                    config: runtimeConfig,
+                  }),
+                  thinkLevel: run.thinkLevel,
+                  timeoutMs: run.timeoutMs,
+                  runId,
+                  extraSystemPrompt: run.extraSystemPrompt,
+                  sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                  silentReplyPromptMode: run.silentReplyPromptMode,
+                  ownerNumbers: run.ownerNumbers,
+                  cliSessionId: getCliSessionBinding(activeSessionEntry, cliExecutionProvider)
+                    ?.sessionId,
+                  cliSessionBinding: getCliSessionBinding(activeSessionEntry, cliExecutionProvider),
+                  images: queuedImages,
+                  imageOrder: queuedImageOrder,
+                  skillsSnapshot: run.skillsSnapshot,
+                  messageChannel: queued.originatingChannel ?? undefined,
+                  messageProvider: resolveOriginMessageProvider({
+                    originatingChannel: queued.originatingChannel,
+                    provider: run.messageProvider,
+                  }),
+                  agentAccountId: run.agentAccountId,
+                  senderIsOwner: run.senderIsOwner,
+                  disableTools: opts?.disableTools,
+                  abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                });
+              }
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,

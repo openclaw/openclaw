@@ -8,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const runCliAgentMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -335,6 +336,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
   }));
+  vi.doMock("../../agents/cli-runner.js", () => ({
+    runCliAgent: (params: unknown) => runCliAgentMock(params),
+  }));
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
@@ -440,6 +444,7 @@ beforeAll(async () => {
 beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
+  runCliAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
@@ -657,6 +662,70 @@ describe("createFollowupRunner auto fallback primary probes", () => {
 });
 
 describe("createFollowupRunner runtime config", () => {
+  it("routes queued followups through CLI runtime dispatch when the model selects a CLI backend", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-followup",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+        },
+      },
+    };
+    const sessionStore = { main: sessionEntry };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.provider).toBe("claude-cli");
+    expect(call.model).toBe("claude-opus-4-7");
+    expect(call.config).toBe(runtimeConfig);
+    expect(call.cliSessionId).toBe("cli-session-1");
+    expect(call.messageChannel).toBe("telegram");
+  });
+
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
     const sourceConfig: OpenClawConfig = {
       models: {
