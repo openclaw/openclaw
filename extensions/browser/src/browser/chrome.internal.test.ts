@@ -158,9 +158,20 @@ async function withMockChromeCdpServer(params: {
   } else {
     wss.on("connection", (ws) => {
       ws.on("message", (raw) => {
-        const msg = JSON.parse(rawDataToString(raw)) as { id?: number };
-        if (msg.id === 1) {
-          ws.send(JSON.stringify({ id: 1, result: { product: "Chrome/Mock" } }));
+        const message = JSON.parse(rawDataToString(raw)) as {
+          id?: unknown;
+          method?: unknown;
+        };
+        if (message.method === "Browser.getVersion" && typeof message.id === "number") {
+          ws.send(
+            JSON.stringify({
+              id: message.id,
+              result: {
+                product: "Chrome/Mock",
+                userAgent: "OpenClawTest",
+              },
+            }),
+          );
         }
       });
     });
