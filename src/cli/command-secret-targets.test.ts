@@ -82,6 +82,11 @@ vi.mock("../secrets/target-registry.js", () => ({
         record(`plugins.entries.${pluginId}.config.webFetch.apiKey`);
       }
     }
+    const tools = (config as { tools?: { web?: { fetch?: { firecrawl?: { apiKey?: unknown } } } } })
+      ?.tools;
+    if (tools?.web?.fetch?.firecrawl?.apiKey !== undefined) {
+      record("tools.web.fetch.firecrawl.apiKey");
+    }
     return out;
   }),
 }));
