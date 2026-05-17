@@ -2024,7 +2024,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps verbose tool summaries suppressed for channel message-tool-only turns", async () => {
+  it("delivers verbose tool summaries for Discord channel message-tool-only turns", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -2056,7 +2056,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🛠️ `pwd (agent)`" });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
@@ -4945,6 +4945,39 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers verbose tool progress in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ Exec: echo post-restart" });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🛠️ Exec: echo post-restart" }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("delivers marked runtime failure notices in message-tool-only mode", async () => {
