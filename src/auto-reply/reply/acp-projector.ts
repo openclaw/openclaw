@@ -174,6 +174,7 @@ export function createAcpReplyProjector(params: {
     meta?: AcpProjectedDeliveryMeta,
   ) => Promise<boolean>;
   onProgress?: () => void;
+  onVisibleText?: (text: string) => void;
   provider?: string;
   accountId?: string;
 }): AcpReplyProjector {
@@ -444,6 +445,7 @@ export function createAcpReplyProjector(params: {
       const remaining = settings.maxOutputChars - emittedOutputChars;
       const accepted = remaining < text.length ? text.slice(0, remaining) : text;
       if (accepted.length > 0) {
+        params.onVisibleText?.(accepted);
         emittedOutputChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
         if (settings.deliveryMode === "live") {

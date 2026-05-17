@@ -1858,7 +1858,14 @@ describe("AcpSessionManager", () => {
       code: "ACP_TURN_FAILED",
     });
 
-    expect(events).toEqual([expect.objectContaining({ type: "text_delta", text: "partial" })]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "turn_started",
+        mode: "prompt",
+        requestId: "r-output",
+      }),
+      expect.objectContaining({ type: "text_delta", text: "partial" }),
+    ]);
     expect(harness.fallbackRuntime.runTurn).not.toHaveBeenCalled();
   });
 

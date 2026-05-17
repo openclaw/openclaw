@@ -1,3 +1,4 @@
+import { emitAcpRuntimeAgentEvent } from "../acp/runtime/agent-event-bridge.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
@@ -576,6 +577,12 @@ async function agentCommandInternal(
           requestId: runId,
           signal: opts.abortSignal,
           onEvent: (event) => {
+            emitAcpRuntimeAgentEvent({
+              runId,
+              sessionKey,
+              event,
+              includeAssistantOutput: false,
+            });
             if (event.type === "done") {
               stopReason = event.stopReason;
               return;

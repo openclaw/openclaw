@@ -88,6 +88,11 @@ export type AcpRuntimeDoctorReport = {
 
 export type AcpRuntimeEvent =
   | {
+      type: "turn_started";
+      mode?: AcpRuntimePromptMode;
+      requestId?: string;
+    }
+  | {
       type: "text_delta";
       text: string;
       stream?: "output" | "thought";

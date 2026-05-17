@@ -1,4 +1,5 @@
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
+import { emitAcpRuntimeAgentEvent } from "../../acp/runtime/agent-event-bridge.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAcpThreadSessionDetailLines } from "../../acp/runtime/session-identifiers.js";
@@ -421,6 +422,20 @@ export async function tryDispatchAcpReply(params: {
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     deliver: delivery.deliver,
     onProgress: markAcpProgress,
+    onVisibleText: (delta) => {
+      const runId = normalizeOptionalString(params.runId);
+      if (!runId) {
+        return;
+      }
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "assistant",
+        data: {
+          delta,
+        },
+      });
+    },
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: effectiveDispatchAccountId,
   });
@@ -519,7 +534,15 @@ export async function tryDispatchAcpReply(params: {
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-      onEvent: async (event) => await projector.onEvent(event),
+      onEvent: async (event) => {
+        emitAcpRuntimeAgentEvent({
+          runId: params.runId,
+          sessionKey,
+          event,
+          includeAssistantOutput: false,
+        });
+        await projector.onEvent(event);
+      },
     });
 
     await projector.flush(true);

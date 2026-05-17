@@ -25,6 +25,14 @@ export async function consumeAcpTurnStream(params: {
   let sawOutput = false;
   let sawTerminalEvent = false;
 
+  if (params.eventGate.open) {
+    await params.onEvent?.({
+      type: "turn_started",
+      mode: params.turn.mode,
+      requestId: params.turn.requestId,
+    });
+  }
+
   for await (const event of params.runtime.runTurn(params.turn)) {
     if (!params.eventGate.open) {
       continue;

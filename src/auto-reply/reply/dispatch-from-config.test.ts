@@ -690,6 +690,11 @@ function createMockAcpSessionManager() {
           mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
           agent: entry?.acp?.agent || "codex",
         });
+        await params.onEvent({
+          type: "turn_started",
+          mode: params.mode,
+          requestId: params.requestId,
+        });
         const stream = runtimeBackend.runtime.runTurn({
           handle,
           text: params.text ?? "",
@@ -2171,7 +2176,18 @@ describe("dispatchReplyFromConfig", () => {
 
   it("emits lifecycle end for ACP turns using the current run id", async () => {
     setNoAbort();
-    const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
+    const runtime = createAcpRuntime([
+      { type: "status", tag: "usage_update", text: "warming up" },
+      {
+        type: "tool_call",
+        text: "reading",
+        title: "Read file",
+        status: "running",
+      },
+      { type: "text_delta", text: "hidden plan", tag: "plan" },
+      { type: "text_delta", text: "done" },
+      { type: "done" },
+    ]);
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
       storeSessionKey: "agent:codex-acp:session-1",
@@ -2215,7 +2231,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    const lifecycleEvent = agentEventMocks.emitAgentEvent.mock.calls
+    const events = agentEventMocks.emitAgentEvent.mock.calls
       .map(
         (call) =>
           call[0] as {
@@ -2225,10 +2241,45 @@ describe("dispatchReplyFromConfig", () => {
             stream?: unknown;
           },
       )
-      .find((event) => event.runId === "run-acp-lifecycle-end");
+      .filter((event) => event.runId === "run-acp-lifecycle-end");
+    const lifecycleEvent = events.find(
+      (event) => event.stream === "lifecycle" && event.data?.phase === "end",
+    );
     expect(lifecycleEvent?.sessionKey).toBe("agent:codex-acp:session-1");
     expect(lifecycleEvent?.stream).toBe("lifecycle");
     expect(lifecycleEvent?.data?.phase).toBe("end");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stream: "lifecycle",
+          data: expect.objectContaining({ phase: "turn_started" }),
+        }),
+        expect.objectContaining({
+          stream: "status",
+          data: expect.objectContaining({ text: "warming up" }),
+        }),
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({
+            text: "reading",
+            title: "Read file",
+            status: "running",
+          }),
+        }),
+        expect.objectContaining({
+          stream: "assistant",
+          data: expect.objectContaining({ delta: "done" }),
+        }),
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stream: "assistant",
+          data: expect.objectContaining({ delta: "hidden plan" }),
+        }),
+      ]),
+    );
   });
 
   it("emits lifecycle error for ACP turn failures using the current run id", async () => {
@@ -2291,7 +2342,12 @@ describe("dispatchReplyFromConfig", () => {
             stream?: unknown;
           },
       )
-      .find((event) => event.runId === "run-acp-lifecycle-error");
+      .find(
+        (event) =>
+          event.runId === "run-acp-lifecycle-error" &&
+          event.stream === "lifecycle" &&
+          event.data?.phase === "error",
+      );
     expect(lifecycleEvent?.sessionKey).toBe("agent:codex-acp:session-1");
     expect(lifecycleEvent?.stream).toBe("lifecycle");
     expect(lifecycleEvent?.data?.phase).toBe("error");

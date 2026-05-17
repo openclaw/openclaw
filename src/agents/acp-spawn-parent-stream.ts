@@ -190,6 +190,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     });
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
+  const startedAt = Date.now();
   const wake = () => {
     if (!shouldSurfaceUpdates) {
       return;
@@ -241,7 +242,11 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   let disposed = false;
   let pendingText = "";
-  let lastProgressAt = Date.now();
+  let lastAssistantOutputAt = startedAt;
+  let lastTurnStartedAt = startedAt;
+  let sawTurnStarted = false;
+  let sawRuntimeActivity = false;
+  let sawAssistantOutput = false;
   let stallNotified = false;
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
@@ -284,6 +289,32 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
+  const resolveNoOutputSummary = () => {
+    const seconds = Math.round(noOutputNoticeMs / 1000);
+    if (!sawTurnStarted) {
+      return {
+        task: `No ACP turn handoff for ${seconds}s. Runtime setup may be stalled.`,
+        text: `${relayLabel} has not started an ACP turn after ${seconds}s. Runtime setup may be stalled.`,
+      };
+    }
+    if (!sawRuntimeActivity && !sawAssistantOutput) {
+      return {
+        task: `ACP turn started but no runtime activity or assistant output for ${seconds}s.`,
+        text: `${relayLabel} started an ACP turn but has produced no runtime activity or assistant output for ${seconds}s. Upstream auth, proxy, or network access may be stalled.`,
+      };
+    }
+    if (!sawAssistantOutput) {
+      return {
+        task: `ACP runtime activity observed, but no assistant output for ${seconds}s.`,
+        text: `${relayLabel} reported ACP runtime activity but no assistant output for ${seconds}s. The upstream agent may still be working or blocked before a final answer.`,
+      };
+    }
+    return {
+      task: `No assistant output for ${seconds}s after previous output.`,
+      text: `${relayLabel} has produced no additional assistant output for ${seconds}s.`,
+    };
+  };
+
   const noOutputWatcherTimer = setInterval(() => {
     if (disposed || noOutputNoticeMs <= 0) {
       return;
@@ -291,21 +322,24 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (stallNotified) {
       return;
     }
-    if (Date.now() - lastProgressAt < noOutputNoticeMs) {
+    const outputReferenceAt = sawAssistantOutput
+      ? lastAssistantOutputAt
+      : sawTurnStarted
+        ? lastTurnStartedAt
+        : startedAt;
+    if (Date.now() - outputReferenceAt < noOutputNoticeMs) {
       return;
     }
     stallNotified = true;
+    const summary = resolveNoOutputSummary();
     recordTaskRunProgressByRunId({
       runId,
       runtime: "acp",
       sessionKey: params.childSessionKey,
       lastEventAt: Date.now(),
-      eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
+      eventSummary: summary.task,
     });
-    emit(
-      `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
-      `${contextPrefix}:stall`,
-    );
+    emit(summary.text, `${contextPrefix}:stall`);
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
 
@@ -342,13 +376,13 @@ export function startAcpSpawnParentStreamRelay(params: {
       if (!delta || !delta.trim()) {
         return;
       }
+      sawRuntimeActivity = true;
       logEvent("assistant_delta", {
         delta,
         ...(assistantPhase ? { phase: assistantPhase } : {}),
       });
 
       if (assistantPhase === "commentary") {
-        lastProgressAt = Date.now();
         return;
       }
 
@@ -364,7 +398,8 @@ export function startAcpSpawnParentStreamRelay(params: {
         emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
       }
 
-      lastProgressAt = Date.now();
+      sawAssistantOutput = true;
+      lastAssistantOutputAt = Date.now();
       pendingText += delta;
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
@@ -377,12 +412,49 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
+    if (event.stream === "status" || event.stream === "tool") {
+      sawRuntimeActivity = true;
+      const text = normalizeOptionalString(
+        (event.data as { text?: unknown; title?: unknown } | undefined)?.text ??
+          (event.data as { title?: unknown } | undefined)?.title,
+      );
+      logEvent(event.stream, {
+        ...(text ? { text } : {}),
+        data: event.data,
+      });
+      if (text) {
+        recordTaskRunProgressByRunId({
+          runId,
+          runtime: "acp",
+          sessionKey: params.childSessionKey,
+          lastEventAt: Date.now(),
+          eventSummary: truncate(compactWhitespace(text), STREAM_SNIPPET_MAX_CHARS),
+        });
+      }
+      return;
+    }
+
     if (event.stream !== "lifecycle") {
       return;
     }
 
     const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
+    if (phase === "turn_started") {
+      sawTurnStarted = true;
+      lastTurnStartedAt = Date.now();
+      if (stallNotified && !sawAssistantOutput) {
+        stallNotified = false;
+      }
+      recordTaskRunProgressByRunId({
+        runId,
+        runtime: "acp",
+        sessionKey: params.childSessionKey,
+        lastEventAt: Date.now(),
+        eventSummary: "ACP turn started.",
+      });
+      return;
+    }
     if (phase === "end") {
       flushPending();
       const startedAt = toFiniteNumber(

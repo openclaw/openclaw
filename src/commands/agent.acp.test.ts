@@ -395,6 +395,86 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("forwards ACP runtime status and tool events for diagnostics", async () => {
+    await withAcpSessionEnv(async () => {
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          onEvent?: (event: {
+            type: string;
+            text?: string;
+            tag?: string;
+            mode?: string;
+            requestId?: string;
+            title?: string;
+            status?: string;
+            stopReason?: string;
+          }) => Promise<void>;
+        };
+        await params.onEvent?.({
+          type: "turn_started",
+          mode: "prompt",
+          requestId: "run-acp-diagnostics",
+        });
+        await params.onEvent?.({
+          type: "status",
+          tag: "usage_update",
+          text: "warming up",
+        });
+        await params.onEvent?.({
+          type: "tool_call",
+          title: "Read file",
+          status: "running",
+          text: "reading",
+        });
+        await params.onEvent?.({ type: "text_delta", text: "done" });
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+      });
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand(
+        {
+          message: "ping",
+          sessionKey: "agent:codex:acp:test",
+          runId: "run-acp-diagnostics",
+        },
+        runtime,
+      );
+
+      const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+      expect(emitted).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: "run-acp-diagnostics",
+            stream: "lifecycle",
+            data: expect.objectContaining({ phase: "turn_started" }),
+          }),
+          expect.objectContaining({
+            runId: "run-acp-diagnostics",
+            stream: "status",
+            data: expect.objectContaining({ text: "warming up", tag: "usage_update" }),
+          }),
+          expect.objectContaining({
+            runId: "run-acp-diagnostics",
+            stream: "tool",
+            data: expect.objectContaining({
+              text: "reading",
+              title: "Read file",
+              status: "running",
+            }),
+          }),
+          expect.objectContaining({
+            runId: "run-acp-diagnostics",
+            stream: "assistant",
+            data: expect.objectContaining({ delta: "done" }),
+          }),
+        ]),
+      );
+    });
+  });
+
   it("keeps no-reply ACP turns silent", async () => {
     await withAcpSessionEnv(async () => {
       const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);

@@ -259,7 +259,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_500);
-    expectTextWithFragment(collectedTexts(), "has produced no output for 1s");
+    expectTextWithFragment(collectedTexts(), "has not started an ACP turn after 1s");
 
     emitAgentEvent({
       runId: "run-2",
@@ -283,6 +283,65 @@ describe("startAcpSpawnParentStreamRelay", () => {
       },
     });
     expectTextWithFragment(collectedTexts(), "run failed: boom");
+    relay.dispose();
+  });
+
+  it("classifies stalls after ACP turn handoff without blaming interactive input", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-turn-started",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-turn",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-turn-started",
+      stream: "lifecycle",
+      data: {
+        phase: "turn_started",
+      },
+    });
+    vi.advanceTimersByTime(1_500);
+
+    const texts = collectedTexts();
+    expectTextWithFragment(texts, "started an ACP turn but has produced no runtime activity");
+    expectNoTextWithFragment(texts, "interactive input");
+    relay.dispose();
+  });
+
+  it("classifies runtime activity without assistant output", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-runtime-activity",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-activity",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-runtime-activity",
+      stream: "lifecycle",
+      data: {
+        phase: "turn_started",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-runtime-activity",
+      stream: "status",
+      data: {
+        text: "warming up",
+      },
+    });
+    vi.advanceTimersByTime(1_500);
+
+    const texts = collectedTexts();
+    expectTextWithFragment(texts, "reported ACP runtime activity but no assistant output");
+    expectNoTextWithFragment(texts, "interactive input");
     relay.dispose();
   });
 
