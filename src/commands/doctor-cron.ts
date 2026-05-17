@@ -81,6 +81,16 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
       `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
     );
   }
+  if (issues.invalidSchedule) {
+    lines.push(
+      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
+    );
+  }
+  if (issues.invalidPayload) {
+    lines.push(
+      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
+    );
+  }
   return lines;
 }
 
@@ -122,7 +132,7 @@ function getRecord(value: unknown): Record<string, unknown> | null {
 
 function formatProviderCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([provider, count]) => `${provider}=${count}`)
     .join(", ");
 }

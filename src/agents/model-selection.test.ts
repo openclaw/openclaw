@@ -695,6 +695,25 @@ describe("model-selection", () => {
       ).toBe("qwen-dashscope");
     });
 
+    it("infers provider from raw configured ids when manifest policies add prefixes", () => {
+      const cfg = {
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "llama-fast",
+        }),
+      ).toBe("nvidia");
+    });
+
     it("infers Google provider from canonicalized configured provider catalogs", () => {
       const cfg = {
         models: {
@@ -1655,6 +1674,34 @@ describe("model-selection", () => {
       }
     });
 
+    it("normalizes bare configured default model strings with manifest policies", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "llama-fast" },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/llama-fast",
+      });
+    });
+
     it("prefers slash-form aliases for configured default models", () => {
       const cfg = {
         agents: {
@@ -2127,6 +2174,38 @@ describe("model-selection", () => {
           ],
         }),
       ).toBe("medium");
+    });
+
+    it("honors configured provider models that disable reasoning", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "gemma-4-26b-a4b-it",
+                  name: "Gemma 4 26B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "google",
+          model: "gemma-4-26b-a4b-it",
+        }),
+      ).toBe("off");
     });
   });
 });

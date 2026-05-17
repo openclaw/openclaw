@@ -14,6 +14,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -396,12 +397,20 @@ export function createSessionStatusTool(opts?: {
       });
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
+      const isImplicitRunSessionStatus =
+        requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+
+      // No-arg status should prefer the live run session when available (#82669).
+      if (isImplicitRunSessionStatus) {
+        requestedKeyRaw = opts?.runSessionKey;
+      }
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
       const isSemanticCurrentRequest =
         requestedKeyRaw === "current" ||
+        isImplicitRunSessionStatus ||
         Boolean(
           resolveCurrentSessionClientAlias({
             key: requestedKeyRaw ?? "",
@@ -557,7 +566,7 @@ export function createSessionStatusTool(opts?: {
         const fallback = resolveImplicitCurrentSessionFallback({
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
           fallbackKey:
-            isSemanticCurrentRequest && opts?.runSessionKey
+            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && opts?.runSessionKey
               ? opts.runSessionKey
               : storeScopedRequesterKey,
         });
@@ -630,6 +639,15 @@ export function createSessionStatusTool(opts?: {
             nextStore[resolved.key] = persistedEntry;
           });
           resolved.entry = persistedEntry;
+          triggerSessionPatchHook({
+            cfg,
+            sessionEntry: persistedEntry,
+            sessionKey: resolved.key,
+            patch: {
+              key: resolved.key,
+              model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
+            },
+          });
           changedModel = true;
         }
       }

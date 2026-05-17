@@ -1,7 +1,4 @@
-import type {
-  SilentReplyPolicyShape,
-  SilentReplyRewriteShape,
-} from "../shared/silent-reply-policy.js";
+import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
@@ -238,8 +235,6 @@ export type AgentDefaultsConfig = {
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
-  /** Whether disallowed silent replies should be rewritten by conversation type. */
-  silentReplyRewrite?: SilentReplyRewriteShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
@@ -278,8 +273,8 @@ export type AgentDefaultsConfig = {
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
-   * - once: inject once per unique truncation signature (default)
-   * - always: inject on every run with truncation
+   * - once: inject once per unique truncation signature
+   * - always: inject on every run with truncation (default)
    */
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */

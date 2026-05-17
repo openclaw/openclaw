@@ -1,5 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
@@ -218,13 +219,13 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
-        description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+        description: "Send image/GIF/video as document to avoid channel compression.",
       }),
     ),
     asDocument: Type.Optional(
       Type.Boolean({
         description:
-          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "Send image/GIF/video as document to avoid channel compression. Alias for forceDocument.",
       }),
     ),
   };
@@ -570,6 +571,7 @@ type MessageToolOptions = {
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 };
@@ -770,7 +772,7 @@ function appendMessageToolVisibleReplyHint(
   const targetGuidance = requireExplicitTarget
     ? "Include target when sending."
     : "The target defaults to the current source conversation, so omit target unless sending elsewhere.";
-  return `${description} For this turn, visible replies to the current source conversation must use action="send" with message. ${targetGuidance} Normal final answers are private and are not posted.`;
+  return `${description} For this turn, use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
 }
 
 function appendMessageToolReadHint(
@@ -960,6 +962,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        inboundEventKind: options?.inboundEventKind,
         abortSignal: signal,
       });
 

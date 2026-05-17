@@ -198,7 +198,8 @@ Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 Use `models.providers.<id>.timeoutSeconds` for slow local or remote model
 servers before raising `agents.defaults.timeoutSeconds`. The provider timeout
 applies only to model HTTP requests, including connect, headers, body streaming,
-and the total guarded-fetch abort.
+and the total guarded-fetch abort. If the agent or run timeout is lower, raise
+that ceiling too because provider timeouts cannot extend the whole agent run.
 
 <Note>
 For custom OpenAI-compatible providers, persisting a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname. OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.

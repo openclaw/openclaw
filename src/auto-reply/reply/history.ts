@@ -71,6 +71,10 @@ export function appendHistoryEntry<T extends HistoryEntry>(params: {
   return history;
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -80,6 +84,10 @@ export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
   return appendHistoryEntry(params);
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function recordPendingHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -153,6 +161,11 @@ export function normalizeHistoryMediaEntries(params: {
   return out;
 }
 
+/**
+ * @deprecated Plugin message-turn code should use
+ * `createChannelHistoryWindow(...).recordWithMedia(...)`. This helper remains
+ * for core internals and older plugin compatibility.
+ */
 export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -217,6 +230,11 @@ export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>
   });
 }
 
+/**
+ * @deprecated Plugin message-turn code should use
+ * `createChannelHistoryWindow(...).buildPendingContext(...)`. This helper remains
+ * for core internals and older plugin compatibility.
+ */
 export function buildPendingHistoryContextFromMap(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -238,6 +256,11 @@ export function buildPendingHistoryContextFromMap(params: {
   });
 }
 
+/**
+ * @deprecated Plugin message-turn code should use
+ * `createChannelHistoryWindow(...).buildInboundHistory(...)`. This helper remains
+ * for core internals and older plugin compatibility.
+ */
 export function buildInboundHistoryFromMap<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -275,6 +298,11 @@ export function buildInboundHistoryFromEntries(params: {
   });
 }
 
+/**
+ * @deprecated Prefer `buildHistoryContextFromEntries(...)` for existing entry
+ * arrays, or `createChannelHistoryWindow(...)` when working from a history map.
+ * This helper remains for older plugin compatibility.
+ */
 export function buildHistoryContextFromMap(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -305,6 +333,10 @@ export function buildHistoryContextFromMap(params: {
   });
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function clearHistoryEntries(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -312,6 +344,10 @@ export function clearHistoryEntries(params: {
   params.historyMap.set(params.historyKey, []);
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function clearHistoryEntriesIfEnabled(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;

@@ -88,14 +88,12 @@ import type {
 import {
   buildAgentMediaPayload,
   buildModelsProviderData,
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
+  createChannelHistoryWindow,
   createChannelPairingController,
   createChannelMessageReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
   logInboundDrop,
   logTypingFailure,
-  recordPendingHistoryEntryIfEnabled,
   registerPluginHttpRoute,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveChannelMediaMaxBytes,
@@ -1413,8 +1411,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const pendingSender = senderName;
         const recordPendingHistory = () => {
           const trimmed = pendingBody.trim();
-          recordPendingHistoryEntryIfEnabled({
-            historyMap: channelHistories,
+          createChannelHistoryWindow({ historyMap: channelHistories }).record({
             limit: historyLimit,
             historyKey: historyKey ?? "",
             entry:
@@ -1506,8 +1503,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         let combinedBody = body;
         if (historyKey) {
-          combinedBody = buildPendingHistoryContextFromMap({
-            historyMap: channelHistories,
+          const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
+          combinedBody = channelHistory.buildPendingContext({
             historyKey,
             limit: historyLimit,
             currentMessage: combinedBody,
@@ -1530,8 +1527,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const commandBody = rawText.trim();
         const inboundHistory =
           historyKey && historyLimit > 0
-            ? buildInboundHistoryFromMap({
-                historyMap: channelHistories,
+            ? createChannelHistoryWindow({ historyMap: channelHistories }).buildInboundHistory({
                 historyKey,
                 limit: historyLimit,
               })

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -15,6 +14,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
+import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 vi.mock("../process/exec.js", () => ({
@@ -89,31 +89,6 @@ function ensureSuiteFixtureRoot() {
   suiteFixtureRoot = path.join(suiteTempRootTracker.ensureSuiteTempRoot(), "_fixtures");
   fs.mkdirSync(suiteFixtureRoot, { recursive: true });
   return suiteFixtureRoot;
-}
-
-async function packToArchive({
-  pkgDir,
-  outDir,
-  outName,
-  flatRoot,
-}: {
-  pkgDir: string;
-  outDir: string;
-  outName: string;
-  flatRoot?: boolean;
-}) {
-  const dest = path.join(outDir, outName);
-  fs.rmSync(dest, { force: true });
-  const entries = flatRoot ? fs.readdirSync(pkgDir) : [path.basename(pkgDir)];
-  await tar.c(
-    {
-      gzip: true,
-      file: dest,
-      cwd: flatRoot ? pkgDir : path.dirname(pkgDir),
-    },
-    entries,
-  );
-  return dest;
 }
 
 function getArchiveFixturePath(params: {
@@ -1154,6 +1129,32 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.pluginId).toBe("inferred-runtime-plugin");
+    }
+  });
+
+  it("rejects package installs when openclaw.extensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "blank-extension-entry-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js", " "] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.extensions[1]");
+      expect(result.error).toContain("non-empty string");
     }
   });
 

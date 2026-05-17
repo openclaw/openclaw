@@ -26,11 +26,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
@@ -242,8 +238,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let combinedBody = body;
     const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
-      combinedBody = buildPendingHistoryContextFromMap({
-        historyMap: deps.groupHistories,
+      const channelHistory = createChannelHistoryWindow({ historyMap: deps.groupHistories });
+      combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: deps.historyLimit,
         currentMessage: combinedBody,
@@ -267,8 +263,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
-        ? buildInboundHistoryFromMap({
-            historyMap: deps.groupHistories,
+        ? createChannelHistoryWindow({ historyMap: deps.groupHistories }).buildInboundHistory({
             historyKey,
             limit: deps.historyLimit,
           })
@@ -837,8 +832,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteTarget?.body || "";
       const historyKey = groupId ?? "unknown";
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: deps.groupHistories,
+      createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
         historyKey,
         limit: deps.historyLimit,
         entry: {
