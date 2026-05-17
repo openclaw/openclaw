@@ -90,15 +90,6 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.2
         version: 0.3.2(undici@8.3.0)
-      '@slack/bolt':
-        specifier: 4.7.2
-        version: 4.7.2(@types/express@5.0.6)
-      '@slack/types':
-        specifier: 2.21.1
-        version: 2.21.1
-      '@slack/web-api':
-        specifier: 7.16.0
-        version: 7.16.0
       age-encryption:
         specifier: 0.1.5
         version: 0.1.5
