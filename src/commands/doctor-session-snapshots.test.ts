@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -33,6 +34,14 @@ function skillPrompt(location: string): string {
     "  </skill>",
     "</available_skills>",
   ].join("\n");
+}
+
+async function writeSessionStore(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(store, null, 2));
 }
 
 describe("doctor session snapshot stale runtime metadata", () => {
@@ -193,22 +202,14 @@ describe("doctor session snapshot stale runtime metadata", () => {
       "SKILL.md",
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main": sessionEntry({
-            skillsSnapshot: {
-              prompt: skillPrompt(stalePath),
-              skills: [{ name: "doctor" }],
-            },
-          }),
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
         },
-        null,
-        2,
-      ),
-    );
+      }),
+    });
 
     await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
 
@@ -220,5 +221,78 @@ describe("doctor session snapshot stale runtime metadata", () => {
     expect(message).toContain("inactive runtime root");
     expect(message).toContain(stalePath);
     expect(message).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+  });
+
+  it("reports stale cached metadata from configured session stores", async () => {
+    const stalePath = path.join(
+      root,
+      "old-runtime",
+      "node_modules",
+      "openclaw",
+      "skills",
+      "doctor",
+      "SKILL.md",
+    );
+    const stateDir = path.join(root, "state");
+    const defaultStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const configuredStorePath = path.join(root, "configured-sessions.json");
+    await writeSessionStore(defaultStorePath, {});
+    await writeSessionStore(configuredStorePath, {
+      "agent:configured": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({
+      cfg: { session: { store: configuredStorePath } } as OpenClawConfig,
+      bundledSkillsDir,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain(configuredStorePath);
+    expect(message).toContain("agent:configured");
+    expect(message).toContain(stalePath);
+  });
+
+  it("reports stale cached metadata from templated configured session stores", async () => {
+    const stalePath = path.join(
+      root,
+      "old-runtime",
+      "node_modules",
+      "openclaw",
+      "skills",
+      "doctor",
+      "SKILL.md",
+    );
+    const templatedStore = path.join(root, "stores", "{agentId}", "sessions.json");
+    const opsStorePath = path.join(root, "stores", "ops", "sessions.json");
+    await writeSessionStore(opsStorePath, {
+      "agent:ops": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({
+      cfg: {
+        session: { store: templatedStore },
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+      } as OpenClawConfig,
+      bundledSkillsDir,
+      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain(opsStorePath);
+    expect(message).toContain("agent:ops");
+    expect(message).toContain(stalePath);
   });
 });

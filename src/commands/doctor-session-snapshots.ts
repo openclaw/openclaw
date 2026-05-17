@@ -3,7 +3,9 @@ import path from "node:path";
 import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -237,9 +239,23 @@ async function listSessionStorePaths(stateDir: string): Promise<string[]> {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function resolveSessionStorePaths(params: {
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): string[] | undefined {
+  if (!params.cfg) {
+    return undefined;
+  }
+  return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
+    .map((target) => target.storePath)
+    .filter((storePath) => fs.existsSync(storePath))
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
 export async function noteSessionSnapshotHealth(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }) {
   const bundledSkillsDir = params?.bundledSkillsDir ?? resolveBundledSkillsDir();
@@ -247,7 +263,9 @@ export async function noteSessionSnapshotHealth(params?: {
     return;
   }
   const storePaths =
-    params?.storePaths ?? (await listSessionStorePaths(resolveStateDir(params?.env)));
+    params?.storePaths ??
+    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
+    (await listSessionStorePaths(resolveStateDir(params?.env)));
   const findingsByStore = new Map<string, StaleSessionSnapshotPathFinding[]>();
   for (const storePath of storePaths) {
     let store: Record<string, SessionEntry>;

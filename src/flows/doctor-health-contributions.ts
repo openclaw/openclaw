@@ -358,7 +358,7 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
-  await noteSessionSnapshotHealth({ env: ctx.env ?? process.env });
+  await noteSessionSnapshotHealth({ cfg: ctx.cfg, env: ctx.env ?? process.env });
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
