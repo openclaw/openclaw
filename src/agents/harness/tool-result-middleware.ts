@@ -105,6 +105,128 @@ function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentTool
   );
 }
 
+// Common shapes that nested-tool-result content blocks come in across runtimes
+// (Codex app-server, Anthropic, Vercel AI). Per #82912 the Codex `message` tool
+// path produces `{ type: "toolResult", content: [...] }` blocks that fail the
+// strict validator above and cause the entire send-and-confirm result to be
+// replaced with "Tool output unavailable due to post-processing error", even
+// though the underlying tool call succeeded.
+const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set([
+  "toolresult",
+  "tool_result",
+  "tool",
+  "function",
+  "functionresult",
+  "function_result",
+]);
+
+// Pull a string out of common content-block / nested-result shapes. Falls back
+// to JSON.stringify so callers always get something to surface upstream rather
+// than dropping the block entirely. Returns `null` only when the value yields
+// no representable text at all.
+function coerceMiddlewareText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    // Nested toolResult/content arrays — flatten each entry and join, dropping
+    // anything that yields no representable text. Codex emits this shape for
+    // the `message` tool's send-and-confirm flow.
+    const parts = value
+      .map((entry) => coerceMiddlewareText(entry))
+      .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    return parts.length > 0 ? parts.join("\n") : null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  for (const key of ["text", "output", "result", "message", "value"]) {
+    const candidate = (value as Record<string, unknown>)[key];
+    if (typeof candidate === "string") {
+      return candidate;
+    }
+  }
+  const nestedContent = (value as Record<string, unknown>).content;
+  if (typeof nestedContent === "string") {
+    return nestedContent;
+  }
+  if (Array.isArray(nestedContent)) {
+    const parts = nestedContent
+      .map((entry) => coerceMiddlewareText(entry))
+      .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized : null;
+  } catch {
+    return null;
+  }
+}
+
+// Pass valid blocks through unchanged. For nested tool-result / function blocks
+// flatten them into a single bounded text block so the underlying tool output
+// reaches the model instead of being silently nuked.
+function coerceMiddlewareContentBlock(value: unknown): unknown {
+  if (isValidMiddlewareContentBlock(value)) {
+    return value;
+  }
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return null;
+  }
+  const lowerType = value.type.toLowerCase();
+  if (NESTED_TOOL_RESULT_BLOCK_TYPES.has(lowerType)) {
+    const flattened = coerceMiddlewareText(value.content ?? value);
+    if (flattened === null || flattened.length === 0) {
+      return null;
+    }
+    return {
+      type: "text",
+      text: truncateUtf16Safe(flattened, MAX_MIDDLEWARE_TEXT_CHARS),
+    };
+  }
+  return null;
+}
+
+// Pass valid results through unchanged. Otherwise rebuild `content` by coercing
+// each block, drop nulls, keep at most MAX_MIDDLEWARE_CONTENT_BLOCKS entries,
+// and preserve `details` only when it already passes the strict validator.
+// Returns `null` only when nothing could be salvaged, so the caller still
+// surfaces the generic post-processing error for genuinely-broken middleware
+// output.
+function coerceMiddlewareToolResult(value: unknown): OpenClawAgentToolResult | null {
+  if (isValidMiddlewareToolResult(value)) {
+    return value;
+  }
+  if (!isRecord(value) || !Array.isArray(value.content)) {
+    return null;
+  }
+  const coerced: unknown[] = [];
+  for (const block of value.content) {
+    const next = coerceMiddlewareContentBlock(block);
+    if (next !== null) {
+      coerced.push(next);
+      if (coerced.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
+        break;
+      }
+    }
+  }
+  if (coerced.length === 0) {
+    return null;
+  }
+  const detailsPreserved = isValidMiddlewareDetails(value.details) ? value.details : undefined;
+  const candidate: Record<string, unknown> = { content: coerced };
+  if (detailsPreserved !== undefined) {
+    candidate.details = detailsPreserved;
+  }
+  return isValidMiddlewareToolResult(candidate) ? candidate : null;
+}
+
 /**
  * Coerce an arbitrary value into a JSON-safe shape that satisfies
  * `isValidMiddlewareDetails`. Round-trips through `JSON.stringify` with a
@@ -214,8 +336,9 @@ export function createAgentToolResultMiddlewareRunner(
           // Validate the current object after every handler so in-place writes
           // cannot bypass the same shape and size bounds as returned results.
           const candidate = next?.result ?? current;
-          if (isValidMiddlewareToolResult(candidate)) {
-            current = candidate;
+          const coerced = coerceMiddlewareToolResult(candidate);
+          if (coerced !== null) {
+            current = coerced;
           } else {
             log.warn(
               `[${ctx.runtime}] discarded invalid tool result middleware output for ${truncateUtf16Safe(

@@ -228,4 +228,77 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
     expect(result.details).toEqual({ compacted: true, runtime: "codex", harness: "codex" });
   });
+
+  it("coerces nested toolResult blocks (Codex message-tool shape) into text instead of failing closed (#82912)", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [
+            {
+              // The shape Codex app-server emits for the `message` tool path.
+              type: "toolResult",
+              content: [{ type: "text", text: "send receipt: SIG-9af3" }],
+            } as never,
+          ],
+          details: { status: "delivered" },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "send receipt: SIG-9af3" }]);
+    expect(result.details).toEqual({ status: "delivered" });
+  });
+
+  it("coerces nested function_result blocks by flattening common string fields", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [
+            {
+              type: "function_result",
+              output: "delivered to chat-42 at 2026-05-17T05:00:00Z",
+            } as never,
+          ],
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "delivered to chat-42 at 2026-05-17T05:00:00Z" },
+    ]);
+  });
+
+  it("still fails closed when no content block can be salvaged", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [{ type: "image" /* missing mimeType + data */ } as never],
+          details: {},
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
 });
