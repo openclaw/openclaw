@@ -1449,12 +1449,22 @@ export function createExecTool(
       }
       rejectUnsafeControlShellCommand(params.command);
 
+      // Inject agent identity env vars so scripts/hooks can identify the agent
+      const agentEnvVars: Record<string, string> = {};
+      if (agentId) {
+        agentEnvVars.OPENCLAW_AGENT_ID = agentId;
+        agentEnvVars.CLAWDBOT_AGENT_ID = agentId;
+      }
+      if (defaults?.sessionKey) {
+        agentEnvVars.OPENCLAW_SESSION_KEY = defaults.sessionKey;
+      }
+
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =
         host === "sandbox"
           ? null
           : sanitizeHostExecEnvWithDiagnostics({
-              baseEnv: inheritedBaseEnv,
+              baseEnv: { ...inheritedBaseEnv, ...agentEnvVars },
               overrides: params.env,
               blockPathOverrides: true,
             });
@@ -1498,10 +1508,11 @@ export function createExecTool(
           ? buildSandboxEnv({
               defaultPath: DEFAULT_PATH,
               paramsEnv: params.env,
+              agentEnvVars,
               sandboxEnv: sandbox.env,
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
-          : (hostEnvResult?.env ?? inheritedBaseEnv);
+          : (hostEnvResult?.env ?? { ...inheritedBaseEnv, ...agentEnvVars });
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
