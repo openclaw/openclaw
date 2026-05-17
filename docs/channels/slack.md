@@ -1199,6 +1199,9 @@ Slash sessions use isolated keys like `agent:<agentId>:slack:slash:<userId>` and
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
+For new agent, CLI, and plugin output, prefer the shared
+`presentation` buttons or select blocks. They use the same Slack interaction
+path while also degrading on other channels.
 
 Enable it globally:
 
@@ -1232,16 +1235,20 @@ Or enable it for one Slack account only:
 }
 ```
 
-When enabled, agents can emit Slack-only reply directives:
+When enabled, agents can still emit deprecated Slack-only reply directives:
 
 - `[[slack_buttons: Approve:approve, Reject:reject]]`
 - `[[slack_select: Choose a target | Canary:canary, Production:production]]`
 
-These directives compile into Slack Block Kit and route clicks or selections back through the existing Slack interaction event path.
+These directives compile into Slack Block Kit and route clicks or selections
+back through the existing Slack interaction event path. Keep them for old
+prompts and Slack-specific escape hatches; use shared presentation for new
+portable controls.
 
 Notes:
 
-- This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
+- This is Slack-specific legacy UI. Other channels do not translate Slack Block
+  Kit directives into their own button systems.
 - The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
 - If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
 

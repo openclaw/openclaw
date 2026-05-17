@@ -12,6 +12,14 @@ export type InteractiveReplyButton = {
   webApp?: {
     url: string;
   };
+  /**
+   * @deprecated Use webApp. The snake_case alias is accepted for legacy JSON payloads only.
+   */
+  web_app?: {
+    url: string;
+  };
+  priority?: number;
+  disabled?: boolean;
   style?: InteractiveButtonStyle;
 };
 
@@ -146,11 +154,17 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
   if (!label || (!value && !url && !webAppUrl)) {
     return undefined;
   }
+  const priority =
+    typeof record.priority === "number" && Number.isFinite(record.priority)
+      ? record.priority
+      : undefined;
   return {
     label,
     ...(value ? { value } : {}),
     ...(url ? { url } : {}),
     ...(webAppUrl ? { webApp: { url: webAppUrl } } : {}),
+    ...(priority !== undefined ? { priority } : {}),
+    ...(record.disabled === true ? { disabled: true } : {}),
     style: normalizeButtonStyle(record.style),
   };
 }
@@ -279,7 +293,7 @@ export function presentationToInteractiveReply(
     }
     if (block.type === "buttons") {
       const buttons = block.buttons
-        .filter((button) => button.value || button.url || button.webApp)
+        .filter((button) => button.value || button.url || button.webApp || button.web_app)
         .map((button) => {
           const interactiveButton: InteractiveReplyButton = {
             label: button.label,
@@ -291,8 +305,15 @@ export function presentationToInteractiveReply(
           if (button.url) {
             interactiveButton.url = button.url;
           }
-          if (button.webApp) {
-            interactiveButton.webApp = button.webApp;
+          const webApp = button.webApp ?? button.web_app;
+          if (webApp) {
+            interactiveButton.webApp = webApp;
+          }
+          if (button.priority !== undefined) {
+            interactiveButton.priority = button.priority;
+          }
+          if (button.disabled === true) {
+            interactiveButton.disabled = true;
           }
           return interactiveButton;
         });
@@ -370,7 +391,7 @@ export function renderMessagePresentationFallbackText(params: {
     if (block.type === "buttons") {
       const labels = block.buttons
         .map((button) => {
-          const targetUrl = button.url ?? button.webApp?.url;
+          const targetUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
           return targetUrl ? `${button.label}: ${targetUrl}` : button.label;
         })
         .filter(Boolean);

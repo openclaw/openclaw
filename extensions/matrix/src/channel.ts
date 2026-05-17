@@ -341,6 +341,14 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    limits: {
+      text: {
+        maxLength: 4000,
+        encoding: "characters",
+        markdownDialect: "markdown",
+        supportsEdit: true,
+      },
+    },
   },
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalMatrixExecApprovalPrompt({

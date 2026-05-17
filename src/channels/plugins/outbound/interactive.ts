@@ -1,4 +1,9 @@
 import type { InteractiveReply, InteractiveReplyBlock } from "../../../interactive/payload.js";
+export {
+  adaptMessagePresentationForChannel,
+  applyPresentationActionLimits,
+  presentationPageSize,
+} from "./presentation-limits.js";
 
 export function reduceInteractiveReply<TState>(
   interactive: InteractiveReply | undefined,
