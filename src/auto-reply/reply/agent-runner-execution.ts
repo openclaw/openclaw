@@ -16,7 +16,6 @@ import {
   classifyOAuthRefreshFailure,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
@@ -56,7 +55,7 @@ import {
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -87,6 +86,7 @@ import {
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -114,10 +114,6 @@ const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
 const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
-
-function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
-  return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
-}
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
@@ -1124,7 +1120,7 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
-function resolveSessionRuntimeOverrideForProvider(params: {
+export function resolveSessionRuntimeOverrideForProvider(params: {
   provider: string;
   entry?: Pick<SessionEntry, "agentRuntimeOverride">;
 }): string | undefined {
@@ -1747,16 +1743,6 @@ export async function runAgentTurnWithFallback(params: {
                 provider);
 
           if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
-            const startedAt = Date.now();
-            notifyAgentRunStart();
-            emitAgentEvent({
-              runId,
-              stream: "lifecycle",
-              data: {
-                phase: "start",
-                startedAt,
-              },
-            });
             const isRoomEventCliRun = params.followupRun.currentInboundEventKind === "room_event";
             const cliSessionBinding = isRoomEventCliRun
               ? undefined
@@ -1768,195 +1754,99 @@ export async function runAgentTurnWithFallback(params: {
               originatingChannel: params.followupRun.originatingChannel,
               provider: params.sessionCtx.Provider,
             });
-            return (async () => {
-              let lifecycleTerminalEmitted = false;
-              const createAssistantTextBridge = (deliver: (text: string) => Promise<void>) => {
-                let lastText: string | undefined;
-                let unsubscribed = false;
-                let delivery = Promise.resolve();
-                const rawUnsubscribe = onAgentEvent((evt) => {
-                  if (evt.runId !== runId || evt.stream !== "assistant") {
-                    return;
-                  }
-                  if (params.followupRun.run.silentExpected) {
-                    return;
-                  }
-                  const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
-                  if (text === undefined || text === lastText) {
-                    return;
-                  }
-                  lastText = text;
-                  delivery = delivery.then(() => deliver(text)).catch(() => undefined);
-                });
-                return {
-                  unsubscribe() {
-                    if (unsubscribed) {
-                      return;
-                    }
-                    unsubscribed = true;
-                    rawUnsubscribe();
-                  },
-                  async drain(): Promise<void> {
-                    await delivery;
-                  },
-                };
-              };
-              const noopBridge = {
-                unsubscribe: () => undefined,
-                drain: async (): Promise<void> => undefined,
-              };
-              const assistantBridge = createAssistantTextBridge(async (text) => {
+            const result = await runCliAgentWithLifecycle({
+              runId,
+              provider: cliExecutionProvider,
+              onAgentRunStart: notifyAgentRunStart,
+              suppressAssistantBridge: params.followupRun.run.silentExpected,
+              onAssistantText: async (text) => {
                 const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                 if (textForTyping === undefined || !params.opts?.onPartialReply) {
                   return;
                 }
                 await params.opts.onPartialReply({ text: textForTyping });
-              });
-              const reasoningBridge = shouldBridgeCliAssistantTextToReasoning(cliExecutionProvider)
-                ? createAssistantTextBridge(async (text) => {
-                    await params.opts?.onReasoningStream?.({ text });
-                  })
-                : noopBridge;
-              try {
-                const rawResult = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  trigger: params.isHeartbeat ? "heartbeat" : "user",
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: runtimeConfig,
-                  prompt: params.commandBody,
-                  transcriptPrompt: params.transcriptCommandBody,
-                  currentInboundEventKind: params.followupRun.currentInboundEventKind,
-                  currentInboundContext: params.followupRun.currentInboundContext,
-                  inputProvenance: params.followupRun.run.inputProvenance,
-                  provider: cliExecutionProvider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
-                  lane: runLane,
-                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
-                  silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
-                  extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId: cliSessionBinding?.sessionId,
-                  cliSessionBinding,
-                  authProfileId: authProfile.authProfileId,
-                  bootstrapPromptWarningSignaturesSeen,
-                  bootstrapPromptWarningSignature:
-                    bootstrapPromptWarningSignaturesSeen[
-                      bootstrapPromptWarningSignaturesSeen.length - 1
-                    ],
-                  images: params.opts?.images,
-                  imageOrder: params.opts?.imageOrder,
-                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
-                  messageChannel: params.followupRun.originatingChannel ?? undefined,
-                  messageProvider: hookMessageProvider,
-                  agentAccountId: params.followupRun.run.agentAccountId,
-                  senderIsOwner: params.followupRun.run.senderIsOwner,
-                  disableTools: params.opts?.disableTools,
-                  abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-                  replyOperation: params.replyOperation,
-                });
-                const result: EmbeddedAgentRunResult =
-                  isRoomEventCliRun && rawResult.meta.agentMeta
-                    ? (() => {
-                        const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
-                          rawResult.meta.agentMeta;
-                        return {
-                          ...rawResult,
-                          meta: {
-                            ...rawResult.meta,
-                            agentMeta: {
-                              ...agentMeta,
-                              sessionId: "",
-                            },
+              },
+              onReasoningText: async (text) => {
+                await params.opts?.onReasoningStream?.({ text });
+              },
+              onErrorBeforeLifecycle: async () => {
+                if (!rollbackFallbackCandidateSelection) {
+                  return;
+                }
+                try {
+                  await rollbackFallbackCandidateSelection();
+                  clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
+                } catch (rollbackError) {
+                  logVerbose(
+                    `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                  );
+                }
+              },
+              runParams: {
+                sessionId: params.followupRun.run.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: params.followupRun.run.agentId,
+                trigger: params.isHeartbeat ? "heartbeat" : "user",
+                sessionFile: params.followupRun.run.sessionFile,
+                workspaceDir: params.followupRun.run.workspaceDir,
+                config: runtimeConfig,
+                prompt: params.commandBody,
+                transcriptPrompt: params.transcriptCommandBody,
+                currentInboundEventKind: params.followupRun.currentInboundEventKind,
+                currentInboundContext: params.followupRun.currentInboundContext,
+                inputProvenance: params.followupRun.run.inputProvenance,
+                provider: cliExecutionProvider,
+                model,
+                thinkLevel: params.followupRun.run.thinkLevel,
+                timeoutMs: params.followupRun.run.timeoutMs,
+                runId,
+                lane: runLane,
+                extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                ownerNumbers: params.followupRun.run.ownerNumbers,
+                cliSessionId: cliSessionBinding?.sessionId,
+                cliSessionBinding,
+                authProfileId: authProfile.authProfileId,
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature:
+                  bootstrapPromptWarningSignaturesSeen[
+                    bootstrapPromptWarningSignaturesSeen.length - 1
+                  ],
+                images: params.opts?.images,
+                imageOrder: params.opts?.imageOrder,
+                skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                messageChannel: params.followupRun.originatingChannel ?? undefined,
+                messageProvider: hookMessageProvider,
+                agentAccountId: params.followupRun.run.agentAccountId,
+                senderIsOwner: params.followupRun.run.senderIsOwner,
+                disableTools: params.opts?.disableTools,
+                abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                replyOperation: params.replyOperation,
+              },
+              transformResult: (rawResult) =>
+                isRoomEventCliRun && rawResult.meta.agentMeta
+                  ? (() => {
+                      const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                        rawResult.meta.agentMeta;
+                      return {
+                        ...rawResult,
+                        meta: {
+                          ...rawResult.meta,
+                          agentMeta: {
+                            ...agentMeta,
+                            sessionId: "",
                           },
-                        };
-                      })()
-                    : rawResult;
-                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                  result.meta?.systemPromptReport,
-                );
-
-                assistantBridge.unsubscribe();
-                reasoningBridge.unsubscribe();
-                await assistantBridge.drain();
-                await reasoningBridge.drain();
-
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
-                const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
-                if (cliText) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "assistant",
-                    data: { text: cliText },
-                  });
-                }
-
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "end",
-                    startedAt,
-                    endedAt: Date.now(),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-
-                return result;
-              } catch (err) {
-                assistantBridge.unsubscribe();
-                reasoningBridge.unsubscribe();
-                await assistantBridge.drain();
-                await reasoningBridge.drain();
-                if (rollbackFallbackCandidateSelection) {
-                  try {
-                    await rollbackFallbackCandidateSelection();
-                    clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                  } catch (rollbackError) {
-                    logVerbose(
-                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                    );
-                  }
-                }
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-                throw err;
-              } finally {
-                assistantBridge.unsubscribe();
-                reasoningBridge.unsubscribe();
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
-              }
-            })();
+                        },
+                      };
+                    })()
+                  : rawResult,
+            });
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
+            return result;
           }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
