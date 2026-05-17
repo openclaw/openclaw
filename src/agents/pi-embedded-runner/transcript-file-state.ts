@@ -107,7 +107,8 @@ function isToolCallContent(value: unknown): boolean {
     repairableToolCallContentTypes.has(value.type) &&
     hasToolCallId(value) &&
     isString(value.name) &&
-    (isToolCallPayload(value.arguments) || isToolCallPayload(value.input)) &&
+    (value.arguments === undefined || isToolCallPayload(value.arguments)) &&
+    (value.input === undefined || isToolCallPayload(value.input)) &&
     isOptionalString(value.thoughtSignature)
   );
 }
@@ -373,7 +374,7 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
       if (isString(id)) {
         rejectedIds.add(id);
         const parentId = rawEntry.parentId;
-        rejectedParentById.set(id, isString(parentId) ? resolveRejectedParent(parentId) : null);
+        rejectedParentById.set(id, isString(parentId) ? parentId : null);
       }
       continue;
     }
@@ -641,7 +642,7 @@ export class TranscriptFileState {
 
 export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  const fileEntries = parseSessionEntries(raw);
+  const fileEntries = parseSessionEntries(raw).filter(isRecord);
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const headerVersionBeforeMigration = sessionHeaderVersion(headerBeforeMigration);
