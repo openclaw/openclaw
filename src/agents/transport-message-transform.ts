@@ -70,8 +70,13 @@ export function transformTransportMessages(
     }
     const isSameModel =
       msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
+    const sourceContent = Array.isArray(msg.content)
+      ? msg.content
+      : msg.content != null && typeof msg.content === "object"
+        ? ([msg.content] as typeof msg.content)
+        : [];
     const content: typeof msg.content = [];
-    for (const block of msg.content) {
+    for (const block of sourceContent) {
       if (block.type === "thinking") {
         if (block.redacted) {
           if (isSameModel) {

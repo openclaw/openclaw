@@ -166,12 +166,31 @@ const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
 const configSessionsMocks = vi.hoisted(() => ({
+  loadSessionStore: vi.fn<(storePath: string, opts?: unknown) => Record<string, unknown>>(
+    () => ({}),
+  ),
   readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
+  readLatestAssistantTextFromSessionTranscript: vi.fn<
+    (sessionFile: string) => Promise<{ text: string; timestamp?: number } | undefined>
+  >(async () => undefined),
+  resolveAndPersistSessionFile: vi.fn<(params?: unknown) => Promise<{ sessionFile: string }>>(
+    async () => ({ sessionFile: "/tmp/openclaw-discord-process-test-session.jsonl" }),
+  ),
+  resolveSessionStoreEntry: vi.fn<
+    (params: { store: Record<string, unknown>; sessionKey?: string }) => { existing?: unknown }
+  >((params) => ({
+    existing: params.sessionKey ? params.store[params.sessionKey] : undefined,
+  })),
   resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
     () => "/tmp/openclaw-discord-process-test-sessions.json",
   ),
 }));
+const loadSessionStore = configSessionsMocks.loadSessionStore;
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
+const readLatestAssistantTextFromSessionTranscript =
+  configSessionsMocks.readLatestAssistantTextFromSessionTranscript;
+const resolveAndPersistSessionFile = configSessionsMocks.resolveAndPersistSessionFile;
+const resolveSessionStoreEntry = configSessionsMocks.resolveSessionStoreEntry;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
 const createDiscordRestClientSpy = vi.hoisted(() =>
   vi.fn<
@@ -266,8 +285,17 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
-  readSessionUpdatedAt: (...args: unknown[]) => configSessionsMocks.readSessionUpdatedAt(...args),
-  resolveStorePath: (...args: unknown[]) => configSessionsMocks.resolveStorePath(...args),
+  loadSessionStore: (storePath: string, opts?: unknown) =>
+    configSessionsMocks.loadSessionStore(storePath, opts),
+  readSessionUpdatedAt: (params?: unknown) => configSessionsMocks.readSessionUpdatedAt(params),
+  readLatestAssistantTextFromSessionTranscript: (sessionFile: string) =>
+    configSessionsMocks.readLatestAssistantTextFromSessionTranscript(sessionFile),
+  resolveAndPersistSessionFile: (params?: unknown) =>
+    configSessionsMocks.resolveAndPersistSessionFile(params),
+  resolveSessionStoreEntry: (params: { store: Record<string, unknown>; sessionKey?: string }) =>
+    configSessionsMocks.resolveSessionStoreEntry(params),
+  resolveStorePath: (path?: unknown, opts?: unknown) =>
+    configSessionsMocks.resolveStorePath(path, opts),
 }));
 
 vi.mock("../client.js", () => ({
@@ -358,12 +386,24 @@ beforeEach(() => {
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
+  loadSessionStore.mockClear();
   readSessionUpdatedAt.mockClear();
+  readLatestAssistantTextFromSessionTranscript.mockClear();
+  resolveAndPersistSessionFile.mockClear();
+  resolveSessionStoreEntry.mockClear();
   resolveStorePath.mockClear();
   createDiscordRestClientSpy.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
+  loadSessionStore.mockReturnValue({});
   readSessionUpdatedAt.mockReturnValue(undefined);
+  readLatestAssistantTextFromSessionTranscript.mockResolvedValue(undefined);
+  resolveAndPersistSessionFile.mockResolvedValue({
+    sessionFile: "/tmp/openclaw-discord-process-test-session.jsonl",
+  });
+  resolveSessionStoreEntry.mockImplementation((params) => ({
+    existing: params.sessionKey ? params.store[params.sessionKey] : undefined,
+  }));
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
 });
@@ -1737,6 +1777,47 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses transcript-backed final text when progress final text is truncated", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    const prefix =
+      "Here is the complete Discord answer with enough stable prefix text before truncation";
+    const truncatedFinal = `${prefix}...`;
+    const fullAnswer = `${prefix} ${Array.from(
+      { length: 260 },
+      (_value, index) => `continuation${index}`,
+    ).join(" ")}`;
+
+    loadSessionStore.mockReturnValue({
+      "agent:main:discord:channel:c1": { sessionId: "session-1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: fullAnswer,
+      timestamp: Date.now() + 60_000,
+    });
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: truncatedFinal });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      discordConfig: { maxLinesPerMessage: 120 },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    const params = firstMockArg(deliverDiscordReply, "deliverDiscordReply");
+    const replies = requireRecord(params, "deliverDiscordReply params").replies;
+    expect(Array.isArray(replies)).toBe(true);
+    expect((replies as Array<{ text?: string }>)[0]?.text).toBe(fullAnswer);
   });
 
   it("clears partial drafts when fallback final delivery fails before completion", async () => {

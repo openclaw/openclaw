@@ -50,7 +50,10 @@ import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import { asObjectRecord } from "./object.js";
-import { isUpdatePackageSwapInProgress } from "./update-phase.js";
+import {
+  isLegacyPackageUpdateDoctorPass,
+  shouldDeferConfiguredPluginInstallRepair,
+} from "./update-phase.js";
 
 type DownloadableInstallCandidate = {
   pluginId: string;
@@ -763,6 +766,7 @@ async function installCandidate(params: {
   records: Record<string, PluginInstallRecord>;
   updateChannel?: UpdateChannel;
   mode?: "install" | "update";
+  preferNpm?: boolean;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -786,7 +790,11 @@ async function installCandidate(params: {
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
   const npmInstallSpec = npmSpecs?.installSpec ?? candidate.npmSpec;
-  if (clawhubInstallSpec && candidate.defaultChoice !== "npm") {
+  const shouldTryClawHub =
+    clawhubInstallSpec &&
+    !(params.preferNpm && npmInstallSpec) &&
+    candidate.defaultChoice !== "npm";
+  if (shouldTryClawHub) {
     const clawhubResult = await installPluginFromClawHub({
       spec: clawhubInstallSpec,
       extensionsDir,
@@ -1012,6 +1020,7 @@ async function repairMissingPluginInstalls(params: {
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion: VERSION,
   });
+  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
 
   for (const [pluginId, record] of Object.entries(records)) {
@@ -1026,7 +1035,7 @@ async function repairMissingPluginInstalls(params: {
     changes.push(`Removed stale managed install record for bundled plugin "${pluginId}".`);
   }
 
-  if (isUpdatePackageSwapInProgress(env)) {
+  if (shouldDeferConfiguredPluginInstallRepair(env)) {
     const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
       cfg: params.cfg,
       env,
@@ -1171,6 +1180,7 @@ async function repairMissingPluginInstalls(params: {
       records: nextRecords,
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
+      preferNpm: preferNpmInstalls,
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];

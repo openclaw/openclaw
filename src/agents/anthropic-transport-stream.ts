@@ -1193,8 +1193,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               const hasNativeAnthropicDelta =
                 (delta?.type === "text_delta" && typeof delta.text === "string") ||
                 (delta?.type === "thinking_delta" && typeof delta.thinking === "string") ||
-                (delta?.type === "input_json_delta" &&
-                  typeof delta.partial_json === "string") ||
+                (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") ||
                 (delta?.type === "signature_delta" && typeof delta.signature === "string");
               let appendedContent = false;
               if (

@@ -683,6 +683,7 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
   commandName: string;
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
+  providerOverrides?: { webSearch?: string; webFetch?: string };
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
   const cfg = params.config ?? getRuntimeConfig();
@@ -692,6 +693,7 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
     commandName: params.commandName,
     targetIds: params.targetIds,
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    ...(params.providerOverrides ? { providerOverrides: params.providerOverrides } : {}),
     runtime: defaultRuntime,
   });
   if (sourceConfig) {
@@ -1095,10 +1097,12 @@ async function runImageDescribe(params: {
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const resolvedPath = path.resolve(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(filePath.trim());
+      const resolvedPath = isRemoteUrl ? filePath.trim() : path.resolve(filePath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             provider: activeModel.provider,
@@ -1108,6 +1112,7 @@ async function runImageDescribe(params: {
           })
         : await describeImageFile({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             prompt,
@@ -1614,14 +1619,16 @@ async function runTtsStateMutation(params: {
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
   const rawConfig = getRuntimeConfig();
   const config = withWebProviderOverride(rawConfig, "search", params.provider);
+  const provider = normalizeOptionalString(params.provider);
   const secretTargets = getWebSearchCommandSecretTargets({
     config,
-    provider: params.provider,
+    provider,
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web search",
     targetIds: secretTargets.targetIds,
     ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
+    ...(provider ? { providerOverrides: { webSearch: provider } } : {}),
     config,
   });
   const result = await runWebSearch({
@@ -1647,14 +1654,16 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
   const rawConfig = getRuntimeConfig();
   const config = withWebProviderOverride(rawConfig, "fetch", params.provider);
+  const provider = normalizeOptionalString(params.provider);
   const secretTargets = getWebFetchCommandSecretTargets({
     config,
-    provider: params.provider,
+    provider,
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web fetch",
     targetIds: secretTargets.targetIds,
     ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
+    ...(provider ? { providerOverrides: { webFetch: provider } } : {}),
     config,
   });
   const resolved = resolveWebFetchDefinition({
