@@ -14,7 +14,8 @@ import {
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
 
-export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
+export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
+  messageId: string;
   sourceMessage: Message;
 };
 
