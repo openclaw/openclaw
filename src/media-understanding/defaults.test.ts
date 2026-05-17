@@ -190,6 +190,10 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(providers).toContain("minimax-portal-cn");
     expect(providers).not.toContain("gemini");
     expect(providers).toContain("google");
+    expect(providers.indexOf("minimax-cn")).toBeLessThan(providers.indexOf("minimax"));
+    expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
+      providers.indexOf("minimax-portal"),
+    );
   });
 
   it("keeps the bundled video fallback order", () => {

@@ -114,6 +114,30 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
   return configured;
 }
 
+function isExecutionAliasProvider(providerId: string): boolean {
+  return normalizeMediaProviderId(providerId) !== providerId;
+}
+
+function insertConfiguredImageProviders(params: {
+  prioritized: string[];
+  configured: string[];
+}): string[] {
+  const merged = [...params.prioritized];
+  for (const providerId of params.configured.filter(isExecutionAliasProvider)) {
+    const canonicalProviderId = normalizeMediaProviderId(providerId);
+    const canonicalIndex = merged.indexOf(canonicalProviderId);
+    if (canonicalIndex >= 0) {
+      merged.splice(canonicalIndex, 0, providerId);
+    } else {
+      merged.unshift(providerId);
+    }
+  }
+  for (const providerId of params.configured.filter((id) => !isExecutionAliasProvider(id))) {
+    merged.push(providerId);
+  }
+  return [...new Set(merged)];
+}
+
 export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
@@ -171,7 +195,10 @@ export function resolveAutoMediaKeyProviders(params: {
   if (params.providerRegistry || params.capability !== "image") {
     return prioritized;
   }
-  return [...new Set([...prioritized, ...resolveConfiguredImageProviderIds(params.cfg)])];
+  return insertConfiguredImageProviders({
+    prioritized,
+    configured: resolveConfiguredImageProviderIds(params.cfg),
+  });
 }
 
 export function providerSupportsNativePdfDocument(params: {

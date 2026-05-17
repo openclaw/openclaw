@@ -68,6 +68,34 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
 };
 
+function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
+  const model = cfg?.agents?.defaults?.model;
+  if (typeof model === "string") {
+    return model.trim().length > 0;
+  }
+  return typeof model?.primary === "string" && model.primary.trim().length > 0;
+}
+
+function modelRefProvider(candidate: string | null | undefined): string | undefined {
+  const trimmed = candidate?.trim();
+  if (!trimmed?.includes("/")) {
+    return undefined;
+  }
+  return trimmed.slice(0, trimmed.indexOf("/")).trim();
+}
+
+function isExecutionAliasCandidateForProvider(
+  candidate: string | null | undefined,
+  provider: string,
+): boolean {
+  const candidateProvider = modelRefProvider(candidate);
+  return Boolean(
+    candidateProvider &&
+    candidateProvider !== normalizeMediaProviderId(candidateProvider) &&
+    normalizeMediaProviderId(candidateProvider) === normalizeMediaProviderId(provider),
+  );
+}
+
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
@@ -173,12 +201,22 @@ export function resolveImageModelConfigForTool(params: {
       });
       return modelId ? `${providerId}/${modelId}` : null;
     });
+  const defaultPrimaryIsImplicit = !hasExplicitDefaultPrimaryModel(params.cfg);
+  const primaryAliasCandidates = defaultPrimaryIsImplicit
+    ? autoCandidates.filter((candidate) =>
+        isExecutionAliasCandidateForProvider(candidate, primary.provider),
+      )
+    : [];
+  const remainingAutoCandidates =
+    primaryAliasCandidates.length === 0
+      ? autoCandidates
+      : autoCandidates.filter((candidate) => !primaryAliasCandidates.includes(candidate));
 
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    candidates: [...primaryCandidates, ...autoCandidates],
+    candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
   });
 }
 

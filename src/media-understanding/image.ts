@@ -360,9 +360,30 @@ function resolveConfiguredProviderBaseUrl(
   const normalizedProvider = normalizeMediaProviderId(provider);
   const normalized = cfg.models?.providers?.[normalizedProvider];
   if (typeof normalized?.baseUrl === "string" && normalized.baseUrl.trim()) {
+    if (isMinimaxCnAlias(provider) && !isMinimaxCnBaseUrl(normalized.baseUrl)) {
+      return undefined;
+    }
     return normalized.baseUrl.trim();
   }
   return undefined;
+}
+
+function isMinimaxCnAlias(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
+}
+
+function isMinimaxCnBaseUrl(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.toLowerCase() === "api.minimaxi.com";
+  } catch {
+    return false;
+  }
 }
 
 async function resolveMinimaxVlmFallbackRuntime(params: {
