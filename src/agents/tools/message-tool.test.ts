@@ -1528,6 +1528,60 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("eventName");
   });
 
+  it("excludes unrelated action-group properties when discord exposes send plus moderation/channel actions (#81484)", () => {
+    // Regression: Discord guild allowlist mode advertises send alongside many
+    // other actions. Previously the message-tool schema merged every action
+    // group's properties (presence, channel-management, moderation, sticker)
+    // into a single permissive object, letting models emit `action="send"`
+    // payloads populated with topic/rateLimitPerUser/activityName/clearParent/
+    // status/targetAuthor but no `message`, causing "message required" and
+    // repeated outbound retries.
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: [
+        "send",
+        "read",
+        "react",
+        "reactions",
+        "edit",
+        "delete",
+        "pin",
+        "unpin",
+        "list-pins",
+        "thread-create",
+        "thread-list",
+        "thread-reply",
+        "upload-file",
+      ],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+    const properties = getToolProperties(tool);
+
+    // send/read/react/thread families remain advertised.
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("messageId");
+    expect(properties).toHaveProperty("threadName");
+
+    // Unrelated action-group properties must not leak into the shared schema.
+    expect(properties).not.toHaveProperty("topic");
+    expect(properties).not.toHaveProperty("rateLimitPerUser");
+    expect(properties).not.toHaveProperty("clearParent");
+    expect(properties).not.toHaveProperty("activityName");
+    expect(properties).not.toHaveProperty("activityState");
+    expect(properties).not.toHaveProperty("status");
+    expect(properties).not.toHaveProperty("pollId");
+    expect(properties).not.toHaveProperty("eventName");
+  });
+
   it("filters scoped schemas through the per-agent message action allowlist", () => {
     const plugin = createChannelPlugin({
       id: "discord",

@@ -791,6 +791,154 @@ function buildSendOnlyMessageToolSchemaProps(options: {
   };
 }
 
+// Map each optional action-group schema to the action names that actually
+// consume its properties. When the active action list omits all of a group's
+// actions, the group must be excluded so models cannot smuggle unrelated
+// fields (e.g. topic, rateLimitPerUser, activityName, clearParent,
+// targetAuthor) into an `action="send"` payload and produce malformed
+// outbound sends with no `message` field. See issue #81484.
+const SCOPED_ACTION_GROUPS: ReadonlyArray<{
+  actions: ReadonlySet<ChannelMessageActionName>;
+  build: () => Record<string, TSchema>;
+}> = [
+  {
+    actions: new Set<ChannelMessageActionName>([
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "unsend",
+      "pin",
+      "unpin",
+      "reply",
+    ]),
+    build: buildReactionSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>([
+      "read",
+      "search",
+      "thread-list",
+      "channel-list",
+      "list-pins",
+      "event-list",
+    ]),
+    build: buildFetchSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>(["poll", "poll-vote"]),
+    build: buildPollSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>([
+      "search",
+      "thread-list",
+      "thread-create",
+      "thread-reply",
+      "channel-info",
+      "channel-list",
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "topic-create",
+      "topic-edit",
+      "permissions",
+      "member-info",
+      "role-info",
+      "role-add",
+      "role-remove",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+      "setGroupIcon",
+      "leaveGroup",
+      "event-create",
+      "event-list",
+      "timeout",
+      "kick",
+      "ban",
+    ]),
+    build: buildChannelTargetSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>([
+      "sticker",
+      "sticker-search",
+      "sticker-upload",
+      "emoji-list",
+      "emoji-upload",
+      "download-file",
+      "upload-file",
+    ]),
+    build: buildStickerSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>(["thread-create", "thread-list", "thread-reply"]),
+    build: buildThreadSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>(["event-create", "event-list"]),
+    build: buildEventSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>(["timeout", "kick", "ban", "delete", "unsend"]),
+    build: buildModerationSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>([
+      "channel-create",
+      "channel-edit",
+      "category-create",
+      "category-edit",
+      "topic-create",
+      "topic-edit",
+    ]),
+    build: buildChannelManagementSchema,
+  },
+  {
+    actions: new Set<ChannelMessageActionName>(["set-presence", "set-profile", "voice-status"]),
+    build: buildPresenceSchema,
+  },
+];
+
+function buildScopedMessageToolSchemaProps(
+  actions: readonly string[],
+  options: {
+    includePresentation: boolean;
+    includeDeliveryPin: boolean;
+    extraProperties?: Record<string, TSchema>;
+  },
+): Record<string, TSchema> {
+  const activeActions = new Set(actions);
+  const props: Record<string, TSchema> = {
+    ...buildRoutingSchema(),
+    ...buildSendSchema(options),
+    ...buildGatewaySchema(),
+  };
+  for (const group of SCOPED_ACTION_GROUPS) {
+    let included = false;
+    for (const action of group.actions) {
+      if (activeActions.has(action)) {
+        included = true;
+        break;
+      }
+    }
+    if (!included) {
+      continue;
+    }
+    Object.assign(props, group.build());
+  }
+  if (options.extraProperties) {
+    Object.assign(props, options.extraProperties);
+  }
+  return props;
+}
+
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
@@ -800,9 +948,14 @@ function buildMessageToolSchemaFromActions(
     extraProperties?: Record<string, TSchema>;
   },
 ) {
-  const props = isSendOnlyActions(actions)
-    ? buildSendOnlyMessageToolSchemaProps(options)
-    : buildMessageToolSchemaProps(options);
+  let props: Record<string, TSchema>;
+  if (isSendOnlyActions(actions)) {
+    props = buildSendOnlyMessageToolSchemaProps(options);
+  } else if (actions.length > 0) {
+    props = buildScopedMessageToolSchemaProps(actions, options);
+  } else {
+    props = buildMessageToolSchemaProps(options);
+  }
   return Type.Object({
     action: stringEnum(actions),
     ...props,
