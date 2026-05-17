@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { planOpenClawModelsJsonWithDeps } from "./models-config.plan.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
@@ -15,7 +17,10 @@ function normalizeLmstudioBaseUrl(baseUrl: string): string {
 
 vi.mock("./models-config.providers.policy.runtime.js", () => {
   return {
-    applyProviderNativeStreamingUsagePolicy: () => undefined,
+    applyProviderNativeStreamingUsagePolicy: (
+      _providerKey: string,
+      provider: { baseUrl?: unknown } | undefined,
+    ) => provider,
     normalizeProviderConfigPolicy: (
       providerKey: string,
       provider: { baseUrl?: unknown } | undefined,
@@ -248,6 +253,142 @@ describe("normalizeProviders", () => {
     }
   });
 
+  it("does not add plaintext auth-profile keys to generated provider config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const env = { ...process.env } as NodeJS.ProcessEnv;
+    delete env.OPENAI_API_KEY;
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-profile-plaintext-secret", // pragma: allowlist secret
+            },
+          },
+        },
+        agentDir,
+      );
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          models: [createModel()],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir, env });
+
+      expect(normalized?.openai?.apiKey).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips provider apiKey values that match plaintext auth-profile keys", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const env = { ...process.env } as NodeJS.ProcessEnv;
+    delete env.OPENAI_API_KEY;
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-profile-plaintext-secret", // pragma: allowlist secret
+            },
+          },
+        },
+        agentDir,
+      );
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-profile-plaintext-secret", // pragma: allowlist secret
+          api: "openai-completions",
+          models: [createModel()],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir, env });
+
+      expect(normalized?.openai?.apiKey).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips profile-backed plaintext keys preserved by models.json merge mode", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const env = { ...process.env } as NodeJS.ProcessEnv;
+    delete env.OPENAI_API_KEY;
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-profile-plaintext-secret", // pragma: allowlist secret
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: { models: { mode: "merge", providers: {} } },
+          agentDir,
+          env,
+          existingRaw: "",
+          existingParsed: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-profile-plaintext-secret", // pragma: allowlist secret
+                api: "openai-completions",
+                models: [createModel({ id: "gpt-proof" })],
+              },
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                apiKey: "CUSTOM_PROXY_API_KEY", // pragma: allowlist secret
+                api: "openai-completions",
+                models: [createModel({ id: "custom-model" })],
+              },
+            },
+          },
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              models: [createModel({ id: "gpt-proof" })],
+            },
+          }),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<string, { apiKey?: string }>;
+      };
+      expect(parsed.providers?.openai?.apiKey).toBeUndefined();
+      expect(parsed.providers?.custom?.apiKey).toBe("CUSTOM_PROXY_API_KEY");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes SecretRef-managed provider apiKey values to env markers", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const secretRefManagedProviders = new Set<string>();
@@ -392,6 +533,73 @@ describe("normalizeProviders", () => {
 
       const normalized = normalizeProviders({ providers, agentDir });
       expect(normalized?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips profile-backed plaintext keys from merge-preserved providers without models", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const env = { ...process.env } as NodeJS.ProcessEnv;
+    delete env.OPENAI_API_KEY;
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-profile-plaintext-secret", // pragma: allowlist secret
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: {
+            models: {
+              mode: "merge",
+              providers: {
+                custom: {
+                  baseUrl: "https://custom.example/v1",
+                  apiKey: "CUSTOM_PROXY_API_KEY", // pragma: allowlist secret
+                  api: "openai-completions",
+                  models: [createModel({ id: "custom-model" })],
+                },
+              },
+            },
+          },
+          agentDir,
+          env,
+          existingRaw: "",
+          existingParsed: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-profile-plaintext-secret", // pragma: allowlist secret
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        {
+          resolveImplicitProviders: async () => ({}),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<string, { apiKey?: string }>;
+      };
+      expect(parsed.providers?.openai?.apiKey).toBeUndefined();
+      expect(parsed.providers?.custom?.apiKey).toBe("CUSTOM_PROXY_API_KEY");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
