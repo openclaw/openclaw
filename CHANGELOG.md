@@ -47,7 +47,6 @@ Docs: https://docs.openclaw.ai
 - Control UI: advertise shared Gateway protocol constants in browser connect frames, fixing protocol mismatch handshakes after protocol constant drift. Fixes #82882. Thanks @galiniliev.
 - Gateway: add rollback protocol-mismatch diagnostics, including client protocol ranges in Gateway logs and deep status/doctor hints for stale client processes. Fixes #82841. (#82908)
 - Gateway/auth: allow same-host trusted-proxy callers to use the documented local direct `gateway.auth.password` fallback after revisiting the #78684 fail-closed policy, while keeping token fallback rejected and forwarded-header requests on the trusted-proxy path. Fixes #82607. (#82953) Thanks @joshavant.
-- Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure. (#82616) Thanks @dutifulbob.
 - Agents/subagents: route group/channel subagent completions through message-tool-only handoffs when required and keep active-requester wake failures from dropping completion delivery. Fixes #82803. Thanks @galiniliev, @yozakura-ava, and @moeedahmed.
 - Memory-core: scan persisted memory source sessions on startup, comparing on-disk transcripts against the index and marking only missing/newer/resized files dirty for incremental sync. Fixes #82341. (#82341) Thanks @giodl73-repo.
 - Telegram: keep the top-level default account in the account list when named accounts or bindings are added alongside top-level credentials, preserving default polling while still letting named-only configs resolve to a single account. Fixes #82794. (#82794) Thanks @giodl73-repo.
@@ -58,6 +57,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: name outbound document attachments from their MIME type when no filename is provided, so PDF and CSV sends arrive as `file.pdf` and `file.csv` instead of an extensionless `file`. Thanks @mcaxtr.
 - Process/diagnostics: report active lane blockers in lane wait warnings so `queueAhead=0` no longer hides commands waiting behind active work. Fixes #82791. (#82792) Thanks @galiniliev.
 - Process/diagnostics: stop counting the active processing turn as queued backlog in liveness warnings so transient max-only event-loop spikes do not surface as gateway warnings.
+- Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure. (#82616) Thanks @dutifulbob.
 
 ## 2026.5.17
 
