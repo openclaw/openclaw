@@ -1,7 +1,6 @@
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
-import { maybeArchiveLegacyClawdBrowserProfileResidue } from "../doctor-browser.js";
 import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
@@ -132,16 +131,6 @@ export async function runDoctorRepairSequence(params: {
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
-  }
-  const legacyBrowserProfileCleanup = await maybeArchiveLegacyClawdBrowserProfileResidue(
-    state.candidate,
-    { env },
-  );
-  if (legacyBrowserProfileCleanup.changes.length > 0) {
-    changeNotes.push(sanitizeLines(legacyBrowserProfileCleanup.changes));
-  }
-  if (legacyBrowserProfileCleanup.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(legacyBrowserProfileCleanup.warnings));
   }
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,

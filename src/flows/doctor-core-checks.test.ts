@@ -38,6 +38,7 @@ describe("registerCoreHealthChecks", () => {
       "core/doctor/command-owner",
       "core/doctor/workspace-status",
       "core/doctor/skills-readiness",
+      "core/doctor/browser-clawd-profile-residue",
       "core/doctor/final-config-validation",
     ]);
   });
@@ -57,7 +58,7 @@ describe("registerCoreHealthChecks", () => {
     clearHealthChecksForTest();
     registerCoreHealthChecks();
 
-    expect(listHealthChecks()).toHaveLength(5);
+    expect(listHealthChecks()).toHaveLength(6);
   });
 
   it("shows the repair-capable health check shape with skills readiness", async () => {

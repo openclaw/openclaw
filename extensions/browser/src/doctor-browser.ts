@@ -31,7 +31,7 @@ type ManagedProfile = {
   name: string;
 };
 
-type LegacyClawdBrowserProfileResidue = {
+export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
   legacyUserDataDir: string;
   canonicalUserDataDir: string;
@@ -147,7 +147,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   return false;
 }
 
-function resolveLegacyClawdBrowserProfileResidue(
+export function detectLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,
 ): LegacyClawdBrowserProfileResidue | null {
@@ -224,7 +224,7 @@ export async function noteChromeMcpBrowserReadiness(
   const managedProfiles = collectManagedProfiles(cfg);
   const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const legacyClawdResidue = resolveLegacyClawdBrowserProfileResidue(cfg, {
+  const legacyClawdResidue = detectLegacyClawdBrowserProfileResidue(cfg, {
     configDir: deps?.configDir,
     pathExists: deps?.pathExists,
   });
@@ -352,7 +352,7 @@ export async function maybeArchiveLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,
 ): Promise<{ changes: string[]; warnings: string[] }> {
-  const residue = resolveLegacyClawdBrowserProfileResidue(cfg, deps);
+  const residue = detectLegacyClawdBrowserProfileResidue(cfg, deps);
   if (!residue) {
     return { changes: [], warnings: [] };
   }

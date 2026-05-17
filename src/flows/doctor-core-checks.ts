@@ -1,5 +1,11 @@
+import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
+import {
+  detectLegacyClawdBrowserProfileResidue,
+  maybeArchiveLegacyClawdBrowserProfileResidue,
+  type LegacyClawdBrowserProfileResidue,
+} from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
   collectUnavailableAgentSkills,
@@ -10,6 +16,7 @@ import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.j
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
+const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 
 export function configValidationIssuesToHealthFindings(
@@ -167,6 +174,92 @@ function skillReadinessPath(skill: SkillStatusEntry): string {
   return `skills.entries.${skill.skillKey}.enabled`;
 }
 
+function browserResidueDeps(ctx: { configPath?: string }) {
+  return ctx.configPath ? { configDir: path.dirname(ctx.configPath) } : {};
+}
+
+function browserResidueFinding(residue: LegacyClawdBrowserProfileResidue): HealthFinding {
+  return {
+    checkId: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
+    severity: "warning",
+    message: `Legacy managed browser profile residue was found at ${residue.legacyProfileDir}.`,
+    path: residue.legacyProfileDir,
+    ocPath: "oc://state/browser/clawd",
+    fixHint:
+      "Run `openclaw doctor --fix` to archive the stale clawd profile safely instead of deleting it in place.",
+  };
+}
+
+function formatWouldArchiveBrowserResidue(residue: LegacyClawdBrowserProfileResidue): string {
+  return [
+    "Would archive legacy clawd managed browser profile residue.",
+    `- legacy profile: ${residue.legacyProfileDir}`,
+    `- canonical profile: ${residue.canonicalUserDataDir}`,
+  ].join("\n");
+}
+
+const browserClawdProfileResidueCheck: HealthCheck = {
+  id: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
+  kind: "core",
+  description:
+    "Legacy clawd managed browser profile residue has been archived after the OpenClaw rename.",
+  source: "doctor",
+  async detect(ctx, scope) {
+    const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
+    if (!residue) {
+      return [];
+    }
+    const scopedPaths = new Set(scope?.paths ?? []);
+    if (scopedPaths.size > 0 && !scopedPaths.has(residue.legacyProfileDir)) {
+      return [];
+    }
+    return [browserResidueFinding(residue)];
+  },
+  async repair(ctx) {
+    const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
+    if (!residue) {
+      return {
+        status: "skipped",
+        reason: "legacy clawd browser profile residue no longer exists",
+        changes: [],
+      };
+    }
+    const effect = {
+      kind: "state" as const,
+      action:
+        ctx.dryRun === true
+          ? "would-archive-legacy-browser-profile-residue"
+          : "archive-legacy-browser-profile-residue",
+      target: residue.legacyProfileDir,
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun === true) {
+      return {
+        changes: [formatWouldArchiveBrowserResidue(residue)],
+        effects: [effect],
+      };
+    }
+    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
+      ctx.cfg,
+      browserResidueDeps(ctx),
+    );
+    if (result.changes.length === 0 && result.warnings.length > 0) {
+      return {
+        status: "failed",
+        reason: result.warnings.join("; "),
+        changes: [],
+        warnings: result.warnings,
+        effects: [],
+      };
+    }
+    return {
+      changes: result.changes,
+      warnings: result.warnings,
+      effects: result.changes.length > 0 ? [effect] : [],
+    };
+  },
+};
+
 const finalConfigValidationCheck: HealthCheck = {
   id: FINAL_CONFIG_VALIDATION_CHECK_ID,
   kind: "core",
@@ -192,6 +285,7 @@ export function registerCoreHealthChecks(): void {
   registerHealthCheck(commandOwnerCheck);
   registerHealthCheck(workspaceStatusCheck);
   registerHealthCheck(skillsReadinessCheck);
+  registerHealthCheck(browserClawdProfileResidueCheck);
   registerHealthCheck(finalConfigValidationCheck);
   registered = true;
 }
@@ -205,6 +299,7 @@ export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = [
   commandOwnerCheck,
   workspaceStatusCheck,
   skillsReadinessCheck,
+  browserClawdProfileResidueCheck,
   finalConfigValidationCheck,
 ];
 

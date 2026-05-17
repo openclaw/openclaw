@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
   noteChromeMcpBrowserReadiness,
 } from "./doctor-browser.js";
@@ -45,6 +46,37 @@ describe("doctor browser facade", () => {
     });
     expect(delegate).toHaveBeenCalledWith(cfg, { noteFn });
     expect(noteFn).not.toHaveBeenCalled();
+  });
+
+  it("delegates legacy clawd browser profile detection to the browser facade surface", async () => {
+    const residue = {
+      legacyProfileDir: "/tmp/openclaw-home/browser/clawd",
+      legacyUserDataDir: "/tmp/openclaw-home/browser/clawd/user-data",
+      canonicalUserDataDir: "/tmp/openclaw-home/browser/openclaw/user-data",
+    };
+    const detect = vi.fn().mockReturnValue(residue);
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      noteChromeMcpBrowserReadiness: vi.fn(),
+      detectLegacyClawdBrowserProfileResidue: detect,
+    });
+    const cfg: OpenClawConfig = {
+      browser: {
+        profiles: {
+          openclaw: { color: "#FF4500" },
+        },
+      },
+    };
+    const deps = {
+      configDir: "/tmp/openclaw-home",
+      pathExists: (targetPath: string) => targetPath === "/tmp/openclaw-home/browser/clawd",
+    };
+
+    await expect(detectLegacyClawdBrowserProfileResidue(cfg, deps)).resolves.toEqual(residue);
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "browser",
+      artifactBasename: "browser-doctor.js",
+    });
+    expect(detect).toHaveBeenCalledWith(cfg, deps);
   });
 
   it("delegates legacy clawd browser profile cleanup to the browser facade surface", async () => {
@@ -94,6 +126,19 @@ describe("doctor browser facade", () => {
       changes: [],
       warnings: ["Browser profile cleanup is unavailable: missing browser doctor facade"],
     });
+  });
+
+  it("skips loading the browser residue detection surface when legacy residue is absent", async () => {
+    await expect(
+      detectLegacyClawdBrowserProfileResidue(
+        {},
+        {
+          configDir: "/tmp/openclaw-home",
+          pathExists: () => false,
+        },
+      ),
+    ).resolves.toBeNull();
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
   it("skips loading the browser cleanup surface when legacy residue is absent", async () => {

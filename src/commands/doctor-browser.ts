@@ -20,15 +20,25 @@ type BrowserDoctorDeps = {
   pathExists?: (targetPath: string) => boolean;
 };
 
-type BrowserDoctorRepairDeps = {
+export type BrowserDoctorRepairDeps = {
   env?: NodeJS.ProcessEnv;
   configDir?: string;
   pathExists?: (targetPath: string) => boolean;
   movePathToTrash?: (targetPath: string) => Promise<string>;
 };
 
+export type LegacyClawdBrowserProfileResidue = {
+  legacyProfileDir: string;
+  legacyUserDataDir: string;
+  canonicalUserDataDir: string;
+};
+
 type BrowserDoctorSurface = {
   noteChromeMcpBrowserReadiness: (cfg: OpenClawConfig, deps?: BrowserDoctorDeps) => Promise<void>;
+  detectLegacyClawdBrowserProfileResidue?: (
+    cfg: OpenClawConfig,
+    deps?: BrowserDoctorRepairDeps,
+  ) => LegacyClawdBrowserProfileResidue | null;
   maybeArchiveLegacyClawdBrowserProfileResidue?: (
     cfg: OpenClawConfig,
     deps?: BrowserDoctorRepairDeps,
@@ -62,6 +72,20 @@ export async function noteChromeMcpBrowserReadiness(cfg: OpenClawConfig, deps?: 
     const message = error instanceof Error ? error.message : String(error);
     noteFn(`- Browser health check is unavailable: ${message}`, "Browser");
   }
+}
+
+export async function detectLegacyClawdBrowserProfileResidue(
+  cfg: OpenClawConfig,
+  deps?: BrowserDoctorRepairDeps,
+): Promise<LegacyClawdBrowserProfileResidue | null> {
+  if (!mayHaveLegacyClawdBrowserProfileResidue(deps)) {
+    return null;
+  }
+  const detect = loadBrowserDoctorSurface().detectLegacyClawdBrowserProfileResidue;
+  if (!detect) {
+    return null;
+  }
+  return detect(cfg, deps);
 }
 
 export async function maybeArchiveLegacyClawdBrowserProfileResidue(
