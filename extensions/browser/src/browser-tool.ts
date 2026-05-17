@@ -48,6 +48,7 @@ import {
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { describeBrowserImageWithVision, isBrowserVisionEnabled } from "./browser/vision.js";
+import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
   browserAct,
@@ -786,7 +787,14 @@ export function createBrowserTool(opts?: {
               );
               const headerLines = [`MEDIA:${screenshotPath}`];
               headerLines.push(`[analyzed by ${described.provider}/${described.model}]`);
-              const text = `${headerLines.join("\n")}\n${described.text.trim()}`;
+              // Vision model descriptions contain web page content which is
+              // untrusted external input — wrap it the same way snapshot and
+              // tabs results are wrapped to mitigate prompt injection.
+              const wrappedDescription = wrapExternalContent(described.text.trim(), {
+                source: "browser",
+                includeWarning: true,
+              });
+              const text = `${headerLines.join("\n")}\n${wrappedDescription}`;
               return {
                 content: [{ type: "text", text }],
                 details: {

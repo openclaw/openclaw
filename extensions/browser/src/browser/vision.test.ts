@@ -320,4 +320,62 @@ describe("describeBrowserImageWithVision", () => {
     expect(result.text.length).toBeLessThanOrEqual(100);
     expect(result.text.endsWith("[truncated]")).toBe(true);
   });
+
+  it("skips candidates when file size exceeds maxBytes", async () => {
+    // Create a temp file larger than 50 bytes to trigger the maxBytes guard.
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vision-test-"));
+    const bigFile = path.join(tmpDir, "big.jpg");
+    await fs.writeFile(bigFile, Buffer.alloc(200)); // 200 bytes
+
+    const describe = vi.fn().mockResolvedValue({ text: "ok", model: "gpt-vision" });
+    await expect(
+      describeBrowserImageWithVision(
+        {
+          cfg: {
+            tools: {
+              browser: {
+                maxBytes: 50,
+                models: [{ provider: "openai", model: "gpt-vision" }],
+              },
+            },
+          },
+          filePath: bigFile,
+        },
+        makeDeps(describe),
+      ),
+    ).rejects.toThrow(/exceeds maxBytes/);
+    expect(describe).not.toHaveBeenCalled();
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("forwards profile and preferredProfile to describeImageFileWithModel", async () => {
+    const describe = vi.fn().mockResolvedValue({ text: "ok", model: "gpt-vision" });
+    await describeBrowserImageWithVision(
+      {
+        cfg: {
+          tools: {
+            browser: {
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-vision",
+                  profile: "my-profile",
+                  preferredProfile: "my-preferred",
+                },
+              ],
+            },
+          },
+        },
+        filePath: "/tmp/screenshot.png",
+      },
+      makeDeps(describe),
+    );
+    const args = describe.mock.calls[0][0] as Record<string, unknown>;
+    expect(args.profile).toBe("my-profile");
+    expect(args.preferredProfile).toBe("my-preferred");
+  });
 });
