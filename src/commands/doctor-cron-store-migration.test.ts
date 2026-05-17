@@ -159,13 +159,19 @@ describe("normalizeStoredCronJobs", () => {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
         payload: { kind: "agentTurn", message: ["tick"] },
       }),
+      makeLegacyJob({
+        id: "empty-agent-turn-message",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "   " },
+      }),
     ];
 
     const result = normalizeStoredCronJobs(jobs);
 
     expect(result.mutated).toBe(true);
     expect(result.issues.invalidSchedule).toBe(1);
-    expect(result.issues.invalidPayload).toBe(1);
+    expect(result.issues.invalidPayload).toBe(2);
     expect(jobs.map((job) => job.id)).toEqual(["valid"]);
     expect(result.jobs.map((job) => job.id)).toEqual(["valid"]);
   });

@@ -57,8 +57,8 @@ export function getInvalidPersistedCronJobReason(
     }
   }
   if (payloadKind === "agentTurn") {
-    if (typeof payloadRecord.message !== "string") {
-      return "missing-payload-text";
+    if (typeof payloadRecord.message !== "string" || payloadRecord.message.trim().length === 0) {
+      return "invalid-payload";
     }
   }
   return null;

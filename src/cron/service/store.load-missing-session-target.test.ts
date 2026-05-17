@@ -198,6 +198,18 @@ describe("cron service store load: missing sessionTarget", () => {
         payload: { kind: "agentTurn", message: { text: "tick" } },
         state: {},
       },
+      {
+        id: "empty-agent-turn-message",
+        name: "empty agent turn message",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "   " },
+        state: {},
+      },
     ]);
     const beforeRaw = await fs.readFile(storePath, "utf-8");
     const warnSpy = vi.spyOn(logger, "warn");
@@ -214,13 +226,14 @@ describe("cron service store load: missing sessionTarget", () => {
       const msg = typeof call[1] === "string" ? call[1] : "";
       return msg.includes("skipped invalid persisted job");
     });
-    expect(invalidShapeWarns).toHaveLength(5);
+    expect(invalidShapeWarns).toHaveLength(6);
     expect(invalidShapeWarns.map((call) => (call[0] as { reason?: string }).reason)).toEqual([
       "missing-schedule",
       "missing-payload",
       "invalid-schedule",
       "missing-payload-text",
-      "missing-payload-text",
+      "invalid-payload",
+      "invalid-payload",
     ]);
     warnSpy.mockRestore();
   });
