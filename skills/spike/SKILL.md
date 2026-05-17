@@ -20,7 +20,7 @@ Loop
 
 Output shape
 
-- Default workspace: `/tmp/openclaw-spikes/<slug>` unless user asks for repo-local files.
+- Default workspace: `.tmp/openclaw-spikes/<slug>` unless user asks for a tracked repo-local path.
 - Repo-local option: `spikes/<NNN-slug>/` with `README.md` and minimal code.
 - Prefer runnable CLI, tiny HTML, one endpoint, or focused test.
 - Avoid package sprawl, Docker, env files, app frameworks, and production cleanup.
