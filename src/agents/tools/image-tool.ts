@@ -96,23 +96,19 @@ function isExecutionAliasCandidateForProvider(
   );
 }
 
-function resolveConfiguredMinimaxExecutionAliasProviders(cfg?: OpenClawConfig): string[] {
-  return Object.keys(cfg?.models?.providers ?? {}).filter(
-    (providerId) =>
-      isMinimaxVlmProvider(providerId) && providerId !== normalizeMediaProviderId(providerId),
-  );
-}
-
 function isCanonicalCandidateShadowedByExecutionAlias(
   candidate: string | null | undefined,
-  aliasProviders: readonly string[],
+  candidates: readonly (string | null | undefined)[],
 ): boolean {
   const candidateProvider = modelRefProvider(candidate);
   if (!candidateProvider || candidateProvider !== normalizeMediaProviderId(candidateProvider)) {
     return false;
   }
-  return aliasProviders.some(
-    (aliasProvider) => normalizeMediaProviderId(aliasProvider) === candidateProvider,
+  if (!isMinimaxVlmProvider(candidateProvider)) {
+    return false;
+  }
+  return candidates.some((shadowCandidate) =>
+    isExecutionAliasCandidateForProvider(shadowCandidate, candidateProvider),
   );
 }
 
@@ -207,10 +203,7 @@ export function resolveImageModelConfigForTool(params: {
     return [];
   })();
 
-  const configuredMinimaxAliasProviders = resolveConfiguredMinimaxExecutionAliasProviders(
-    params.cfg,
-  );
-  const autoCandidates = imageToolProviderDeps
+  const rawAutoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -225,11 +218,14 @@ export function resolveImageModelConfigForTool(params: {
         includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
       });
       return modelId ? `${providerId}/${modelId}` : null;
-    })
-    .filter(
-      (candidate) =>
-        !isCanonicalCandidateShadowedByExecutionAlias(candidate, configuredMinimaxAliasProviders),
-    );
+    });
+  const autoCandidates = rawAutoCandidates.filter(
+    (candidate) =>
+      !isCanonicalCandidateShadowedByExecutionAlias(candidate, [
+        ...primaryCandidates,
+        ...rawAutoCandidates,
+      ]),
+  );
   const defaultPrimaryIsImplicit = !hasExplicitDefaultPrimaryModel(params.cfg);
   const primaryAliasCandidates = defaultPrimaryIsImplicit
     ? autoCandidates.filter((candidate) =>

@@ -847,6 +847,48 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("keeps canonical MiniMax fallback when configured CN alias has no image candidate", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) =>
+          capability === "image" ? ["minimax"] : [],
+        resolveDefaultMediaModel: ({ providerId, capability }) =>
+          capability === "image" && providerId === "minimax" ? "MiniMax-VL-01" : undefined,
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax/MiniMax-VL-01",
+      });
+    });
+  });
+
   it("passes the configured image timeout to provider calls", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       await withTempAgentDir(async (agentDir) => {
