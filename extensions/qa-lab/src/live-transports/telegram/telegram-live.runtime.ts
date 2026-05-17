@@ -362,6 +362,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       telegramQaStepRun({
         expectReply: true,
         input: `/context@${sutUsername}`,
+        matchText: "/context list",
         expectedTextIncludes: ["/context list", "Inline shortcut"],
       }),
   },
@@ -1258,7 +1259,11 @@ function matchesTelegramScenarioReply(params: {
   if (params.allowAnySutReply === true) {
     return params.message.messageId > params.sentMessageId;
   }
-  return Boolean(params.matchText && params.message.text.includes(params.matchText));
+  return Boolean(
+    params.matchText &&
+    params.message.messageId > params.sentMessageId &&
+    params.message.text.includes(params.matchText),
+  );
 }
 
 function assertTelegramScenarioReply(params: {
@@ -1789,6 +1794,7 @@ export async function runTelegramQaLive(params: {
                 });
                 driverOffset = await flushTelegramUpdates(runtimeEnv.driverToken);
               }
+              driverOffset = await flushTelegramUpdates(runtimeEnv.driverToken);
               const stepResult = await runTelegramQaScenarioStep({
                 driverOffset,
                 driverToken: runtimeEnv.driverToken,
