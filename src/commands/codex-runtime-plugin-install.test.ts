@@ -225,6 +225,7 @@ describe("ensureCodexRuntimePluginForGatewayStartup", () => {
     expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
     expect(result.cfg).toBe(cfg);
     expect(log.messages.some((m) => m.includes("skipping startup install"))).toBe(true);
+    expect(log.messages.some((m) => m.includes("openclaw plugins install"))).toBe(true);
   });
 
   it("does not invoke any install side effect when plugins.enabled is false and the package is missing", async () => {
@@ -242,5 +243,32 @@ describe("ensureCodexRuntimePluginForGatewayStartup", () => {
     expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
     expect(result.cfg).toBe(cfg);
     expect(log.messages.some((m) => m.includes("skipping startup install"))).toBe(true);
+    expect(log.messages.some((m) => m.includes("openclaw plugins install"))).toBe(true);
+  });
+
+  it("returns passthrough with manual fix log when install times out", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } as OpenClawConfig;
+    const log = createLog();
+
+    loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+    existsSync.mockReturnValue(false);
+    ensureOnboardingPluginInstalled.mockImplementation(
+      () => new Promise(() => {}), // never resolves
+    );
+
+    const { ensureCodexRuntimePluginForGatewayStartup } =
+      await import("./codex-runtime-plugin-install.js");
+    // Inject a 0ms timeout so the test doesn't wait 60s
+    const result = await ensureCodexRuntimePluginForGatewayStartup({
+      cfg,
+      log: log.log,
+      installTimeoutMs: 0,
+    });
+
+    expect(result.cfg).toBe(cfg);
+    expect(log.messages.some((m) => m.includes("timed out"))).toBe(true);
+    expect(log.messages.some((m) => m.includes("openclaw plugins install"))).toBe(true);
   });
 });
