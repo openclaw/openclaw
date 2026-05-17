@@ -101,6 +101,7 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
     {
       pluginId: "firecrawl",
       id: "firecrawl",
+      autoDetectOrder: 50,
       credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
       getConfiguredCredentialValue: (config?: {
         plugins?: {
@@ -127,6 +128,7 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
     {
       pluginId: "other-fetch",
       id: "other",
+      autoDetectOrder: 100,
       credentialPath: "plugins.entries.other-fetch.config.webFetch.apiKey",
       getConfiguredCredentialValue: (config?: {
         plugins?: {
@@ -149,6 +151,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
     {
       pluginId: "brave",
       id: "brave",
+      autoDetectOrder: 10,
       credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
       getConfiguredCredentialValue: (config?: {
         tools?: { web?: { search?: { apiKey?: unknown } } };
@@ -166,6 +169,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
     {
       pluginId: "firecrawl",
       id: "firecrawl",
+      autoDetectOrder: 60,
       credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
       getConfiguredCredentialValue: (config?: {
         plugins?: {
@@ -196,6 +200,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
     {
       pluginId: "exa",
       id: "exa",
+      autoDetectOrder: 65,
       credentialPath: "plugins.entries.exa.config.webSearch.apiKey",
       getConfiguredCredentialValue: (config?: {
         plugins?: {
@@ -211,6 +216,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
     {
       pluginId: "gemini",
       id: "gemini",
+      autoDetectOrder: 20,
       credentialPath: "plugins.entries.gemini.config.webSearch.apiKey",
       getConfiguredCredentialValue: (): undefined => undefined,
       getConfiguredCredentialFallback: (config?: {
@@ -224,6 +230,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
     {
       pluginId: "ollama",
       id: "ollama",
+      autoDetectOrder: 110,
       credentialPath: "",
       getConfiguredCredentialValue: (): undefined => undefined,
       getConfiguredCredentialFallback: (): undefined => undefined,
@@ -340,6 +347,73 @@ describe("command secret target ids", () => {
               config: {
                 webSearch: {
                   apiKey: { source: "env", provider: "default", id: "EXA_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      { providerId: "firecrawl" },
+    );
+
+    expect(scoped.targetIds).toEqual(
+      new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+    );
+    expect(scoped.forcedActivePaths).toEqual(
+      new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+    );
+  });
+
+  it("discovers explicit search provider targets even when config selects another provider", async () => {
+    const webSearchProviders = await import("../plugins/web-search-providers.runtime.js");
+    vi.mocked(webSearchProviders.resolvePluginWebSearchProviders).mockImplementationOnce(
+      (params: { config?: { tools?: { web?: { search?: { provider?: string } } } } }) => {
+        const selectedProvider = params.config?.tools?.web?.search?.provider;
+        return selectedProvider === "firecrawl"
+          ? ([
+              {
+                pluginId: "firecrawl",
+                id: "firecrawl",
+                credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+                getConfiguredCredentialValue: (config?: {
+                  plugins?: {
+                    entries?: {
+                      firecrawl?: { config?: { webSearch?: { apiKey?: unknown } } };
+                    };
+                  };
+                }) => config?.plugins?.entries?.firecrawl?.config?.webSearch?.apiKey,
+                getConfiguredCredentialFallback: (): undefined => undefined,
+                getCredentialValue: (): undefined => undefined,
+              },
+            ] as never)
+          : ([
+              {
+                pluginId: "exa",
+                id: "exa",
+                credentialPath: "plugins.entries.exa.config.webSearch.apiKey",
+                getConfiguredCredentialValue: (config?: {
+                  plugins?: {
+                    entries?: {
+                      exa?: { config?: { webSearch?: { apiKey?: unknown } } };
+                    };
+                  };
+                }) => config?.plugins?.entries?.exa?.config?.webSearch?.apiKey,
+                getConfiguredCredentialFallback: (): undefined => undefined,
+                getCredentialValue: (): undefined => undefined,
+              },
+            ] as never);
+      },
+    );
+
+    const scoped = getCapabilityWebSearchCommandSecretTargets(
+      {
+        tools: { web: { search: { provider: "exa", enabled: true } } },
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
                 },
               },
             },
@@ -477,7 +551,7 @@ describe("command secret target ids", () => {
           firecrawl: {
             config: {
               webFetch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                apiKey: "firecrawl-key",
               },
             },
           },
@@ -505,7 +579,7 @@ describe("command secret target ids", () => {
           firecrawl: {
             config: {
               webFetch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                apiKey: "firecrawl-key",
               },
             },
           },
@@ -517,9 +591,126 @@ describe("command secret target ids", () => {
     expect(scoped.allowedPaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
     );
-    expect(scoped.forcedActivePaths).toEqual(
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
     );
+  });
+
+  it("does not force later search fallback refs after an earlier provider credential", () => {
+    const scoped = getCapabilityWebSearchCommandSecretTargets({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          google: {
+            apiKey: "google-key",
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds.has("models.providers.*.apiKey")).toBe(false);
+    expect(scoped.allowedPaths).toBeUndefined();
+    expect(scoped.forcedActivePaths).toBeUndefined();
+  });
+
+  it("uses runtime auto-detect order before stopping at a search credential", () => {
+    const scoped = getCapabilityWebSearchCommandSecretTargets({
+      tools: { web: { search: { enabled: true } } },
+      models: {
+        providers: {
+          google: {
+            apiKey: "google-key",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "EXA_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds.has("models.providers.*.apiKey")).toBe(true);
+    expect(scoped.allowedPaths).toEqual(
+      new Set(["models.providers.google.apiKey", "plugins.entries.exa.config.webSearch.apiKey"]),
+    );
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(new Set(["models.providers.google.apiKey"]));
+  });
+
+  it("treats unresolved search fallback refs as optional during auto-detect", () => {
+    const scoped = getCapabilityWebSearchCommandSecretTargets({
+      tools: { web: { search: { enabled: true } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: "exa-key",
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
+    expect(scoped.allowedPaths).toEqual(
+      new Set([
+        "plugins.entries.exa.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webFetch.apiKey",
+      ]),
+    );
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(
+      new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
+    );
+  });
+
+  it("does not force search fallback refs when web search is disabled", () => {
+    const scoped = getCapabilityWebSearchCommandSecretTargets({
+      tools: { web: { search: { enabled: false, provider: "firecrawl" } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
+    expect(scoped.allowedPaths).toBeUndefined();
+    expect(scoped.forcedActivePaths).toBeUndefined();
   });
 
   it("limits auto-detect wildcard fallback paths to the concrete configured path", () => {
@@ -528,7 +719,7 @@ describe("command secret target ids", () => {
       models: {
         providers: {
           google: {
-            apiKey: { source: "env", provider: "default", id: "GOOGLE_API_KEY" },
+            apiKey: "google-key",
           },
           openai: {
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
@@ -539,7 +730,8 @@ describe("command secret target ids", () => {
 
     expect(scoped.targetIds.has("models.providers.*.apiKey")).toBe(true);
     expect(scoped.allowedPaths).toEqual(new Set(["models.providers.google.apiKey"]));
-    expect(scoped.forcedActivePaths).toEqual(new Set(["models.providers.google.apiKey"]));
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(new Set(["models.providers.google.apiKey"]));
   });
 
   it("falls back to broad web search command targets for stale configured providers", () => {
@@ -570,7 +762,7 @@ describe("command secret target ids", () => {
           firecrawl: {
             config: {
               webFetch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                apiKey: "firecrawl-key",
               },
             },
           },
@@ -582,7 +774,8 @@ describe("command secret target ids", () => {
     expect(scoped.allowedPaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
     );
-    expect(scoped.forcedActivePaths).toEqual(
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
     );
   });
@@ -670,7 +863,7 @@ describe("command secret target ids", () => {
           firecrawl: {
             config: {
               webSearch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                apiKey: "firecrawl-key",
               },
             },
           },
@@ -719,7 +912,7 @@ describe("command secret target ids", () => {
           firecrawl: {
             config: {
               webSearch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                apiKey: "firecrawl-key",
               },
             },
           },
@@ -731,14 +924,15 @@ describe("command secret target ids", () => {
     expect(scoped.allowedPaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
     );
-    expect(scoped.forcedActivePaths).toEqual(
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
     );
   });
 
-  it("includes configured fetch fallback targets for stale configured providers", () => {
+  it("does not force fetch fallback refs when web fetch is disabled", () => {
     const scoped = getCapabilityWebFetchCommandSecretTargets({
-      tools: { web: { fetch: { provider: "stale", enabled: true } } },
+      tools: { web: { fetch: { enabled: false, provider: "firecrawl" } } },
       plugins: {
         entries: {
           firecrawl: {
@@ -752,11 +946,63 @@ describe("command secret target ids", () => {
       },
     } as never);
 
+    expect(scoped.targetIds.has("plugins.entries.firecrawl.config.webSearch.apiKey")).toBe(false);
+    expect(scoped.allowedPaths).toBeUndefined();
+    expect(scoped.forcedActivePaths).toBeUndefined();
+  });
+
+  it("treats unresolved fetch fallback refs as optional during auto-detect", () => {
+    const scoped = getCapabilityWebFetchCommandSecretTargets({
+      tools: { web: { fetch: { enabled: true } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_FIRECRAWL_SEARCH_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
     expect(scoped.targetIds.has("plugins.entries.firecrawl.config.webSearch.apiKey")).toBe(true);
     expect(scoped.allowedPaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
     );
-    expect(scoped.forcedActivePaths).toEqual(
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(
+      new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+    );
+  });
+
+  it("includes configured fetch fallback targets for stale configured providers", () => {
+    const scoped = getCapabilityWebFetchCommandSecretTargets({
+      tools: { web: { fetch: { provider: "stale", enabled: true } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: "firecrawl-key",
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds.has("plugins.entries.firecrawl.config.webSearch.apiKey")).toBe(true);
+    expect(scoped.allowedPaths).toEqual(
+      new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+    );
+    expect(scoped.forcedActivePaths).toBeUndefined();
+    expect(scoped.optionalActivePaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
     );
   });

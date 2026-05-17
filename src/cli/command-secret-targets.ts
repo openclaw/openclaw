@@ -5,7 +5,9 @@ import type {
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
 import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
+import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import { loadChannelSecretContractApi } from "../secrets/channel-contract-api.js";
 import {
@@ -78,6 +80,7 @@ type CommandSecretTargetScope = {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
 };
 type SelectedProviderTargetIds = {
   matchedProvider: boolean;
@@ -328,6 +331,25 @@ function resolveSelectedWebSearchProviderId(
   );
 }
 
+function withSelectedWebProviderForDiscovery(
+  config: OpenClawConfig,
+  kind: "search" | "fetch",
+  providerId: string | undefined,
+): OpenClawConfig {
+  if (!providerId) {
+    return config;
+  }
+  const next = structuredClone(config);
+  const tools = (next.tools ??= {});
+  const web = (tools.web ??= {});
+  const existing = web[kind];
+  web[kind] =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...existing, provider: providerId }
+      : { provider: providerId };
+  return next;
+}
+
 function hasConfiguredFetchCredential(params: {
   provider: PluginWebFetchProviderEntry;
   config: OpenClawConfig;
@@ -431,8 +453,13 @@ function getCapabilityWebSearchSelectedProviderTargetIds(
   const allowedPaths = new Set<string>();
   const fallbackTargetIds = new Set<string>();
   const fallbackPaths = new Set<string>();
-  const providers = resolvePluginWebSearchProviders({
+  const providerDiscoveryConfig = withSelectedWebProviderForDiscovery(
     config,
+    "search",
+    normalizeProviderId(providerId),
+  );
+  const providers = resolvePluginWebSearchProviders({
+    config: providerDiscoveryConfig,
     bundledAllowlistCompat: true,
   }).filter((provider) => provider.id === selectedProviderId);
   for (const provider of providers) {
@@ -523,8 +550,13 @@ function getCapabilityWebFetchSelectedProviderTargetIds(
   const allowedPaths = new Set<string>();
   const fallbackTargetIds = new Set<string>();
   const fallbackPaths = new Set<string>();
-  const providers = resolvePluginWebFetchProviders({
+  const providerDiscoveryConfig = withSelectedWebProviderForDiscovery(
     config,
+    "fetch",
+    normalizeProviderId(providerId),
+  );
+  const providers = resolvePluginWebFetchProviders({
+    config: providerDiscoveryConfig,
     bundledAllowlistCompat: true,
   }).filter((provider) => provider.id === selectedProviderId);
   for (const provider of providers) {
@@ -580,13 +612,15 @@ function getCapabilityWebSearchAutoDetectTargets(config: OpenClawConfig): Comman
   const targetIds = new Set(baseTargetIds);
   const fallbackTargetIds = new Set<string>();
   const fallbackPaths = new Set<string>();
-  const providers = resolvePluginWebSearchProviders({
-    config,
-    bundledAllowlistCompat: true,
-  });
+  const providers = sortWebSearchProvidersForAutoDetect(
+    resolvePluginWebSearchProviders({
+      config,
+      bundledAllowlistCompat: true,
+    }),
+  );
   for (const provider of providers) {
     if (hasConfiguredSearchCredential({ provider, config })) {
-      continue;
+      break;
     }
     const fallback = provider.getConfiguredCredentialFallback?.(config);
     const fallbackPath = fallback?.path?.trim();
@@ -598,6 +632,7 @@ function getCapabilityWebSearchAutoDetectTargets(config: OpenClawConfig): Comman
       fallbackTargetIds.add(targetId);
     }
     fallbackPaths.add(fallbackPath);
+    break;
   }
   if (fallbackTargetIds.size === 0) {
     return { targetIds };
@@ -607,11 +642,11 @@ function getCapabilityWebSearchAutoDetectTargets(config: OpenClawConfig): Comman
     baseTargetIds,
     concreteFallbackPaths: fallbackPaths,
   });
-  const forcedActivePaths = discoverForcedActivePaths(config, fallbackTargetIds, allowedPaths);
+  const optionalActivePaths = discoverForcedActivePaths(config, fallbackTargetIds, allowedPaths);
   return {
     targetIds,
     ...(allowedPaths ? { allowedPaths } : {}),
-    ...(forcedActivePaths ? { forcedActivePaths } : {}),
+    ...(optionalActivePaths ? { optionalActivePaths } : {}),
   };
 }
 
@@ -620,13 +655,15 @@ function getCapabilityWebFetchAutoDetectTargets(config: OpenClawConfig): Command
   const targetIds = new Set(baseTargetIds);
   const fallbackTargetIds = new Set<string>();
   const fallbackPaths = new Set<string>();
-  const providers = resolvePluginWebFetchProviders({
-    config,
-    bundledAllowlistCompat: true,
-  });
+  const providers = sortWebFetchProvidersForAutoDetect(
+    resolvePluginWebFetchProviders({
+      config,
+      bundledAllowlistCompat: true,
+    }),
+  );
   for (const provider of providers) {
     if (hasConfiguredFetchCredential({ provider, config })) {
-      continue;
+      break;
     }
     const fallback = provider.getConfiguredCredentialFallback?.(config);
     const fallbackPath = fallback?.path?.trim();
@@ -638,6 +675,7 @@ function getCapabilityWebFetchAutoDetectTargets(config: OpenClawConfig): Command
       fallbackTargetIds.add(targetId);
     }
     fallbackPaths.add(fallbackPath);
+    break;
   }
   if (fallbackTargetIds.size === 0) {
     return { targetIds };
@@ -647,11 +685,11 @@ function getCapabilityWebFetchAutoDetectTargets(config: OpenClawConfig): Command
     baseTargetIds,
     concreteFallbackPaths: fallbackPaths,
   });
-  const forcedActivePaths = discoverForcedActivePaths(config, fallbackTargetIds, allowedPaths);
+  const optionalActivePaths = discoverForcedActivePaths(config, fallbackTargetIds, allowedPaths);
   return {
     targetIds,
     ...(allowedPaths ? { allowedPaths } : {}),
-    ...(forcedActivePaths ? { forcedActivePaths } : {}),
+    ...(optionalActivePaths ? { optionalActivePaths } : {}),
   };
 }
 
@@ -842,6 +880,9 @@ export function getCapabilityWebFetchCommandSecretTargets(
     providerId?: string | null;
   },
 ): CommandSecretTargetScope {
+  if (resolveFetchConfig(config)?.enabled === false) {
+    return { targetIds: getCapabilityWebFetchCommandSecretTargetIds() };
+  }
   const selectedProviderId = resolveSelectedWebFetchProviderId(config, options?.providerId);
   if (!selectedProviderId) {
     return getCapabilityWebFetchAutoDetectTargets(config);
@@ -880,6 +921,9 @@ export function getCapabilityWebSearchCommandSecretTargets(
     providerId?: string | null;
   },
 ): CommandSecretTargetScope {
+  if (resolveSearchConfig(config)?.enabled === false) {
+    return { targetIds: getCapabilityWebSearchCommandSecretTargetIds() };
+  }
   const selectedProviderId = resolveSelectedWebSearchProviderId(config, options?.providerId);
   if (!selectedProviderId) {
     return getCapabilityWebSearchAutoDetectTargets(config);

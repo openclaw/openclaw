@@ -78,4 +78,59 @@ describe("runtime command secrets", () => {
     expect(resolved.diagnostics).toEqual([]);
     expect(resolved.inactiveRefPaths).toEqual([]);
   });
+
+  it("re-resolves forced command-selected web provider paths with gateway env", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "extensions";
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    const firecrawlPath = "plugins.entries.firecrawl.config.webSearch.apiKey";
+    const config = {
+      tools: {
+        web: {
+          search: { enabled: true, provider: "exa" },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            enabled: false,
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        FIRECRAWL_API_KEY: "gateway-selected-firecrawl-key",
+        HOME: process.env.HOME,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      },
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
+      commandName: "infer web search",
+      targetIds: new Set([firecrawlPath]),
+      allowedPaths: new Set([firecrawlPath]),
+      forcedActivePaths: new Set([firecrawlPath]),
+    });
+
+    expect(resolved.assignments).toMatchObject([
+      {
+        path: firecrawlPath,
+        value: "gateway-selected-firecrawl-key",
+      },
+    ]);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.inactiveRefPaths).toEqual([]);
+  });
 });

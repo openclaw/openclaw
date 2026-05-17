@@ -227,6 +227,7 @@ export function createGatewayAuxHandlers(params: {
             allowedPaths,
             commandName,
             forcedActivePaths,
+            optionalActivePaths,
             providerOverrides,
             targetIds,
           }) => {
@@ -236,6 +237,9 @@ export function createGatewayAuxHandlers(params: {
                 targetIds: new Set(targetIds),
                 ...(allowedPaths ? { allowedPaths: new Set(allowedPaths) } : {}),
                 ...(forcedActivePaths ? { forcedActivePaths: new Set(forcedActivePaths) } : {}),
+                ...(optionalActivePaths
+                  ? { optionalActivePaths: new Set(optionalActivePaths) }
+                  : {}),
                 ...(providerOverrides ? { providerOverrides } : {}),
               });
             if (assignments.length === 0) {

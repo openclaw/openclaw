@@ -1584,6 +1584,7 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
   const cfg = params.config ?? getRuntimeConfig();
@@ -1594,6 +1595,7 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
     targetIds: params.targetIds,
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
     runtime: defaultRuntime,
     autoEnable: true,
   });
@@ -1616,6 +1618,9 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
     ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
     ...(scopedTargets.forcedActivePaths
       ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
       : {}),
     config: rawConfig,
   });
@@ -1649,6 +1654,9 @@ async function runWebFetchCommand(params: { url: string; provider?: string; form
     ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
     ...(scopedTargets.forcedActivePaths
       ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
       : {}),
     config: rawConfig,
   });

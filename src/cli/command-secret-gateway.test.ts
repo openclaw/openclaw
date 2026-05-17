@@ -377,6 +377,45 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     }
   });
 
+  it("does not retry old gateways without forced active path support", async () => {
+    const envKey = "WEB_SEARCH_FIRECRAWL_OLD_GATEWAY_ONLY";
+    await withEnvValue(envKey, undefined, async () => {
+      callGateway.mockRejectedValueOnce(
+        new Error("secrets.resolve invalid request: invalid secrets.resolve params"),
+      );
+
+      await expect(
+        resolveCommandSecretRefsViaGateway({
+          config: {
+            tools: {
+              web: {
+                search: {
+                  provider: "exa",
+                },
+              },
+            },
+            plugins: {
+              entries: {
+                firecrawl: {
+                  config: {
+                    webSearch: {
+                      apiKey: { source: "env", provider: "default", id: envKey },
+                    },
+                  },
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          commandName: "infer web search",
+          targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+          allowedPaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+          forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+        }),
+      ).rejects.toThrow(/does not support command-scoped secret resolution/i);
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("fails fast when gateway-backed resolution is unavailable", async () => {
     const envKey = "TALK_API_KEY_FAILFAST";
     const priorValue = process.env[envKey];
@@ -577,6 +616,37 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         | undefined;
       expect(fetchConfig?.firecrawl?.apiKey).toBe("firecrawl-legacy-local-fallback-key");
       expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
+  });
+
+  it("keeps top-level web search SecretRefs on the direct local fallback path", async () => {
+    const runtimeWebTools = await import("../secrets/runtime-web-tools.js");
+    vi.mocked(runtimeWebTools.resolveRuntimeWebTools).mockClear();
+    const envKey = "WEB_SEARCH_BRAVE_TOP_LEVEL_LOCAL_FALLBACK";
+    await withEnvValue(envKey, "brave-top-level-local-fallback-key", async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "exa",
+                apiKey: { source: "env", provider: "default", id: envKey },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        commandName: "infer web search",
+        targetIds: new Set(["tools.web.search.apiKey"]),
+        forcedActivePaths: new Set(["tools.web.search.apiKey"]),
+      });
+
+      expect(result.resolvedConfig.tools?.web?.search?.apiKey).toBe(
+        "brave-top-level-local-fallback-key",
+      );
+      expect(result.targetStatesByPath["tools.web.search.apiKey"]).toBe("resolved_local");
+      expect(runtimeWebTools.resolveRuntimeWebTools).not.toHaveBeenCalled();
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   });
