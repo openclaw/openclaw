@@ -17,6 +17,20 @@ export {
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
 export {
+  buildWorkspaceReconcilePlan,
+  chunkWorkspaceMarkdownByHeading,
+  collectWorkspaceReconcileFiles,
+  computeWorkspaceReconcileDeleteCandidates,
+  WORKSPACE_RECONCILER_ID,
+  WORKSPACE_RECONCILER_ROOTS,
+  type WorkspaceReconcileChunk,
+  type WorkspaceReconcileFile,
+  type WorkspaceReconcilePayload,
+  type WorkspaceReconcilePlan,
+  type WorkspaceReconcilePoint,
+  type WorkspaceReconcileRoot,
+} from "./host/workspace-reconcile.js";
+export {
   buildMemoryReadResult,
   buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,

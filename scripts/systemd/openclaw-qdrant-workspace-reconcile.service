@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw Qdrant workspace reconciliation
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'set -euo pipefail; /usr/bin/docker info >/dev/null; test "$(/usr/bin/docker inspect --format "{{.State.Running}}" "__OPENCLAW_GATEWAY_CONTAINER__")" = "true"; cd "__OPENCLAW_REPO_DIR__"; /usr/bin/docker exec -w /app "__OPENCLAW_GATEWAY_CONTAINER__" node dist/index.js qdrant workspace reconcile --apply >>"$HOME"/.openclaw-qdrant-workspace-reconcile.log 2>&1'
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run OpenClaw Qdrant workspace reconciliation every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

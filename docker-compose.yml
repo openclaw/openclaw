@@ -36,11 +36,16 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
       - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - ./dist:/app/dist
+      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -54,6 +59,9 @@ services:
     # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - openclaw-qdrant
     ports:
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
@@ -107,11 +115,12 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
       - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - ./dist:/app/dist
+      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
     stdin_open: true
     tty: true
     init: true
@@ -200,3 +209,8 @@ volumes:
   minio_data:
   milvus_data:
   ollama_data:
+
+networks:
+  openclaw-qdrant:
+    external: true
+    name: openclaw_qdrant_shared
