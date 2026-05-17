@@ -1,3 +1,8 @@
+---
+name: canvas
+description: Display HTML content (games, visualizations, dashboards, generated pages, interactive demos) on connected OpenClaw nodes (Mac app, iOS, Android) via a Tailscale-backed canvas host. Use when the user asks to show, render, present, or push HTML/web content to a node's canvas view, or wants to surface generated visualizations on a paired device.
+---
+
 # Canvas Skill
 
 Display HTML content on connected OpenClaw nodes (Mac app, iOS, Android).
