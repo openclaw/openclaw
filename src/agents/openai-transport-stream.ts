@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
@@ -24,6 +24,7 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -75,6 +76,7 @@ const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validato
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -372,6 +374,288 @@ function stringifyRedactedEvent(value: unknown): string {
   return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
 }
 
+type ResponsesFailedNoDetailsObservation = {
+  event: "openai_responses_response_failed_without_details";
+  provider: string;
+  api: Api;
+  transportModel: string;
+  providerRuntimeFailureKind: "no_error_details";
+  responseId: string;
+  responseStatus: string;
+  responseModel: string;
+  responseObject: string;
+  metadataKeys: string[];
+  requestIdHashes: string[];
+  failureFieldsPreview: string;
+  responsePreview: string;
+};
+
+type ResponsesFailedEventSummary = {
+  message: string;
+  responseId?: string;
+  observation?: ResponsesFailedNoDetailsObservation;
+};
+
+const RESPONSE_FAILED_FAILURE_FIELD_KEYS = [
+  "error",
+  "incomplete_details",
+  "status_details",
+  "failure_reason",
+  "last_error",
+  "provider_error",
+  "error_details",
+] as const;
+
+function readResponseFailedString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  return stringifyUnknown(record?.[key]);
+}
+
+function buildResponsesFailedEventSummary(
+  message: string,
+  responseId: string | undefined,
+  observation?: ResponsesFailedNoDetailsObservation,
+): ResponsesFailedEventSummary {
+  const summary: ResponsesFailedEventSummary = { message };
+  if (responseId) {
+    summary.responseId = responseId;
+  }
+  if (observation) {
+    summary.observation = observation;
+  }
+  return summary;
+}
+
+function isResponseFailedIdentifierKey(key: string): boolean {
+  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
+  return (
+    normalized === "requestid" ||
+    normalized === "xrequestid" ||
+    normalized === "providerrequestid" ||
+    normalized === "providerresponseid" ||
+    normalized === "litellmrequestid" ||
+    (normalized.includes("request") && normalized.endsWith("id")) ||
+    (normalized.includes("provider") && normalized.endsWith("id"))
+  );
+}
+
+function collectResponseFailedIdentifierHashes(
+  value: unknown,
+  opts: {
+    path?: string;
+    depth?: number;
+    identifierKey?: string;
+    out?: string[];
+    seen?: WeakSet<object>;
+  } = {},
+): string[] {
+  const path = opts.path ?? "";
+  const depth = opts.depth ?? 0;
+  const identifierKey = opts.identifierKey ?? "";
+  const out = opts.out ?? [];
+  const seen = opts.seen ?? new WeakSet<object>();
+  if (out.length >= 12 || depth > 4 || !value || typeof value !== "object") {
+    return out;
+  }
+  if (seen.has(value)) {
+    return out;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      if (index >= 8 || out.length >= 12) {
+        break;
+      }
+      const itemString =
+        typeof item === "string" || typeof item === "number" ? String(item).trim() : "";
+      if (identifierKey && isResponseFailedIdentifierKey(identifierKey) && itemString) {
+        out.push(`${path}[${index}]=${redactIdentifier(itemString, { len: 12 })}`);
+        continue;
+      }
+      collectResponseFailedIdentifierHashes(item, {
+        path: `${path}[${index}]`,
+        depth: depth + 1,
+        identifierKey,
+        out,
+        seen,
+      });
+    }
+    return out;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (out.length >= 12) {
+      break;
+    }
+    const childPath = path ? `${path}.${key}` : key;
+    const childString =
+      typeof child === "string" || typeof child === "number" ? String(child).trim() : "";
+    if (isResponseFailedIdentifierKey(key) && childString) {
+      out.push(`${childPath}=${redactIdentifier(childString, { len: 12 })}`);
+      continue;
+    }
+    collectResponseFailedIdentifierHashes(child, {
+      path: childPath,
+      depth: depth + 1,
+      identifierKey: isResponseFailedIdentifierKey(key) ? key : undefined,
+      out,
+      seen,
+    });
+  }
+  return out;
+}
+
+function redactResponseFailedDiagnosticValue(
+  value: unknown,
+  opts: {
+    key?: string;
+    depth?: number;
+    seen?: WeakSet<object>;
+  } = {},
+): unknown {
+  const key = opts.key ?? "";
+  const depth = opts.depth ?? 0;
+  if (typeof value === "string" || typeof value === "number") {
+    return key && isResponseFailedIdentifierKey(key)
+      ? redactIdentifier(String(value), { len: 12 })
+      : value;
+  }
+  if (depth > 6 || !value || typeof value !== "object") {
+    return value;
+  }
+  const seen = opts.seen ?? new WeakSet<object>();
+  if (seen.has(value)) {
+    return "<circular>";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.slice(0, 16).map((item) =>
+      redactResponseFailedDiagnosticValue(item, {
+        key,
+        depth: depth + 1,
+        seen,
+      }),
+    );
+  }
+  const out: Record<string, unknown> = {};
+  for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+    out[childKey] = redactResponseFailedDiagnosticValue(child, {
+      key: childKey,
+      depth: depth + 1,
+      seen,
+    });
+  }
+  return out;
+}
+
+function buildResponsesFailedFailureFields(
+  response: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!response) {
+    return {};
+  }
+  const fields: Record<string, unknown> = {};
+  for (const key of RESPONSE_FAILED_FAILURE_FIELD_KEYS) {
+    if (response[key] !== undefined && response[key] !== null) {
+      fields[key] = response[key];
+    }
+  }
+  return fields;
+}
+
+function buildResponsesFailedNoDetailsObservation(
+  event: Record<string, unknown>,
+  model: Model<Api>,
+  response: Record<string, unknown> | undefined = isRecord(event.response)
+    ? event.response
+    : undefined,
+): ResponsesFailedNoDetailsObservation {
+  const failureFields = redactResponseFailedDiagnosticValue(
+    buildResponsesFailedFailureFields(response),
+  ) as Record<string, unknown>;
+  const metadataKeys = isRecord(response?.metadata)
+    ? Object.keys(response.metadata).toSorted()
+    : [];
+  const responsePreview = {
+    id: readResponseFailedString(response, "id"),
+    status: readResponseFailedString(response, "status"),
+    model: readResponseFailedString(response, "model"),
+    object: readResponseFailedString(response, "object"),
+    failureFields,
+    metadataKeys,
+  };
+  return {
+    event: "openai_responses_response_failed_without_details",
+    provider: model.provider,
+    api: model.api,
+    transportModel: model.id,
+    providerRuntimeFailureKind: "no_error_details",
+    responseId: responsePreview.id,
+    responseStatus: responsePreview.status,
+    responseModel: responsePreview.model,
+    responseObject: responsePreview.object,
+    metadataKeys,
+    requestIdHashes: collectResponseFailedIdentifierHashes(event),
+    failureFieldsPreview: stringifyRedactedEvent(failureFields),
+    responsePreview: stringifyRedactedEvent(responsePreview),
+  };
+}
+
+function summarizeResponsesFailedNoDetailsObservation(
+  observation: ResponsesFailedNoDetailsObservation,
+): string {
+  const requestIds = observation.requestIdHashes.join(",");
+  const metadataKeys = observation.metadataKeys.join(",");
+  return (
+    `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
+    `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
+    `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
+    `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
+    `failureFields=${observation.failureFieldsPreview}`
+  );
+}
+
+function normalizeResponsesFailedEvent(
+  event: Record<string, unknown>,
+  model: Model<Api>,
+): ResponsesFailedEventSummary {
+  const response = isRecord(event.response) ? event.response : undefined;
+  const responseId = readResponseFailedString(response, "id") || undefined;
+  const error = isRecord(response?.error) ? response.error : undefined;
+  if (error) {
+    const code = readResponseFailedString(error, "code").trim();
+    const message = readResponseFailedString(error, "message").trim();
+    if (code || message) {
+      return buildResponsesFailedEventSummary(
+        `${code || "unknown"}: ${message || "no message"}`,
+        responseId,
+      );
+    }
+  }
+  const incompleteDetails = isRecord(response?.incomplete_details)
+    ? response.incomplete_details
+    : undefined;
+  const incompleteReason = readResponseFailedString(incompleteDetails, "reason");
+  if (incompleteReason) {
+    return buildResponsesFailedEventSummary(`incomplete: ${incompleteReason}`, responseId);
+  }
+  return buildResponsesFailedEventSummary(
+    RESPONSE_FAILED_NO_DETAILS_MESSAGE,
+    responseId,
+    buildResponsesFailedNoDetailsObservation(event, model, response),
+  );
+}
+
+function logResponsesFailedNoDetails(observation: ResponsesFailedNoDetailsObservation): void {
+  log.warn(
+    `[responses] response.failed missing error details provider=${observation.provider} ` +
+      `api=${observation.api} model=${observation.transportModel} ` +
+      summarizeResponsesFailedNoDetailsObservation(observation),
+    observation,
+  );
+}
+
 function summarizeResponsesPayload(params: unknown): string {
   if (!params || typeof params !== "object") {
     return "payload=non-object";
@@ -437,11 +721,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash).toString(36);
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
@@ -483,14 +763,21 @@ function convertResponsesMessages(
   const messages: ResponseInput = [];
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
+  const sanitizeIdPart = (part: string) => part.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+$/, "");
   const normalizeIdPart = (part: string) => {
-    const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sanitized = sanitizeIdPart(part);
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
     return normalized.replace(/_+$/, "");
   };
   const buildForeignResponsesItemId = (itemId: string) => {
     const normalized = `fc_${shortHash(itemId)}`;
     return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
+  };
+  const buildSameProviderCopilotResponsesItemId = (itemId: string) => {
+    const sanitized = sanitizeIdPart(itemId);
+    const candidate = sanitized.startsWith("fc_") ? sanitized : `fc_${sanitized}`;
+    return candidate.length > 64 ? buildForeignResponsesItemId(itemId) : candidate;
   };
   const normalizeToolCallId = (
     id: string,
@@ -508,7 +795,9 @@ function convertResponsesMessages(
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
       ? buildForeignResponsesItemId(itemId)
-      : normalizeIdPart(itemId);
+      : model.provider === "github-copilot"
+        ? buildSameProviderCopilotResponsesItemId(itemId)
+        : normalizeIdPart(itemId);
     if (!normalizedItemId.startsWith("fc_")) {
       normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
     }
@@ -518,6 +807,7 @@ function convertResponsesMessages(
     context.messages,
     model,
     normalizeToolCallId,
+    { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -556,7 +846,16 @@ function convertResponsesMessages(
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (shouldReplayReasoningItems && block.thinkingSignature) {
+          if (
+            shouldReplayReasoningItems &&
+            block.thinkingSignature &&
+            block.thinkingSignature.startsWith("{")
+          ) {
+            // openai-completions plain-text reasoning paths persist a
+            // provenance tag (e.g. "reasoning", "reasoning_details", "content")
+            // as thinkingSignature rather than a JSON-encoded reasoning item.
+            // Replaying those values would corrupt the next request payload
+            // (OpenRouter returns HTTP 500), so skip non-JSON signatures.
             const reasoningItem = JSON.parse(
               block.thinkingSignature,
             ) as ReplayableResponseReasoningItem;
@@ -961,18 +1260,14 @@ async function processResponsesStream(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
       );
     } else if (type === "response.failed") {
-      const response = event.response as
-        | {
-            error?: { code?: string; message?: string };
-            incomplete_details?: { reason?: string };
-          }
-        | undefined;
-      const msg = response?.error
-        ? `${response.error.code || "unknown"}: ${response.error.message || "no message"}`
-        : response?.incomplete_details?.reason
-          ? `incomplete: ${response.incomplete_details.reason}`
-          : "Unknown error (no error details in response)";
-      throw new Error(msg);
+      const failure = normalizeResponsesFailedEvent(event, model);
+      if (failure.responseId) {
+        output.responseId = failure.responseId;
+      }
+      if (failure.observation) {
+        logResponsesFailedNoDetails(failure.observation);
+      }
+      throw new Error(failure.message);
     }
     await cooperativeScheduler.afterEvent();
   }
@@ -1403,7 +1698,7 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
+    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
@@ -2598,6 +2893,14 @@ function shouldPreserveReasoningContentReplay(
   );
 }
 
+function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolean {
+  if (model.provider !== "openrouter") {
+    return true;
+  }
+  const normalizedModelId = model.id.trim().toLowerCase();
+  return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
+}
+
 // OpenAI Chat Completions assistant-message input does not define reasoning
 // replay fields, while OpenRouter and DeepSeek-style providers document
 // compatible pass-back contracts. Keep valid provider-owned replay fields, but
@@ -2643,7 +2946,8 @@ export function buildOpenAICompletionsParams(
   let messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   sanitizeCompletionsReasoningReplayFields(messages, {
-    preserveOpenRouterReasoning: compat.thinkingFormat === "openrouter",
+    preserveOpenRouterReasoning:
+      compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),
     preserveReasoningContent: shouldPreserveReasoningContentReplay(model, compat),
   });
   if (compat.strictMessageKeys) {
@@ -2795,6 +3099,9 @@ export const __testing = {
   processOpenAICompletionsStream,
   processResponsesStream,
   formatModelTransportDebugBaseUrl,
+  buildResponsesFailedNoDetailsObservation,
+  normalizeResponsesFailedEvent,
+  summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
   withResponsesFirstEventTimeout,

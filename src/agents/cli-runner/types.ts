@@ -2,7 +2,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { InboundTurnKind } from "../../channels/turn/kind.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -14,7 +14,7 @@ import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type {
-  CurrentTurnPromptContext,
+  CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
@@ -30,8 +30,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
-  currentTurnKind?: InboundTurnKind;
-  currentTurnContext?: CurrentTurnPromptContext;
+  currentInboundEventKind?: InboundEventKind;
+  currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;
   model?: string;
