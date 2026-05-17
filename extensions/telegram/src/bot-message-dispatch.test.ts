@@ -2421,11 +2421,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       releaseFirstDelivery = resolve;
     });
     let firstDeliverySignal: AbortSignal | undefined;
+    let firstDeliveryShouldContinue: (() => boolean) | undefined;
     const firstDeliveryStarted = new Promise<void>((resolve) => {
       deliverInboundReplyWithMessageSendContext
         .mockImplementationOnce(async (params) => {
-          const request = params as { signal?: AbortSignal };
+          const request = params as { shouldContinue?: () => boolean; signal?: AbortSignal };
           firstDeliverySignal = request.signal;
+          firstDeliveryShouldContinue = request.shouldContinue;
           resolve();
           await holdFirstDelivery;
           return {
@@ -2490,6 +2492,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await firstDeliveryStarted;
 
     expect(firstDeliverySignal?.aborted).toBe(false);
+    expect(firstDeliveryShouldContinue?.()).toBe(true);
 
     await dispatchWithContext({
       context: topicContext(
@@ -2508,6 +2511,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(firstDeliverySignal?.aborted).toBe(true);
+    expect(firstDeliveryShouldContinue?.()).toBe(false);
     releaseFirstDelivery?.();
     await firstDispatch;
   });

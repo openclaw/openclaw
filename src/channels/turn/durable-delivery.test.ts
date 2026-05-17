@@ -184,6 +184,27 @@ describe("durable inbound reply delivery", () => {
     expect(latestSendDurableMessageBatchRequest().signal).toBe(controller.signal);
   });
 
+  it("does not send durable replies when the caller stop predicate is already cancelled", async () => {
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      shouldContinue: () => false,
+      ctxPayload: ctxPayload({
+        OriginatingTo: "chat-1",
+      }),
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error).toMatchObject({ name: "AbortError" });
+    }
+    expect(mocks.resolveOutboundDurableFinalDeliverySupport).not.toHaveBeenCalled();
+    expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
+  });
+
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
     await deliverInboundReplyWithMessageSendContext({
       cfg: {},

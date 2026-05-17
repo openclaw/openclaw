@@ -24,6 +24,7 @@ export type DurableInboundReplyDeliveryOptions = Pick<
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
   signal?: AbortSignal;
+  shouldContinue?: () => boolean;
 };
 
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
@@ -94,6 +95,25 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
   };
 }
 
+function createDurableDeliveryAbortError(): Error {
+  const err = new Error("Operation aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function isDurableInboundReplyDeliveryCancelled(
+  params: Pick<DurableInboundReplyDeliveryParams, "shouldContinue" | "signal">,
+): boolean {
+  return params.signal?.aborted === true || params.shouldContinue?.() === false;
+}
+
+function durableDeliveryAbortResult(): Extract<
+  DurableInboundReplyDeliveryResult,
+  { status: "failed" }
+> {
+  return { status: "failed", error: createDurableDeliveryAbortError() };
+}
+
 export function isDurableInboundReplyDeliveryHandled(
   result: DurableInboundReplyDeliveryResult,
 ): result is Extract<
@@ -116,6 +136,9 @@ export async function deliverInboundReplyWithMessageSendContext(
 ): Promise<DurableInboundReplyDeliveryResult> {
   if (params.info.kind !== "final") {
     return { status: "not_applicable", reason: "non_final" };
+  }
+  if (isDurableInboundReplyDeliveryCancelled(params)) {
+    return durableDeliveryAbortResult();
   }
 
   const channel = normalizeDeliverableOutboundChannel(params.channel);
@@ -150,6 +173,9 @@ export async function deliverInboundReplyWithMessageSendContext(
   } catch (err: unknown) {
     return { status: "failed", error: err };
   }
+  if (isDurableInboundReplyDeliveryCancelled(params)) {
+    return durableDeliveryAbortResult();
+  }
   if (!support.ok) {
     return {
       status: "unsupported",
@@ -171,6 +197,9 @@ export async function deliverInboundReplyWithMessageSendContext(
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
 
+  if (isDurableInboundReplyDeliveryCancelled(params)) {
+    return durableDeliveryAbortResult();
+  }
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel,
@@ -190,6 +219,9 @@ export async function deliverInboundReplyWithMessageSendContext(
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
   });
+  if (isDurableInboundReplyDeliveryCancelled(params)) {
+    return durableDeliveryAbortResult();
+  }
   if (send.status === "failed") {
     return { status: "failed" as const, error: send.error };
   }

@@ -300,6 +300,10 @@ function releaseTelegramReplyFenceAbortController(
   }
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function shouldSupersedeTelegramReplyFence(ctxPayload: {
   Body?: string;
   RawBody?: string;
@@ -1193,6 +1197,7 @@ export const dispatchTelegramMessage = async ({
           },
           silent,
           signal: deliveryAbortController.signal,
+          shouldContinue: isDeliveryActive,
           requiredCapabilities: deriveDurableFinalDeliveryRequirements({
             payload: deliverablePayload,
             replyToId: deliverablePayload.replyToId,
@@ -1209,7 +1214,11 @@ export const dispatchTelegramMessage = async ({
           return false;
         }
         if (durable.status === "failed") {
-          if (deliveryAbortController.signal.aborted) {
+          if (
+            deliveryAbortController.signal.aborted ||
+            !isDeliveryActive() ||
+            isAbortError(durable.error)
+          ) {
             return false;
           }
           throw durable.error;
