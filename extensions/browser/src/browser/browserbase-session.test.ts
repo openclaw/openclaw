@@ -45,10 +45,12 @@ describe("fetchBrowserbaseConnectUrl", () => {
     expect(url).toBe("wss://connect.browserbase.com/abc?signingKey=xyz");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    const [calledUrl, calledInit] = fetchImpl.mock.calls[0];
+    const firstCall = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const calledUrl = firstCall[0];
+    const calledInit = firstCall[1];
     expect(calledUrl).toContain("/v1/sessions/" + SESSION_ID);
-    expect((calledInit as RequestInit).method).toBe("GET");
-    const headers = (calledInit as RequestInit).headers as Record<string, string>;
+    expect(calledInit.method).toBe("GET");
+    const headers = calledInit.headers as Record<string, string>;
     expect(headers["X-BB-API-Key"]).toBe(API_KEY_VALUE);
     expect(headers["Accept"]).toBe("application/json");
   });
