@@ -147,7 +147,17 @@ export function buildApiErrorObservationFields(
         : undefined,
       httpCode: parsed?.httpCode,
       providerRuntimeFailureKind: classifyProviderRuntimeFailureKind({
-        status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
+        // Guard against non-numeric httpCode (e.g. "BadRequest" / "ServerError")
+        // that some providers emit as a string. Number("BadRequest") is NaN,
+        // and passing NaN as `status` makes classifyProviderRuntimeFailureKind
+        // misclassify the failure category, skewing telemetry. Preserve the
+        // existing truthy short-circuit so falsy values (0 / "" / null) still
+        // map to undefined exactly as before.
+        status: (() => {
+          if (!parsed?.httpCode) return undefined;
+          const n = Number(parsed.httpCode);
+          return Number.isFinite(n) ? n : undefined;
+        })(),
         message: trimmed,
         provider: opts?.provider,
       }),
