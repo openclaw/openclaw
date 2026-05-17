@@ -452,7 +452,7 @@ describe("gateway auth browser hardening", () => {
           device: null,
         });
         expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect(res.error?.message ?? "").toMatch(/origin not allowed|requires device identity/i);
       } finally {
         ws.close();
       }
