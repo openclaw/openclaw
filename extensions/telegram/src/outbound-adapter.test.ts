@@ -242,6 +242,48 @@ describe("telegramOutbound", () => {
     ]);
   });
 
+  it("preserves legacy interactive buttons when rendering mixed presentation payloads", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-mixed-buttons",
+      chatId: "12345",
+    });
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: {
+        text: "Choose:",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Legacy", value: "legacy" }] }],
+        },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Generic", value: "generic" }],
+          },
+        ],
+      },
+      ctx: {} as never,
+    });
+    if (!rendered) {
+      throw new Error("expected rendered Telegram presentation");
+    }
+
+    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toBe(
+      undefined,
+    );
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: rendered,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose:\n\n- Generic");
+    expect(options.buttons).toEqual([[{ text: "Legacy", callback_data: "legacy" }]]);
+  });
+
   it("lets allow-always approval callbacks reach Telegram's callback rewrite", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({
       messageId: "tg-approval",
