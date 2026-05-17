@@ -99,6 +99,7 @@ export function buildTelegramInteractiveButtons(
   return rows.length > 0 ? rows : undefined;
 }
 
+/** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
 ): TelegramInlineButtons | undefined {
@@ -122,6 +123,7 @@ export function buildTelegramPresentationButtons(
   return rows.length > 0 ? rows : undefined;
 }
 
+/** Resolve Telegram inline buttons, preserving explicit and legacy button precedence. */
 export function resolveTelegramInlineButtons(params: {
   buttons?: TelegramInlineButtons;
   presentation?: unknown;
