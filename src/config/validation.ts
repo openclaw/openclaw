@@ -85,6 +85,8 @@ function stripPreservedLegacyRootKeysForValidation(
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
+const TELEGRAM_GROUPS_SHAPE_HINT =
+  'expected an object map keyed by Telegram group chat ID; use channels.telegram.groups."<chatId>".topics."<threadId>" for forum-topic overrides. Run "openclaw doctor --fix" for supported legacy Telegram migrations; non-object groups values must be repaired manually.';
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
     (entry) => [entry.channelId, entry.schema] as const,
@@ -225,6 +227,25 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
+function formatChannelJsonSchemaValidationMessage(params: {
+  channelId: string;
+  path: string;
+  message: string;
+  additionalProperty?: string;
+}): string {
+  const baseMessage = params.additionalProperty
+    ? `${params.message}: "${params.additionalProperty}"`
+    : params.message;
+  if (
+    params.channelId === "telegram" &&
+    params.path === "groups" &&
+    /\bmust be object\b/i.test(params.message)
+  ) {
+    return `${baseMessage}; ${TELEGRAM_GROUPS_SHAPE_HINT}`;
+  }
+  return baseMessage;
+}
+
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -244,9 +265,12 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       continue;
     }
     for (const error of result.errors) {
-      const message = error.additionalProperty
-        ? `${error.message}: "${error.additionalProperty}"`
-        : error.message;
+      const message = formatChannelJsonSchemaValidationMessage({
+        channelId,
+        path: error.path,
+        message: error.message,
+        additionalProperty: error.additionalProperty,
+      });
       issues.push({
         path:
           error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
@@ -1316,10 +1340,16 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
+          const message = formatChannelJsonSchemaValidationMessage({
+            channelId: trimmed,
+            path: error.path,
+            message: error.message,
+            additionalProperty: error.additionalProperty,
+          });
           issues.push({
             path:
               error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
-            message: `invalid config: ${error.message}`,
+            message: `invalid config: ${message}`,
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });

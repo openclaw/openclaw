@@ -246,6 +246,26 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("adds actionable Telegram groups shape guidance to raw bundled channel errors", () => {
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        telegram: {
+          groups: [],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find((item) => item.path === "channels.telegram.groups");
+      expect(issue?.message).toContain("invalid config: must be object");
+      expect(issue?.message).toContain("object map keyed by Telegram group chat ID");
+      expect(issue?.message).toContain('channels.telegram.groups."<chatId>".topics."<threadId>"');
+      expect(issue?.message).toContain("openclaw doctor --fix");
+      expect(issue?.message).toContain("repaired manually");
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {

@@ -4,12 +4,14 @@ import {
   collectTelegramInvalidAllowFromWarnings,
   collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
+  collectTelegramGroupsShapeWarnings,
   collectTelegramGroupPolicyWarnings,
   collectTelegramMissingEnvTokenWarnings,
   collectTelegramSelectedQuoteToolProgressWarnings,
   maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramBotEndpointApiRoots,
+  scanTelegramGroupsShapeWarnings,
   scanTelegramInvalidAllowFromEntries,
   scanTelegramSelectedQuoteToolProgressWarnings,
   telegramDoctor,
@@ -291,6 +293,43 @@ describe("telegram doctor", () => {
 
     expect(warnings[0]).toContain("invalid sender entries");
     expect(warnings[1]).toContain("openclaw doctor --fix");
+  });
+
+  it("warns when Telegram groups config is not an object map", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: [],
+          accounts: {
+            work: {
+              groups: "ops",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramGroupsShapeWarnings(cfg);
+    expect(hits).toEqual([
+      { path: "channels.telegram.groups", valueType: "array" },
+      { path: "channels.telegram.accounts.work.groups", valueType: "string" },
+    ]);
+
+    const warnings = collectTelegramGroupsShapeWarnings({
+      hits,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(warnings[0]).toContain("object map keyed by group chat ID");
+    expect(warnings[0]).toContain('groups."<chatId>".topics."<threadId>"');
+    expect(warnings[1]).toContain("openclaw doctor --fix");
+    expect(warnings[1]).toContain("repaired manually");
+
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual(expect.arrayContaining(warnings));
   });
 
   it("warns and repairs Telegram apiRoot values that include the bot endpoint", () => {

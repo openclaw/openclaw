@@ -26,6 +26,7 @@ import {
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
+type TelegramGroupsShapeHit = { path: string; valueType: string };
 type TelegramSelectedQuoteToolProgressHit = { path: string; replyToMode: string };
 type TelegramApiRootBotEndpointHit = {
   path: string;
@@ -50,6 +51,16 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 
 function sanitizeForLog(value: string): string {
   return value.replace(/\p{Cc}+/gu, " ").trim();
+}
+
+function describeConfigValueType(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  return typeof value;
 }
 
 function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
@@ -154,6 +165,40 @@ export function scanTelegramInvalidAllowFromEntries(
     }
   }
   return hits;
+}
+
+export function scanTelegramGroupsShapeWarnings(cfg: OpenClawConfig): TelegramGroupsShapeHit[] {
+  const hits: TelegramGroupsShapeHit[] = [];
+  for (const scope of collectTelegramAccountScopes(cfg)) {
+    if (!Object.prototype.hasOwnProperty.call(scope.account, "groups")) {
+      continue;
+    }
+    if (scope.account.groups === undefined || asObjectRecord(scope.account.groups)) {
+      continue;
+    }
+    hits.push({
+      path: `${scope.prefix}.groups`,
+      valueType: describeConfigValueType(scope.account.groups),
+    });
+  }
+  return hits;
+}
+
+export function collectTelegramGroupsShapeWarnings(params: {
+  hits: TelegramGroupsShapeHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sample = params.hits[0] ?? {
+    path: "channels.telegram.groups",
+    valueType: "unknown",
+  };
+  return [
+    `- ${sanitizeForLog(sample.path)} is ${sanitizeForLog(sample.valueType)}, but Telegram groups must be an object map keyed by group chat ID, with forum topics nested under groups."<chatId>".topics."<threadId>".`,
+    `- Run "${params.doctorFixCommand}" for supported legacy Telegram migrations; non-object groups values must be repaired manually before startup validation can pass.`,
+  ];
 }
 
 export function collectTelegramInvalidAllowFromWarnings(params: {
@@ -557,6 +602,10 @@ export const telegramDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig: normalizeTelegramCompatibilityConfig,
   collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
     ...collectTelegramMissingEnvTokenWarnings({ cfg, env }),
+    ...collectTelegramGroupsShapeWarnings({
+      hits: scanTelegramGroupsShapeWarnings(cfg),
+      doctorFixCommand,
+    }),
     ...collectTelegramInvalidAllowFromWarnings({
       hits: scanTelegramInvalidAllowFromEntries(cfg),
       doctorFixCommand,
