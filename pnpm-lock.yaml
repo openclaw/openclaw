@@ -87,8 +87,8 @@ importers:
         specifier: 0.2.4
         version: 0.2.4
       '@openclaw/proxyline':
-        specifier: 0.3.0
-        version: 0.3.0(undici@8.3.0)
+        specifier: 0.3.2
+        version: 0.3.2(undici@8.3.0)
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -1646,9 +1646,6 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
-      undici:
-        specifier: 8.3.0
-        version: 8.3.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -3340,8 +3337,8 @@ packages:
     resolution: {integrity: sha512-Fo3WTQhxu0asD/rZqIKBqhX6fuZfjyHxSW5yTKfcRx+D9BRAcz0AGoVh+3ur/4XRvZkvsh3Ud8XTw006yRYLgg==}
     engines: {node: '>=20.11'}
 
-  '@openclaw/proxyline@0.3.0':
-    resolution: {integrity: sha512-+18F9jk948+qK70V63Nfiu4odfvdf+0T9qyKyzylmt1WLYGTtLLo88pLgtS+vN5CORJyCuC56Rdswkws5VsEig==}
+  '@openclaw/proxyline@0.3.2':
+    resolution: {integrity: sha512-AHW1hsqbpEJjrzzVdP5TXqHG4j3zmWU5qkPp0rvrGq3vEdbdwNuvAsmfQF0PhJ9ARR7IoS5mKxmD6von3GnAkQ==}
     engines: {node: '>=20.18.1'}
     peerDependencies:
       undici: '>=7.25.0 <9'
@@ -9631,7 +9628,7 @@ snapshots:
       jszip: 3.10.1
       tar: 7.5.15
 
-  '@openclaw/proxyline@0.3.0(undici@8.3.0)':
+  '@openclaw/proxyline@0.3.2(undici@8.3.0)':
     dependencies:
       undici: 8.3.0
 
