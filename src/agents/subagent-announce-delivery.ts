@@ -44,6 +44,7 @@ import {
   resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
+  sendMessage,
   resolveStorePath,
 } from "./subagent-announce-delivery.runtime.js";
 import {
@@ -75,6 +76,7 @@ type SubagentAnnounceDeliveryDeps = {
     text: string,
     options?: EmbeddedPiQueueMessageOptions,
   ) => EmbeddedPiQueueMessageOutcome | Promise<EmbeddedPiQueueMessageOutcome>;
+  sendMessage: typeof sendMessage;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -90,6 +92,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
     };
   },
   queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeAsync,
+  sendMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
@@ -535,6 +538,24 @@ function hasGatewayAgentDeliveredExpectedMedia(
   return Boolean(result && hasDeliveredExpectedMedia(result, expectedMediaUrls));
 }
 
+function buildFallbackCompletionMessage(
+  events: AgentInternalEvent[] | undefined,
+): string | undefined {
+  if (events?.length !== 1) {
+    return undefined;
+  }
+  const completion = events?.find((event) => event.type === "task_completion");
+  const result = completion?.result.trim();
+  if (!completion || !result || result === "(no output)") {
+    return undefined;
+  }
+  const taskLabel = completion.taskLabel.trim();
+  const heading = taskLabel
+    ? `Background task completed: ${taskLabel}`
+    : "Background task completed";
+  return `${heading}\n\n${result}`;
+}
+
 function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
   const result = getGatewayAgentResult(response);
   return result ? getAgentCommandDeliveryFailure(result) : undefined;
@@ -793,6 +814,25 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       !hasVisibleGatewayAgentPayload(directAnnounceResponse)
     ) {
+      const fallbackCompletionMessage = buildFallbackCompletionMessage(params.internalEvents);
+      if (fallbackCompletionMessage) {
+        await subagentAnnounceDeliveryDeps.sendMessage({
+          channel: deliveryTarget.channel,
+          to: deliveryTarget.to ?? "",
+          accountId: deliveryTarget.accountId,
+          threadId: deliveryTarget.threadId,
+          content: fallbackCompletionMessage,
+          cfg,
+          bestEffort: params.bestEffortDeliver,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          agentId: resolveAgentIdFromSessionKey(canonicalRequesterSessionKey),
+          idempotencyKey: `${params.directIdempotencyKey}:completion-fallback`,
+        });
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
       return {
         delivered: false,
         path: "direct",

@@ -137,6 +137,7 @@ async function deliverSlackThreadAnnouncement(params: {
 }) {
   __testing.setDepsForTest({
     callGateway: params.callGateway,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
       isActive: params.isActive,
@@ -178,6 +179,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   };
   __testing.setDepsForTest({
     callGateway: params.callGateway,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
       isActive: false,
@@ -217,6 +219,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
   };
   __testing.setDepsForTest({
     callGateway: params.callGateway,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-telegram",
       isActive: params.isActive === true,
@@ -276,6 +279,7 @@ async function deliverSlackChannelAnnouncement(params: {
 
   __testing.setDepsForTest({
     callGateway: params.callGateway,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
       isActive: params.isActive,
@@ -1150,7 +1154,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("reports failure when announce-agent returns no visible output", async () => {
+  it("falls back for thread completions when announce-agent returns no visible output", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -1181,12 +1185,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(sendMessage), {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "acct-1",
+      threadId: "171.222",
+      content: "Background task completed: thread completion smoke\n\nchild completion output",
+      idempotencyKey: "announce-thread-fallback-empty:completion-fallback",
+    });
   });
 
   it("reports failure for completion DMs when announce-agent returns no visible output", async () => {
@@ -1807,7 +1818,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("reports channel completion failure when announce-agent returns no visible output", async () => {
+  it("falls back to a visible completion message when announce-agent returns no visible output", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -1838,12 +1849,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(sendMessage), {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "acct-1",
+      threadId: undefined,
+      content: "Background task completed: channel completion smoke\n\nchild completion output",
+      idempotencyKey: "announce-channel-fallback-empty:completion-fallback",
+    });
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {
