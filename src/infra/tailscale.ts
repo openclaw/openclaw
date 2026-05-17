@@ -140,6 +140,7 @@ async function readTailscaleStatusJson(
       const { stdout } = await exec(candidate, ["status", "--json"], {
         timeoutMs: 5000,
         maxBuffer: 400_000,
+        suppressFailureLog: attempt < TAILSCALE_STATUS_RETRY_ATTEMPTS - 1,
       });
       return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
     } catch (err) {

@@ -178,7 +178,14 @@ export function shouldSpawnWithShell(params: {
 export async function runExec(
   command: string,
   args: string[],
-  opts: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
+  opts:
+    | number
+    | {
+        timeoutMs?: number;
+        maxBuffer?: number;
+        cwd?: string;
+        suppressFailureLog?: boolean;
+      } = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
@@ -225,7 +232,7 @@ export async function runExec(
         });
       }
     }
-    if (shouldLogVerbose()) {
+    if (shouldLogVerbose() && (typeof opts === "number" || !opts.suppressFailureLog)) {
       logError(danger(`Command failed: ${command} ${args.join(" ")}`));
     }
     throw err;

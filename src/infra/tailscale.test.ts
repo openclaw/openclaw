@@ -104,6 +104,69 @@ describe("tailscale helpers", () => {
     vi.useRealTimers();
   });
 
+  it("suppresses transient status failure logs when a retry succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const loggedFailures: string[] = [];
+      const exec = vi.fn(
+        async (command: string, args: string[], options?: { suppressFailureLog?: boolean }) => {
+          if (exec.mock.calls.length === 1) {
+            if (!options?.suppressFailureLog) {
+              loggedFailures.push(`Command failed: ${command} ${args.join(" ")}`);
+            }
+            throw new Error("Command failed: tailscale status --json");
+          }
+          return {
+            stdout: JSON.stringify({
+              Self: { DNSName: "host.tailnet.ts.net.", TailscaleIPs: ["100.1.1.1"] },
+            }),
+          };
+        },
+      );
+
+      const hostPromise = getTailnetHostname(exec as never, "tailscale");
+      await vi.advanceTimersByTimeAsync(500);
+      const host = await hostPromise;
+
+      expect(host).toBe("host.tailnet.ts.net");
+      expect(loggedFailures).toEqual([]);
+      expect(exec.mock.calls.map((call) => call[2]?.suppressFailureLog)).toEqual([true, undefined]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs the final status failure after retries are exhausted", async () => {
+    vi.useFakeTimers();
+    try {
+      const loggedFailures: string[] = [];
+      const exec = vi.fn(
+        async (command: string, args: string[], options?: { suppressFailureLog?: boolean }) => {
+          if (!options?.suppressFailureLog) {
+            loggedFailures.push(`Command failed: ${command} ${args.join(" ")}`);
+          }
+          throw new Error("Command failed: tailscale status --json");
+        },
+      );
+
+      const hostPromise = getTailnetHostname(exec as never, "tailscale");
+      const expectation = expect(hostPromise).rejects.toThrow(
+        "Command failed: tailscale status --json",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expectation;
+
+      expect(loggedFailures).toEqual(["Command failed: tailscale status --json"]);
+      expect(exec.mock.calls.map((call) => call[2]?.suppressFailureLog)).toEqual([
+        true,
+        true,
+        undefined,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry status --json when the tailscale binary is missing", async () => {
     vi.useFakeTimers();
     const enoent = Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" });
