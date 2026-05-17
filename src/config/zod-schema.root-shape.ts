@@ -63,6 +63,7 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
     })
+    .catchall(z.unknown())
     .optional(),
   env: z
     .object({

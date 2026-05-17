@@ -110,6 +110,8 @@ export type OpenClawConfig = {
       /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
       modelPolicyAllowlist?: true;
     };
+    /** Forward-compatible metadata written by older or newer OpenClaw versions. */
+    [key: string]: unknown;
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;

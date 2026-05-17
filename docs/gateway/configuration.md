@@ -70,7 +70,7 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The root-level `$schema` string is accepted so editors can attach JSON Schema metadata. Unknown children under `meta` are also accepted and preserved for forward-compatible runtime bookkeeping; this exception does not apply to operational sections such as `gateway`, `channels`, providers, auth, plugins, or agents.
 </Warning>
 
 `openclaw config schema` prints the canonical JSON Schema used by Control UI
