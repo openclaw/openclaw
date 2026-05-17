@@ -613,6 +613,30 @@ async function runMatrixStreamingPreviewScenario(
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  if (preview.event.body === params.finalText) {
+    advanceMatrixQaActorCursor({
+      actorId: "driver",
+      syncState: context.syncState,
+      nextSince: preview.since,
+      startSince,
+    });
+    const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
+    return {
+      artifacts: {
+        driverEventId,
+        previewEventId: undefined,
+        reply: finalReply,
+        token: params.finalText,
+        triggerBody,
+      },
+      details: [
+        `driver event: ${driverEventId}`,
+        `scenario: ${params.label}`,
+        "preview event: <none>; final delivered without draft replacement",
+        ...buildMatrixReplyDetails("final reply", finalReply),
+      ].join("\n"),
+    } satisfies MatrixQaScenarioExecution;
+  }
   const finalized = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>

@@ -142,6 +142,7 @@ type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeart
 
 const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
+const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 3;
 const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
   "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
@@ -474,6 +475,14 @@ function isTransientWhatsAppQaDriverError(error: unknown) {
   return /\bConnection Closed\b/iu.test(formatErrorMessage(error));
 }
 
+async function restartWhatsAppQaDriverSession(params: {
+  authDir: string;
+  current: WhatsAppQaDriverSession;
+}) {
+  await params.current.close().catch(() => {});
+  return await startWhatsAppQaDriverSession({ authDir: params.authDir });
+}
+
 async function runWhatsAppScenario(params: {
   driver: WhatsAppQaDriverSession;
   driverPhoneE164: string;
@@ -772,7 +781,7 @@ export async function runWhatsAppQaLive(params: {
         );
         continue;
       }
-      let retriedDriver = false;
+      let driverAttempt = 1;
       while (true) {
         try {
           const result = await runWhatsAppScenario({
@@ -792,17 +801,31 @@ export async function runWhatsAppQaLive(params: {
             sutPhoneE164: runtimeEnv.sutPhoneE164,
           });
           scenarioResults.push(
-            retriedDriver
-              ? { ...result, details: `${result.details}; driver reconnected` }
+            driverAttempt > 1
+              ? {
+                  ...result,
+                  details: `${result.details}; driver reconnected ${driverAttempt - 1}x`,
+                }
               : result,
           );
           break;
         } catch (error) {
-          if (!retriedDriver && isTransientWhatsAppQaDriverError(error)) {
-            retriedDriver = true;
-            await activeDriver.close().catch(() => {});
-            activeDriver = await startWhatsAppQaDriverSession({ authDir: driverAuthDir });
-            driver = activeDriver;
+          if (
+            driverAttempt < WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS &&
+            isTransientWhatsAppQaDriverError(error)
+          ) {
+            driverAttempt += 1;
+            try {
+              activeDriver = await restartWhatsAppQaDriverSession({
+                authDir: driverAuthDir,
+                current: activeDriver,
+              });
+              driver = activeDriver;
+            } catch (restartError) {
+              if (!isTransientWhatsAppQaDriverError(restartError)) {
+                throw restartError;
+              }
+            }
             continue;
           }
           preservedGatewayDebugArtifacts = true;
