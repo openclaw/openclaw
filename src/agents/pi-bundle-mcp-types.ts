@@ -12,6 +12,10 @@ export type McpServerCatalog = {
   serverName: string;
   launchSummary: string;
   toolCount: number;
+  status?: "connected" | "degraded";
+  optional?: boolean;
+  degradedReason?: string;
+  degradedUntil?: number;
 };
 
 export type McpCatalogTool = {

@@ -816,7 +816,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
   });
 
-  it("does not use fallback for unrelated openai-codex refresh errors", async () => {
+  it("marks stale openai-codex profiles unhealthy when refresh fails with invalid_grant", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       createExpiredOauthStore({
@@ -836,5 +836,41 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+
+    const persisted = ensureAuthProfileStore(agentDir);
+    expect(persisted.usageStats?.[profileId]).toMatchObject({
+      disabledReason: "auth_permanent",
+    });
+    expect(persisted.usageStats?.[profileId]?.disabledUntil).toBeGreaterThan(Date.now());
+  });
+
+  it("marks stale openai-codex profiles unhealthy when refresh_token_reused cannot be repaired", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+      }),
+      agentDir,
+    );
+    getOAuthApiKeyMock.mockRejectedValue(
+      new Error(
+        '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+      ),
+    );
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+
+    const persisted = ensureAuthProfileStore(agentDir);
+    expect(persisted.usageStats?.[profileId]).toMatchObject({
+      disabledReason: "auth_permanent",
+    });
+    expect(persisted.usageStats?.[profileId]?.disabledUntil).toBeGreaterThan(Date.now());
   });
 });
