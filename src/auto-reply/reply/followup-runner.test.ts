@@ -9,6 +9,7 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
+const runWithModelFallbackMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -316,10 +317,9 @@ async function persistRunSessionUsageForFollowupTest(
 async function loadFreshFollowupRunnerModuleForTest() {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
-  vi.doMock(
-    "../../agents/model-fallback.js",
-    async () => await import("../../test-utils/model-fallback.mock.js"),
-  );
+  vi.doMock("../../agents/model-fallback.js", () => ({
+    runWithModelFallback: (params: unknown) => runWithModelFallbackMock(params),
+  }));
   vi.doMock("../../agents/session-write-lock.js", () => ({
     acquireSessionWriteLock: vi.fn(async () => ({
       release: async () => {},
@@ -445,6 +445,22 @@ beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   runCliAgentMock.mockReset();
+  runWithModelFallbackMock.mockReset();
+  runWithModelFallbackMock.mockImplementation(
+    async (params: {
+      provider: string;
+      model: string;
+      run: (
+        provider: string,
+        model: string,
+        options?: { allowTransientCooldownProbe?: boolean },
+      ) => Promise<unknown>;
+    }) => ({
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+    }),
+  );
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
@@ -724,6 +740,89 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+  });
+
+  it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecyclePhases: string[] = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream !== "lifecycle") {
+        return;
+      }
+      const phase = typeof evt.data.phase === "string" ? evt.data.phase : undefined;
+      if (phase) {
+        lifecyclePhases.push(phase);
+      }
+    });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("cli failed");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: Date.now() },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: Date.now() },
+      });
+      return {
+        payloads: [{ text: "fallback ok" }],
+        meta: {},
+      };
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          run: {
+            config: runtimeConfig,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(lifecyclePhases).toEqual(["start", "start", "end"]);
   });
 
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
