@@ -125,6 +125,7 @@ export async function runMediaUnderstandingFile(
       attachments: cache,
       media: attachments,
       agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
       activeModel: params.activeModel,
@@ -177,6 +178,7 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 }
 
