@@ -74,6 +74,7 @@ import {
   extractTelegramMessageForumFlag,
   isTelegramCommandsAllowFromConfigured,
   resolveTelegramCommandAuthorization,
+  resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
@@ -121,6 +122,7 @@ type TelegramResolvedGroupConfig = {
 function telegramCommandTargetSharesMessageTimeline(params: {
   commandTargetSessionKey: string;
   mainSessionKey: string;
+  directPeerId?: string | number | null;
 }): boolean {
   const targetSessionKey = normalizeLowercaseStringOrEmpty(params.commandTargetSessionKey);
   if (
@@ -131,7 +133,17 @@ function telegramCommandTargetSharesMessageTimeline(params: {
   }
   const parsed = parseAgentSessionKey(targetSessionKey);
   const rest = parsed?.rest ?? "";
-  return rest.startsWith("telegram:group:") || /^telegram:[^:]+:direct:/.test(rest);
+  if (rest.startsWith("telegram:group:")) {
+    return true;
+  }
+  const directPeerId = normalizeLowercaseStringOrEmpty(
+    params.directPeerId == null ? "" : String(params.directPeerId),
+  );
+  if (!directPeerId) {
+    return false;
+  }
+  const accountScopedDirect = /^telegram:[^:]+:direct:([^:]+)(?::|$)/.exec(rest);
+  return normalizeLowercaseStringOrEmpty(accountScopedDirect?.[1]) === directPeerId;
 }
 
 type TelegramCommandAuthResult = {
@@ -1156,6 +1168,7 @@ export const registerTelegramNativeCommands = ({
         const commandTargetSharesMessageTimeline = telegramCommandTargetSharesMessageTimeline({
           commandTargetSessionKey,
           mainSessionKey: route.mainSessionKey,
+          directPeerId: isGroup ? undefined : resolveTelegramDirectPeerId({ chatId, senderId }),
         });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: executionCfg,
