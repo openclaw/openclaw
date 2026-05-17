@@ -1,0 +1,134 @@
+{
+  "id": "gigachat",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["gigachat"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "gigachat-native",
+      "hosts": ["gigachat.devices.sberbank.ru", "api.giga.chat"]
+    }
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "gigachat",
+        "authMethods": ["authorization-key"],
+        "envVars": ["GIGACHAT_AUTHORIZATION_KEY"]
+      }
+    ]
+  },
+  "modelCatalog": {
+    "providers": {
+      "gigachat": {
+        "baseUrl": "https://gigachat.devices.sberbank.ru/api/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "GigaChat-2",
+            "name": "GigaChat 2",
+            "input": ["text"],
+            "reasoning": false,
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "requiresStringContent": true,
+              "strictMessageKeys": true
+            }
+          },
+          {
+            "id": "GigaChat-2-Pro",
+            "name": "GigaChat 2 Pro",
+            "input": ["text"],
+            "reasoning": false,
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "requiresStringContent": true,
+              "strictMessageKeys": true
+            }
+          },
+          {
+            "id": "GigaChat-2-Max",
+            "name": "GigaChat 2 Max",
+            "input": ["text"],
+            "reasoning": false,
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "requiresStringContent": true,
+              "strictMessageKeys": true
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "gigachat": "static"
+    }
+  },
+  "providerAuthEnvVars": {
+    "gigachat": ["GIGACHAT_AUTHORIZATION_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "gigachat",
+      "method": "authorization-key",
+      "choiceId": "gigachat-authorization-key",
+      "choiceLabel": "GigaChat Authorization key",
+      "choiceHint": "OAuth Authorization key from the Sber developer cabinet",
+      "groupId": "gigachat",
+      "groupLabel": "GigaChat",
+      "groupHint": "Sber OAuth Authorization key",
+      "optionKey": "gigachatAuthorizationKey",
+      "cliFlag": "--gigachat-authorization-key",
+      "cliOption": "--gigachat-authorization-key <key>",
+      "cliDescription": "GigaChat Authorization key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "scope": {
+        "type": "string",
+        "enum": ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"],
+        "default": "GIGACHAT_API_PERS"
+      },
+      "endpoint": {
+        "type": "string",
+        "enum": ["main", "business"],
+        "default": "main"
+      }
+    }
+  }
+}

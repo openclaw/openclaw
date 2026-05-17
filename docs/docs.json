@@ -1380,6 +1380,7 @@
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
+                  "providers/gigachat",
                   "providers/glm",
                   "providers/google",
                   "providers/gradium",

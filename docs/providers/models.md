@@ -32,6 +32,7 @@ model as `provider/model`.
 - [DeepInfra](/providers/deepinfra)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
+- [GigaChat](/providers/gigachat)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)

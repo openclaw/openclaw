@@ -332,6 +332,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: gigachat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gigachat/**"
+          - "docs/providers/gigachat.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
