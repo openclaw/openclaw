@@ -1397,6 +1397,48 @@ describe("run-node script", () => {
     });
   });
 
+  it("shows tty progress while rebuilding source-checkout artifacts", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const { spawn, spawnSync } = createSpawnRecorder();
+      const stderrChunks: string[] = [];
+      const stderr = {
+        isTTY: true,
+        write: vi.fn((chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        }),
+      } as unknown as NodeJS.WriteStream;
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          CI: "false",
+          OPENCLAW_FORCE_BUILD: "1",
+        },
+        spawn,
+        spawnSync,
+        stderr,
+        runRuntimePostBuild: async () => {},
+        execPath: process.execPath,
+        platform: process.platform,
+      } as Parameters<typeof runNodeMain>[0]);
+
+      expect(exitCode).toBe(0);
+      const stderrText = stderrChunks.join("");
+      expect(stderrText).toContain("Building local CLI artifacts");
+      expect(stderrText).toContain("\x1b[2K");
+    });
+  });
+
   it("rebuilds when git HEAD changes even if source mtimes do not exceed the old build stamp", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

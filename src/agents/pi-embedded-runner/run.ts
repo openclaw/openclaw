@@ -211,6 +211,23 @@ function withEmbeddedRunLaneTimeout(
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
 }
 
+function resolveEmbeddedRunSessionQueuePriority(
+  trigger: RunEmbeddedPiAgentParams["trigger"],
+): CommandQueueEnqueueOptions["priority"] {
+  switch (trigger) {
+    case "user":
+    case "manual":
+      return "foreground";
+    case "cron":
+    case "heartbeat":
+    case "memory":
+    case "overflow":
+      return "background";
+    default:
+      return "normal";
+  }
+}
+
 function normalizeEmbeddedRunAttemptResult(
   attempt: EmbeddedRunAttemptForRunner,
 ): EmbeddedRunAttemptForRunner {
@@ -378,6 +395,7 @@ export async function runEmbeddedPiAgent(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
   let laneTaskProgressAtMs = Date.now();
   const noteLaneTaskProgress = () => {
@@ -395,8 +413,12 @@ export async function runEmbeddedPiAgent(
     params.enqueue
       ? params.enqueue(task, withLaneTimeout(opts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
-    params.enqueue ? params.enqueue(task, opts) : enqueueCommandInLane(sessionLane, task, opts);
+  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    return params.enqueue
+      ? params.enqueue(task, sessionOpts)
+      : enqueueCommandInLane(sessionLane, task, sessionOpts);
+  };
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??

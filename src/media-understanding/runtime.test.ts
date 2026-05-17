@@ -3,10 +3,12 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
 import {
+  describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
+  transcribeAudioFile,
 } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
@@ -168,6 +170,82 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.runCapability).toHaveBeenCalledTimes(1);
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes workspaceDir through file media understanding requests", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await describeImageFile({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("passes workspaceDir through audio and video file helpers", async () => {
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "video", outcome: "skipped", attachments: [] },
+    });
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.mp4", mime: "video/mp4" },
+    ]);
+
+    await describeVideoFile({
+      filePath: "/tmp/sample.mp4",
+      mime: "video/mp4",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability: "video",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    mocks.runCapability.mockReset();
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "audio", outcome: "skipped", attachments: [] },
+    });
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+
+    await transcribeAudioFile({
+      filePath: "/tmp/sample.ogg",
+      mime: "audio/ogg",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability: "audio",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("passes per-request image prompts into media understanding config", async () => {

@@ -161,12 +161,17 @@ private func configureSSHRemote(_ opts: ConfigureRemoteOptions) throws -> Config
         onboardingSkipped: true)
 }
 
-private func configureDirectRemote(_ opts: ConfigureRemoteOptions, directUrlRaw: String) throws -> ConfigureRemoteOutput {
+private func configureDirectRemote(
+    _ opts: ConfigureRemoteOptions,
+    directUrlRaw: String) throws -> ConfigureRemoteOutput
+{
     guard let directURL = normalizeDirectURL(directUrlRaw) else {
         throw NSError(
             domain: "ConfigureRemote",
             code: 2,
-            userInfo: [NSLocalizedDescriptionKey: "Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts"])
+            userInfo: [
+                NSLocalizedDescriptionKey: "Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts",
+            ])
     }
 
     let configURL = openClawConfigURL()
@@ -212,7 +217,7 @@ private func openClawConfigURL() -> URL {
 private func loadConfigRoot(from url: URL) throws -> [String: Any] {
     guard FileManager().isReadableFile(atPath: url.path) else { return [:] }
     let data = try Data(contentsOf: url)
-    return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    return try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
 }
 
 private func saveConfigRoot(_ root: [String: Any], to url: URL) throws {

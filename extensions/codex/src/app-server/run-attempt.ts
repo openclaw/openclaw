@@ -867,7 +867,6 @@ export async function runCodexAppServerAttempt(
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
     const threadConfig = mergeCodexThreadConfigs(
-      nativeHookRelayConfig,
       bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
     );
     const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
@@ -930,6 +929,7 @@ export async function runCodexAppServerAttempt(
               appServer: pluginAppServer,
               developerInstructions: promptBuild.developerInstructions,
               config: threadConfig,
+              finalConfigPatch: nativeHookRelayConfig,
               mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
               mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
               contextEngineProjection,
@@ -1035,9 +1035,12 @@ export async function runCodexAppServerAttempt(
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
   let steeringQueue: ReturnType<typeof createCodexSteeringQueue> | undefined;
   let completed = false;
+  let terminalTurnNotificationQueued = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
   let turnCompletionIdleTimeoutMessage: string | undefined;
+  let clientClosedPromptError: string | undefined;
+  let clientClosedAbort = false;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -1057,6 +1060,7 @@ export async function runCodexAppServerAttempt(
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
   let turnCompletionIdleWatchPinnedByTerminalError = false;
+  let turnCompletionIdleTimeoutOverrideMs: number | undefined;
   let turnAssistantCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnAssistantCompletionIdleWatchArmed = false;
   let turnAssistantCompletionLastActivityAt = Date.now();
@@ -1192,8 +1196,9 @@ export async function runCodexAppServerAttempt(
     ) {
       return;
     }
+    const timeoutMs = turnCompletionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
     const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    if (idleMs < turnCompletionIdleTimeoutMs) {
+    if (idleMs < timeoutMs) {
       scheduleTurnCompletionIdleWatch();
       return;
     }
@@ -1206,7 +1211,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       idleMs,
-      timeoutMs: turnCompletionIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
       ...turnCompletionLastActivityDetails,
     });
@@ -1214,7 +1219,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       idleMs,
-      timeoutMs: turnCompletionIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
       ...turnCompletionLastActivityDetails,
     });
@@ -1270,7 +1275,8 @@ export async function runCodexAppServerAttempt(
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    const delayMs = Math.max(1, turnCompletionIdleTimeoutMs - elapsedMs);
+    const timeoutMs = turnCompletionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
+    const delayMs = Math.max(1, timeoutMs - elapsedMs);
     turnCompletionIdleTimer = setTimeout(fireTurnCompletionIdleTimeout, delayMs);
     turnCompletionIdleTimer.unref?.();
   }
@@ -1348,6 +1354,7 @@ export async function runCodexAppServerAttempt(
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
     turnCompletionLastActivityDetails = options?.details;
+    turnCompletionIdleTimeoutOverrideMs = undefined;
     if (options?.attemptProgress) {
       turnAttemptLastProgressAt = turnCompletionLastActivityAt;
       turnAttemptLastProgressReason = reason;
@@ -1377,6 +1384,7 @@ export async function runCodexAppServerAttempt(
   const disarmTurnCompletionIdleWatch = () => {
     turnCompletionIdleWatchArmed = false;
     turnCompletionIdleWatchPinnedByTerminalError = false;
+    turnCompletionIdleTimeoutOverrideMs = undefined;
     clearTurnCompletionIdleTimer();
   };
 
@@ -1393,9 +1401,14 @@ export async function runCodexAppServerAttempt(
     scheduleTurnAssistantCompletionIdleWatch();
   };
 
-  const armTurnCompletionIdleWatch = (options?: { pinnedByTerminalError?: boolean }) => {
+  const armTurnCompletionIdleWatch = (options?: {
+    pinnedByTerminalError?: boolean;
+    timeoutMs?: number;
+  }) => {
     turnCompletionIdleWatchArmed = true;
     turnCompletionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
+    turnCompletionIdleTimeoutOverrideMs =
+      options?.timeoutMs !== undefined ? Math.max(1, Math.floor(options.timeoutMs)) : undefined;
     scheduleTurnCompletionIdleWatch();
   };
 
@@ -1462,6 +1475,19 @@ export async function runCodexAppServerAttempt(
     });
   };
 
+  const isTerminalTurnNotificationForTurn = (
+    notification: CodexServerNotification,
+    notificationTurnId: string,
+  ): boolean => {
+    if (!isTurnNotification(notification.params, thread.threadId, notificationTurnId)) {
+      return false;
+    }
+    return (
+      notification.method === "turn/completed" ||
+      isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt })
+    );
+  };
+
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
@@ -1504,6 +1530,11 @@ export async function runCodexAppServerAttempt(
       notification,
       turnCrossedToolHandoff,
     );
+    const postToolRawAssistantCompletionNeedsTerminalGuard =
+      isCurrentTurnNotification &&
+      turnCrossedToolHandoff &&
+      isRawAssistantCompletionNotification(notification) &&
+      activeTurnItemIds.size === 0;
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
@@ -1521,6 +1552,8 @@ export async function runCodexAppServerAttempt(
       disarmTurnAssistantCompletionIdleWatch();
     } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
+    } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
+      armTurnCompletionIdleWatch({ timeoutMs: turnAssistantCompletionIdleTimeoutMs });
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem) {
@@ -1545,6 +1578,7 @@ export async function runCodexAppServerAttempt(
       isCurrentTurnNotification &&
       !trackedDynamicToolCompletion &&
       !rawToolOutputCompletion &&
+      !postToolRawAssistantCompletionNeedsTerminalGuard &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
@@ -1560,7 +1594,10 @@ export async function runCodexAppServerAttempt(
     const isTurnAbortMarker =
       isCurrentTurnNotification &&
       isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
-    const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
+    const isTurnTerminal = isTerminalTurnNotificationForTurn(notification, turnId);
+    if (isTurnTerminal) {
+      terminalTurnNotificationQueued = true;
+    }
     try {
       await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
@@ -1590,6 +1627,9 @@ export async function runCodexAppServerAttempt(
       userInputBridge?.handleNotification(notification);
       pendingNotifications.push(notification);
       return Promise.resolve();
+    }
+    if (isTerminalTurnNotificationForTurn(notification, turnId)) {
+      terminalTurnNotificationQueued = true;
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
@@ -1758,6 +1798,7 @@ export async function runCodexAppServerAttempt(
       }
     }
   });
+  let closeCleanup: (() => void) | undefined;
 
   const forceContextEngineCompactionForCodexOverflow = async (error: unknown): Promise<boolean> => {
     if (!activeContextEngine?.info.ownsCompaction) {
@@ -2016,6 +2057,40 @@ export async function runCodexAppServerAttempt(
     nativePostToolUseRelayEnabled:
       nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
   });
+  if (
+    isTerminalTurnStatus(turn.turn.status) ||
+    pendingNotifications.some((notification) =>
+      isTerminalTurnNotificationForTurn(notification, activeTurnId),
+    )
+  ) {
+    terminalTurnNotificationQueued = true;
+  }
+  closeCleanup = (
+    client as {
+      addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
+    }
+  ).addCloseHandler?.(() => {
+    if (completed || terminalTurnNotificationQueued || runAbortController.signal.aborted) {
+      return;
+    }
+    clientClosedPromptError = "codex app-server client closed before turn completed";
+    trajectoryRecorder?.recordEvent("turn.client_closed", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    embeddedAgentLog.warn("codex app-server client closed before turn completed", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    clientClosedAbort = true;
+    runAbortController.abort("client_closed");
+    completed = true;
+    clearTurnAttemptIdleTimer();
+    clearTurnCompletionIdleTimer();
+    clearTurnAssistantCompletionIdleTimer();
+    clearTurnTerminalIdleTimer();
+    resolveCompletion?.();
+  });
   emitLifecycleStart();
   const activeProjector = projector;
   turnTerminalIdleWatchArmed = true;
@@ -2080,12 +2155,15 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
-    const finalAborted = result.aborted || runAbortController.signal.aborted;
-    let finalPromptError = turnCompletionIdleTimedOut
-      ? turnCompletionIdleTimeoutMessage
-      : timedOut
-        ? "codex app-server attempt timed out"
-        : result.promptError;
+    const finalAborted =
+      result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
+    let finalPromptError =
+      clientClosedPromptError ??
+      (turnCompletionIdleTimedOut
+        ? turnCompletionIdleTimeoutMessage
+        : timedOut
+          ? "codex app-server attempt timed out"
+          : result.promptError);
     const finalPromptErrorMessage =
       typeof finalPromptError === "string"
         ? finalPromptError
@@ -2104,7 +2182,8 @@ export async function runCodexAppServerAttempt(
         signal: runAbortController.signal,
       });
     }
-    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+    const finalPromptErrorSource =
+      timedOut || clientClosedPromptError ? "prompt" : result.promptErrorSource;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -2221,11 +2300,14 @@ export async function runCodexAppServerAttempt(
     });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
-        status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        status:
+          timedOut || (runAbortController.signal.aborted && !clientClosedAbort)
+            ? "interrupted"
+            : "cleanup",
         threadId: thread.threadId,
         turnId: activeTurnId,
         timedOut,
-        aborted: runAbortController.signal.aborted,
+        aborted: runAbortController.signal.aborted && !clientClosedAbort,
       });
     }
     await runAgentCleanupStep({
@@ -2247,6 +2329,7 @@ export async function runCodexAppServerAttempt(
     clearTurnTerminalIdleTimer();
     notificationCleanup();
     requestCleanup();
+    closeCleanup?.();
     nativeHookRelay?.unregister();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);

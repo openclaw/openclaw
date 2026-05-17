@@ -561,24 +561,30 @@ describe("chat voice controls", () => {
     });
 
     const model = container.querySelector<HTMLInputElement>(
-      '.agent-chat__talk-options input[placeholder="gpt-realtime-2"]',
+      '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
     const voice = container.querySelector<HTMLSelectElement>(
-      ".agent-chat__talk-options label:nth-of-type(4) select",
+      ".agent-chat__talk-options-primary label:nth-of-type(1) select",
+    );
+    const sensitivity = container.querySelector<HTMLSelectElement>(
+      ".agent-chat__talk-options-primary label:nth-of-type(3) select",
     );
     const voiceOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
-        ".agent-chat__talk-options label:nth-of-type(4) option",
+        ".agent-chat__talk-options-primary label:nth-of-type(1) option",
       ),
     ).map((option) => option.value);
     const reasoningOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
-        ".agent-chat__talk-options label:nth-of-type(5) option",
+        ".agent-chat__talk-options-advanced label:nth-of-type(3) option",
       ),
     ).map((option) => option.value);
 
     if (voice === null) {
       throw new Error("expected Talk voice select");
+    }
+    if (sensitivity === null) {
+      throw new Error("expected Talk sensitivity select");
     }
     expect(voiceOptions).toEqual([
       "",
@@ -593,14 +599,58 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
+    expect(sensitivity.value).toBe("__custom");
+    expect(Array.from(sensitivity.options).map((option) => option.value)).toEqual([
+      "",
+      "0.65",
+      "0.5",
+      "0.35",
+      "__custom",
+    ]);
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
+    expect(container.textContent).toContain("Sensitivity");
+    expect(container.textContent).toContain("Advanced");
+    expect(container.textContent).toContain("Pause before send");
+    expect(container.textContent).not.toContain("Silence ms");
+    expect(container.textContent).not.toContain("Prefix ms");
     if (model === null) {
       throw new Error("expected Talk model input");
     }
     model.value = "gpt-realtime-mini";
     model.dispatchEvent(new Event("input", { bubbles: true }));
+    sensitivity.value = "0.35";
+    sensitivity.dispatchEvent(new Event("change", { bubbles: true }));
+    sensitivity.value = "";
+    sensitivity.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "0.35" });
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "" });
+
+    const defaultContainer = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkOptions: {
+        provider: "",
+        model: "",
+        voice: "",
+        transport: "",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange,
+    });
+    const defaultSensitivity = defaultContainer.querySelector<HTMLSelectElement>(
+      ".agent-chat__talk-options-primary label:nth-of-type(3) select",
+    );
+    expect(defaultSensitivity?.value).toBe("");
+    expect(Array.from(defaultSensitivity?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "0.65",
+      "0.5",
+      "0.35",
+    ]);
   });
 
   it("renders composer and Talk labels from the active locale", async () => {
