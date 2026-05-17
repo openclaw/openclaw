@@ -1,9 +1,9 @@
 ---
-name: codex-review
-description: "Codex code review closeout: local dirty changes, PR branch vs main, parallel tests."
+name: autoreview
+description: "Autoreview closeout: local dirty changes, PR branch vs main, parallel tests."
 ---
 
-# Codex Review
+# Autoreview
 
 Run Codex's built-in code review as a closeout check. This is code review (`codex review`), not Guardian `auto_review` approval routing.
 
@@ -66,7 +66,7 @@ codex review --commit HEAD
 or with the helper:
 
 ```bash
-.agents/skills/codex-review/scripts/codex-review --mode commit --commit HEAD
+.agents/skills/autoreview/scripts/autoreview --mode commit --commit HEAD
 ```
 
 Use commit review for already-landed or already-pushed work on `main`. Reviewing
@@ -79,7 +79,7 @@ with `--base`.
 Format first if formatting can change line locations. Then it is OK to run tests and review in parallel:
 
 ```bash
-.agents/skills/codex-review/scripts/codex-review --parallel-tests "<focused test command>"
+.agents/skills/autoreview/scripts/autoreview --parallel-tests "<focused test command>"
 ```
 
 Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain. Once that rerun exits cleanly, stop; do not spend another long review cycle on redundant confirmation.
@@ -98,7 +98,7 @@ Run inline only for tiny changes or when subagents are unavailable.
 Bundled helper:
 
 ```bash
-.agents/skills/codex-review/scripts/codex-review --help
+.agents/skills/autoreview/scripts/autoreview --help
 ```
 
 The helper:
@@ -110,11 +110,12 @@ The helper:
 - supports `--reviewer codex|claude|pi|opencode|auto`; `auto` runs Codex first
 - supports `--fallback-reviewer claude|pi|opencode|none`; default is `claude`
 - falls back only when Codex is unavailable or exits nonzero, not when Codex reports findings
-- writes only to stdout unless `--output` or `CODEX_REVIEW_OUTPUT` is set
+- writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox` by default
-- keeps accepting `--full-access`; use `--no-yolo` or `CODEX_REVIEW_YOLO=0` to opt out
-- prints `codex-review clean: no accepted/actionable findings reported` when the selected review command exits 0
+- keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
+- still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
+- prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
 
 ## Final Report
 

@@ -10,6 +10,7 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
 } from "./runtime-api.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -59,12 +60,20 @@ export function cloneMessage(message: QaBusMessage): QaBusMessage {
     ...message,
     conversation: { ...message.conversation },
     attachments: (message.attachments ?? []).map((attachment) => cloneAttachment(attachment)),
+    toolCalls: message.toolCalls?.map((toolCall) => cloneToolCall(toolCall)),
     reactions: message.reactions.map((reaction) => ({ ...reaction })),
   };
 }
 
 function cloneAttachment(attachment: QaBusAttachment): QaBusAttachment {
   return { ...attachment };
+}
+
+function cloneToolCall(toolCall: QaBusToolCall): QaBusToolCall {
+  return {
+    name: toolCall.name,
+    ...(toolCall.arguments ? { arguments: structuredClone(toolCall.arguments) } : {}),
+  };
 }
 
 export function cloneEvent(event: QaBusEvent): QaBusEvent {
@@ -141,7 +150,11 @@ export function searchQaBusMessages(params: {
         .join(" ")
         .toLowerCase();
       const messageText = normalizeOptionalLowercaseString(message.text) ?? "";
-      return `${messageText} ${searchableAttachmentText}`.includes(query);
+      const searchableToolText = (message.toolCalls ?? [])
+        .map((toolCall) => toolCall.name)
+        .join(" ")
+        .toLowerCase();
+      return `${messageText} ${searchableAttachmentText} ${searchableToolText}`.includes(query);
     })
     .slice(-limit)
     .map((message) => cloneMessage(message));

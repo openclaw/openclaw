@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: codex-review [options]
+Usage: autoreview [options]
 
 Options:
   --mode auto|local|branch|commit
@@ -36,15 +36,15 @@ EOF
 mode=auto
 base_ref=
 commit_ref=HEAD
-reviewer=${CODEX_REVIEW_REVIEWER:-auto}
-fallback_reviewer=${CODEX_REVIEW_FALLBACK_REVIEWER:-claude}
+reviewer=${AUTOREVIEW_REVIEWER:-${CODEX_REVIEW_REVIEWER:-auto}}
+fallback_reviewer=${AUTOREVIEW_FALLBACK_REVIEWER:-${CODEX_REVIEW_FALLBACK_REVIEWER:-claude}}
 codex_bin=${CODEX_BIN:-codex}
 claude_bin=${CLAUDE_BIN:-claude}
 pi_bin=${PI_BIN:-pi}
 opencode_bin=${OPENCODE_BIN:-opencode}
 codex_args=()
-yolo=${CODEX_REVIEW_YOLO:-1}
-output=${CODEX_REVIEW_OUTPUT:-}
+yolo=${AUTOREVIEW_YOLO:-${CODEX_REVIEW_YOLO:-1}}
+output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
 parallel_tests=
 dry_run=false
 
@@ -189,7 +189,7 @@ else
   review_cmd=("$codex_bin" "${codex_args[@]}" review --base "$base_ref")
 fi
 
-printf 'codex-review target: %s\n' "$review_kind"
+printf 'autoreview target: %s\n' "$review_kind"
 printf 'branch: %s\n' "${current_branch:-detached}"
 if [[ -n "$pr_url" ]]; then
   printf 'pr: %s\n' "$pr_url"
@@ -294,7 +294,7 @@ Rules:
   Why: one sentence
   Fix: one sentence
 - If no accepted/actionable findings, output exactly:
-  codex-review clean: no accepted/actionable findings reported
+  autoreview clean: no accepted/actionable findings reported
 
 Diff:
 EOF
@@ -360,7 +360,7 @@ run_prompt_reviewer() {
       status=1
     elif ! grep -q '[^[:space:]]' "$reviewer_output"; then
       status=1
-    elif ! grep -Fxq 'codex-review clean: no accepted/actionable findings reported' "$reviewer_output"; then
+    elif ! grep -Fxq 'autoreview clean: no accepted/actionable findings reported' "$reviewer_output"; then
       status=1
     fi
   fi
@@ -405,7 +405,7 @@ run_auto_review() {
   if [[ "$fallback_reviewer" == none ]]; then
     return "$status"
   fi
-  printf 'codex-review warning: codex exited %s; falling back to %s\n' "$status" "$fallback_reviewer" >&2
+  printf 'autoreview warning: codex exited %s; falling back to %s\n' "$status" "$fallback_reviewer" >&2
   run_selected_review "$fallback_reviewer"
 }
 
@@ -458,16 +458,16 @@ report_clean_review_or_fail() {
   elapsed_text=$(format_elapsed "${review_elapsed_seconds:-0}")
 
   if review_output_has_findings; then
-    printf 'codex-review complete after %s\n' "$elapsed_text"
-    printf 'codex-review findings: accepted/actionable findings reported\n'
+    printf 'autoreview complete after %s\n' "$elapsed_text"
+    printf 'autoreview findings: accepted/actionable findings reported\n'
     return 1
   fi
   if review_output_empty; then
-    printf 'codex-review complete after %s; no output\n' "$elapsed_text"
+    printf 'autoreview complete after %s; no output\n' "$elapsed_text"
     return 1
   fi
-  printf 'codex-review complete after %s\n' "$elapsed_text"
-  printf 'codex-review clean: no accepted/actionable findings reported\n'
+  printf 'autoreview complete after %s\n' "$elapsed_text"
+  printf 'autoreview clean: no accepted/actionable findings reported\n'
 }
 
 if [[ -z "$parallel_tests" ]]; then
@@ -523,7 +523,7 @@ review_elapsed_seconds=$(cat "$review_elapsed_file")
 tests_status=$(cat "$tests_status_file")
 rm -f "$review_status_file" "$review_elapsed_file" "$tests_status_file"
 
-printf 'codex-review exit: %s\n' "$review_status"
+printf 'autoreview exit: %s\n' "$review_status"
 printf 'tests exit: %s\n' "$tests_status"
 
 if [[ "$review_status" != 0 || "$tests_status" != 0 ]]; then

@@ -469,6 +469,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       },
       blockStreaming: true,
       streaming: "quiet",
+      toolProfile: "coding",
     },
   },
   {

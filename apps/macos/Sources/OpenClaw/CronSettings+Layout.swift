@@ -53,10 +53,6 @@ extension CronSettings {
                 Text(job.displayName)
             }
         }
-        .onChange(of: self.store.selectedJobId) { _, newValue in
-                guard let newValue else { return }
-                Task { await self.store.refreshRuns(jobId: newValue) }
-            }
     }
 
     private func updateActiveWork(active: Bool) {
@@ -150,14 +146,32 @@ extension CronSettings {
                         .foregroundStyle(.secondary)
                 }
 
-                List(selection: self.$store.selectedJobId) {
-                    ForEach(self.store.jobs) { job in
-                        self.jobRow(job)
-                            .tag(job.id)
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(self.store.jobs) { job in
+                            Button {
+                                self.selectJob(job.id)
+                            } label: {
+                                self.jobRow(job)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 8)
+                                    .background(self.store.selectedJobId == job.id ? Color.accentColor.opacity(0.18) : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
                             .contextMenu { self.jobContextMenu(job) }
+                        }
+
+                        if self.store.jobs.isEmpty {
+                            Text("No cron jobs yet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                        }
                     }
+                    .padding(.vertical, 4)
                 }
-                .listStyle(.inset)
             }
             .frame(width: 250)
 
@@ -166,6 +180,11 @@ extension CronSettings {
             self.detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+    }
+
+    private func selectJob(_ id: String) {
+        self.store.selectedJobId = id
+        Task { await self.store.refreshRuns(jobId: id) }
     }
 
     @ViewBuilder
