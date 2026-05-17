@@ -36,6 +36,7 @@ function resolveAccountWithEnv(
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
   vi.spyOn(runtimeEnvModule, "createSubsystemLogger").mockImplementation(() => {
     const logger = {
       warn: warnMock,
@@ -43,6 +44,10 @@ beforeEach(() => {
     };
     return logger as unknown as ReturnType<typeof runtimeEnvModule.createSubsystemLogger>;
   });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("resolveTelegramAccount", () => {
@@ -125,6 +130,48 @@ describe("resolveTelegramAccount", () => {
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
   });
 
+  it("keeps the implicit default account when top-level credentials coexist with a named account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: { fusion: { enabled: false, botToken: "tok-fusion" } },
+        },
+      },
+      bindings: [{ agentId: "fusion", match: { channel: "telegram", accountId: "fusion" } }],
+    };
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default", "fusion"]);
+    expect(listEnabledTelegramAccounts(cfg).map((account) => account.accountId)).toEqual([
+      "default",
+    ]);
+  });
+
+  it("keeps the implicit default account for top-level tokenFile credentials", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          tokenFile: "/tmp/openclaw-telegram-token",
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default", "work"]);
+  });
+
+  it("keeps the implicit default account when TELEGRAM_BOT_TOKEN supplies the default token", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: { accounts: { work: { botToken: "tok-work" } } },
+      },
+    };
+
+    withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
+      expect(listTelegramAccountIds(cfg)).toEqual(["default", "work"]);
+    });
+  });
+
   it("does not resolve disabled account tokens when listing enabled accounts", () => {
     const cfg = {
       channels: {
@@ -183,6 +230,20 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
+    expectNoMissingDefaultWarning();
+  });
+
+  it("does not warn when top-level credentials provide the implicit default account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("default");
     expectNoMissingDefaultWarning();
   });
 

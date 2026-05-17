@@ -4,6 +4,7 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 
 const DEFAULT_AGENT_ID = "main";
 
@@ -34,7 +35,19 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
       ids.add(normalizeAccountId(key));
     }
   }
+  if (hasDefaultTelegramCredential(cfg)) {
+    ids.add(DEFAULT_ACCOUNT_ID);
+  }
   return [...ids];
+}
+
+function hasDefaultTelegramCredential(cfg: OpenClawConfig): boolean {
+  const telegram = cfg.channels?.telegram;
+  return (
+    hasConfiguredSecretInput(telegram?.botToken, cfg.secrets?.defaults) ||
+    hasConfiguredSecretInput(telegram?.tokenFile, cfg.secrets?.defaults) ||
+    Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim())
+  );
 }
 
 function resolveBindingAccount(params: {
