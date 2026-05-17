@@ -93,6 +93,7 @@ type TelegramSendOpts = {
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
+  abortSignal?: AbortSignal;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Quote text for Telegram reply_parameters. */
@@ -210,6 +211,14 @@ function createTelegramHttpLogger(cfg: OpenClawConfig) {
     const detail = redactSensitiveText(formatUncaughtError(err.error ?? err));
     diagLogger.warn(`telegram http error (${label}): ${detail}`);
   };
+}
+
+function throwIfTelegramSendAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    const err = new Error("Operation aborted");
+    err.name = "AbortError";
+    throw err;
+  }
 }
 
 function shouldUseTelegramClientOptionsCache(): boolean {
@@ -606,6 +615,9 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
+  const abortSignal = opts.abortSignal;
+  const assertSendActive = () => throwIfTelegramSendAborted(abortSignal);
+  assertSendActive();
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
@@ -616,6 +628,7 @@ export async function sendMessageTelegram(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
+  assertSendActive();
   const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
     opts.maxBytes ??
@@ -666,12 +679,14 @@ export async function sendMessageTelegram(
     chunk: TelegramTextChunk,
     params?: TelegramSendMessageParams,
   ) => {
+    assertSendActive();
     return await withTelegramThreadFallback(
       params,
       "message",
       opts.verbose,
       target.chatType !== "direct",
       async (effectiveParams, label) => {
+        assertSendActive();
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
           baseParams.link_preview_options = linkPreviewOptions;
@@ -681,14 +696,16 @@ export async function sendMessageTelegram(
           ...(opts.silent === true ? { disable_notification: true } : {}),
         };
         const hasPlainParams = Object.keys(plainParams).length > 0;
-        const requestPlain = (retryLabel: string) =>
-          requestWithChatNotFound(
+        const requestPlain = (retryLabel: string) => {
+          assertSendActive();
+          return requestWithChatNotFound(
             () =>
               hasPlainParams
                 ? api.sendMessage(chatId, chunk.plainText, plainParams)
                 : api.sendMessage(chatId, chunk.plainText),
             retryLabel,
           );
+        };
         if (!chunk.htmlText) {
           return await requestPlain(label);
         }
@@ -700,11 +717,13 @@ export async function sendMessageTelegram(
         return await withTelegramHtmlParseFallback({
           label,
           verbose: opts.verbose,
-          requestHtml: (retryLabel) =>
-            requestWithChatNotFound(
+          requestHtml: (retryLabel) => {
+            assertSendActive();
+            return requestWithChatNotFound(
               () => api.sendMessage(chatId, htmlText, htmlParams),
               retryLabel,
-            ),
+            );
+          },
           requestPlain,
         });
       },
@@ -730,6 +749,7 @@ export async function sendMessageTelegram(
       if (!chunk) {
         continue;
       }
+      assertSendActive();
       const res = await sendTelegramTextChunk(chunk, buildTextParams(index === chunks.length - 1));
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
@@ -805,6 +825,7 @@ export async function sendMessageTelegram(
   }
 
   if (mediaUrl) {
+    assertSendActive();
     const media = await loadWebMedia(
       mediaUrl,
       buildOutboundMediaLoadOptions({
@@ -814,6 +835,7 @@ export async function sendMessageTelegram(
         optimizeImages: opts.forceDocument ? false : undefined,
       }),
     );
+    assertSendActive();
     const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
@@ -825,6 +847,7 @@ export async function sendMessageTelegram(
       opts.forceDocument === true && (kind === "image" || kind === "video") ? "document" : kind;
     if (deliveryKind === "image" && !isGif) {
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
+      assertSendActive();
     }
     const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
     const fileName =
@@ -855,6 +878,7 @@ export async function sendMessageTelegram(
       deliveryKind === "video" && !isVideoNote
         ? await probeVideoDimensions(media.buffer)
         : undefined;
+    assertSendActive();
     const mediaParams = {
       ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
@@ -866,15 +890,19 @@ export async function sendMessageTelegram(
       sender: (
         effectiveParams: TelegramThreadScopedParams | undefined,
       ) => Promise<TelegramMessageLike>,
-    ) =>
-      await withTelegramThreadFallback(
+    ) => {
+      assertSendActive();
+      return await withTelegramThreadFallback(
         mediaParams,
         label,
         opts.verbose,
         target.chatType !== "direct",
-        async (effectiveParams, retryLabel) =>
-          requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
+        async (effectiveParams, retryLabel) => {
+          assertSendActive();
+          return requestWithChatNotFound(() => sender(effectiveParams), retryLabel);
+        },
       );
+    };
 
     const mediaSender = (() => {
       if (isGif && deliveryKind !== "document") {
@@ -975,6 +1003,7 @@ export async function sendMessageTelegram(
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
+      assertSendActive();
       const textResult = await sendChunkedText(followUpText, "text follow-up send");
       return { messageId: textResult.messageId, chatId: resolvedChatId };
     }
@@ -985,6 +1014,7 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
+  assertSendActive();
   const textResult = await sendChunkedText(text, "text send");
   recordChannelActivity({
     channel: "telegram",

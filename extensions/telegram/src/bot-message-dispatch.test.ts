@@ -2414,6 +2414,104 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await firstDispatch;
   });
 
+  it("aborts durable topic delivery when authorized native stop targets that session", async () => {
+    const topicSessionKey = "agent:main:telegram:group:-1003826723328:topic:8185";
+    let releaseFirstDelivery: (() => void) | undefined;
+    const holdFirstDelivery = new Promise<void>((resolve) => {
+      releaseFirstDelivery = resolve;
+    });
+    let firstDeliverySignal: AbortSignal | undefined;
+    const firstDeliveryStarted = new Promise<void>((resolve) => {
+      deliverInboundReplyWithMessageSendContext
+        .mockImplementationOnce(async (params) => {
+          const request = params as { signal?: AbortSignal };
+          firstDeliverySignal = request.signal;
+          resolve();
+          await holdFirstDelivery;
+          return {
+            status: "handled_visible",
+            delivery: {
+              messageIds: ["1001"],
+              visibleReplySent: true,
+            },
+          };
+        })
+        .mockResolvedValue({
+          status: "handled_visible",
+          delivery: {
+            messageIds: ["1002"],
+            visibleReplySent: true,
+          },
+        });
+    });
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Old durable topic reply" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Stopping" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+
+    const topicContext = (
+      ctxPayload: Partial<TelegramMessageContext["ctxPayload"]>,
+      messageId: number,
+    ) =>
+      createContext({
+        chatId: -1003826723328,
+        isGroup: true,
+        threadSpec: { id: 8185, scope: "forum" },
+        msg: {
+          chat: { id: -1003826723328, type: "supergroup", is_forum: true },
+          message_id: messageId,
+          message_thread_id: 8185,
+          is_topic_message: true,
+        } as never,
+        ctxPayload: {
+          SessionKey: topicSessionKey,
+          ChatType: "group",
+          MessageSid: String(messageId),
+          ...ctxPayload,
+        } as never,
+      });
+
+    const firstDispatch = dispatchWithContext({
+      context: topicContext(
+        {
+          Body: "make a long durable answer",
+          RawBody: "make a long durable answer",
+          CommandAuthorized: true,
+        },
+        96451,
+      ),
+      streamMode: "off",
+    });
+    await firstDeliveryStarted;
+
+    expect(firstDeliverySignal?.aborted).toBe(false);
+
+    await dispatchWithContext({
+      context: topicContext(
+        {
+          SessionKey: "agent:main:telegram:group:-1003826723328:control",
+          CommandTargetSessionKey: topicSessionKey,
+          CommandSource: "native",
+          Body: "/stop@vacs_tars_bot",
+          RawBody: "/stop@vacs_tars_bot",
+          CommandBody: "/stop",
+          CommandAuthorized: true,
+        },
+        96452,
+      ),
+      streamMode: "off",
+    });
+
+    expect(firstDeliverySignal?.aborted).toBe(true);
+    releaseFirstDelivery?.();
+    await firstDispatch;
+  });
+
   it("uses configured doneHoldMs when clearing Telegram status reactions after reply", async () => {
     vi.useFakeTimers();
     const reactionApi = vi.fn(async () => true);

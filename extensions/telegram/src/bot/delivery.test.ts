@@ -1431,6 +1431,40 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("does not send media when the continuation predicate flips false after loading media", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 30,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+    let active = true;
+    const mediaLoader = vi.fn(async () => {
+      active = false;
+      return {
+        buffer: Buffer.from("img"),
+        contentType: "image/jpeg",
+        fileName: "a.jpg",
+      };
+    });
+
+    const result = await deliverReplies({
+      replies: [{ mediaUrls: ["https://a.jpg"] }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      mediaLoader: mediaLoader as typeof loadWebMedia,
+      shouldContinue: () => active,
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(mediaLoader).toHaveBeenCalledTimes(1);
+    expect(sendPhoto).not.toHaveBeenCalled();
+  });
+
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

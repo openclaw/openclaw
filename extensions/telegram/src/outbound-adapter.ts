@@ -64,6 +64,7 @@ async function resolveTelegramSendContext(params: {
   threadId?: string | number | null;
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
+  abortSignal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
@@ -76,6 +77,7 @@ async function resolveTelegramSendContext(params: {
     replyToMessageId?: number;
     accountId?: string;
     silent?: boolean;
+    abortSignal?: AbortSignal;
     gatewayClientScopes?: readonly string[];
   };
 }> {
@@ -89,6 +91,7 @@ async function resolveTelegramSendContext(params: {
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
       accountId: params.accountId ?? undefined,
       silent: params.silent,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       gatewayClientScopes: params.gatewayClientScopes,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
     },
@@ -252,6 +255,7 @@ export function createTelegramOutboundAdapter(
         threadId,
         formatting,
         silent,
+        abortSignal,
         gatewayClientScopes,
       }) => {
         const { send, baseOpts } = await resolveTelegramSendContext({
@@ -262,6 +266,7 @@ export function createTelegramOutboundAdapter(
           threadId,
           formatting,
           silent,
+          abortSignal,
           gatewayClientScopes,
           resolveSend,
         });
@@ -283,6 +288,7 @@ export function createTelegramOutboundAdapter(
         formatting,
         forceDocument,
         silent,
+        abortSignal,
         gatewayClientScopes,
       }) => {
         const { send, baseOpts } = await resolveTelegramSendContext({
@@ -293,6 +299,7 @@ export function createTelegramOutboundAdapter(
           threadId,
           formatting,
           silent,
+          abortSignal,
           gatewayClientScopes,
           resolveSend,
         });
@@ -318,6 +325,7 @@ export function createTelegramOutboundAdapter(
       formatting,
       forceDocument,
       silent,
+      abortSignal,
       gatewayClientScopes,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
@@ -328,6 +336,7 @@ export function createTelegramOutboundAdapter(
         threadId,
         formatting,
         silent,
+        abortSignal,
         gatewayClientScopes,
         resolveSend,
       });

@@ -229,6 +229,7 @@ function beginTelegramReplyFence(params: {
   key: string;
   supersede: boolean;
   abortController?: AbortController;
+  abortControllers?: readonly AbortController[];
 }): number {
   const existing = telegramReplyFenceByKey.get(params.key);
   const state: TelegramReplyFenceState = existing ?? {
@@ -241,6 +242,9 @@ function beginTelegramReplyFence(params: {
   }
   if (params.abortController) {
     (state.abortControllers ??= new Set()).add(params.abortController);
+  }
+  for (const abortController of params.abortControllers ?? []) {
+    (state.abortControllers ??= new Set()).add(abortController);
   }
   state.activeDispatches += 1;
   telegramReplyFenceByKey.set(params.key, state);
@@ -265,12 +269,12 @@ function isTelegramReplyFenceSuperseded(params: { key: string; generation: numbe
   return (telegramReplyFenceByKey.get(params.key)?.generation ?? 0) !== params.generation;
 }
 
-function endTelegramReplyFence(key: string, abortController?: AbortController): void {
+function endTelegramReplyFence(key: string, abortControllers?: readonly AbortController[]): void {
   const state = telegramReplyFenceByKey.get(key);
   if (!state) {
     return;
   }
-  if (abortController) {
+  for (const abortController of abortControllers ?? []) {
     state.abortControllers?.delete(abortController);
   }
   state.activeDispatches = Math.max(0, state.activeDispatches - 1);
@@ -533,6 +537,7 @@ export const dispatchTelegramMessage = async ({
   });
   let replyFenceGeneration: number | undefined;
   const roomEventAbortController = isRoomEvent ? new AbortController() : undefined;
+  const deliveryAbortController = new AbortController();
   let roomEventAbortControllerQueued = false;
   let dispatchWasSuperseded = false;
   const isDispatchSuperseded = () =>
@@ -541,14 +546,24 @@ export const dispatchTelegramMessage = async ({
       key: replyFenceKey.activeKey,
       generation: replyFenceGeneration,
     });
+  const isDeliveryActive = () => !isDispatchSuperseded();
+  const abortDeliveryIfSuperseded = () => {
+    if (isDeliveryActive() || deliveryAbortController.signal.aborted) {
+      return;
+    }
+    deliveryAbortController.abort();
+  };
   const releaseReplyFence = () => {
     if (replyFenceGeneration === undefined) {
       return;
     }
-    endTelegramReplyFence(
-      replyFenceKey.activeKey,
-      roomEventAbortControllerQueued ? undefined : roomEventAbortController,
-    );
+    endTelegramReplyFence(replyFenceKey.activeKey, [
+      deliveryAbortController,
+      ...(roomEventAbortControllerQueued || !roomEventAbortController
+        ? []
+        : [roomEventAbortController]),
+    ]);
+    abortDeliveryIfSuperseded();
     replyFenceGeneration = undefined;
   };
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -940,7 +955,10 @@ export const dispatchTelegramMessage = async ({
   replyFenceGeneration = beginTelegramReplyFence({
     key: replyFenceKey.activeKey,
     supersede: supersedeReplyFence,
-    abortController: roomEventAbortController,
+    abortControllers: [
+      deliveryAbortController,
+      ...(roomEventAbortController ? [roomEventAbortController] : []),
+    ],
   });
 
   const implicitQuoteReplyTargetId =
@@ -1049,7 +1067,7 @@ export const dispatchTelegramMessage = async ({
           });
         }
       : undefined,
-    shouldContinue: () => !isDispatchSuperseded(),
+    shouldContinue: isDeliveryActive,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
@@ -1149,7 +1167,8 @@ export const dispatchTelegramMessage = async ({
       payload: ReplyPayload,
       options?: { durable?: boolean; silent?: boolean },
     ) => {
-      if (isDispatchSuperseded()) {
+      if (!isDeliveryActive()) {
+        abortDeliveryIfSuperseded();
         return false;
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
@@ -1173,6 +1192,7 @@ export const dispatchTelegramMessage = async ({
             chunkMode,
           },
           silent,
+          signal: deliveryAbortController.signal,
           requiredCapabilities: deriveDurableFinalDeliveryRequirements({
             payload: deliverablePayload,
             replyToId: deliverablePayload.replyToId,
@@ -1184,7 +1204,14 @@ export const dispatchTelegramMessage = async ({
             },
           }),
         });
+        if (!isDeliveryActive()) {
+          abortDeliveryIfSuperseded();
+          return false;
+        }
         if (durable.status === "failed") {
+          if (deliveryAbortController.signal.aborted) {
+            return false;
+          }
           throw durable.error;
         }
         if (durable.status === "handled_visible") {

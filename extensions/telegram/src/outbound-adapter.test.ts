@@ -91,6 +91,22 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
+  it("forwards abort signals into Telegram sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+    const abortController = new AbortController();
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "12345",
+      text: "hello",
+      deps: { sendTelegram: sendMessageTelegramMock },
+      abortSignal: abortController.signal,
+    });
+
+    const options = lastCallOptions(sendMessageTelegramMock, "12345", "hello");
+    expect(options.abortSignal).toBe(abortController.signal);
+  });
+
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })

@@ -801,6 +801,36 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow(/returned no message_id/i);
   });
 
+  it("does not send media when the abort signal flips after media loading", async () => {
+    const abortController = new AbortController();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 8,
+      chat: { id: "123" },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+    loadWebMedia.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {
+        buffer: Buffer.from("fake-image"),
+        contentType: "image/jpeg",
+        fileName: "photo.jpg",
+      };
+    });
+
+    await expect(
+      sendMessageTelegram("123", "caption", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.png",
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(sendPhoto).not.toHaveBeenCalled();
+  });
+
   it("uses native fetch for BAN compatibility when api is omitted", async () => {
     const originalFetch = globalThis.fetch;
     const originalBun = (globalThis as { Bun?: unknown }).Bun;

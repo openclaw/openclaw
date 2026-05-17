@@ -374,13 +374,15 @@ async function deliverMediaReply(params: {
   let visibleFallbackText: string | undefined;
   let first = true;
   let pendingFollowUpText: string | undefined;
+  const assertActive = () => assertTelegramDeliveryActive(params.shouldContinue);
   for (const mediaUrl of params.mediaList) {
-    assertTelegramDeliveryActive(params.shouldContinue);
+    assertActive();
     const isFirstMedia = first;
     const media = await params.mediaLoader(
       mediaUrl,
       buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
     );
+    assertActive();
     const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
@@ -405,6 +407,7 @@ async function deliverMediaReply(params: {
     });
     const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
     const videoDimensions = kind === "video" ? await probeVideoDimensions(media.buffer) : undefined;
+    assertActive();
     const mediaParams: Record<string, unknown> = {
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" } : {}),
@@ -426,8 +429,10 @@ async function deliverMediaReply(params: {
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
+        send: (effectiveParams) => {
+          assertActive();
+          return params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams });
+        },
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
@@ -439,8 +444,10 @@ async function deliverMediaReply(params: {
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
+        send: (effectiveParams) => {
+          assertActive();
+          return params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams });
+        },
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
@@ -452,8 +459,10 @@ async function deliverMediaReply(params: {
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
+        send: (effectiveParams) => {
+          assertActive();
+          return params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams });
+        },
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
@@ -477,8 +486,10 @@ async function deliverMediaReply(params: {
             thread: params.thread,
             requestParams,
             shouldLog,
-            send: (effectiveParams) =>
-              params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
+            send: (effectiveParams) => {
+              assertActive();
+              return params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams });
+            },
           });
           if (firstDeliveredMessageId == null) {
             firstDeliveredMessageId = result.message_id;
@@ -486,6 +497,7 @@ async function deliverMediaReply(params: {
           markDelivered(params.progress);
         };
         await params.onVoiceRecording?.();
+        assertActive();
         try {
           await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
         } catch (voiceErr) {
@@ -563,8 +575,10 @@ async function deliverMediaReply(params: {
           runtime: params.runtime,
           thread: params.thread,
           requestParams: mediaParams,
-          send: (effectiveParams) =>
-            params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+          send: (effectiveParams) => {
+            assertActive();
+            return params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams });
+          },
         });
         if (firstDeliveredMessageId == null) {
           firstDeliveredMessageId = result.message_id;
@@ -577,8 +591,10 @@ async function deliverMediaReply(params: {
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
+        send: (effectiveParams) => {
+          assertActive();
+          return params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams });
+        },
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;

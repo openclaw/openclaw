@@ -33,6 +33,7 @@ type SendDurableMessageBatchRequest = {
   to?: string;
   threadId?: string | number | null;
   durability?: string;
+  signal?: AbortSignal;
 };
 
 type DeliverySupportRequest = {
@@ -162,6 +163,25 @@ describe("durable inbound reply delivery", () => {
     });
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
+  });
+
+  it("forwards the caller cancellation signal to durable message delivery", async () => {
+    const controller = new AbortController();
+
+    await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      signal: controller.signal,
+      ctxPayload: ctxPayload({
+        OriginatingTo: "chat-1",
+      }),
+    });
+
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    expect(latestSendDurableMessageBatchRequest().signal).toBe(controller.signal);
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {

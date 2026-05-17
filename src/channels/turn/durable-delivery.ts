@@ -23,6 +23,7 @@ export type DurableInboundReplyDeliveryOptions = Pick<
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
+  signal?: AbortSignal;
 };
 
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
@@ -185,6 +186,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
+    signal: params.signal,
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
   });
