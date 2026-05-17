@@ -144,6 +144,12 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
+  // Last non-success native Codex tool (commandExecution, fileChange, webSearch,
+  // mcpToolCall) seen during this turn. Surfaced as
+  // `EmbeddedRunAttemptResult.lastToolError` so the embedded-run payload layer
+  // can emit a visible warning when the turn otherwise aborts with no
+  // assistant text (see #83093).
+  private lastNativeToolError?: NonNullable<EmbeddedRunAttemptResult["lastToolError"]>;
   private readonly nativeSubagentTaskMirror: CodexNativeSubagentTaskMirror;
 
   constructor(
@@ -341,6 +347,7 @@ export class CodexAppServerEventProjector {
       },
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt: this.guardianReviewCount > 0 ? false : undefined,
+      ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
     };
   }
 
@@ -538,6 +545,7 @@ export class CodexAppServerEventProjector {
       });
     }
     this.recordToolMeta(item);
+    this.recordNativeToolError(item);
     this.emitStandardItemEvent({ phase: "end", item });
     this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.recordNativeToolTranscriptCall(item);
@@ -646,6 +654,7 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.recordNativeToolError(item);
       this.emitSnapshotOnlyNativeToolProgress(item);
       this.recordNativeToolTranscriptCall(item);
       this.recordNativeToolTranscriptResult(item);
@@ -1123,6 +1132,27 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(meta ? { meta } : {}),
     });
+  }
+
+  private recordNativeToolError(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const status = itemStatus(item);
+    if (!isNonSuccessItemStatus(status)) {
+      return;
+    }
+    const toolName = itemName(item);
+    if (!toolName) {
+      return;
+    }
+    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const error = itemToolError(item, status);
+    this.lastNativeToolError = {
+      toolName,
+      ...(meta ? { meta } : {}),
+      ...(error ? { error } : {}),
+    };
   }
 
   private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {

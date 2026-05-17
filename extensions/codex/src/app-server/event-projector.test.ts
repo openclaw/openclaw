@@ -1757,6 +1757,105 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.isError).toBe(true);
   });
 
+  it("surfaces declined Codex-native tool result as attempt-level lastToolError (#83093)", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "rm -rf /tmp/work",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: { id: TURN_ID, status: "interrupted", items: [] },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastToolError).toBeDefined();
+    expect(result.lastToolError?.toolName).toBe("bash");
+    expect(result.lastToolError?.error).toBe("codex native tool blocked");
+    expect(result.lastToolError?.meta).toBeTruthy();
+  });
+
+  it("surfaces failed Codex-native tool result with output text as lastToolError", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [
+            {
+              type: "commandExecution",
+              id: "cmd-failed",
+              command: "ls /no-such-path",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "failed",
+              commandActions: [],
+              aggregatedOutput: "ls: cannot access '/no-such-path': No such file or directory",
+              exitCode: 2,
+              durationMs: 5,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.lastToolError).toBeDefined();
+    expect(result.lastToolError?.toolName).toBe("bash");
+    expect(result.lastToolError?.error).toBe(
+      "ls: cannot access '/no-such-path': No such file or directory",
+    );
+    expect(result.lastToolError?.meta).toBeTruthy();
+  });
+
+  it("does not set lastToolError when all native tool items succeed", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-ok",
+          command: "echo hi",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "hi\n",
+          exitCode: 0,
+          durationMs: 2,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.lastToolError).toBeUndefined();
+  });
+
   it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
