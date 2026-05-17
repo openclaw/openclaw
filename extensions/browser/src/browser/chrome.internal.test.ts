@@ -519,7 +519,8 @@ describe("chrome.ts internal", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = String(input);
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
           if (url.includes("/json/version")) {
             discoveryCalls += 1;
             if (discoveryCalls === 1) {
