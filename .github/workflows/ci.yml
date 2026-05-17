@@ -2174,3 +2174,20 @@ jobs:
               exit 1
               ;;
           esac
+
+  regression-detector-gate:
+    name: Regression Detector Gate
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Run regression detector gate
+        run: node scripts/check-regression-detector-gate.mjs
