@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "grammy/types";
+import type { Message } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
@@ -29,6 +29,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -135,6 +136,62 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+type TelegramReactionEntry = {
+  key: string;
+  label: string;
+};
+
+type TelegramRawReaction = {
+  type?: unknown;
+  emoji?: unknown;
+  custom_emoji_id?: unknown;
+};
+
+function normalizeTelegramReactionEntry(reaction: unknown): TelegramReactionEntry | undefined {
+  if (!reaction || typeof reaction !== "object") {
+    return undefined;
+  }
+  const raw = reaction as TelegramRawReaction;
+  if (raw.type === "emoji" && typeof raw.emoji === "string" && raw.emoji.trim()) {
+    const emoji = raw.emoji.trim();
+    return { key: `emoji:${emoji}`, label: emoji };
+  }
+  if (
+    raw.type === "custom_emoji" &&
+    typeof raw.custom_emoji_id === "string" &&
+    raw.custom_emoji_id.trim()
+  ) {
+    const customEmojiId = raw.custom_emoji_id.trim();
+    return {
+      key: `custom_emoji:${customEmojiId}`,
+      label: `custom_emoji:${customEmojiId}`,
+    };
+  }
+  return undefined;
+}
+
+function collectAddedTelegramReactionEntries(params: {
+  oldReactions: readonly unknown[];
+  newReactions: readonly unknown[];
+}): TelegramReactionEntry[] {
+  const oldKeys = new Set(
+    params.oldReactions
+      .map((reaction) => normalizeTelegramReactionEntry(reaction)?.key)
+      .filter((key): key is string => Boolean(key)),
+  );
+  const seen = new Set<string>();
+  const added: TelegramReactionEntry[] = [];
+  for (const reaction of params.newReactions) {
+    const entry = normalizeTelegramReactionEntry(reaction);
+    if (!entry || oldKeys.has(entry.key) || seen.has(entry.key)) {
+      continue;
+    }
+    seen.add(entry.key);
+    added.push(entry);
+  }
+  return added;
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1447,15 +1504,10 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      // Detect added reactions.
-      const oldEmojis = new Set(
-        reaction.old_reaction
-          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-          .map((r) => r.emoji),
-      );
-      const addedReactions = reaction.new_reaction
-        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-        .filter((r) => !oldEmojis.has(r.emoji));
+      const addedReactions = collectAddedTelegramReactionEntries({
+        oldReactions: reaction.old_reaction,
+        newReactions: reaction.new_reaction,
+      });
 
       if (addedReactions.length === 0) {
         return;
@@ -1495,15 +1547,27 @@ export const registerTelegramHandlers = ({
       });
       const sessionKey = route.sessionKey;
 
-      // Enqueue system event for each added reaction.
-      for (const r of addedReactions) {
-        const emoji = r.emoji;
-        const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-        telegramDeps.enqueueSystemEvent(text, {
+      let enqueuedCount = 0;
+      for (const addedReaction of addedReactions) {
+        const text = `Telegram reaction added: ${addedReaction.label} by ${senderLabel} on msg ${messageId} (reaction_key=${addedReaction.key})`;
+        const enqueued = telegramDeps.enqueueSystemEvent(text, {
           sessionKey,
-          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${addedReaction.key}`,
         });
+        if (!enqueued) {
+          logVerbose(`telegram: skipped duplicate reaction event: ${text}`);
+          continue;
+        }
+        enqueuedCount += 1;
         logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+      if (enqueuedCount > 0) {
+        requestHeartbeat({
+          source: "notifications-event",
+          intent: "immediate",
+          reason: "telegram-reaction",
+          sessionKey,
+        });
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
