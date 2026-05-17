@@ -15,6 +15,7 @@ import {
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
 import { isWhatsAppNewsletterJid } from "./normalize.js";
 import {
@@ -151,7 +152,10 @@ export async function sendMessageWhatsApp(
         text = caption ?? "";
       }
       if (forceDocumentDelivery) {
-        documentFileName ??= media.fileName ?? "file";
+        documentFileName ??= resolveWhatsAppDocumentFileName({
+          fileName: media.fileName,
+          mimetype: media.mimetype,
+        });
       }
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);

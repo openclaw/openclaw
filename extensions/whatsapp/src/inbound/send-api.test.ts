@@ -111,15 +111,39 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to default document filename when fileName is absent", async () => {
+  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
     expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       document: payload,
-      fileName: "file",
+      fileName: "file.pdf",
       caption: "doc",
       mimetype: "application/pdf",
+    });
+  });
+
+  it("uses MIME mappings for text document filename fallbacks", async () => {
+    const payload = Buffer.from("a,b\n1,2\n");
+    await api.sendMessage("+1555", "doc", payload, "text/csv");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file.csv",
+      caption: "doc",
+      mimetype: "text/csv",
+    });
+  });
+
+  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
+    const payload = Buffer.from("unknown");
+    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file",
+      caption: "doc",
+      mimetype: "application/x-custom",
     });
   });
 
@@ -134,6 +158,23 @@ describe("createWebSendApi", () => {
       expect.objectContaining({
         document: payload,
         fileName: "promo.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("uses MIME-aware filename fallback for forced visual documents", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "file.png",
         caption: "promo",
         mimetype: "image/png",
       }),

@@ -452,6 +452,23 @@ describe("web outbound", () => {
     });
   });
 
+  it("maps documents without fileName to MIME-aware default filename", async () => {
+    const buf = Buffer.from("pdf");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/pdf",
+      kind: "document",
+    });
+    await sendMessageWhatsApp("+1555", "doc", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "media://generated",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      fileName: "file.pdf",
+    });
+  });
+
   it("forces document branch when forceDocument is true with image media", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
@@ -511,7 +528,7 @@ describe("web outbound", () => {
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "promo", buf, "image/png", {
       asDocument: true,
-      fileName: "file",
+      fileName: "file.png",
     });
   });
 
