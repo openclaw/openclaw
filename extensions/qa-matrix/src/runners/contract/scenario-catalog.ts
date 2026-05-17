@@ -1226,6 +1226,10 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
   "matrix-e2ee-media-image",
 ] satisfies MatrixQaScenarioId[];
 
+const MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS = new Set<MatrixQaScenarioId>([
+  "matrix-subagent-thread-spawn",
+]);
+
 const MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS = [
   "matrix-e2ee-basic-reply",
   "matrix-e2ee-thread-follow-up",
@@ -1260,7 +1264,9 @@ function normalizeMatrixQaProfile(profile?: string): MatrixQaProfile {
 }
 
 function getMatrixQaProfileScenarioIds(profile: MatrixQaProfile): MatrixQaScenarioId[] {
-  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id);
+  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id).filter(
+    (id) => !MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS.has(id),
+  );
   const mediaIds = buildMatrixQaScenarioIdSet(MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS);
   const smokeIds = buildMatrixQaScenarioIdSet(MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS);
   switch (profile) {
