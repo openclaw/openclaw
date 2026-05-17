@@ -1507,6 +1507,7 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     resolvedThreadId?: number;
     dmThreadId?: number;
+    dmPolicy: DmPolicy;
     storeAllowFrom: string[];
     senderId: string;
     effectiveGroupAllow: NormalizedAllowFrom;
@@ -1525,6 +1526,7 @@ export const registerTelegramHandlers = ({
       isForum,
       resolvedThreadId,
       dmThreadId,
+      dmPolicy,
       storeAllowFrom,
       senderId,
       effectiveGroupAllow,
@@ -1539,6 +1541,30 @@ export const registerTelegramHandlers = ({
     const messageText = getTelegramTextParts(msg).text;
     const botUsername = ctx.me?.username;
     const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
+    let abortControlAuthorized: Promise<boolean> | undefined;
+    const isAuthorizedAbortControlMessage = () => {
+      if (!isAbortControlMessage || !senderId) {
+        return Promise.resolve(false);
+      }
+      abortControlAuthorized ??= resolveTelegramCommandIngressAuthorization({
+        accountId,
+        cfg,
+        dmPolicy,
+        isGroup,
+        chatId,
+        resolvedThreadId,
+        senderId,
+        effectiveDmAllow,
+        effectiveGroupAllow,
+        ownerAccess: { ownerList: [], senderIsOwner: false },
+        eventKind: "message",
+        allowTextCommands: true,
+        hasControlCommand: true,
+        modeWhenAccessGroupsOff: "allow",
+        includeDmAllowForGroupCommands: false,
+      }).then((gate) => gate.authorized);
+      return abortControlAuthorized;
+    };
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
@@ -1607,7 +1633,7 @@ export const registerTelegramHandlers = ({
         scheduleTextFragmentFlush(entry);
         return;
       }
-    } else if (text && isAbortControlMessage) {
+    } else if (text && isAbortControlMessage && (await isAuthorizedAbortControlMessage())) {
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
       const threadId = resolvedThreadId ?? dmThreadId;
       const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
@@ -1757,7 +1783,7 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
-    if (isAbortControlMessage && senderId) {
+    if (senderId && (await isAuthorizedAbortControlMessage())) {
       for (const lane of ["default", "forward"] as const) {
         inboundDebouncer.cancelKey(
           buildTelegramInboundDebounceKey({
@@ -2682,6 +2708,7 @@ export const registerTelegramHandlers = ({
         isForum: event.isForum,
         resolvedThreadId,
         dmThreadId,
+        dmPolicy,
         storeAllowFrom,
         senderId: event.senderId,
         effectiveGroupAllow,
