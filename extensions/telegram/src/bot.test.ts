@@ -3207,7 +3207,13 @@ describe("createTelegramBot", () => {
     expect(firstSystemEventArg(0)).toBe(
       `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42 (reaction_key=emoji:${THUMBS_UP_EMOJI})`,
     );
-    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
+    expect(systemEventOptions()).toEqual(
+      expect.objectContaining({
+        contextKey: expect.stringContaining("telegram:reaction:add:1234:42:9"),
+        forceSenderIsOwnerFalse: true,
+        trusted: false,
+      }),
+    );
     expect(requestHeartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "notifications-event",

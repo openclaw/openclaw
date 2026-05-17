@@ -137,62 +137,6 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 
-type TelegramReactionEntry = {
-  key: string;
-  label: string;
-};
-
-type TelegramRawReaction = {
-  type?: unknown;
-  emoji?: unknown;
-  custom_emoji_id?: unknown;
-};
-
-function normalizeTelegramReactionEntry(reaction: unknown): TelegramReactionEntry | undefined {
-  if (!reaction || typeof reaction !== "object") {
-    return undefined;
-  }
-  const raw = reaction as TelegramRawReaction;
-  if (raw.type === "emoji" && typeof raw.emoji === "string" && raw.emoji.trim()) {
-    const emoji = raw.emoji.trim();
-    return { key: `emoji:${emoji}`, label: emoji };
-  }
-  if (
-    raw.type === "custom_emoji" &&
-    typeof raw.custom_emoji_id === "string" &&
-    raw.custom_emoji_id.trim()
-  ) {
-    const customEmojiId = raw.custom_emoji_id.trim();
-    return {
-      key: `custom_emoji:${customEmojiId}`,
-      label: `custom_emoji:${customEmojiId}`,
-    };
-  }
-  return undefined;
-}
-
-function collectAddedTelegramReactionEntries(params: {
-  oldReactions: readonly unknown[];
-  newReactions: readonly unknown[];
-}): TelegramReactionEntry[] {
-  const oldKeys = new Set(
-    params.oldReactions
-      .map((reaction) => normalizeTelegramReactionEntry(reaction)?.key)
-      .filter((key): key is string => Boolean(key)),
-  );
-  const seen = new Set<string>();
-  const added: TelegramReactionEntry[] = [];
-  for (const reaction of params.newReactions) {
-    const entry = normalizeTelegramReactionEntry(reaction);
-    if (!entry || oldKeys.has(entry.key) || seen.has(entry.key)) {
-      continue;
-    }
-    seen.add(entry.key);
-    added.push(entry);
-  }
-  return added;
-}
-
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -1504,10 +1448,14 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const addedReactions = collectAddedTelegramReactionEntries({
-        oldReactions: reaction.old_reaction,
-        newReactions: reaction.new_reaction,
-      });
+      const reactionChanges = ctx.reactions();
+      const addedReactions = [
+        ...reactionChanges.emojiAdded.map((emoji) => ({ key: `emoji:${emoji}`, label: emoji })),
+        ...reactionChanges.customEmojiAdded.map((customEmojiId) => ({
+          key: `custom_emoji:${customEmojiId}`,
+          label: `custom_emoji:${customEmojiId}`,
+        })),
+      ];
 
       if (addedReactions.length === 0) {
         return;
@@ -1553,6 +1501,8 @@ export const registerTelegramHandlers = ({
         const enqueued = telegramDeps.enqueueSystemEvent(text, {
           sessionKey,
           contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${addedReaction.key}`,
+          forceSenderIsOwnerFalse: true,
+          trusted: false,
         });
         if (!enqueued) {
           logVerbose(`telegram: skipped duplicate reaction event: ${text}`);
