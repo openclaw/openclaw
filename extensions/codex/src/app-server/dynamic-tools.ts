@@ -18,6 +18,7 @@ import {
   type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
@@ -253,7 +254,11 @@ function resolveAgentContextLimitValue(params: {
   if (!Array.isArray(list)) {
     return defaultValue;
   }
-  const agent = list.find((entry) => readRecord(entry)?.id === params.agentId);
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const agent = list.find((entry) => {
+    const entryId = readRecord(entry)?.id;
+    return typeof entryId === "string" && normalizeAgentId(entryId) === normalizedAgentId;
+  });
   const agentValue = readPositiveInteger(
     readRecord(readRecord(agent)?.contextLimits)?.[params.key],
   );

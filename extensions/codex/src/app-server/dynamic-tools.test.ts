@@ -266,6 +266,55 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("rerun with narrower args");
   });
 
+  it("honors normalized per-agent dynamic tool result caps", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "large_lookup",
+          execute: vi.fn(async () => textToolResult("x".repeat(400))),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "research-bot",
+        config: {
+          agents: {
+            defaults: {
+              contextLimits: {
+                toolResultMaxChars: 1_000,
+              },
+            },
+            list: [
+              {
+                id: "Research Bot",
+                contextLimits: {
+                  toolResultMaxChars: 180,
+                },
+              },
+            ],
+          },
+        } as never,
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "large_lookup",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
+    const firstItem = result.contentItems[0];
+    if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+      throw new Error("expected inputText tool result");
+    }
+    expect(firstItem.text.length).toBeLessThanOrEqual(180);
+    expect(firstItem.text).toContain("OpenClaw truncated dynamic tool result");
+  });
+
   it("keeps truncation notices within tiny configured caps", async () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
