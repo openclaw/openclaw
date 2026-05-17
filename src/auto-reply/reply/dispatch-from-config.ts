@@ -1043,7 +1043,14 @@ export async function dispatchReplyFromConfig(
     const shouldSendVerboseProgressMessages =
       !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
-    const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
+    const shouldSendToolStartStatuses = false;
+    const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      chatType === "direct" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied &&
+      shouldEmitVerboseProgress() &&
+      shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -1207,7 +1214,7 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-      if (suppressDelivery) {
+      if (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression()) {
         return;
       }
       const normalizedLabel = normalizeWorkingLabel(label);
@@ -1236,7 +1243,11 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
+      if (
+        (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression()) ||
+        !shouldEmitVerboseProgress() ||
+        !shouldSendVerboseProgressMessages
+      ) {
         return;
       }
       const replyPayload: ReplyPayload = {
@@ -1409,7 +1420,7 @@ export async function dispatchReplyFromConfig(
               if (!suppressAutomaticSourceDelivery) {
                 await onToolResultFromReplyOptions?.(payload);
               }
-              if (suppressDelivery) {
+              if (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression()) {
                 return;
               }
               const ttsPayload = await maybeApplyTtsToReplyPayload({
