@@ -356,6 +356,11 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
   await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
+async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
+  await noteSessionSnapshotHealth({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
   await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
@@ -743,6 +748,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-transcripts",
       label: "Session transcripts",
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-snapshots",
+      label: "Session snapshots",
+      run: runSessionSnapshotsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
