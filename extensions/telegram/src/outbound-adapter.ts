@@ -190,8 +190,6 @@ export function createTelegramOutboundAdapter(
           maxLabelLength: 64,
         },
         text: {
-          maxLength: TELEGRAM_TEXT_CHUNK_LIMIT,
-          encoding: "characters",
           markdownDialect: "html",
         },
       },

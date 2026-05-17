@@ -335,8 +335,8 @@ describe("telegramOutbound", () => {
     ]);
   });
 
-  it("counts presentation text limits in characters", () => {
-    const text = "👍".repeat(3000);
+  it("leaves long presentation text for Telegram chunking", () => {
+    const text = "👍".repeat(5000);
     const presentation = adaptMessagePresentationForChannel({
       presentation: { blocks: [{ type: "text", text }] },
       capabilities: telegramOutbound.presentationCapabilities,
