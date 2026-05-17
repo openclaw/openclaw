@@ -573,6 +573,100 @@ describe("memory index", () => {
     expect(noResults.length).toBe(0);
   });
 
+  it("excludes leading YAML front matter from FTS-only memory chunks", async () => {
+    forceNoProvider = true;
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-fts-frontmatter.sqlite"),
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      [
+        "---",
+        "doc_id: YAML_ONLY_ALPHA_MARKER",
+        "title: Hidden Alpha Front Matter",
+        "tags:",
+        "  - alpha",
+        "---",
+        "# Body",
+        "Beta body visible.",
+      ].join("\n"),
+    );
+    await manager.sync({ reason: "test" });
+
+    const bodyResults = await manager.search("Beta", { maxResults: 1 });
+    expect(bodyResults.length).toBeGreaterThan(0);
+    expect(bodyResults[0]?.snippet).toContain("Beta body visible");
+    expect(bodyResults[0]?.snippet).not.toContain("YAML_ONLY_ALPHA_MARKER");
+    expect(bodyResults[0]?.startLine).toBe(7);
+
+    const frontMatterResults = await manager.search("YAML_ONLY_ALPHA_MARKER", { maxResults: 1 });
+    expect(frontMatterResults).toHaveLength(0);
+    expect(embedBatchCalls).toBe(0);
+  });
+
+  it("excludes leading YAML front matter from provider-backed indexed chunks", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-provider-frontmatter.sqlite"),
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const manager = await getPersistentManager(cfg);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      [
+        "---",
+        "doc_id: YAML_ONLY_ALPHA_MARKER",
+        "title: Hidden Alpha Front Matter",
+        "tags:",
+        "  - alpha",
+        "---",
+        "# Body",
+        "Beta body visible.",
+      ].join("\n"),
+    );
+    await manager.sync({ reason: "test" });
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => {
+            all: (
+              ...params: unknown[]
+            ) => Array<{ text: string; start_line: number; end_line: number }>;
+          };
+        };
+      }
+    ).db;
+    const chunks = db
+      .prepare("SELECT text, start_line, end_line FROM chunks WHERE source = ? ORDER BY start_line")
+      .all("memory");
+
+    expect(embedBatchCalls).toBeGreaterThan(0);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks[0]?.text).toContain("Beta body visible");
+    expect(chunks[0]?.text).not.toContain("YAML_ONLY_ALPHA_MARKER");
+    expect(chunks[0]?.text).not.toContain("Hidden Alpha Front Matter");
+    expect(chunks[0]?.start_line).toBe(7);
+
+    const frontMatterResults = await manager.search("YAML_ONLY_ALPHA_MARKER", { maxResults: 1 });
+    expect(frontMatterResults).toHaveLength(0);
+  });
+
   it("prefers exact session transcript hits in FTS-only mode", async () => {
     try {
       const manager = await getFtsSessionManager({

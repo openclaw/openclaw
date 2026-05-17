@@ -184,4 +184,105 @@ describe("memory host SDK package internals", () => {
     expect(chunks[0].startLine).toBe(4);
     expect(chunks[chunks.length - 1].endLine).toBe(13);
   });
+
+  it("excludes leading YAML front matter from retrieval chunks while preserving source line numbers", () => {
+    const content = [
+      "---",
+      "doc_id: OPENCLAW_EXECUTION_DISCIPLINE",
+      "title: OpenClaw Execution Discipline",
+      "sensitivity: internal",
+      "---",
+      "# OpenClaw Execution Discipline",
+      "Body retrieval text.",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0 });
+
+    expect(chunks[0]?.text).toBe("# OpenClaw Execution Discipline\nBody retrieval text.");
+    expect(chunks[0]?.text).not.toContain("doc_id:");
+    expect(chunks[0]?.startLine).toBe(6);
+    expect(chunks[0]?.endLine).toBe(7);
+  });
+
+  it("preserves parsed leading YAML front matter as markdown file metadata", async () => {
+    const tmpDir = getTmpDir();
+    const notePath = path.join(tmpDir, "authority.md");
+    fsSync.writeFileSync(
+      notePath,
+      [
+        "---",
+        "doc_id: OPENCLAW_EXECUTION_DISCIPLINE",
+        "title: OpenClaw Execution Discipline",
+        'quoted_numeric_id: "123"',
+        'quoted_flag: "false"',
+        "reviewed: true",
+        "revision: 3",
+        "sensitivity: internal",
+        "tags:",
+        "  - authority",
+        "inline_tags: [memory, retrieval]",
+        "nested:",
+        "  owner: OpenClaw",
+        "  priority: 2",
+        "nullable: null",
+        "---",
+        "# OpenClaw Execution Discipline",
+        "Body retrieval text.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const note = await buildFileEntry(notePath, tmpDir);
+
+    expect(note).toMatchObject({ path: "authority.md", kind: "markdown" });
+    expect((note as { frontmatter?: unknown } | null)?.frontmatter).toMatchObject({
+      doc_id: "OPENCLAW_EXECUTION_DISCIPLINE",
+      title: "OpenClaw Execution Discipline",
+      quoted_numeric_id: "123",
+      quoted_flag: "false",
+      reviewed: true,
+      revision: 3,
+      sensitivity: "internal",
+      tags: ["authority"],
+      inline_tags: ["memory", "retrieval"],
+      nested: { owner: "OpenClaw", priority: 2 },
+      nullable: null,
+    });
+  });
+
+  it("bounds front matter normalization for cyclic aliases and unsafe keys", async () => {
+    const tmpDir = getTmpDir();
+    const notePath = path.join(tmpDir, "adversarial-authority.md");
+    fsSync.writeFileSync(
+      notePath,
+      [
+        "---",
+        "safe: retained",
+        "cycle: &cycle [*cycle]",
+        "__proto__:",
+        "  polluted: true",
+        "constructor:",
+        "  polluted: true",
+        "---",
+        "# Safe Body",
+        "Body retrieval text.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const note = await buildFileEntry(notePath, tmpDir);
+    const frontmatter = (note as { frontmatter?: Record<string, unknown> } | null)?.frontmatter;
+
+    expect(frontmatter).toMatchObject({ safe: "retained" });
+    expect(Object.hasOwn(frontmatter ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(frontmatter ?? {}, "constructor")).toBe(false);
+    expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
+
+    const chunks = chunkMarkdown(fsSync.readFileSync(notePath, "utf-8"), {
+      tokens: 400,
+      overlap: 0,
+    });
+    expect(chunks[0]?.text).toBe("# Safe Body\nBody retrieval text.");
+    expect(chunks[0]?.startLine).toBe(9);
+  });
 });

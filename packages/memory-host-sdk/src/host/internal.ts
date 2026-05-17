@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import YAML from "yaml";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -41,9 +42,20 @@ export type MemoryFileEntry = {
   dataHash?: string;
   kind?: "markdown" | "multimodal";
   contentText?: string;
+  frontmatter?: MemoryMarkdownFrontmatter;
   modality?: MemoryMultimodalModality;
   mimeType?: string;
 };
+
+export type MemoryMarkdownFrontmatterValue =
+  | string
+  | number
+  | boolean
+  | null
+  | MemoryMarkdownFrontmatterValue[]
+  | { [key: string]: MemoryMarkdownFrontmatterValue };
+
+export type MemoryMarkdownFrontmatter = Record<string, MemoryMarkdownFrontmatterValue>;
 
 export type MemoryChunk = {
   startLine: number;
@@ -63,6 +75,116 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
   modalities: [],
   maxFileBytes: 0,
 };
+
+type MarkdownLineEntry = { line: string; lineNo: number };
+
+type PreparedMarkdownForMemoryIndexing = {
+  frontmatter?: MemoryMarkdownFrontmatter;
+  lines: MarkdownLineEntry[];
+};
+
+const MAX_FRONTMATTER_NORMALIZATION_DEPTH = 32;
+const MAX_FRONTMATTER_NORMALIZATION_NODES = 2_000;
+
+type FrontmatterNormalizationState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+
+function isUnsafeFrontmatterKey(key: string): boolean {
+  return key === "__proto__" || key === "prototype" || key === "constructor";
+}
+
+function normalizeMemoryMarkdownFrontmatterValue(
+  value: unknown,
+  state: FrontmatterNormalizationState,
+  depth: number,
+): MemoryMarkdownFrontmatterValue | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (depth > MAX_FRONTMATTER_NORMALIZATION_DEPTH) {
+    return undefined;
+  }
+  if (typeof value !== "object") {
+    return undefined;
+  }
+  if (state.seen.has(value)) {
+    return undefined;
+  }
+  state.seen.add(value);
+  state.nodes += 1;
+  if (state.nodes > MAX_FRONTMATTER_NORMALIZATION_NODES) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => normalizeMemoryMarkdownFrontmatterValue(entry, state, depth + 1))
+      .filter((entry): entry is MemoryMarkdownFrontmatterValue => entry !== undefined);
+  }
+  const normalized = Object.create(null) as { [key: string]: MemoryMarkdownFrontmatterValue };
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const key = rawKey.trim();
+    if (!key || isUnsafeFrontmatterKey(key)) {
+      continue;
+    }
+    const normalizedValue = normalizeMemoryMarkdownFrontmatterValue(rawValue, state, depth + 1);
+    if (normalizedValue !== undefined) {
+      normalized[key] = normalizedValue;
+    }
+  }
+  return normalized;
+}
+
+function parseMemoryMarkdownFrontmatter(
+  blockLines: string[],
+): MemoryMarkdownFrontmatter | undefined {
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(blockLines.join("\n"), { schema: "core" });
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const frontmatter = Object.create(null) as MemoryMarkdownFrontmatter;
+  const state: FrontmatterNormalizationState = { seen: new WeakSet<object>(), nodes: 0 };
+  for (const [rawKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+    const key = rawKey.trim();
+    if (!key || isUnsafeFrontmatterKey(key)) {
+      continue;
+    }
+    const normalizedValue = normalizeMemoryMarkdownFrontmatterValue(rawValue, state, 0);
+    if (normalizedValue !== undefined) {
+      frontmatter[key] = normalizedValue;
+    }
+  }
+  return Object.keys(frontmatter).length > 0 ? frontmatter : undefined;
+}
+
+export function prepareMarkdownForMemoryIndexing(
+  content: string,
+): PreparedMarkdownForMemoryIndexing {
+  const lines = content.split("\n");
+  if ((lines[0] ?? "").trim() !== "---") {
+    return { lines: lines.map((line, index) => ({ line, lineNo: index + 1 })) };
+  }
+  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  if (closingIndex === -1) {
+    return { lines: lines.map((line, index) => ({ line, lineNo: index + 1 })) };
+  }
+  return {
+    frontmatter: parseMemoryMarkdownFrontmatter(lines.slice(1, closingIndex)),
+    lines: lines.slice(closingIndex + 1).map((line, index) => ({
+      line,
+      lineNo: closingIndex + 2 + index,
+    })),
+  };
+}
 
 export function ensureDir(dir: string): string {
   try {
@@ -284,6 +406,7 @@ export async function buildFileEntry(
     throw err;
   }
   const hash = hashText(content);
+  const prepared = prepareMarkdownForMemoryIndexing(content);
   return {
     path: normalizedPath,
     absPath,
@@ -291,6 +414,7 @@ export async function buildFileEntry(
     size: stat.size,
     hash,
     kind: "markdown",
+    ...(prepared.frontmatter ? { frontmatter: prepared.frontmatter } : {}),
   };
 }
 
@@ -363,7 +487,7 @@ export function chunkMarkdown(
   content: string,
   chunking: { tokens: number; overlap: number },
 ): MemoryChunk[] {
-  const lines = content.split("\n");
+  const lines = prepareMarkdownForMemoryIndexing(content).lines;
   if (lines.length === 0) {
     return [];
   }
@@ -371,7 +495,7 @@ export function chunkMarkdown(
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
 
-  let current: Array<{ line: string; lineNo: number }> = [];
+  let current: MarkdownLineEntry[] = [];
   let currentChars = 0;
 
   const flush = () => {
@@ -402,7 +526,7 @@ export function chunkMarkdown(
       return;
     }
     let acc = 0;
-    const kept: Array<{ line: string; lineNo: number }> = [];
+    const kept: MarkdownLineEntry[] = [];
     for (let i = current.length - 1; i >= 0; i -= 1) {
       const entry = current[i];
       if (!entry) {
@@ -418,9 +542,9 @@ export function chunkMarkdown(
     currentChars = acc;
   };
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    const lineNo = i + 1;
+  for (const entry of lines) {
+    const line = entry.line;
+    const lineNo = entry.lineNo;
     const segments: string[] = [];
     if (line.length === 0) {
       segments.push("");
