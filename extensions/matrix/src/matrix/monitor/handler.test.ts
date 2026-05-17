@@ -913,6 +913,31 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it("processes room messages mentioned via bracketed @displayName in formatted_body", async () => {
+    const recordInboundSession = vi.fn(async () => {});
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      getMemberDisplayName: async () => "Display Name",
+      recordInboundSession,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixRoomMessageEvent({
+        eventId: "$bracketed-display-name-mention",
+        content: {
+          msgtype: "m.text",
+          body: "@[Display Name] please reply",
+          formatted_body:
+            '<a href="https://matrix.to/#/@bot:example.org">@[Display Name]</a> please reply',
+          "m.mentions": { user_ids: ["@bot:example.org"] },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
   it("does not fetch self displayName for plain-text room mentions", async () => {
     const getMemberDisplayName = vi.fn(async () => "Tom Servo");
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
