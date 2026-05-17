@@ -2819,14 +2819,17 @@ function injectToolCallThoughtSignatures(
         continue;
       }
       const sig = sigById.get(id) ?? fallbackSig;
-      // Sentinel is the documented Gemini 3 "skip validator" token — pass through.
-      // Only validate real captured signatures.
-      if (sig !== GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP && (
-        typeof sig !== "string" ||
-        sig.length === 0 ||
-        sig.length % 4 !== 0 ||
-        !/^[A-Za-z0-9+/]+={0,2}$/.test(sig)
-      )) {
+      // Same truncation guard as extensions/google/transport-stream.ts
+      // sanitizeGeminiToolCallThoughtSignature(): reject only concrete
+      // truncation footprints, not opaque-shape signatures.
+      if (typeof sig !== "string" || sig.length === 0) {
+        continue;
+      }
+      const trimmed = sig.trim();
+      if (/[…]|\.\.\./.test(trimmed)) {
+        continue;
+      }
+      if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 !== 0) {
         continue;
       }
       const extra =

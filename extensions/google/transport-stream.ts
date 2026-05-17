@@ -167,15 +167,6 @@ function retainThoughtSignature(existing: string | undefined, incoming: string |
   return existing;
 }
 
-function isValidGeminiThoughtSignature(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length % 4 === 0 &&
-    /^[A-Za-z0-9+/]+={0,2}$/.test(value)
-  );
-}
-
 function stableStringifyGoogleToolCallValue(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringifyGoogleToolCallValue(item)).join(",")}]`;
@@ -221,7 +212,15 @@ function sanitizeGeminiToolCallThoughtSignature(
   ) {
     return undefined;
   }
-  if (!isValidGeminiThoughtSignature(trimmed)) {
+  // Reject signatures that show concrete compaction-truncation footprints.
+  // Ellipsis (U+2026 or three dots) marks a truncated Base64 string.
+  if (/[…]|\.\.\./.test(trimmed)) {
+    return undefined;
+  }
+  // For strings that look like canonical Base64, a length not a multiple of 4
+  // means compaction cut the token mid-stream. Opaque-shape signatures
+  // (e.g. containing -, _, ~, .) do not match and pass through unchanged.
+  if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 !== 0) {
     return undefined;
   }
   return trimmed;
@@ -548,7 +547,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           }
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(isSameRoute && isValidGeminiThoughtSignature(block.textSignature)
+            ...(isSameRoute && block.textSignature
               ? { thoughtSignature: block.textSignature }
               : {}),
           });
@@ -562,9 +561,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             parts.push({
               thought: true,
               text: sanitizeTransportPayloadText(block.thinking),
-              ...(isValidGeminiThoughtSignature(block.thinkingSignature)
-                ? { thoughtSignature: block.thinkingSignature }
-                : {}),
+              ...(block.thinkingSignature ? { thoughtSignature: block.thinkingSignature } : {}),
             });
           } else {
             parts.push({ text: sanitizeTransportPayloadText(block.thinking) });
@@ -587,7 +584,6 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           if (ownSignature) {
             nextReplayToolCallThoughtSignatures.set(replayKey, ownSignature);
           }
-          const thoughtSignature =
           const thoughtSignature =
             ownSignature ??
             replayedThoughtSignature ??
