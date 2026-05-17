@@ -21,6 +21,7 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
+  resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftRender,
   resolveChannelStreamingBlockEnabled,
@@ -1130,6 +1131,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                 seed: progressSeed,
               }),
               lines: previewToolProgressLines,
+              maxLineChars: resolveChannelProgressDraftMaxLineChars(account.config),
             }),
           }
         : previewText,

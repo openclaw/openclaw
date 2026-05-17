@@ -692,6 +692,7 @@ Default slash command settings:
         progress: {
           label: "auto",
           maxLines: 8,
+          maxLineChars: 120,
           toolProgress: true,
         },
       },
@@ -705,6 +706,7 @@ Default slash command settings:
     - Media, error, and explicit-reply finals cancel pending preview edits.
     - `streaming.preview.toolProgress` (default `true`) controls whether tool/progress updates reuse the preview message.
     - Tool/progress rows render as compact emoji + title + detail when available, for example `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`.
+    - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
     - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
 
     Hide raw command/exec text while keeping compact progress lines:

@@ -278,6 +278,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         progress: {
           label: "auto",
           maxLines: 8,
+          maxLineChars: 120,
           toolProgress: true,
         },
       },

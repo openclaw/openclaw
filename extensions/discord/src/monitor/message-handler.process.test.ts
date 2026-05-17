@@ -2316,7 +2316,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
+      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Apply Patch");

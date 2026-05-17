@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - CLI/sessions: accept `openclaw sessions list` as an alias for `openclaw sessions`, matching other list-style commands. Fixes #81139. (#81163) Thanks @YB0y.
+- Channels/stream previews: widen compact progress draft lines and cut prose at word boundaries while preserving command/path suffixes, with `streaming.progress.maxLineChars` for channel-specific tuning.
 - CLI/plugins: have `openclaw plugins doctor` warn when a configured runtime needs a missing owner plugin, sharing the same install mapping as `openclaw doctor --fix`. Fixes #81326. (#81674) Thanks @Zavianx.
 - Agents/Codex: route OpenAI runs that resolve to `openai-codex` through the Codex provider and bootstrap OpenClaw's stored OAuth profile into the Codex harness when the harness owns transport, so `openai/*` model refs no longer fail with `No API key found for openai-codex` despite an existing Codex OAuth profile. (#82864) Thanks @ragesaq.
 - Agents/ACP: distinguish prompt-submitted and runtime-active child stalls from true interactive waits, including redacted proxy-env diagnostics for Codex ACP no-output runs. Fixes #44810.
