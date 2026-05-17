@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -15,6 +14,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
+import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 vi.mock("../process/exec.js", () => ({
@@ -89,31 +89,6 @@ function ensureSuiteFixtureRoot() {
   suiteFixtureRoot = path.join(suiteTempRootTracker.ensureSuiteTempRoot(), "_fixtures");
   fs.mkdirSync(suiteFixtureRoot, { recursive: true });
   return suiteFixtureRoot;
-}
-
-async function packToArchive({
-  pkgDir,
-  outDir,
-  outName,
-  flatRoot,
-}: {
-  pkgDir: string;
-  outDir: string;
-  outName: string;
-  flatRoot?: boolean;
-}) {
-  const dest = path.join(outDir, outName);
-  fs.rmSync(dest, { force: true });
-  const entries = flatRoot ? fs.readdirSync(pkgDir) : [path.basename(pkgDir)];
-  await tar.c(
-    {
-      gzip: true,
-      file: dest,
-      cwd: flatRoot ? pkgDir : path.dirname(pkgDir),
-    },
-    entries,
-  );
-  return dest;
 }
 
 function getArchiveFixturePath(params: {

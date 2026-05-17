@@ -1,22 +1,35 @@
 import crypto from "node:crypto";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
+  markAutoFallbackPrimaryProbe,
+} from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
+import {
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
+  resolveSessionRuntimeOverrideForProvider,
+} from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
@@ -222,11 +235,22 @@ export function createFollowupRunner(params: {
       });
       const replySessionKey = queued.run.sessionKey ?? sessionKey;
       const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
-      const effectiveQueued =
+      let effectiveQueued =
         runtimeConfig === queued.run.config
           ? queued
           : { ...queued, run: { ...queued.run, config: runtimeConfig } };
-      const run = effectiveQueued.run;
+      let run = effectiveQueued.run;
+      let activeSessionEntry =
+        (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ??
+        (replySessionKey === sessionKey ? sessionEntry : undefined);
+      run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+        run,
+        entry: activeSessionEntry,
+        sessionKey: replySessionKey,
+      });
+      if (run !== effectiveQueued.run) {
+        effectiveQueued = { ...effectiveQueued, run };
+      }
       replyOperation = createReplyOperation({
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
@@ -251,8 +275,6 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      let activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
         cfg: runtimeConfig,
         followupRun: effectiveQueued,
@@ -261,7 +283,7 @@ export function createFollowupRunner(params: {
         agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore,
-        sessionKey,
+        sessionKey: replySessionKey,
         storePath,
         isHeartbeat: opts?.isHeartbeat === true,
         replyOperation,
@@ -269,7 +291,80 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const resolveRunForFallbackCandidate = (
+        provider: string,
+        model: string,
+      ): FollowupRun["run"] => {
+        const probe = run.autoFallbackPrimaryProbe;
+        const isPrimaryProbeCandidate =
+          probe && provider === probe.provider && model === probe.model;
+        if (
+          probe &&
+          provider === probe.fallbackProvider &&
+          !isPrimaryProbeCandidate &&
+          probe.fallbackAuthProfileId
+        ) {
+          const candidateRun: FollowupRun["run"] = {
+            ...run,
+            provider,
+            model,
+            authProfileId: probe.fallbackAuthProfileId,
+          };
+          if (probe.fallbackAuthProfileIdSource) {
+            candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
+          } else {
+            delete candidateRun.authProfileIdSource;
+          }
+          return candidateRun;
+        }
+        return run;
+      };
+      const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
+        provider: string;
+        model: string;
+      }): Promise<void> => {
+        const probe = run.autoFallbackPrimaryProbe;
+        if (!probe) {
+          return;
+        }
+        if (paramsForClear.provider !== probe.provider || paramsForClear.model !== probe.model) {
+          return;
+        }
+        if (!replySessionKey || !sessionStore) {
+          return;
+        }
+        const entry = sessionStore[replySessionKey] ?? activeSessionEntry;
+        if (!entry || !entryMatchesAutoFallbackPrimaryProbe(entry, probe)) {
+          return;
+        }
+        clearAutoFallbackPrimaryProbeSelection(entry);
+        sessionStore[replySessionKey] = entry;
+        activeSessionEntry = entry;
+        if (!storePath) {
+          return;
+        }
+        await updateSessionStore(storePath, (store) => {
+          const persistedEntry = store[replySessionKey];
+          if (!persistedEntry) {
+            return;
+          }
+          if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+            return;
+          }
+          clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+          store[replySessionKey] = persistedEntry;
+        });
+      };
+      fallbackProvider = run.provider;
+      fallbackModel = run.model;
       replyOperation.setPhase("running");
+      let pendingDeferredCliTerminal:
+        | {
+            provider: string;
+            model: string;
+            startedAt: number;
+          }
+        | undefined;
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
@@ -279,9 +374,125 @@ export function createFollowupRunner(params: {
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
+            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const activeProbe = run.autoFallbackPrimaryProbe;
+            if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
+              markAutoFallbackPrimaryProbe({
+                probe: activeProbe,
+                sessionKey: replySessionKey,
+              });
+            }
+            const authProfile = resolveRunAuthProfile(candidateRun, provider, {
+              config: runtimeConfig,
+            });
+            const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+              provider,
+              entry: activeSessionEntry,
+            });
+            const cliExecutionProvider =
+              sessionRuntimeOverride === "pi"
+                ? provider
+                : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+                    ? sessionRuntimeOverride
+                    : undefined) ??
+                  resolveCliRuntimeExecutionProvider({
+                    provider,
+                    cfg: runtimeConfig,
+                    agentId: run.agentId,
+                    modelId: model,
+                  }) ??
+                  provider);
             let attemptCompactionCount = 0;
             try {
+              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+                const isRoomEventCliRun = queued.currentInboundEventKind === "room_event";
+                const cliSessionBinding = isRoomEventCliRun
+                  ? undefined
+                  : getCliSessionBinding(activeSessionEntry, cliExecutionProvider);
+                const cliLifecycleStartedAt = Date.now();
+                pendingDeferredCliTerminal = {
+                  provider,
+                  model,
+                  startedAt: cliLifecycleStartedAt,
+                };
+                const result = await runCliAgentWithLifecycle({
+                  runId,
+                  provider: cliExecutionProvider,
+                  startedAt: cliLifecycleStartedAt,
+                  emitLifecycleTerminal: false,
+                  onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
+                  suppressAssistantBridge: run.silentExpected,
+                  runParams: {
+                    replyOperation,
+                    sessionId: run.sessionId,
+                    sessionKey: replySessionKey,
+                    agentId: run.agentId,
+                    trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                    sessionFile: run.sessionFile,
+                    workspaceDir: run.workspaceDir,
+                    config: runtimeConfig,
+                    prompt: queued.prompt,
+                    transcriptPrompt: queued.transcriptPrompt,
+                    currentInboundEventKind: queued.currentInboundEventKind,
+                    currentInboundContext: queued.currentInboundContext,
+                    inputProvenance: run.inputProvenance,
+                    provider: cliExecutionProvider,
+                    model,
+                    ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
+                      config: runtimeConfig,
+                    }),
+                    thinkLevel: run.thinkLevel,
+                    timeoutMs: run.timeoutMs,
+                    runId,
+                    extraSystemPrompt: run.extraSystemPrompt,
+                    sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                    silentReplyPromptMode: run.silentReplyPromptMode,
+                    extraSystemPromptStatic: run.extraSystemPromptStatic,
+                    ownerNumbers: run.ownerNumbers,
+                    cliSessionId: cliSessionBinding?.sessionId,
+                    cliSessionBinding,
+                    bootstrapPromptWarningSignaturesSeen,
+                    bootstrapPromptWarningSignature:
+                      bootstrapPromptWarningSignaturesSeen[
+                        bootstrapPromptWarningSignaturesSeen.length - 1
+                      ],
+                    images: queuedImages,
+                    imageOrder: queuedImageOrder,
+                    skillsSnapshot: run.skillsSnapshot,
+                    messageChannel: queued.originatingChannel ?? undefined,
+                    messageProvider: resolveOriginMessageProvider({
+                      originatingChannel: queued.originatingChannel,
+                      provider: run.messageProvider,
+                    }),
+                    agentAccountId: run.agentAccountId,
+                    senderIsOwner: run.senderIsOwner,
+                    disableTools: opts?.disableTools,
+                    abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                  },
+                  transformResult: (rawResult) =>
+                    isRoomEventCliRun && rawResult.meta.agentMeta
+                      ? (() => {
+                          const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                            rawResult.meta.agentMeta;
+                          return {
+                            ...rawResult,
+                            meta: {
+                              ...rawResult.meta,
+                              agentMeta: {
+                                ...agentMeta,
+                                sessionId: "",
+                              },
+                            },
+                          };
+                        })()
+                      : rawResult,
+                });
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  result.meta?.systemPromptReport,
+                );
+                return result;
+              }
+              pendingDeferredCliTerminal = undefined;
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
@@ -314,8 +525,8 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
-                currentTurnKind: queued.currentTurnKind,
-                currentTurnContext: queued.currentTurnContext,
+                currentInboundEventKind: queued.currentInboundEventKind,
+                currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
@@ -375,9 +586,42 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (
+          pendingDeferredCliTerminal &&
+          pendingDeferredCliTerminal.provider === fallbackProvider &&
+          pendingDeferredCliTerminal.model === fallbackModel
+        ) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "end",
+              startedAt: pendingDeferredCliTerminal.startedAt,
+              endedAt: Date.now(),
+            },
+          });
+        }
+        pendingDeferredCliTerminal = undefined;
+        await clearRecoveredAutoFallbackPrimaryProbe({
+          provider: fallbackProvider,
+          model: fallbackModel,
+        });
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
+        if (pendingDeferredCliTerminal) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "error",
+              startedAt: pendingDeferredCliTerminal.startedAt,
+              endedAt: Date.now(),
+              error: message,
+            },
+          });
+          pendingDeferredCliTerminal = undefined;
+        }
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }
@@ -393,18 +637,19 @@ export function createFollowupRunner(params: {
           provider: providerUsed,
           model: modelUsed,
           contextTokensOverride: agentCfgContextTokens,
-          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
-      if (storePath && sessionKey) {
+      if (storePath && replySessionKey) {
         await persistRunSessionUsage({
           storePath,
-          sessionKey,
+          sessionKey: replySessionKey,
           cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
+          isHeartbeat: opts?.isHeartbeat === true,
           modelUsed,
           providerUsed,
           contextTokensUsed,
@@ -440,9 +685,9 @@ export function createFollowupRunner(params: {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
           cfg: runtimeConfig,
-          sessionEntry,
+          sessionEntry: activeSessionEntry,
           sessionStore,
-          sessionKey,
+          sessionKey: replySessionKey,
           storePath,
           amount: autoCompactionCount,
           compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
@@ -452,7 +697,7 @@ export function createFollowupRunner(params: {
           newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
         const refreshedSessionEntry =
-          sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
+          replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
         if (refreshedSessionEntry) {
           const queueKey = run.sessionKey ?? sessionKey;
           if (queueKey) {

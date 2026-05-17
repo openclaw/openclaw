@@ -320,6 +320,40 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     },
   );
 
+  it("ignores malformed persisted package channel metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageChannel: {
+              id: ["installed"],
+              label: 12,
+              blurb: { text: "bad" },
+              preferOver: "legacy",
+              commands: {
+                nativeCommandsAutoEnabled: "yes",
+              },
+            },
+          },
+        ],
+      } as unknown as InstalledPluginIndex,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageManifest).toBeUndefined();
+    expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
