@@ -83,6 +83,42 @@ describe("model provider localService config", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts bundled provider timeout overlays without custom provider fields", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("still requires baseUrl and models for custom provider declarations", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          custom: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(issuePaths(result.issues)).toEqual(
+        expect.arrayContaining([
+          "models.providers.custom.baseUrl",
+          "models.providers.custom.models",
+        ]),
+      );
+    }
+  });
 });
 
 describe("$schema key in config (#14998)", () => {
