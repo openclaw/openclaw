@@ -790,7 +790,7 @@ describe("matrix live qa scenarios", () => {
     const scenarios = new Map(MATRIX_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
 
     expect(scenarios.get("matrix-subagent-thread-spawn")?.timeoutMs).toBeGreaterThanOrEqual(
-      120_000,
+      180_000,
     );
     expect(scenarios.get("matrix-room-generated-image-delivery")?.timeoutMs).toBeGreaterThanOrEqual(
       180_000,
@@ -2766,7 +2766,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.threadRootEventId).toBe("$subagent-thread-root");
 
     expectSentTextMessage(sendTextMessage, {
-      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=60"],
+      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=120"],
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });

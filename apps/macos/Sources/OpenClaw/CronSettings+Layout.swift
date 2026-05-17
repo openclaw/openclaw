@@ -155,7 +155,9 @@ extension CronSettings {
                                 self.jobRow(job)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 8)
-                                    .background(self.store.selectedJobId == job.id ? Color.accentColor.opacity(0.18) : .clear)
+                                    .background(
+                                        self.store.selectedJobId == job.id
+                                            ? Color.accentColor.opacity(0.18) : .clear)
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                             .buttonStyle(.plain)

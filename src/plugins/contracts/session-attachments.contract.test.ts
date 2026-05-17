@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -11,6 +11,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "../../media/mime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
+  attachmentProbeFs,
   resolveAttachmentDelivery,
   sendPluginSessionAttachment,
 } from "../host-hook-attachments.js";
@@ -453,8 +454,15 @@ describe("plugin session attachments", () => {
     await withSessionStore(async ({ storePath, stateDir }) => {
       const unreadablePath = path.join(stateDir, "unreadable.pdf");
       await fs.writeFile(unreadablePath, "%PDF-1.7\n", "utf8");
-      await fs.chmod(unreadablePath, 0o000);
       await writeSessionEntry(storePath);
+      const originalOpen = attachmentProbeFs.open.bind(attachmentProbeFs);
+      const openSpy = vi.spyOn(attachmentProbeFs, "open").mockImplementation((async (...args) => {
+        const [target] = args;
+        if (path.resolve(String(target)) === unreadablePath) {
+          throw new Error("EACCES: permission denied, open 'unreadable.pdf'");
+        }
+        return await originalOpen(...args);
+      }) as typeof fs.open);
 
       try {
         const result = await sendBundledSessionAttachment({
@@ -468,7 +476,7 @@ describe("plugin session attachments", () => {
         }
         expect(result.error).toContain(`attachment file MIME read failed for ${unreadablePath}`);
       } finally {
-        await fs.chmod(unreadablePath, 0o600).catch(() => undefined);
+        openSpy.mockRestore();
       }
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });

@@ -981,7 +981,6 @@ export async function runQaLabUiCommand(opts: {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
@@ -996,7 +995,7 @@ export async function runQaLabUiCommand(opts: {
     advertiseHost: opts.advertiseHost,
     advertisePort: Number.isFinite(opts.advertisePort) ? opts.advertisePort : undefined,
     controlUiUrl: opts.controlUiUrl,
-    controlUiToken: opts.controlUiToken,
+    controlUiProxyToken: process.env.OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN,
     controlUiProxyTarget: opts.controlUiProxyTarget,
     uiDistDir: opts.uiDistDir,
     autoKickoffTarget: opts.autoKickoffTarget,

@@ -169,7 +169,6 @@ async function runQaUi(opts: {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
@@ -585,7 +584,6 @@ export function registerQaLabCli(program: Command) {
       Number(value),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
-    .option("--control-ui-token <token>", "Optional Control UI token for embedded links")
     .option(
       "--control-ui-proxy-target <url>",
       "Optional upstream Control UI target for /control-ui proxying",
@@ -606,7 +604,6 @@ export function registerQaLabCli(program: Command) {
         advertiseHost?: string;
         advertisePort?: number;
         controlUiUrl?: string;
-        controlUiToken?: string;
         controlUiProxyTarget?: string;
         uiDistDir?: string;
         autoKickoffTarget?: string;

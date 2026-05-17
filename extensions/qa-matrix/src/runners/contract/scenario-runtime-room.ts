@@ -306,7 +306,7 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
   const triggerBody = [
     `${context.sutUserId} Call sessions_spawn now for this QA check.`,
     `Use task="Finish with exactly ${childToken}."`,
-    "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=60.",
+    "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=120.",
     "Do not send the child token from this parent session.",
   ].join(" ");
   const driverEventId = await client.sendTextMessage({

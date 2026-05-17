@@ -1,4 +1,5 @@
-import { lstat, open } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
@@ -18,6 +19,9 @@ import type {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+export const attachmentProbeFs = {
+  open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
+};
 const MAX_ATTACHMENT_FILES = 10;
 
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
@@ -71,9 +75,9 @@ async function readMimeSniffBuffer(
   filePath: string,
   size: number,
 ): Promise<Buffer | { error: string }> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let handle: Awaited<ReturnType<typeof fsPromises.open>> | undefined;
   try {
-    handle = await open(filePath, "r");
+    handle = await attachmentProbeFs.open(filePath, "r");
     const length = Math.min(Math.max(0, size), FILE_TYPE_SNIFF_MAX_BYTES);
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, 0);

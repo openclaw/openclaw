@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Agents/skills: tighten bundled skill prompts and metadata, quote skill descriptions, refresh current CLI/API guidance, and update embedded sherpa-onnx runtime downloads.
 - Skills: update the Obsidian skill to target the official `obsidian` CLI and require its registered binary instead of the third-party `obsidian-cli`.
 - Skills: add a Python debugging skill for pdb, breakpoint(), post-mortem inspection, and debugpy remote attach.
+- Plugins/messages: add presentation capability limits for channel renderers, adapt rich message controls before native rendering, and mark legacy `interactive`/Slack directive producer APIs as deprecated.
 - Proxy: support HTTPS managed forward-proxy endpoints and scoped `proxy.tls.caFile` CA trust for proxy endpoint TLS. (#79171) Thanks @jesse-merhi.
 - QA-Lab: add first-hour 20-turn and optional 100-turn runtime parity scenarios, with tier metadata for standard and soak QA gates. (#80323) Thanks @100yenadmin.
 - QA-Lab: add a live-only Codex Pi-shaped Read vocabulary canary so runtime parity catches native workspace-read prompt compatibility drift. (#80323) Thanks @100yenadmin.
@@ -26,10 +27,13 @@ Docs: https://docs.openclaw.ai
 
 - Feishu: refresh inbound session delivery context for DM, group, and broadcast turns so later replies do not inherit stale WebChat routing. Fixes #78274.
 - QA-Lab/qa-channel: attach redacted agent tool-start traces to outbound `QaBusMessage` records so scenarios can assert actual tool use instead of relying only on reply text. Fixes #67637. Thanks @100yenadmin.
+- QA-Lab: fail live runtime parity reports when assistant-message usage is missing, preventing `0 vs 0` live token rows from being reported as passing proof. Fixes #80411. Thanks @100yenadmin.
+- QA-Lab: stop returning Control UI bearer tokens from unauthenticated bootstrap payloads and bind Docker harness ports to loopback-only host addresses. (#66355) Thanks @pgondhi987.
 - Mac app: avoid a SwiftUI metadata crash when rendering the Cron Jobs settings pane.
 - Agents/OpenAI streams: yield via `setTimeout(0)` instead of `setImmediate` between bursty Responses chunks so abort timers can fire during the yield, keeping cancel-on-timeout responsive on hot streams. Refs #82462.
 - CLI/config: send SecretRef diagnostics to stderr so JSON command stdout remains parseable.
 - CLI/plugins: ship the bundled memory CLI as a package entry so package-installed `openclaw memory` commands register correctly.
+- CLI/update: defer doctor-time plugin package installs during package swaps and seed post-core repair from the updated install registry, preventing duplicate reinstall failures.
 - Feishu: detect SecretRef top-level credentials as a configured default account instead of treating object-backed app secrets as missing.
 - CLI/completion: resolve concrete PowerShell profile paths and reload commands during setup and doctor completion installation. Fixes #44296. (#83059) Thanks @yu-xin-c.
 - Providers/Google: preserve and recover Gemini 3 tool-call thought signatures during native replay so function-calling turns no longer fail with missing `thought_signature` 400s. Fixes #72879. (#80358) Thanks @abnershang.
@@ -102,6 +106,7 @@ Docs: https://docs.openclaw.ai
 - Process/diagnostics: stop counting the active processing turn as queued backlog in liveness warnings so transient max-only event-loop spikes do not surface as gateway warnings.
 - Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure. (#82616) Thanks @dutifulbob.
 - Browser plugin: trust managed Chrome CDP diagnostics when launch HTTP probes race cold-start readiness, avoiding false startup failures. Fixes #82904. (#82986) Thanks @kmanan and @hclsys.
+- Android: prompt before replacing a changed Gateway TLS thumbprint, showing the old and new SHA-256 fingerprints so users can accept expected certificate rotations instead of hard failing on pin mismatch. (#83077) Thanks @sliekens.
 
 ## 2026.5.17
 
