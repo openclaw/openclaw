@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Config/models: accept `thinkingFormat: "together"` in model compat config so Together routes can opt into the Together-specific thinking response shape.
 - Plugins/tokenjuice: bump the bundled tokenjuice runtime to 0.7.1, bringing Codex hook approval compatibility, pre-tool command wrapping fixes, and Rolldown/Vitest output compaction improvements into the OpenClaw plugin.
 - Agents/OpenAI: stop post-processing GPT-5 final replies with hardcoded brevity caps, preserving full channel responses instead of appending synthetic ellipses, and log when strict-agentic GPT-5 execution activates. Fixes #82910.
 - Agents/media: deliver failed async image, music, and video generation completions directly when requester-session completion handoff fails, so channel users see provider errors instead of silent fallback stalls.
