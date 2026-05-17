@@ -38,7 +38,7 @@ describe("Core Harness doctor summary", () => {
     readFileSync: () => body,
   });
 
-  it("detects isolated process homes and keeps a Japanese next action", () => {
+  it("downgrades the isolated-home warning to warn when OPENCLAW_HOME points at a non-isolated path", () => {
     const summary = buildCoreHarnessSummary({
       cfg: {},
       configPath: "/tmp/codex-home/.openclaw/openclaw.json",
@@ -51,13 +51,40 @@ describe("Core Harness doctor summary", () => {
     });
 
     expect(isIsolatedCodexHome("/tmp/codex-home")).toBe(true);
-    expect(summary.warnings).toContainEqual(
-      expect.objectContaining({
-        code: "core-harness.home.isolated",
-        severity: "error",
-        what_to_do_now: expect.stringContaining("OPENCLAW_HOME"),
-      }),
-    );
+    const isolated = summary.warnings.find((w) => w.code === "core-harness.home.isolated");
+    expect(isolated?.severity).toBe("warn");
+    expect(isolated?.what_to_do_now).toContain("OPENCLAW_HOME");
+  });
+
+  it("does not emit the isolated-home warning when OPENCLAW_HOME is unset and effective home == HOME", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: {},
+      configPath: "/tmp/codex-home/.openclaw/openclaw.json",
+      env: { HOME: "/tmp/codex-home" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      ...readWrapper("openclaw-setup resolve_openclaw_home OPENCLAW_HOME"),
+    });
+
+    // OPENCLAW_HOME unset → effective home falls through to HOME → resolve
+    // equality short-circuits the warning. Defensive `overrideIsIsolated`
+    // would still pick error severity if this branch were reachable.
+    expect(summary.warnings.find((w) => w.code === "core-harness.home.isolated")).toBeUndefined();
+  });
+
+  it("keeps the isolated-home warning at error severity when OPENCLAW_HOME is also isolated", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: {},
+      configPath: "/tmp/codex-home/.openclaw/openclaw.json",
+      env: {
+        HOME: "/tmp/codex-home",
+        OPENCLAW_HOME: "/tmp/.codex/state",
+      } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      ...readWrapper("openclaw-setup resolve_openclaw_home OPENCLAW_HOME"),
+    });
+
+    const isolated = summary.warnings.find((w) => w.code === "core-harness.home.isolated");
+    expect(isolated?.severity).toBe("error");
   });
 
   it("uses HOME as the effective home when OPENCLAW_HOME is not set", () => {
@@ -107,6 +134,47 @@ describe("Core Harness doctor summary", () => {
       openclawSetupAlias: true,
       homeResolver: true,
     });
+  });
+
+  it("downgrades wrapper warnings to info when the wrapper file is missing entirely", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: { commands: { ownerAllowFrom: ["discord:123"] } } as OpenClawConfig,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      existsSync: () => false,
+      readFileSync: () => "",
+    });
+
+    const aliasMissing = summary.warnings.find(
+      (w) => w.code === "core-harness.wrapper.openclaw-setup-alias-missing",
+    );
+    const resolverMissing = summary.warnings.find(
+      (w) => w.code === "core-harness.wrapper.home-resolver-missing",
+    );
+    expect(aliasMissing?.severity).toBe("info");
+    expect(resolverMissing?.severity).toBe("info");
+    expect(aliasMissing?.summary.toLowerCase()).toContain("not detected");
+  });
+
+  it("keeps wrapper warnings at warn when the wrapper file exists but content is incomplete", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: { commands: { ownerAllowFrom: ["discord:123"] } } as OpenClawConfig,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      existsSync: () => true,
+      readFileSync: () => "",
+    });
+
+    const aliasMissing = summary.warnings.find(
+      (w) => w.code === "core-harness.wrapper.openclaw-setup-alias-missing",
+    );
+    const resolverMissing = summary.warnings.find(
+      (w) => w.code === "core-harness.wrapper.home-resolver-missing",
+    );
+    expect(aliasMissing?.severity).toBe("warn");
+    expect(resolverMissing?.severity).toBe("warn");
   });
 
   it("still honors explicit wrapperPath overrides for tests and tooling", () => {

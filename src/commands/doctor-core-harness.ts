@@ -222,9 +222,11 @@ export function buildCoreHarnessSummary(params: {
   // (containerised or stripped environments), so we never lose detection.
   const wrapperBase = resolveOsHomeDir(env) ?? home.path;
   const wrapperPath = params.wrapperPath ?? path.join(wrapperBase, WRAPPER_LIB_RELATIVE_PATH);
+  const existsSync = params.existsSync ?? fs.existsSync;
+  const wrapperFileExists = existsSync(wrapperPath);
   const wrappers = inspectWrapperCoverage({
     wrapperPath,
-    existsSync: params.existsSync ?? fs.existsSync,
+    existsSync,
     readFileSync: params.readFileSync ?? fs.readFileSync,
   });
   const wildcardAllowFrom = collectAllowFromWildcards(params.cfg);
@@ -255,33 +257,55 @@ export function buildCoreHarnessSummary(params: {
     home.isolatedProcessHome &&
     path.resolve(home.processHome ?? os.homedir()) !== path.resolve(home.path)
   ) {
+    // If OPENCLAW_HOME points at a non-isolated path the operator already
+    // routed Core Harness away from the Codex sandbox, so the warning is
+    // informational only. If OPENCLAW_HOME is unset, the resolver would have
+    // fallen through to the isolated HOME (in which case effective home ==
+    // process home and this branch is unreachable), but we still treat it as
+    // error severity defensively. If OPENCLAW_HOME itself is isolated, the
+    // operator did not escape the sandbox; keep error severity.
+    const overrideIsIsolated = env.OPENCLAW_HOME == null || isIsolatedCodexHome(env.OPENCLAW_HOME);
+    const severity: "error" | "warn" = overrideIsIsolated ? "error" : "warn";
     addWarning(warnings, {
       code: "core-harness.home.isolated",
-      severity: "error",
+      severity,
       category: "new",
-      summary: "Core Harness is running from an isolated Codex-like HOME.",
+      summary:
+        severity === "error"
+          ? "Core Harness is running from an isolated Codex-like HOME."
+          : "Core Harness HOME is isolated, but OPENCLAW_HOME points at a non-isolated path.",
       what_to_do_now:
-        "OPENCLAW_HOME を実運用 home に向けて、wrapper 経由で doctor を実行してください。",
+        severity === "error"
+          ? "OPENCLAW_HOME を実運用 home に向けて、wrapper 経由で doctor を実行してください。"
+          : "OPENCLAW_HOME が実 home を指していれば動作に支障はありません。HOME も合わせて実 home にすれば完全に解消されます。",
     });
   }
 
   if (!wrappers.openclawSetupAlias) {
     addWarning(warnings, {
       code: "core-harness.wrapper.openclaw-setup-alias-missing",
-      severity: "warn",
+      severity: wrapperFileExists ? "warn" : "info",
       category: "new",
-      summary: "wrapper repo aliases do not include active setup repo.",
-      what_to_do_now: "oc-wrapper-lib に openclaw-setup alias を追加してください。",
+      summary: wrapperFileExists
+        ? "wrapper repo aliases do not include active setup repo."
+        : "wrapper file not detected; openclaw-setup alias coverage unverified.",
+      what_to_do_now: wrapperFileExists
+        ? "oc-wrapper-lib に openclaw-setup alias を追加してください。"
+        : "oc-wrapper-lib が見つかりません。wrapper を使っている場合はパスと権限を確認してください。使っていなければこの警告は無視できます。",
     });
   }
 
   if (!wrappers.homeResolver) {
     addWarning(warnings, {
       code: "core-harness.wrapper.home-resolver-missing",
-      severity: "warn",
+      severity: wrapperFileExists ? "warn" : "info",
       category: "new",
-      summary: "wrapper home resolver is missing or not using OPENCLAW_HOME.",
-      what_to_do_now: "oc-wrapper-lib の HOME 解決を OPENCLAW_HOME 優先にしてください。",
+      summary: wrapperFileExists
+        ? "wrapper home resolver is missing or not using OPENCLAW_HOME."
+        : "wrapper file not detected; home-resolver coverage unverified.",
+      what_to_do_now: wrapperFileExists
+        ? "oc-wrapper-lib の HOME 解決を OPENCLAW_HOME 優先にしてください。"
+        : "oc-wrapper-lib が見つかりません。wrapper を使っている場合はパスと権限を確認してください。使っていなければこの警告は無視できます。",
     });
   }
 
