@@ -25,6 +25,7 @@ import {
   browserStatus,
   browserStop,
   callGatewayTool,
+  describeImageFileWithModel,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
@@ -46,6 +47,7 @@ import {
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { describeBrowserImageWithVision, isBrowserVisionEnabled } from "./browser/vision.js";
 
 const browserToolDeps = {
   browserAct,
@@ -62,6 +64,7 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  describeImageFileWithModel,
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
@@ -88,6 +91,7 @@ export const testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
+      describeImageFileWithModel: typeof describeImageFileWithModel;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
@@ -113,6 +117,8 @@ export const testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.describeImageFileWithModel =
+      overrides?.describeImageFileWithModel ?? describeImageFileWithModel;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
@@ -762,9 +768,56 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
+          const screenshotPath = result.path;
+          const screenshotCfg = browserToolDeps.getRuntimeConfig();
+          if (isBrowserVisionEnabled(screenshotCfg)) {
+            try {
+              const described = await describeBrowserImageWithVision(
+                {
+                  cfg: screenshotCfg,
+                  filePath: screenshotPath,
+                  // Intentionally omit `mediaUrl`: screenshots live on local
+                  // disk, so the helper should read the buffer from `filePath`
+                  // rather than HTTP-fetch the local path.
+                },
+                {
+                  describeImageFileWithModel: browserToolDeps.describeImageFileWithModel,
+                },
+              );
+              const headerLines = [`MEDIA:${screenshotPath}`];
+              headerLines.push(`[analyzed by ${described.provider}/${described.model}]`);
+              const text = `${headerLines.join("\n")}\n${described.text.trim()}`;
+              return {
+                content: [{ type: "text", text }],
+                details: {
+                  ...(result as Record<string, unknown>),
+                  media: {
+                    mediaUrl: screenshotPath,
+                  },
+                  vision: {
+                    provider: described.provider,
+                    model: described.model,
+                    attempts: described.attempts,
+                  },
+                },
+              };
+            } catch (err) {
+              // Fall back to returning the raw image block so the agent loop
+              // can still recover (multimodal models will still read it, and
+              // text-only models will see "[image omitted]" rather than nothing).
+              const reason = err instanceof Error ? err.message : String(err);
+              const extraText = `[browser screenshot vision failed: ${reason}]`;
+              return await browserToolDeps.imageResultFromFile({
+                label: "browser:screenshot",
+                path: screenshotPath,
+                extraText,
+                details: result,
+              });
+            }
+          }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
-            path: result.path,
+            path: screenshotPath,
             details: result,
             imageSanitization: resolveRuntimeImageSanitization(),
           });

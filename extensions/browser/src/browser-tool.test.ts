@@ -157,6 +157,7 @@ vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
+  describeImageFileWithModel: vi.fn(),
 }));
 vi.mock("./sdk-setup-tools.js", async () => {
   const actual =
@@ -165,6 +166,7 @@ vi.mock("./sdk-setup-tools.js", async () => {
     ...actual,
     callGatewayTool: gatewayMocks.callGatewayTool,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
+    describeImageFileWithModel: toolCommonMocks.describeImageFileWithModel,
     listNodes: nodesUtilsMocks.listNodes,
   };
 });
@@ -207,6 +209,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
       usesChromeMcp: profile.driver === "existing-session",
     }),
+    describeImageFileWithModel: toolCommonMocks.describeImageFileWithModel,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     jsonResult: (result: unknown) => ({
       content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -295,6 +298,7 @@ function resetBrowserToolMocks() {
     browserStart: browserClientMocks.browserStart as never,
     browserStatus: browserClientMocks.browserStatus as never,
     browserStop: browserClientMocks.browserStop as never,
+    describeImageFileWithModel: toolCommonMocks.describeImageFileWithModel as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
     getRuntimeConfig: configMocks.loadConfig as never,
     listNodes: nodesUtilsMocks.listNodes as never,

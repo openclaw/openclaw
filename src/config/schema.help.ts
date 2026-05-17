@@ -812,6 +812,22 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
   "tools.media.image.scope":
     "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
+  "tools.browser.enabled":
+    "Enable automatic vision understanding for browser screenshot results so text-only main models can read what the browser sees. When disabled or unset, browser screenshots return image content blocks as before, letting multimodal main models read them directly. Configure `tools.browser.models` to specify the vision provider/model to use.",
+  "tools.browser.maxBytes":
+    "Maximum accepted screenshot byte size sent to the configured vision model. Keep the limit aligned with your provider caps so screenshots are not silently truncated; lower it on slow uplinks to keep request latency predictable.",
+  "tools.browser.maxChars":
+    "Maximum characters returned from the screenshot description after model response normalization. Use tighter limits to keep tool result payloads small for downstream main models, or increase it when screenshots include dense text the agent must read.",
+  "tools.browser.prompt":
+    "Instruction template used when describing browser screenshots. Keep the prompt deterministic and focused on the viewport so descriptions stay consistent across turns; override for use cases that need UI-state-aware framing (for example accessibility tree summaries).",
+  "tools.browser.timeoutSeconds":
+    "Timeout in seconds for each browser screenshot description request before it is aborted. Increase for high-resolution screenshots that need careful OCR; lower it when latency matters more than completeness so the browser tool falls back to returning the raw image promptly.",
+  "tools.browser.attachments":
+    "Attachment handling policy reserved for parity with other media understanding configs. The browser tool always describes the just-captured screenshot, so this field is currently a no-op; keep defaults unless you intend to share policy plumbing with future browser tool features.",
+  "tools.browser.models":
+    "Ordered vision model preferences for describing browser screenshots. Put the most reliable multimodal model first to reduce fallback attempts when the primary provider is unavailable; leave empty to keep the browser tool returning image blocks for multimodal main models to read directly.",
+  "tools.browser.scope":
+    "Scope selector for when browser screenshot vision is attempted (for example only explicit screenshot actions versus broader auto-capture). Keep narrow scope when you only want vision fallback in specific channels to control token and API spend.",
   ...MEDIA_AUDIO_FIELD_HELP,
   "tools.media.video.enabled":
     "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",

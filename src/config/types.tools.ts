@@ -670,6 +670,14 @@ export type ToolsConfig = {
     };
   };
   media?: MediaToolsConfig;
+  /**
+   * Optional media-understanding configuration for the browser tool. When
+   * `models` is set, browser screenshot actions analyze the captured image
+   * with the configured vision model and return the description as text so
+   * text-only main models can read screenshots. When not set, screenshots are
+   * returned as image content blocks as before.
+   */
+  browser?: MediaUnderstandingConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */
   message?: MessageToolsConfig;
