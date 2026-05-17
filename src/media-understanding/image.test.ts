@@ -209,6 +209,7 @@ describe("describeImageWithModel", () => {
           expect.objectContaining({
             role: "user",
             content: [
+              expect.objectContaining({ type: "text", text: "Describe the image." }),
               expect.objectContaining({
                 type: "image",
                 mimeType: "image/png",
@@ -220,7 +221,7 @@ describe("describeImageWithModel", () => {
       expect.any(Object),
     );
     const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.messages?.[0]?.content).toHaveLength(1);
+    expect(context?.messages?.[0]?.content).toHaveLength(2);
   });
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {

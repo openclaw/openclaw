@@ -72,16 +72,22 @@ function buildImageContext(
   prompt: string,
   images: Array<{ buffer: Buffer; mime?: string }>,
 ): Context {
+  // Build image content blocks and prepend the prompt as a text block.
+  // Some providers (e.g. MiniMax chat completion) require at least one text
+  // content block in the user message and will reject image-only payloads
+  // with "chat content is empty".  Placing the prompt here also matches
+  // the typical vision-model convention of interleaved text + images.
+  const imageBlocks = images.map((image) => ({
+    type: "image" as const,
+    data: image.buffer.toString("base64"),
+    mimeType: image.mime ?? "image/jpeg",
+  }));
   return {
     systemPrompt: prompt,
     messages: [
       {
         role: "user",
-        content: images.map((image) => ({
-          type: "image" as const,
-          data: image.buffer.toString("base64"),
-          mimeType: image.mime ?? "image/jpeg",
-        })),
+        content: [{ type: "text" as const, text: prompt }, ...imageBlocks],
         timestamp: Date.now(),
       },
     ],
