@@ -777,6 +777,7 @@ describe("qa cli runtime", () => {
         "personal-memory-preference-recall",
         "personal-redaction-no-secret-leak",
         "personal-tool-safety-followthrough",
+        "personal-approval-denial-stop",
       ],
     });
   });
