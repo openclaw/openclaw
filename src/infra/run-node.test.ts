@@ -1421,6 +1421,7 @@ describe("run-node script", () => {
         args: ["status"],
         env: {
           ...process.env,
+          CI: "false",
           OPENCLAW_FORCE_BUILD: "1",
         },
         spawn,
