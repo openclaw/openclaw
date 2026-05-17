@@ -461,8 +461,8 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
-        markLiveSwitchPending: true,
       });
+      delete next.liveModelSwitchPending;
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {

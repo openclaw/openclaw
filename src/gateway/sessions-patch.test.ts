@@ -325,13 +325,15 @@ describe("gateway sessions patch", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
-  test("marks model reset patches as pending live model switches", async () => {
+  test("clears pending live model switches for model reset patches", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {
         sessionId: "sess-live-reset",
         updatedAt: 1,
         providerOverride: "anthropic",
         modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+        liveModelSwitchPending: true,
       } as SessionEntry,
     };
     const entry = expectPatchOk(
@@ -344,7 +346,8 @@ describe("gateway sessions patch", () => {
 
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
-    expect(entry.liveModelSwitchPending).toBe(true);
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
   test.each([
