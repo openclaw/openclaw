@@ -51,6 +51,7 @@ import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
+import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -73,7 +74,6 @@ const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
@@ -105,7 +105,10 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-flash-lite-preview",
 ]);
-const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
+const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  "google/gemini-3-flash-preview",
+  "google/gemini-3.1-pro-preview",
+]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 const QUIET_LIVE_LOGS = process.env.OPENCLAW_LIVE_TEST_QUIET !== "0";
@@ -377,7 +380,7 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
-  if (THINKING_TAG_RE.test(params.text) || FINAL_TAG_RE.test(params.text)) {
+  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -440,10 +443,10 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
 }
 
 function stripKnownLiveReasoningWrappers(text: string): string {
-  return text
+  const withoutThinking = text
     .replace(/<\s*think\b[^<>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
-    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "")
-    .replace(/<\s*final\b[^<>]*>([\s\S]*?)<\s*\/\s*final\s*>/gi, "$1");
+    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "");
+  return stripFinalTags(withoutThinking);
 }
 
 function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
@@ -490,6 +493,12 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<final>Visible</final>",
+        "google/gemini-3-flash-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final data-model=openrouter/google/gemini/>Visible",
         "google/gemini-3-flash-preview",
       ),
     ).toBe("Visible");
@@ -937,6 +946,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
+    { modelKey: "google/gemini-3.1-pro-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);

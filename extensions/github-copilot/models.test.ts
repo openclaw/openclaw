@@ -412,6 +412,10 @@ describe("github-copilot token", () => {
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
+    const [, calledInit] = fetchImpl.mock.calls[0] ?? [];
+    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
+      "identity",
+    );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 });
@@ -537,6 +541,9 @@ describe("fetchCopilotModelCatalog", () => {
     expect(((calledInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
       "Bearer tid=test",
     );
+    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
+      "identity",
+    );
 
     expect(out.map((m) => m.id)).toEqual([
       "gpt-5.5",
@@ -644,6 +651,24 @@ describe("fetchCopilotModelCatalog", () => {
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).rejects.toThrow(/HTTP 401/);
+  });
+
+  it("throws provider-owned errors for malformed successful /models payloads", async () => {
+    for (const payload of [[], { data: {} }, { data: [null] }]) {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      });
+
+      await expect(
+        fetchCopilotModelCatalog({
+          copilotApiToken: "tid=test",
+          baseUrl: "https://api.githubcopilot.com",
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        }),
+      ).rejects.toThrow("Copilot /models: malformed JSON response");
+    }
   });
 
   it("rejects empty token / baseUrl synchronously before fetching", async () => {

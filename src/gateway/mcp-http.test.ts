@@ -22,6 +22,7 @@ type ScopedToolsCall = {
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
+  inboundEventKind?: string;
   senderIsOwner?: boolean;
   surface?: string;
   excludeToolNames?: Iterable<string>;
@@ -154,7 +155,7 @@ afterEach(async () => {
 });
 
 describe("mcp loopback server", () => {
-  it("passes session, account, and message channel headers into shared tool resolution", async () => {
+  it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
@@ -170,6 +171,7 @@ describe("mcp loopback server", () => {
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-inbound-event-kind": "room_event",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
@@ -179,6 +181,7 @@ describe("mcp loopback server", () => {
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
+    expect(call.inboundEventKind).toBe("room_event");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
@@ -189,6 +192,30 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("keeps loopback tool cache entries separate by inbound event kind", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const sendToolsList = async (inboundEventKind: string) =>
+      await sendRaw({
+        port: server?.port ?? 0,
+        token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:telegram:group:chat123",
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-inbound-event-kind": inboundEventKind,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await sendToolsList("user_request")).status).toBe(200);
+    expect((await sendToolsList("room_event")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
+    expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {

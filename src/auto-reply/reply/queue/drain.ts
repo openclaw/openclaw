@@ -18,7 +18,7 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+import { completeFollowupRunLifecycle, isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -159,6 +159,130 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
   };
 }
 
+type FollowupRuntimeMetadata = Pick<
+  FollowupRun,
+  | "currentInboundEventKind"
+  | "currentInboundContext"
+  | "abortSignal"
+  | "deliveryCorrelations"
+  | "queuedLifecycle"
+>;
+
+function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
+  return item.currentInboundEventKind === "room_event" || Boolean(item.currentInboundContext);
+}
+
+function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
+  return Boolean(
+    hasCurrentTurnRuntimeMetadata(item) ||
+    item.abortSignal ||
+    item.deliveryCorrelations?.length ||
+    item.queuedLifecycle,
+  );
+}
+
+function combineAbortSignals(items: readonly FollowupRun[]): AbortSignal | undefined {
+  const signals = items.flatMap((item) => (item.abortSignal ? [item.abortSignal] : []));
+  if (signals.length === 0) {
+    return undefined;
+  }
+  if (signals.length === 1) {
+    return signals[0];
+  }
+  const nativeAny = (
+    AbortSignal as typeof AbortSignal & {
+      any?: (signals: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
+  if (nativeAny) {
+    return nativeAny(signals);
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abort();
+      break;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+function collectRuntimeMetadata(
+  items: FollowupRun[],
+  singletonOwner?: FollowupRun,
+): FollowupRuntimeMetadata {
+  const candidates = singletonOwner ? [singletonOwner, ...items] : items;
+  const currentTurnSource =
+    singletonOwner && hasCurrentTurnRuntimeMetadata(singletonOwner)
+      ? singletonOwner
+      : items.find(hasCurrentTurnRuntimeMetadata);
+  const abortSignal = singletonOwner?.abortSignal ?? combineAbortSignals(candidates);
+  const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
+  return {
+    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundContext: currentTurnSource?.currentInboundContext,
+    abortSignal,
+    deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+    queuedLifecycle:
+      singletonOwner?.queuedLifecycle ??
+      (items.length === 1 ? lifecycleSource?.queuedLifecycle : undefined),
+  };
+}
+
+function collectSummaryRuntimeMetadata(items: FollowupRun[]): FollowupRuntimeMetadata {
+  return collectRuntimeMetadata(items, items.length === 1 ? items[0] : undefined);
+}
+
+function clearFollowupQueueSummaryState(queue: {
+  dropPolicy: "summarize" | "old" | "new";
+  droppedCount: number;
+  summaryLines: string[];
+  summarySources?: FollowupRun[];
+}): void {
+  completeFollowupQueueSummarySources(queue);
+  clearQueueSummaryState(queue);
+}
+
+function completeFollowupQueueSummarySources(queue: { summarySources?: FollowupRun[] }): void {
+  for (const item of queue.summarySources ?? []) {
+    completeFollowupRunLifecycle(item);
+  }
+  if (queue.summarySources) {
+    queue.summarySources = [];
+  }
+}
+
+async function runWithSummarySourceCleanup(
+  queue: { summarySources?: FollowupRun[] },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } finally {
+    completeFollowupQueueSummarySources(queue);
+  }
+}
+
+async function dropAbortedFollowups(
+  items: FollowupRun[],
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<number> {
+  let dropped = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (isFollowupRunAborted(item)) {
+      await runFollowup(item);
+      completeFollowupRunLifecycle(item);
+      items.splice(index, 1);
+      dropped += 1;
+    }
+  }
+  return dropped;
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -217,7 +341,21 @@ export function scheduleFollowupDrain(
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
+        const droppedBeforeDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedBeforeDebounce > 0 && queue.items.length === 0) {
+          clearFollowupQueueSummaryState(queue);
+        }
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         await waitForQueueDebounce(queue);
+        const droppedAfterDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedAfterDebounce > 0 && queue.items.length === 0) {
+          clearFollowupQueueSummaryState(queue);
+        }
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.
@@ -225,7 +363,9 @@ export function scheduleFollowupDrain(
           // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
-          const isCrossChannel = hasCrossChannelItems(queue.items, resolveCrossChannelKey);
+          const isCrossChannel =
+            hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
+            queue.items.some(hasRuntimeOnlyFollowupMetadata);
 
           const collectDrainResult = await drainCollectQueueStep({
             collectState,
@@ -237,14 +377,17 @@ export function scheduleFollowupDrain(
             const summaryOnlyPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
             const run = queue.lastRun;
             if (summaryOnlyPrompt && run) {
-              await runTrustedFollowup({
-                prompt: summaryOnlyPrompt,
-                run,
-                enqueuedAt: Date.now(),
-                allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
-                ...collectQueuedImages(queue.items),
+              await runWithSummarySourceCleanup(queue, async () => {
+                await runTrustedFollowup({
+                  prompt: summaryOnlyPrompt,
+                  run,
+                  enqueuedAt: Date.now(),
+                  allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
+                  ...collectSummaryRuntimeMetadata([]),
+                  ...collectQueuedImages(queue.items),
+                });
               });
-              clearQueueSummaryState(queue);
+              clearFollowupQueueSummaryState(queue);
               continue;
             }
             break;
@@ -261,13 +404,16 @@ export function scheduleFollowupDrain(
             if (!summary || !run) {
               break;
             }
-            await runTrustedFollowup({
-              prompt: summary,
-              run,
-              enqueuedAt: Date.now(),
-              allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
+            await runWithSummarySourceCleanup(queue, async () => {
+              await runTrustedFollowup({
+                prompt: summary,
+                run,
+                enqueuedAt: Date.now(),
+                allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
+                ...collectSummaryRuntimeMetadata([]),
+              });
             });
-            clearQueueSummaryState(queue);
+            clearFollowupQueueSummaryState(queue);
             continue;
           }
 
@@ -285,17 +431,25 @@ export function scheduleFollowupDrain(
               summary: pendingSummary,
               renderItem: renderCollectItem,
             });
-            await runTrustedFollowup({
-              prompt,
-              run,
-              enqueuedAt: Date.now(),
-              ...routing,
-              ...collectQueuedImages(groupItems),
-              allowDuringGatewayDrain: groupItems.some(shouldRunFollowupDuringGatewayDrain),
-            });
+            const drainGroup = async () => {
+              await runTrustedFollowup({
+                prompt,
+                run,
+                enqueuedAt: Date.now(),
+                ...routing,
+                ...collectRuntimeMetadata(groupItems),
+                ...collectQueuedImages(groupItems),
+                allowDuringGatewayDrain: groupItems.some(shouldRunFollowupDuringGatewayDrain),
+              });
+            };
+            if (pendingSummary) {
+              await runWithSummarySourceCleanup(queue, drainGroup);
+            } else {
+              await drainGroup();
+            }
             queue.items.splice(0, groupItems.length);
             if (pendingSummary) {
-              clearQueueSummaryState(queue);
+              clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;
             }
           }
@@ -310,22 +464,25 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await runTrustedFollowup({
-                prompt: summaryPrompt,
-                run,
-                enqueuedAt: Date.now(),
-                allowDuringGatewayDrain: shouldRunFollowupDuringGatewayDrain(item),
-                originatingChannel: item.originatingChannel,
-                originatingTo: item.originatingTo,
-                originatingAccountId: item.originatingAccountId,
-                originatingThreadId: item.originatingThreadId,
-                ...collectQueuedImages([item]),
+              await runWithSummarySourceCleanup(queue, async () => {
+                await runTrustedFollowup({
+                  prompt: summaryPrompt,
+                  run,
+                  enqueuedAt: Date.now(),
+                  allowDuringGatewayDrain: shouldRunFollowupDuringGatewayDrain(item),
+                  originatingChannel: item.originatingChannel,
+                  originatingTo: item.originatingTo,
+                  originatingAccountId: item.originatingAccountId,
+                  originatingThreadId: item.originatingThreadId,
+                  ...collectSummaryRuntimeMetadata([item]),
+                  ...collectQueuedImages([item]),
+                });
               });
             }))
           ) {
             break;
           }
-          clearQueueSummaryState(queue);
+          clearFollowupQueueSummaryState(queue);
           continue;
         }
 

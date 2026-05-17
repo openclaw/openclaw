@@ -1,8 +1,11 @@
 export {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
 export { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
 export { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
 export { getRuntimeConfig } from "../../config/config.js";

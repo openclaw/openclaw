@@ -251,6 +251,7 @@ const TARGET_KEYS = [
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
+  "messages.groupChat.unmentionedInbound",
   "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
