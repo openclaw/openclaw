@@ -228,7 +228,9 @@ struct ConfigSchemaLookupChild: Identifiable {
     let hint: ConfigUiHint?
     let hintPath: String?
 
-    var id: String { self.path }
+    var id: String {
+        self.path
+    }
 
     init?(raw: [String: AnyCodable]) {
         guard let key = raw["key"]?.stringValue,
@@ -274,6 +276,7 @@ final class ChannelsStore {
             self.decodedChannelCache.removeAll(keepingCapacity: true)
         }
     }
+
     var lastError: String?
     var lastSuccess: Date?
     var isRefreshing = false

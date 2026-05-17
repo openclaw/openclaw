@@ -51,9 +51,9 @@ extension CronSettings {
             }
         }
         .onChange(of: self.store.selectedJobId) { _, newValue in
-            guard let newValue else { return }
-            Task { await self.store.refreshRuns(jobId: newValue) }
-        }
+                guard let newValue else { return }
+                Task { await self.store.refreshRuns(jobId: newValue) }
+            }
     }
 
     private func updateActiveWork(active: Bool) {

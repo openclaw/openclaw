@@ -191,7 +191,8 @@ extension ConfigSettings {
             Button(self.store.isSavingConfig ? "Saving…" : "Save") {
                 Task { await self.store.saveConfigDraft() }
             }
-            .disabled(self.isNixMode || self.store.isSavingConfig || !self.store.configLoaded || !self.store.configDirty)
+            .disabled(self.isNixMode || self.store.isSavingConfig || !self.store.configLoaded || !self.store
+                .configDirty)
         }
         .buttonStyle(.bordered)
     }
@@ -324,7 +325,6 @@ extension ConfigSettings {
         }
     }
 
-    @ViewBuilder
     private func lookupChildrenList(_ node: ConfigSchemaLookupNode) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(node.children) { child in
