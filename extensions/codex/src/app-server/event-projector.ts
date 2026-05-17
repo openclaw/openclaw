@@ -1001,7 +1001,7 @@ export class CodexAppServerEventProjector {
     }
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
-    const error = itemToolError(item, status);
+    const error = itemToolError(item, status, this.toolResultOutputTextByItem);
     const startedAt =
       typeof item.durationMs === "number" ? Date.now() - Math.max(0, item.durationMs) : undefined;
     const hookParams = {
@@ -1687,6 +1687,7 @@ function itemFileChanges(item: CodexThreadItem): Array<{ path: string; kind: str
 function itemToolError(
   item: CodexThreadItem,
   status: ReturnType<typeof itemStatus>,
+  outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   if (status === "blocked") {
     return "codex native tool blocked";
@@ -1694,7 +1695,7 @@ function itemToolError(
   if (status !== "failed") {
     return undefined;
   }
-  return itemOutputText(item) ?? "codex native tool failed";
+  return itemOutputText(item, outputTextByItem) ?? "codex native tool failed";
 }
 
 function itemMeta(
