@@ -1123,44 +1123,31 @@ class NodeRuntime(
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-      if (expectedFingerprint == null) {
-        // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
-        _statusText.value = "Verify gateway TLS fingerprint…"
-        scope.launch {
-          val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
-          if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
-          val fp =
-            tlsProbe.fingerprintSha256 ?: run {
-              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
-              return@launch
-            }
-          val observedFingerprint =
-            normalizeGatewayTlsFingerprint(fp)
-              .takeIf { it.isNotBlank() }
-              ?: fp
-          _pendingGatewayTrust.value =
-            GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = observedFingerprint, auth = auth)
-        }
-        return
-      }
-
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
-            connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+            if (expectedFingerprint == null) {
+              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+            } else {
+              connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+            }
             return@launch
           }
-        val observedFingerprint = normalizeGatewayTlsFingerprint(fp)
-        if (observedFingerprint != expectedFingerprint) {
+        val observedFingerprint =
+          normalizeGatewayTlsFingerprint(fp)
+            .takeIf { it.isNotBlank() }
+            ?: fp
+        val previousFingerprint = expectedFingerprint?.takeUnless { it == observedFingerprint }
+        if (expectedFingerprint == null || previousFingerprint != null) {
           _pendingGatewayTrust.value =
             GatewayTrustPrompt(
               endpoint = endpoint,
               fingerprintSha256 = observedFingerprint,
               auth = auth,
-              previousFingerprintSha256 = expectedFingerprint,
+              previousFingerprintSha256 = previousFingerprint,
             )
           return@launch
         }
