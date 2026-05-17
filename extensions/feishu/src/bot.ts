@@ -708,6 +708,10 @@ export async function handleFeishuMessage(params: {
       commandProbeBody,
       cfg,
     );
+    const isExplicitTextCommand = core.channel.commands.isControlCommandMessage(
+      commandProbeBody,
+      cfg,
+    );
     const dmIngress = isDirect
       ? await resolveFeishuDmIngressAccess({
           cfg,
@@ -956,6 +960,10 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? shouldComputeCommandAuthorized
         : core.channel.commands.shouldComputeCommandAuthorized(effectiveCommandProbeBody, cfg);
+    const isEffectiveExplicitTextCommand =
+      audioTranscript === undefined
+        ? isExplicitTextCommand
+        : core.channel.commands.isControlCommandMessage(effectiveCommandProbeBody, cfg);
     const commandAuthorized = shouldComputeEffectiveCommandAuthorized
       ? isDirect && audioTranscript === undefined && dmIngress
         ? dmIngress.commandAccess.authorized
@@ -1300,6 +1308,7 @@ export async function handleFeishuMessage(params: {
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
+        ...(isEffectiveExplicitTextCommand ? { CommandSource: "text" as const } : {}),
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,

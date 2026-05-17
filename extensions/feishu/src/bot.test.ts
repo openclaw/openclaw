@@ -162,12 +162,6 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
   };
 }
 
-function _createUnboundConfiguredRoute(
-  route: NonNullable<ConfiguredBindingRoute>["route"],
-): ConfiguredBindingRoute {
-  return { bindingResolution: null, route };
-}
-
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   return {
     channel: {
@@ -192,6 +186,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
+        isControlCommandMessage: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
       },
       pairing: {
@@ -948,6 +943,7 @@ describe("handleFeishuMessage command authorization", () => {
   );
   const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
   const mockShouldComputeCommandAuthorized = vi.fn(() => true);
+  const mockIsControlCommandMessage = vi.fn(() => false);
   const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
   const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
@@ -962,6 +958,7 @@ describe("handleFeishuMessage command authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
+    mockIsControlCommandMessage.mockReset().mockReturnValue(false);
     mockGetMessageFeishu.mockReset().mockResolvedValue(null);
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
@@ -1006,6 +1003,7 @@ describe("handleFeishuMessage command authorization", () => {
           },
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            isControlCommandMessage: mockIsControlCommandMessage,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
           pairing: {
@@ -1400,6 +1398,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   it("computes group command authorization from group allowFrom", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockIsControlCommandMessage.mockReturnValue(true);
     mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -1436,10 +1435,12 @@ describe("handleFeishuMessage command authorization", () => {
     const context = mockCallArg<{
       ChatType?: string;
       CommandAuthorized?: boolean;
+      CommandSource?: string;
       SenderId?: string;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ChatType).toBe("group");
     expect(context.CommandAuthorized).toBe(false);
+    expect(context.CommandSource).toBe("text");
     expect(context.SenderId).toBe("ou-attacker");
   });
 
@@ -1481,6 +1482,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   it("falls back to top-level allowFrom for group command authorization", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockIsControlCommandMessage.mockReturnValue(true);
     mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
 
     const cfg: ClawdbotConfig = {
@@ -1518,11 +1520,54 @@ describe("handleFeishuMessage command authorization", () => {
     const context = mockCallArg<{
       ChatType?: string;
       CommandAuthorized?: boolean;
+      CommandSource?: string;
       SenderId?: string;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ChatType).toBe("group");
     expect(context.CommandAuthorized).toBe(true);
+    expect(context.CommandSource).toBe("text");
     expect(context.SenderId).toBe("ou-admin");
+  });
+
+  it("does not mark inline slash-like text as a text command source", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockIsControlCommandMessage.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-inline-false-positive",
+        },
+      },
+      message: {
+        message_id: "msg-inline-false-positive",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hey /status" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const context = mockCallArg<{
+      ChatType?: string;
+      CommandAuthorized?: boolean;
+      CommandSource?: string;
+      SenderId?: string;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.ChatType).toBe("direct");
+    expect(context.CommandAuthorized).toBe(true);
+    expect(context.CommandSource).toBeUndefined();
+    expect(context.SenderId).toBe("ou-inline-false-positive");
   });
 
   it("allows group sender when global groupSenderAllowFrom includes sender", async () => {
