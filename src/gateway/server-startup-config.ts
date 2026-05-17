@@ -20,9 +20,7 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import {
-  activateSecretsRuntimeSnapshotState,
-} from "../secrets/runtime-state.js";
+import { activateSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
@@ -179,10 +177,14 @@ export function createRuntimeSecretsActivator(params: {
   const finishPreparedSnapshot = async (
     prepared: PreparedRuntimeSecretsSnapshot,
     activationParams: RuntimeSecretsActivationParams,
+    options?: {
+      activateRuntimeSecretsSnapshot?: (snapshot: PreparedRuntimeSecretsSnapshot) => void;
+    },
   ) => {
     assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
     if (activationParams.activate) {
-      const activateRuntimeSecretsSnapshot = await loadActivateRuntimeSecretsSnapshot();
+      const activateRuntimeSecretsSnapshot =
+        options?.activateRuntimeSecretsSnapshot ?? (await loadActivateRuntimeSecretsSnapshot());
       activateRuntimeSecretsSnapshot(prepared);
       logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
     }
@@ -241,41 +243,29 @@ export function createRuntimeSecretsActivator(params: {
             config: pruneSkippedStartupSecretSurfaces(config),
           });
           if (fastPath) {
-            const prepared = fastPath.snapshot;
-            assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
-            activateSecretsRuntimeSnapshotState({
-              snapshot: prepared,
-              refreshContext: fastPath.refreshContext,
-              refreshHandler: {
-                refresh: async ({ sourceConfig }) => {
-                  const secretsRuntime = await loadSecretsRuntime();
-                  const refreshed = await secretsRuntime.prepareSecretsRuntimeSnapshot({
-                    config: sourceConfig,
-                    env: fastPath.refreshContext.env,
-                    agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
-                    loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
-                    ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
-                      ? {}
-                      : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
-                  });
-                  secretsRuntime.activateSecretsRuntimeSnapshot(refreshed);
-                  return true;
-                },
-              },
+            return await finishPreparedSnapshot(fastPath.snapshot, activationParams, {
+              activateRuntimeSecretsSnapshot: (snapshot) =>
+                activateSecretsRuntimeSnapshotState({
+                  snapshot,
+                  refreshContext: fastPath.refreshContext,
+                  refreshHandler: {
+                    refresh: async ({ sourceConfig }) => {
+                      const secretsRuntime = await loadSecretsRuntime();
+                      const refreshed = await secretsRuntime.prepareSecretsRuntimeSnapshot({
+                        config: sourceConfig,
+                        env: fastPath.refreshContext.env,
+                        agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
+                        loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
+                        ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
+                          ? {}
+                          : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
+                      });
+                      secretsRuntime.activateSecretsRuntimeSnapshot(refreshed);
+                      return true;
+                    },
+                  },
+                }),
             });
-            logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
-            if (secretsDegraded) {
-              const recoveredMessage =
-                "Secret resolution recovered; runtime remained on last-known-good during the outage.";
-              params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
-              params.emitStateEvent(
-                "SECRETS_RELOADER_RECOVERED",
-                recoveredMessage,
-                prepared.config,
-              );
-            }
-            secretsDegraded = false;
-            return prepared;
           }
         }
         const loadAuthStore = startupPreflight
@@ -363,11 +353,8 @@ export async function prepareGatewayStartupConfig(params: {
   const canReusePreflightPreparedSnapshot = (config: OpenClawConfig): boolean =>
     Boolean(
       preflightPrepared &&
-        params.activateRuntimeSecrets.activatePreparedSnapshot &&
-        isDeepStrictEqual(
-          pruneSkippedStartupSecretSurfaces(config),
-          preflightPrepared.sourceConfig,
-        ),
+      params.activateRuntimeSecrets.activatePreparedSnapshot &&
+      isDeepStrictEqual(pruneSkippedStartupSecretSurfaces(config), preflightPrepared.sourceConfig),
     );
   const activateStartupSecrets = async (config: OpenClawConfig) => {
     if (preflightPrepared && canReusePreflightPreparedSnapshot(config)) {
@@ -413,7 +400,9 @@ export async function prepareGatewayStartupConfig(params: {
     }),
   );
   const activatedConfig = (
-    await measure("config.auth.secrets-activate", () => activateStartupSecrets(runtimeStartupConfig))
+    await measure("config.auth.secrets-activate", () =>
+      activateStartupSecrets(runtimeStartupConfig),
+    )
   ).config;
   return {
     ...authBootstrap,

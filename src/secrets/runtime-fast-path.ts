@@ -275,6 +275,10 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
       ) {
         return null;
       }
+      authStores = candidateDirs.map((agentDir) => ({
+        agentDir,
+        store: { version: 1, profiles: {} },
+      }));
     } else {
       const loadAuthStore = params.loadAuthStore;
       authStores = candidateDirs.map((agentDir) => ({
