@@ -1,6 +1,6 @@
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -45,6 +45,17 @@ export type MemoryCorpusSupplement = {
     query: string;
     maxResults?: number;
     agentSessionKey?: string;
+    /**
+     * Candidates the engine has already computed for this query (via the
+     * built-in `manager.search`) on the same turn. Supplements that
+     * rerank, filter, or annotate existing results can use these
+     * directly instead of issuing a redundant `manager.search`. Optional
+     * so existing supplements that produce their own results (e.g.
+     * compiled wiki corpora) keep working unchanged. Only populated when
+     * the engine had a base result set in scope at supplement-invocation
+     * time (i.e. `corpus !== "wiki"` paths).
+     */
+    engineCandidates?: MemorySearchResult[];
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;

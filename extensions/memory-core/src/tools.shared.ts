@@ -4,6 +4,7 @@ import {
   resolveMemorySearchConfig,
   resolveSessionAgentIds,
   type MemoryCorpusSearchResult,
+  type MemorySearchResult,
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -146,6 +147,13 @@ export async function searchMemoryCorpusSupplements(params: {
   maxResults?: number;
   agentSessionKey?: string;
   corpus?: "memory" | "wiki" | "all" | "sessions";
+  /**
+   * Optional pass-through to supplements. When the engine has already
+   * run `manager.search` for this turn, forward those candidates so
+   * reranker/filter supplements can operate on them directly instead
+   * of issuing a redundant `manager.search` themselves.
+   */
+  engineCandidates?: MemorySearchResult[];
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
@@ -154,9 +162,21 @@ export async function searchMemoryCorpusSupplements(params: {
   if (supplements.length === 0) {
     return [];
   }
+  // Forward the full params (including engineCandidates when present)
+  // to each supplement. The supplement's typed param list accepts
+  // engineCandidates as an optional field, so existing supplements that
+  // ignore it keep working.
+  const supplementParams = {
+    query: params.query,
+    maxResults: params.maxResults,
+    agentSessionKey: params.agentSessionKey,
+    engineCandidates: params.engineCandidates,
+  };
   const results = (
     await Promise.all(
-      supplements.map(async (registration) => await registration.supplement.search(params)),
+      supplements.map(
+        async (registration) => await registration.supplement.search(supplementParams),
+      ),
     )
   ).flat();
   return results
