@@ -14,9 +14,11 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
@@ -80,7 +82,19 @@ type RunCodexAppServerAttemptOptions = NonNullable<
 >;
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return waitForDiagnosticEventsDrained();
+}
+
+function emitAsyncDiagnosticBacklog(count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: `backlog-run-${index}`,
+      callId: `backlog-call-${index}`,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  }
 }
 
 function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
@@ -2521,6 +2535,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("thread/start");
+    emitAsyncDiagnosticBacklog(150);
 
     const toolResult = (await harness.handleServerRequest({
       id: "request-echo-error-tool",

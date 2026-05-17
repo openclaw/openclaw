@@ -51,6 +51,7 @@ import {
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -2183,8 +2184,15 @@ export async function runCodexAppServerAttempt(
             },
           });
         }
-        await waitForDiagnosticEventDrain();
-        if (!terminalDiagnosticObserved) {
+        if (
+          !terminalDiagnosticObserved &&
+          !hasPendingDynamicToolTerminalDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          })
+        ) {
           emitDynamicToolTerminalDiagnostic({
             response,
             call,
@@ -2196,8 +2204,15 @@ export async function runCodexAppServerAttempt(
         }
         return protocolResponse as JsonValue;
       } catch (error) {
-        await waitForDiagnosticEventDrain();
-        if (!terminalDiagnosticObserved) {
+        if (
+          !terminalDiagnosticObserved &&
+          !hasPendingDynamicToolTerminalDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          })
+        ) {
           emitDynamicToolErrorDiagnostic({
             call,
             runId: params.runId,
@@ -2948,10 +2963,6 @@ function toCodexDynamicToolProtocolResponse(
   };
 }
 
-function waitForDiagnosticEventDrain(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 type TerminalToolExecutionDiagnostic = Extract<
   DiagnosticEventPayload,
   { type: "tool.execution.blocked" | "tool.execution.completed" | "tool.execution.error" }
@@ -2994,6 +3005,26 @@ function isMatchingDynamicToolTerminalDiagnostic(params: {
     params.event.sessionId === undefined &&
     params.event.sessionKey === undefined
   );
+}
+
+function hasPendingDynamicToolTerminalDiagnostic(params: {
+  call: CodexDynamicToolCallParams;
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): boolean {
+  return hasPendingInternalDiagnosticEvent((event) => {
+    if (!isDynamicToolTerminalDiagnosticEvent(event)) {
+      return false;
+    }
+    return isMatchingDynamicToolTerminalDiagnostic({
+      event,
+      call: params.call,
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
+  });
 }
 
 function resolveDynamicToolCallTimeoutMs(params: {
