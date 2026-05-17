@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
@@ -220,6 +221,7 @@ import {
   collectPromptCacheToolNames,
   beginPromptCacheObservation,
   completePromptCacheObservation,
+  type PromptCacheBreak,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
@@ -3240,10 +3242,10 @@ export async function runEmbeddedAttempt(
         },
         abort: abortRun,
       };
-      let lastAssistant: AgentMessage | undefined;
+      let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
-      let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
+      let cacheBreak: PromptCacheBreak | null = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
       let lastCallUsage: NormalizedUsage | undefined;
       let compactionOccurredThisAttempt = false;
@@ -3745,9 +3747,9 @@ export async function runEmbeddedAttempt(
               sessionManager: {
                 appendCustomEntry: async (customType, data) =>
                   await sessionLockController.withSessionWriteLock(() =>
-                    sessionManager.appendCustomEntry(customType, data),
+                    activeSessionManager.appendCustomEntry(customType, data),
                   ),
-                getEntries: () => sessionManager.getEntries(),
+                getEntries: () => activeSessionManager.getEntries(),
               },
               signal: runAbortController.signal,
               streamFn: activeSession.agent.streamFn,
@@ -4085,7 +4087,7 @@ export async function runEmbeddedAttempt(
           await sessionLockController.withSessionWriteLock(() => {
             removeTrailingMidTurnPrecheckAssistantError({
               activeSession,
-              sessionManager,
+              sessionManager: activeSessionManager,
             });
             if (!preflightRecovery && promptErrorSource !== "precheck") {
               promptError = null;
@@ -4166,7 +4168,7 @@ export async function runEmbeddedAttempt(
           // Also skip when compaction ran this attempt — appending a custom entry
           // after compaction would break the guard again. See: #28491
           appendAttemptCacheTtlIfNeeded({
-            sessionManager,
+            sessionManager: activeSessionManager,
             timedOutDuringCompaction,
             compactionOccurredThisAttempt,
             config: params.config,
@@ -4201,7 +4203,7 @@ export async function runEmbeddedAttempt(
           lastAssistant = messagesSnapshot
             .slice()
             .toReversed()
-            .find((m) => m.role === "assistant");
+            .find((message): message is AssistantMessage => message.role === "assistant");
           currentAttemptAssistant = findCurrentAttemptAssistantMessage({
             messagesSnapshot,
             prePromptMessageCount,
@@ -4231,7 +4233,7 @@ export async function runEmbeddedAttempt(
                   changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
                 }
               : undefined;
-          const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
+          const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(activeSessionManager, {
             provider: params.provider,
             modelId: params.modelId,
           });
@@ -4248,7 +4250,7 @@ export async function runEmbeddedAttempt(
 
           if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
             try {
-              sessionManager.appendCustomEntry("openclaw:prompt-error", {
+              activeSessionManager.appendCustomEntry("openclaw:prompt-error", {
                 timestamp: Date.now(),
                 runId: params.runId,
                 sessionId: params.sessionId,
@@ -4303,7 +4305,7 @@ export async function runEmbeddedAttempt(
                 config: params.config,
                 agentId: sessionAgentId,
               }),
-            sessionManager,
+            sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
           });
@@ -4321,7 +4323,7 @@ export async function runEmbeddedAttempt(
             })
           ) {
             try {
-              sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+              activeSessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
                 timestamp: Date.now(),
                 runId: params.runId,
                 sessionId: params.sessionId,
@@ -4342,7 +4344,7 @@ export async function runEmbeddedAttempt(
           ) {
             try {
               const rotation = await rotateTranscriptAfterCompaction({
-                sessionManager,
+                sessionManager: activeSessionManager,
                 sessionFile: params.sessionFile,
               });
               if (rotation.rotated) {
@@ -4432,20 +4434,22 @@ export async function runEmbeddedAttempt(
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
       if (cacheObservabilityEnabled) {
-        if (cacheBreak) {
+        const cacheBreakForLog = cacheBreak as PromptCacheBreak | null;
+        if (cacheBreakForLog) {
           const changeSummary =
-            cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-            "no tracked cache input change";
+            cacheBreakForLog.changes
+              ?.map((change) => `${change.code}(${change.detail})`)
+              .join(", ") ?? "no tracked cache input change";
           log.warn(
-            `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
+            `[prompt-cache] cache read dropped ${cacheBreakForLog.previousCacheRead} -> ${cacheBreakForLog.cacheRead} ` +
               `for ${params.provider}/${params.modelId} via ${streamStrategy}; ${changeSummary}`,
           );
           cacheTrace?.recordStage("cache:result", {
             options: {
-              previousCacheRead: cacheBreak.previousCacheRead,
-              cacheRead: cacheBreak.cacheRead,
+              previousCacheRead: cacheBreakForLog.previousCacheRead,
+              cacheRead: cacheBreakForLog.cacheRead,
               changes:
-                cacheBreak.changes?.map((change) => ({
+                cacheBreakForLog.changes?.map((change) => ({
                   code: change.code,
                   detail: change.detail,
                 })) ?? undefined,
