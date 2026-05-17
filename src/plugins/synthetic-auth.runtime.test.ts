@@ -135,6 +135,34 @@ describe("synthetic auth runtime refs", () => {
     expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
+  it("does not treat a provided index with registry diagnostics as validated synthetic auth", () => {
+    const index = {
+      plugins: [{ syntheticAuthRefs: ["local-provider"] }],
+    };
+
+    expect(
+      resolveRuntimeSyntheticAuthProviderRefs({
+        index,
+        registryDiagnostics: [{ code: "persisted-registry-missing" }],
+      }),
+    ).toStrictEqual([]);
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a provided index with registry diagnostics as validated external auth", () => {
+    const index = {
+      plugins: [{ syntheticAuthRefs: [] }],
+    };
+
+    expect(
+      resolveRuntimeExternalAuthProviderRefs({
+        index,
+        registryDiagnostics: [{ code: "persisted-registry-missing" }],
+      }),
+    ).toStrictEqual([]);
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+  });
+
   it("prefers the active runtime registry when plugins are already loaded", () => {
     getPluginRegistryState.mockReturnValue({
       activeRegistry: {
