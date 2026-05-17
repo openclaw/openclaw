@@ -60,7 +60,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 | DeepInfra   |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
 | Deepgram    |       |       |       |     |  ✓  |       ✓        |                     |
 | ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
-| fal         |   ✓   |   ✓   |       |     |     |                |                     |
+| fal         |   ✓   |   ✓   |   ✓   |     |     |                |                     |
 | Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
 | Gradium     |       |       |       |  ✓  |     |                |                     |
 | Local CLI   |       |       |       |  ✓  |     |                |                     |
@@ -68,7 +68,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral     |       |       |       |     |  ✓  |                |                     |
 | OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| OpenRouter  |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
 | Qwen        |       |   ✓   |       |     |     |                |                     |
 | Runway      |       |   ✓   |       |     |     |                |                     |
 | SenseAudio  |       |       |       |     |  ✓  |                |                     |

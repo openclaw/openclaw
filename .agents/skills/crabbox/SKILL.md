@@ -287,6 +287,13 @@ Use the smallest Crabbox lane that proves the reported user path, not just the
 touched code. Aim for one after-fix E2E proof before commenting, closing, or
 opening a PR for a user-visible bug.
 
+When the user says "test in Crabbox", do not simply copy tests to the remote
+box and run them there. Crabbox is for remote real-scenario proof: copy or
+install OpenClaw as the user would, run the same setup/update/CLI/Gateway/API
+call that failed, and capture behavior from that entrypoint. For regressions or
+bug reports, prove the broken state first when feasible, then run the same
+scenario after the fix.
+
 Pick the lane by symptom:
 
 - Docker/setup/install bug: build a package tarball and run the matching
@@ -308,8 +315,9 @@ Pick the lane by symptom:
 
 Efficient flow:
 
-1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
-   reproduced, capture the exact command and observed behavior instead.
+1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
+   when feasible. If the issue cannot be reproduced, capture the exact command
+   and observed behavior instead.
 2. Patch locally and run narrow local tests for edit speed.
 3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or

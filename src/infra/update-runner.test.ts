@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { pathExists } from "../utils.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -860,9 +861,8 @@ describe("runGatewayUpdate", () => {
     let preflightInstallAttempts = 0;
     let preflightIgnoreScriptsAttempts = 0;
     let finalInstallAttempts = 0;
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const runCommand = async (
         argv: string[],
         options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
@@ -965,9 +965,7 @@ describe("runGatewayUpdate", () => {
       expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
       expect(calls).toContain("pnpm install --ignore-scripts");
       expect(calls).not.toContain("pnpm lint");
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("does not fail a good windows dev preflight only because worktree cleanup hit long paths", async () => {
@@ -977,9 +975,8 @@ describe("runGatewayUpdate", () => {
     const upstreamSha = "upstream123";
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const runCommand = async (
         argv: string[],
         options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
@@ -1067,9 +1064,7 @@ describe("runGatewayUpdate", () => {
       expect(cleanupStep?.stderrTail ?? "").toContain(
         "windows fallback cleanup removed preflight tree",
       );
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("falls back when dev preflight worktree cleanup times out", async () => {
@@ -1915,7 +1910,6 @@ describe("runGatewayUpdate", () => {
   });
 
   it("prepends portable Git PATH for global Windows npm updates", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const localAppData = path.join(tempDir, "local-app-data");
     const portableGitMingw = path.join(
       localAppData,
@@ -1948,14 +1942,12 @@ describe("runGatewayUpdate", () => {
       },
     });
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
         const result = await runWithCommand(runCommand, { cwd: pkgRoot });
         expect(result.status).toBe("ok");
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
 
     const mergedPath = installEnv?.Path ?? installEnv?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
