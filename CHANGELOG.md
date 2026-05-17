@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: record native Codex tool calls and results into trajectory artifacts so debug/trajectory exports capture the full Codex-native tool history, not just OpenClaw-bridged turns. Thanks @vyctorbrzezowski.
 - Codex/app-server: keep bound conversation sessions on the owning agent runtime so native Codex control and follow-up turns do not fall back to the default agent client. Fixes #82954. (#82993)
 - CLI/infer: run gateway model probes in fresh explicit sessions so one-shot provider checks do not inherit default agent transcript state. (#82861) Thanks @Kaspre.
+- Providers/Together: send video-generation requests to Together's v2 video API even when shared text-model config still points at the v1 base URL. (#82992)
 - CLI/sessions: accept `openclaw sessions list` as an alias for `openclaw sessions`, matching other list-style commands. Fixes #81139. (#81163) Thanks @YB0y.
 - Channels/stream previews: widen compact progress draft lines and cut prose at word boundaries while preserving command/path suffixes, with `streaming.progress.maxLineChars` for channel-specific tuning.
 - CLI/plugins: have `openclaw plugins doctor` warn when a configured runtime needs a missing owner plugin, sharing the same install mapping as `openclaw doctor --fix`. Fixes #81326. (#81674) Thanks @Zavianx.
