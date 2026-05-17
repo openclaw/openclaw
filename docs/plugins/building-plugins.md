@@ -112,7 +112,7 @@ local proof.
 
   <Step title="Register the tool">
     ```typescript index.ts
-    import { Type } from "@sinclair/typebox";
+    import { Type } from "typebox";
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
     export default definePluginEntry({
