@@ -5,6 +5,7 @@ import {
 } from "../infra/outbound/session-binding-service.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type {
+  EmbeddedPiQueueFailureReason,
   EmbeddedPiQueueMessageOptions,
   EmbeddedPiQueueMessageOutcome,
 } from "./pi-embedded-runner/runs.js";
@@ -34,6 +35,17 @@ const slackThreadOrigin = {
 
 function createGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeCallGateway;
+}
+
+function createGatewaySequenceMock(
+  responses: Record<string, unknown>[],
+): ReturnType<typeof vi.fn> & typeof runtimeCallGateway {
+  let index = 0;
+  return vi.fn(async () => {
+    const response = responses[Math.min(index, responses.length - 1)] ?? {};
+    index += 1;
+    return response;
+  }) as unknown as ReturnType<typeof vi.fn> & typeof runtimeCallGateway;
 }
 
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
@@ -77,13 +89,13 @@ function createQueueOutcomeMock(
 }
 
 function createQueueOutcomeSequenceMock(
-  queuedOutcomes: boolean[],
+  queuedOutcomes: (boolean | EmbeddedPiQueueFailureReason)[],
 ): ReturnType<typeof vi.fn<QueueEmbeddedPiMessageWithOutcome>> {
   let index = 0;
   return vi.fn((sessionId: string) => {
-    const queued = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
+    const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
     index += 1;
-    return queued
+    return outcome === true
       ? {
           queued: true,
           sessionId,
@@ -93,7 +105,7 @@ function createQueueOutcomeSequenceMock(
       : {
           queued: false,
           sessionId,
-          reason: "not_streaming",
+          reason: typeof outcome === "string" ? outcome : "not_streaming",
           gatewayHealth: "live",
         };
   });
@@ -962,7 +974,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
+      error: "completion agent did not deliver through the message tool",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1177,14 +1189,31 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("steers thread completions when announce-agent returns no visible output", async () => {
-    const callGateway = createGatewayMock({
-      result: {
-        payloads: [],
+  it("forces message-tool thread completions after a stale requester run", async () => {
+    const callGateway = createGatewaySequenceMock([
+      {
+        result: {
+          payloads: [],
+        },
       },
-    });
+      {
+        result: {
+          payloads: [],
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "slack",
+              accountId: "acct-1",
+              to: "channel:C123",
+              threadId: "171.222",
+              text: "The background task completed.",
+            },
+          ],
+        },
+      },
+    ]);
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([false, true]);
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sendMessage,
@@ -1211,35 +1240,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectRecordFields(result, {
       delivered: true,
-      path: "steered",
+      path: "direct",
       phases: [
         {
           phase: "direct-primary",
-          delivered: false,
-          path: "direct",
-          error: "completion agent did not produce a visible reply",
-        },
-        {
-          phase: "steer-fallback",
           delivered: true,
-          path: "steered",
+          path: "direct",
           error: undefined,
         },
       ],
     });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      1,
-      "requester-session-4",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-      },
-    );
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+    });
+    expectRecordFields(mockCallArg(callGateway, 1).params, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "announce-thread-fallback-empty:message-tool",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-4",
       "child done",
       {
@@ -1868,14 +1897,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("steers channel completions when announce-agent returns no visible output", async () => {
-    const callGateway = createGatewayMock({
-      result: {
-        payloads: [],
+  it("forces message-tool channel completions after a stale requester run", async () => {
+    const callGateway = createGatewaySequenceMock([
+      {
+        result: {
+          payloads: [],
+        },
       },
-    });
+      {
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["The background task completed."],
+        },
+      },
+    ]);
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([false, true]);
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
@@ -1902,35 +1940,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectRecordFields(result, {
       delivered: true,
-      path: "steered",
+      path: "direct",
       phases: [
         {
           phase: "direct-primary",
-          delivered: false,
-          path: "direct",
-          error: "completion agent did not produce a visible reply",
-        },
-        {
-          phase: "steer-fallback",
           delivered: true,
-          path: "steered",
+          path: "direct",
           error: undefined,
         },
       ],
     });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      1,
-      "requester-session-channel",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-      },
-    );
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+    });
+    expectRecordFields(mockCallArg(callGateway, 1).params, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "announce-channel-fallback-empty:message-tool",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-channel",
       "child done",
       {

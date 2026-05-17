@@ -28,7 +28,10 @@ import {
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
 import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
-import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
+import type {
+  EmbeddedPiQueueFailureReason,
+  EmbeddedPiQueueMessageOutcome,
+} from "./pi-embedded-runner/runs.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -638,7 +641,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    let completionWakeFailureReason: EmbeddedPiQueueFailureReason | undefined;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -670,6 +673,7 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
+      completionWakeFailureReason = wakeOutcome.reason;
       const shouldFallbackToForcedAgentHandoff =
         requiresMessageToolDelivery && wakeOutcome.reason === "source_reply_delivery_mode_mismatch";
       if (requesterActivity.isActive && !shouldFallbackToForcedAgentHandoff) {
@@ -686,6 +690,7 @@ async function sendSubagentAnnounceDirectly(params: {
         };
       }
     }
+    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -758,7 +763,7 @@ async function sendSubagentAnnounceDirectly(params: {
     }
 
     if (
-      requiresMessageToolDelivery &&
+      completionSourceReplyDeliveryMode &&
       !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
     ) {
       return {
@@ -793,6 +798,40 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       !hasVisibleGatewayAgentPayload(directAnnounceResponse)
     ) {
+      if (completionWakeFailureReason === "no_active_run") {
+        const forcedMessageToolResponse = await runAnnounceDeliveryWithRetry({
+          operation: "completion message-tool announce agent call",
+          signal: params.signal,
+          run: async () =>
+            await runAnnounceAgentCall({
+              agentParams: {
+                ...directAgentParams,
+                deliver: false,
+                sourceReplyDeliveryMode: "message_tool_only",
+                idempotencyKey: `${params.directIdempotencyKey}:message-tool`,
+              },
+              expectFinal: true,
+              timeoutMs: announceTimeoutMs,
+            }),
+        });
+        if (isGatewayAgentRunPending(forcedMessageToolResponse)) {
+          return {
+            delivered: true,
+            path: "direct",
+          };
+        }
+        if (hasGatewayAgentMessagingToolDelivery(forcedMessageToolResponse)) {
+          return {
+            delivered: true,
+            path: "direct",
+          };
+        }
+        return {
+          delivered: false,
+          path: "direct",
+          error: "completion agent did not deliver through the message tool",
+        };
+      }
       return {
         delivered: false,
         path: "direct",
