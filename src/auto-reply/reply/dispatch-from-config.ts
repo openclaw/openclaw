@@ -1674,6 +1674,30 @@ export async function dispatchReplyFromConfig(
       });
     }
 
+    // When automatic source delivery is suppressed (message_tool_only mode) but
+    // usage footer is enabled, the footer is appended to final reply payloads that
+    // never get delivered.  Extract the usage line from the last suppressed reply
+    // and deliver it as a standalone final payload so forum-topic / group-chat
+    // users still see usage metadata.  sendPolicy deny still wins — this only
+    // fires for message-tool suppression.  (#83071)
+    if (suppressAutomaticSourceDelivery && !sendPolicyDenied && !attemptedFinalDelivery) {
+      for (let i = replies.length - 1; i >= 0; i -= 1) {
+        const text = replies[i]?.text;
+        if (!text) {
+          continue;
+        }
+        const usageLineIndex = text.lastIndexOf("\nUsage: ");
+        if (usageLineIndex === -1) {
+          continue;
+        }
+        const usageLine = text.slice(usageLineIndex + 1);
+        const usageReply = await sendFinalPayload({ text: usageLine });
+        queuedFinal = usageReply.queuedFinal || queuedFinal;
+        routedFinalCount += usageReply.routedFinalCount;
+        break;
+      }
+    }
+
     if (!suppressDelivery) {
       const ttsMode = resolveConfiguredTtsMode(cfg, {
         agentId: sessionAgentId,

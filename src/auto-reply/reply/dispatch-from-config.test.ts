@@ -4919,6 +4919,41 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
+  it("delivers usage footer as standalone message in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyWithFooter = {
+      text: "Here is my answer\nUsage: 1.2K in / 500 out · cache 800 cached / 200 new · est $0.02",
+    };
+    const replyResolver = vi.fn(async () => replyWithFooter satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    // The full reply is suppressed but the usage footer should be delivered.
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Usage: 1.2K in / 500 out · cache 800 cached / 200 new · est $0.02",
+      }),
+    );
+  });
+
   it("mirrors internal source reply payloads into the active transcript", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
