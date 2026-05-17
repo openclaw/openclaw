@@ -246,6 +246,30 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("explains the Telegram groups object-map shape when raw channel validation rejects it", () => {
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        telegram: {
+          groups: ["-1001234567890"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.telegram.groups",
+          message: expect.stringContaining(
+            "Telegram groups must be an object map keyed by Telegram group/chat id",
+          ),
+        }),
+      );
+      expect(result.issues[0]?.message).toContain("topics");
+      expect(result.issues[0]?.message).toContain("openclaw doctor --fix");
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {

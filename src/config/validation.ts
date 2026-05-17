@@ -85,6 +85,8 @@ function stripPreservedLegacyRootKeysForValidation(
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
+const TELEGRAM_GROUPS_SHAPE_HINT =
+  'Telegram groups must be an object map keyed by Telegram group/chat id, for example channels.telegram.groups."-1001234567890".topics."99" for forum topic routing. Do not use an array, string, or null for channels.telegram.groups; fix the shape, then rerun openclaw doctor --fix for any remaining Telegram config cleanup.';
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
     (entry) => [entry.channelId, entry.schema] as const,
@@ -225,6 +227,23 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
+function isTelegramGroupsConfigPath(path: string): boolean {
+  return (
+    path === "channels.telegram.groups" ||
+    /^channels\.telegram\.accounts\.[^.]+\.groups$/.test(path)
+  );
+}
+
+function appendTelegramGroupsShapeHint(path: string, message: string): string {
+  if (!isTelegramGroupsConfigPath(path) || message.includes(TELEGRAM_GROUPS_SHAPE_HINT)) {
+    return message;
+  }
+  return `${message}. ${TELEGRAM_GROUPS_SHAPE_HINT}`;
+}
+
+function formatRawChannelConfigIssueMessage(params: { path: string; message: string }): string {
+  return appendTelegramGroupsShapeHint(params.path, `invalid config: ${params.message}`);
+}
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -247,10 +266,11 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       const message = error.additionalProperty
         ? `${error.message}: "${error.additionalProperty}"`
         : error.message;
+      const path =
+        error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
-        path:
-          error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
-        message: `invalid config: ${message}`,
+        path,
+        message: formatRawChannelConfigIssueMessage({ path, message }),
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
       });
@@ -555,13 +575,14 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     }
   }
 
+  const messageWithShapeHint = appendTelegramGroupsShapeHint(path, message);
   if (!allowedValuesSummary) {
-    return { path, message };
+    return { path, message: messageWithShapeHint };
   }
 
   return {
     path,
-    message: appendAllowedValuesHint(message, allowedValuesSummary),
+    message: appendAllowedValuesHint(messageWithShapeHint, allowedValuesSummary),
     allowedValues: allowedValuesSummary.values,
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
   };
@@ -1316,10 +1337,11 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
+          const path =
+            error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
-            path:
-              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
-            message: `invalid config: ${error.message}`,
+            path,
+            message: formatRawChannelConfigIssueMessage({ path, message: error.message }),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
