@@ -3,6 +3,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import type {
   DreamingEntry,
+  WikiImportInsightCluster,
   WikiImportInsights,
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
@@ -514,6 +515,63 @@ function formatImportBadge(item: {
   return "unknown risk";
 }
 
+function formatCount(value: number, singular: string, plural = `${singular}s`): string {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function formatImportClusterSummary(cluster: WikiImportInsightCluster): string {
+  const parts = [cluster.label, formatCount(cluster.itemCount, "chat")];
+  if (cluster.highRiskCount > 0) {
+    parts.push(formatCount(cluster.highRiskCount, "sensitive", "sensitive"));
+  }
+  if (cluster.preferenceSignalCount > 0) {
+    parts.push(formatCount(cluster.preferenceSignalCount, "signal"));
+  }
+  return parts.join(" · ");
+}
+
+function focusImportClusterTab(index: number): void {
+  queueMicrotask(() => {
+    document.getElementById(`imported-insights-cluster-tab-${index}`)?.focus();
+  });
+}
+
+function selectImportCluster(index: number, props: DreamingProps): void {
+  setDiaryPage(index);
+  props.onRequestUpdate?.();
+}
+
+function handleImportClusterKeydown(
+  event: KeyboardEvent,
+  index: number,
+  count: number,
+  props: DreamingProps,
+): void {
+  let nextIndex: number | null = null;
+  switch (event.key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      nextIndex = (index + 1) % count;
+      break;
+    case "ArrowLeft":
+    case "ArrowUp":
+      nextIndex = (index - 1 + count) % count;
+      break;
+    case "Home":
+      nextIndex = 0;
+      break;
+    case "End":
+      nextIndex = count - 1;
+      break;
+    default:
+      return;
+  }
+
+  event.preventDefault();
+  selectImportCluster(nextIndex, props);
+  focusImportClusterTab(nextIndex);
+}
+
 function toggleExpandedCard(bucket: Set<string>, key: string, requestUpdate?: () => void): void {
   if (bucket.has(key)) {
     bucket.delete(key);
@@ -955,33 +1013,45 @@ function renderDiaryImportsSection(props: DreamingProps) {
   const cluster = clusters[clusterIndex];
 
   return html`
-    <div class="dreams-diary__daychips">
-      ${clusters.map(
-        (entry, index) => html`
-          <button
-            class="dreams-diary__day-chip ${index === clusterIndex
-              ? "dreams-diary__day-chip--active"
-              : ""}"
-            @click=${() => {
-              setDiaryPage(index);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${entry.label}
-          </button>
-        `,
-      )}
+    <div class="dreams-diary__cluster-nav">
+      <div class="dreams-diary__cluster-nav-label">Filter by cluster</div>
+      <div
+        class="dreams-diary__daychips dreams-diary__cluster-tabs"
+        role="tablist"
+        aria-label="Imported insight clusters"
+      >
+        ${clusters.map(
+          (entry, index) => html`
+            <button
+              id=${`imported-insights-cluster-tab-${index}`}
+              type="button"
+              role="tab"
+              aria-selected=${index === clusterIndex ? "true" : "false"}
+              aria-controls="imported-insights-cluster-panel"
+              tabindex=${index === clusterIndex ? "0" : "-1"}
+              class="dreams-diary__day-chip dreams-diary__cluster-tab ${index === clusterIndex
+                ? "dreams-diary__day-chip--active dreams-diary__cluster-tab--active"
+                : ""}"
+              @click=${() => selectImportCluster(index, props)}
+              @keydown=${(event: KeyboardEvent) =>
+                handleImportClusterKeydown(event, index, clusters.length, props)}
+            >
+              ${formatImportClusterSummary(entry)}
+            </button>
+          `,
+        )}
+      </div>
     </div>
 
-    <article class="dreams-diary__entry" key="imports-${cluster.key}">
+    <article
+      id="imported-insights-cluster-panel"
+      class="dreams-diary__entry"
+      key="imports-${cluster.key}"
+      role="tabpanel"
+      aria-labelledby=${`imported-insights-cluster-tab-${clusterIndex}`}
+    >
       <div class="dreams-diary__accent"></div>
-      <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} chats
-        ${cluster.highRiskCount > 0 ? html`· ${cluster.highRiskCount} sensitive` : nothing}
-        ${cluster.preferenceSignalCount > 0
-          ? html`· ${cluster.preferenceSignalCount} signals`
-          : nothing}
-      </div>
+      <div class="dreams-diary__date">${formatImportClusterSummary(cluster)}</div>
       <div class="dreams-diary__prose">
         <p class="dreams-diary__para">
           Imported chats clustered around ${cluster.label.toLowerCase()}.

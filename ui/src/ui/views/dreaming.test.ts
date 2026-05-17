@@ -6,6 +6,7 @@ import {
   renderDreaming,
   setDreamAdvancedWaitingSort,
   setDreamDiarySubTab,
+  setDiaryPage,
   setDreamSubTab,
   type DreamingProps,
 } from "./dreaming.ts";
@@ -310,8 +311,41 @@ describe("dreaming view", () => {
       { label: "Imported Insights", active: true },
       { label: "Memory Palace", active: false },
     ]);
+    expect(compactText(container.querySelector(".dreams-diary__cluster-nav-label"))).toBe(
+      "Filter by cluster",
+    );
+    const clusterTabs = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[role="tablist"][aria-label="Imported insight clusters"] [role="tab"]',
+      ),
+    ].map((tab) => ({
+      label: compactText(tab),
+      selected: tab.getAttribute("aria-selected"),
+      controls: tab.getAttribute("aria-controls"),
+      tabIndex: tab.tabIndex,
+      active: tab.classList.contains("dreams-diary__cluster-tab--active"),
+    }));
+    expect(clusterTabs).toEqual([
+      {
+        label: "Travel · 1 chat · 1 signal",
+        selected: "true",
+        controls: "imported-insights-cluster-panel",
+        tabIndex: 0,
+        active: true,
+      },
+      {
+        label: "Health · 1 chat · 1 sensitive",
+        selected: "false",
+        controls: "imported-insights-cluster-panel",
+        tabIndex: -1,
+        active: false,
+      },
+    ]);
+    expect(container.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
+      "imported-insights-cluster-tab-0",
+    );
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Travel · 1 chats · 1 signals",
+      "Travel · 1 chat · 1 signal",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
@@ -325,6 +359,57 @@ describe("dreaming view", () => {
     );
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
+  });
+
+  it("supports keyboard navigation between imported insight cluster tabs", async () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("insights");
+    setDiaryPage(0);
+    const container = document.createElement("div");
+    document.body.append(container);
+    let props: DreamingProps;
+    const rerender = () => render(renderDreaming(props), container);
+    props = buildProps({ onRequestUpdate: rerender });
+    try {
+      rerender();
+
+      const firstTab = container.querySelector<HTMLButtonElement>(
+        "#imported-insights-cluster-tab-0",
+      );
+      expect(firstTab).toBeInstanceOf(HTMLButtonElement);
+      if (!(firstTab instanceof HTMLButtonElement)) {
+        throw new Error("Expected first imported insights cluster tab");
+      }
+
+      firstTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      await Promise.resolve();
+
+      const tabs = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="tablist"][aria-label="Imported insight clusters"] [role="tab"]',
+        ),
+      ].map((tab) => ({
+        id: tab.id,
+        selected: tab.getAttribute("aria-selected"),
+        tabIndex: tab.tabIndex,
+      }));
+      expect(tabs).toEqual([
+        { id: "imported-insights-cluster-tab-0", selected: "false", tabIndex: -1 },
+        { id: "imported-insights-cluster-tab-1", selected: "true", tabIndex: 0 },
+      ]);
+      expect(container.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
+        "imported-insights-cluster-tab-1",
+      );
+      expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
+        "Health · 1 chat · 1 sensitive",
+      );
+      expect(document.activeElement?.id).toBe("imported-insights-cluster-tab-1");
+    } finally {
+      setDiaryPage(0);
+      setDreamDiarySubTab("dreams");
+      setDreamSubTab("scene");
+      container.remove();
+    }
   });
 
   it("opens the full imported source page from diary cards", async () => {
