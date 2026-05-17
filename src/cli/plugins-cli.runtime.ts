@@ -95,6 +95,7 @@ function collectConfiguredRuntimePluginWarnings(params: {
   );
   return collectConfiguredAgentHarnessRuntimes(params.cfg, params.env, {
     includeEnvRuntime: false,
+    includeImplicitRuntimePreferences: false,
     includeLegacyAgentRuntimes: false,
   }).flatMap((runtimeId) => {
     const candidate = resolveConfiguredRuntimePluginInstallCandidate(runtimeId);

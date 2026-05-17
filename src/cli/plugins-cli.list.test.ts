@@ -184,6 +184,27 @@ describe("plugins cli list", () => {
     expect(output).not.toContain("No plugin issues detected.");
   });
 
+  it("does not report implicit OpenAI Codex preference as configured runtime", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).not.toContain('Configured agentRuntime.id="codex"');
+    expect(output).toContain("No plugin issues detected.");
+  });
+
   it("does not report configured Codex runtime when the plugin is enabled", async () => {
     const sourceConfig = {
       agents: {
