@@ -11,8 +11,8 @@ import {
 import { getPath, setPathExistingStrict } from "./path-utils.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
+import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
-import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
