@@ -714,6 +714,37 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBeUndefined();
   });
 
+  it("does not mark identity-linked Telegram DMs as target-timeline sharing when canonical equals the sender", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {
+        session: {
+          identityLinks: {
+            "200": ["telegram:201"],
+          },
+        },
+      },
+      accountId: "personal",
+    });
+    await handler(createTelegramPrivateCommandContext({ userId: 200 }));
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              CommandTargetSharesMessageTimeline?: boolean;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
+      "agent:main:telegram:personal:direct:200",
+    );
+    expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBeUndefined();
+  });
+
   it("uses the target session model when building native argument menus", async () => {
     const cfg = {
       agents: {

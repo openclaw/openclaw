@@ -123,6 +123,7 @@ function telegramCommandTargetSharesMessageTimeline(params: {
   commandTargetSessionKey: string;
   mainSessionKey: string;
   directPeerId?: string | number | null;
+  identityLinks?: Record<string, string[]>;
 }): boolean {
   const targetSessionKey = normalizeLowercaseStringOrEmpty(params.commandTargetSessionKey);
   if (
@@ -143,7 +144,50 @@ function telegramCommandTargetSharesMessageTimeline(params: {
     return false;
   }
   const accountScopedDirect = /^telegram:[^:]+:direct:([^:]+)(?::|$)/.exec(rest);
-  return normalizeLowercaseStringOrEmpty(accountScopedDirect?.[1]) === directPeerId;
+  const targetPeerId = normalizeLowercaseStringOrEmpty(accountScopedDirect?.[1]);
+  if (!targetPeerId || targetPeerId !== directPeerId) {
+    return false;
+  }
+  return !telegramIdentityLinksIncludeDirectPeer({
+    identityLinks: params.identityLinks,
+    directPeerId,
+    targetPeerId,
+  });
+}
+
+function telegramIdentityLinksIncludeDirectPeer(params: {
+  identityLinks?: Record<string, string[]>;
+  directPeerId: string;
+  targetPeerId: string;
+}): boolean {
+  const identityLinks = params.identityLinks;
+  if (!identityLinks) {
+    return false;
+  }
+  const candidates = new Set(
+    [
+      params.directPeerId,
+      params.targetPeerId,
+      `telegram:${params.directPeerId}`,
+      `telegram:${params.targetPeerId}`,
+    ]
+      .map((value) => normalizeLowercaseStringOrEmpty(value))
+      .filter(Boolean),
+  );
+  for (const [canonical, ids] of Object.entries(identityLinks)) {
+    if (candidates.has(normalizeLowercaseStringOrEmpty(canonical))) {
+      return true;
+    }
+    if (!Array.isArray(ids)) {
+      continue;
+    }
+    for (const id of ids) {
+      if (candidates.has(normalizeLowercaseStringOrEmpty(id))) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 type TelegramCommandAuthResult = {
@@ -1169,6 +1213,7 @@ export const registerTelegramNativeCommands = ({
           commandTargetSessionKey,
           mainSessionKey: route.mainSessionKey,
           directPeerId: isGroup ? undefined : resolveTelegramDirectPeerId({ chatId, senderId }),
+          identityLinks: executionCfg.session?.identityLinks,
         });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: executionCfg,

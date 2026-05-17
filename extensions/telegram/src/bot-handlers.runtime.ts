@@ -13,10 +13,8 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
-import {
-  hasControlCommand,
-  isControlCommandMessage,
-} from "openclaw/plugin-sdk/command-detection";
+import { hasControlCommand, isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -1542,6 +1540,7 @@ export const registerTelegramHandlers = ({
     const messageText = getTelegramTextParts(msg).text;
     const botUsername = ctx.me?.username;
     const isControlMessage = isControlCommandMessage(messageText, cfg, { botUsername });
+    const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
@@ -1610,7 +1609,7 @@ export const registerTelegramHandlers = ({
         scheduleTextFragmentFlush(entry);
         return;
       }
-    } else if (text && isControlMessage) {
+    } else if (text && isAbortControlMessage) {
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
       const threadId = resolvedThreadId ?? dmThreadId;
       const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
@@ -1760,7 +1759,7 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
-    if (isControlMessage && debounceKey) {
+    if (isAbortControlMessage && debounceKey) {
       inboundDebouncer.cancelKey(debounceKey);
     }
     await inboundDebouncer.enqueue({
