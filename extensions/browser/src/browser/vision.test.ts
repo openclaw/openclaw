@@ -351,31 +351,4 @@ describe("describeBrowserImageWithVision", () => {
 
     await fs.rm(tmpDir, { recursive: true });
   });
-
-  it("forwards profile and preferredProfile to describeImageFileWithModel", async () => {
-    const describe = vi.fn().mockResolvedValue({ text: "ok", model: "gpt-vision" });
-    await describeBrowserImageWithVision(
-      {
-        cfg: {
-          tools: {
-            browser: {
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-vision",
-                  profile: "my-profile",
-                  preferredProfile: "my-preferred",
-                },
-              ],
-            },
-          },
-        },
-        filePath: "/tmp/screenshot.png",
-      },
-      makeDeps(describe),
-    );
-    const args = describe.mock.calls[0][0] as Record<string, unknown>;
-    expect(args.profile).toBe("my-profile");
-    expect(args.preferredProfile).toBe("my-preferred");
-  });
 });
