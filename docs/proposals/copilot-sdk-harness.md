@@ -88,43 +88,69 @@ A single track:
 
 ### 3.3 Module layout
 
+We follow the existing **extension-harness pattern** established by
+`extensions/codex/` (which adds `@openai/codex@0.130.0` as the Codex
+harness without modifying any core file beyond a published plugin SDK
+seam). The Copilot SDK harness lives as a workspace extension package
+auto-discovered via the existing `extensions/*` glob in
+`pnpm-workspace.yaml`. The upstream SDK is declared as the extension's
+own dependency, **not** as a root `package.json` dependency.
+
 ```
-src/agents/copilot-sdk-runtime/
-  runtime.ts          # Pooled CopilotClient per copilotHome. Lifecycle.
-  attempt.ts          # runCopilotSdkAttempt(params): EmbeddedRunAttemptResult
-  event-bridge.ts     # Session events -> AssistantMessage / AgentMessage
-  tool-bridge.ts      # OpenClaw tools -> SDK Tool[] + onPermissionRequest
-  permission-bridge.ts# Copied tool-policy logic + back-pointer comment to PI source
-  user-input-bridge.ts# onUserInputRequest -> channel/TUI prompts
-  hooks-bridge.ts     # SDK SessionHooks -> harness lifecycle hooks
-  auth-bridge.ts      # AuthProfileStore -> {gitHubToken | useLoggedInUser, copilotHome}
-  usage-bridge.ts     # SDK signals -> NormalizedUsage
-  compaction.ts       # harness.compact via infiniteSessions + workspace marker
-  side-question.ts    # harness.runSideQuestion via transient session
-  reset.ts            # harness.reset via deleteSession
-  provider-mapping/   # Optional BYOK adapters per provider (added on demand)
-  *.test.ts           # Per-bridge focused unit tests with injected fakes
-  attempt.live.e2e.test.ts   # OPENCLAW_LIVE_TEST=1 only
+extensions/copilot-sdk/
+  package.json            # private; dependencies: { "@github/copilot-sdk": "1.0.0-beta.4" };
+                          # devDependencies: { "@openclaw/plugin-sdk": "workspace:*" }
+  openclaw.plugin.json    # manifest; onAgentHarnesses: ["copilot-sdk"]
+  index.ts                # init(api) { api.registerAgentHarness(createCopilotSdkAgentHarness(...)) }
+  harness.ts              # createCopilotSdkAgentHarness(): AgentHarness
+                          # (mirrors extensions/codex/harness.ts shape and exports)
+  src/
+    runtime.ts            # Pooled CopilotClient per copilotHome (per-agent pool; Q5)
+    attempt.ts            # runCopilotSdkAttempt(params): EmbeddedRunAttemptResult
+    event-bridge.ts       # SDK session events -> AssistantMessage / AgentMessage
+    tool-bridge.ts        # OpenClaw tools -> SDK Tool[] + onPermissionRequest
+    permission-bridge.ts  # Copied tool-policy logic + back-pointer to PI source (Q4)
+    user-input-bridge.ts  # onUserInputRequest -> channel/TUI prompts
+    hooks-bridge.ts       # SDK SessionHooks -> harness lifecycle hooks
+    auth-bridge.ts        # AuthProfileStore -> { gitHubToken | useLoggedInUser, copilotHome }
+    usage-bridge.ts       # SDK signals -> NormalizedUsage
+    compaction.ts         # harness.compact via infiniteSessions + workspace marker
+    side-question.ts      # harness.runSideQuestion via transient session
+    reset.ts              # harness.reset via deleteSession
+    provider-mapping/     # BYOK adapters (skeleton only at MVP; Q2)
+    *.test.ts             # Per-bridge focused unit tests with injected fakes
+    attempt.live.e2e.test.ts   # OPENCLAW_LIVE_TEST=1 only
 
 src/agents/harness/
-  builtin-copilot-sdk.ts    # createCopilotSdkAgentHarness(): AgentHarness
-  policy.ts                 # runtime enum extended with "copilot-sdk"
+  policy.ts               # runtime enum widened with "copilot-sdk" (the ONLY core touch)
 
-src/plugins/builtin/
-  copilot-sdk-harness.ts    # registerAgentHarness(...) on bootstrap
+src/cli/
+  <existing command-catalog plumbing>  # --harness copilot-sdk via the existing
+                                       # agentHarnessId -> selectAgentHarness() path
 ```
 
-Nothing in `src/agents/pi-embedded-runner/`, `src/agents/pi-hooks/`, `src/agents/pi-embedded-helpers/`, or `src/types/pi-*.d.ts` is touched.
+The harness type, registration, and helpers are all imported from
+`openclaw/plugin-sdk/agent-harness-runtime` (the same published subpath
+barrel `extensions/codex/harness.ts` uses). No new core helpers, no new
+`src/plugins/builtin/copilot-sdk-harness.ts`, no `src/agents/harness/
+builtin-copilot-sdk.ts` — `extensions/copilot-sdk/index.ts` calls
+`api.registerAgentHarness(...)` on bootstrap.
 
-- Phase 0 spike workspace: `apps/copilot-sdk-spike/` (in repo at `qa/copilot-sdk-spike/`; see implementation note).
-  - Implementation note: spike lives at `qa/copilot-sdk-spike/` because `apps/**` triggers an unrelated CI lane. Deliverable intent unchanged: excluded from build/dist, standalone workspace.
+Nothing in `src/agents/pi-embedded-runner/`, `src/agents/pi-hooks/`,
+`src/agents/pi-embedded-helpers/`, `src/agents/pi-tools.before-tool-call.ts`,
+`src/agents/harness/builtin-pi.ts`, or `src/types/pi-*.d.ts` is touched.
+Root `package.json` and `pnpm-workspace.yaml` are unchanged; only the
+root `pnpm-lock.yaml` updates to include the new workspace package's
+resolutions (standard lockfile churn when a workspace package is added).
+
+- Phase 0 spike workspace: `qa/copilot-sdk-spike/` (see implementation note in §3.7).
 
 ### 3.4 Tool-policy duplication is intentional
 
 We do **not** extract a shared `before-tool-call.ts`. Per answered open
 question Q4, the Copilot SDK harness copies the runtime-neutral tool-policy
 logic from `src/agents/pi-tools.before-tool-call.ts` into
-`src/agents/copilot-sdk-runtime/permission-bridge.ts` with a top-of-file
+`extensions/copilot-sdk/src/permission-bridge.ts` with a top-of-file
 back-pointer comment to the PI source. PI source is untouched; no shim, no
 maintainer-PI coupling, no owner sign-off required to land the new harness.
 
@@ -222,15 +248,15 @@ Each item is sized for one PR. IDs match the SQL todo table.
 
 1. `sdk-capability-doc` — `qa/copilot-sdk-capabilities.md` from `.d.ts` + Cookbook.
 2. `spike-app` — `qa/copilot-sdk-spike/`, excluded from build.
-3. `add-sdk-dep` — add `@github/copilot-sdk` to root `package.json`; `pnpm install`; confirm bundled CLI.
-4. `runtime-pool` — `src/agents/copilot-sdk-runtime/runtime.ts` pooled `CopilotClient` per `copilotHome`.
-5. `attempt-bridge` — `attempt.ts` implementing `runCopilotSdkAttempt`.
+3. `add-sdk-dep` — scaffold `extensions/copilot-sdk/` workspace package (mirroring `extensions/codex/`): `package.json` declaring `@github/copilot-sdk@1.0.0-beta.4` as the extension's own dep plus `@openclaw/plugin-sdk: workspace:*`; minimal `openclaw.plugin.json`; placeholder `index.ts`. Root `package.json` and `pnpm-workspace.yaml` UNCHANGED; root `pnpm-lock.yaml` updates with the new workspace package's resolutions.
+4. `runtime-pool` — `extensions/copilot-sdk/src/runtime.ts` pooled `CopilotClient` per `copilotHome`.
+5. `attempt-bridge` — `extensions/copilot-sdk/src/attempt.ts` implementing `runCopilotSdkAttempt`.
 6. `event-bridge` — translate session events to OpenClaw assistant/agent messages.
 7. `tool-bridge` — translate OpenClaw tools to SDK `Tool[]`; route through permission bridge.
 8. `usage-bridge` — fill `NormalizedUsage` from SDK signals; mark unavailable fields undefined.
-9. `harness-shim` — `src/agents/harness/builtin-copilot-sdk.ts` (`id: "copilot-sdk"`).
-10. `plugin-register` — `src/plugins/builtin/copilot-sdk-harness.ts` registering on bootstrap.
-11. `policy-runtime-enum` — extend `policy.ts` runtime enum and config schema.
+9. `harness-shim` — `extensions/copilot-sdk/harness.ts` exporting `createCopilotSdkAgentHarness(): AgentHarness` (mirrors `extensions/codex/harness.ts`).
+10. `plugin-register` — `extensions/copilot-sdk/index.ts` `init(api)` calling `api.registerAgentHarness(createCopilotSdkAgentHarness(...))`; manifest at `extensions/copilot-sdk/openclaw.plugin.json` with `onAgentHarnesses: ["copilot-sdk"]`.
+11. `policy-runtime-enum` — extend `src/agents/harness/policy.ts` runtime enum and config schema. **Only core file touched.**
 12. `cli-flag` — `openclaw agent --harness copilot-sdk` plumbing.
 13. `unit-tests-mvp` — focused tests per bridge with injected SDK fakes.
 14. `live-smoke` — `attempt.live.e2e.test.ts` under `OPENCLAW_LIVE_TEST=1`.
