@@ -863,8 +863,10 @@ export async function startGatewayPostAttachRuntime(
         );
 
   let pluginServicesReported = false;
+  let reportedPluginServices: PluginServicesHandle | null = null;
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
     pluginServicesReported = true;
+    reportedPluginServices = pluginServices;
     params.onPluginServices?.(pluginServices);
   };
 
@@ -978,7 +980,7 @@ export async function startGatewayPostAttachRuntime(
     tailscaleCleanupPromise,
   ]);
 
-  return { stopGatewayUpdateCheck, tailscaleCleanup, pluginServices: null };
+  return { stopGatewayUpdateCheck, tailscaleCleanup, pluginServices: reportedPluginServices };
 }
 
 export const __testing = {

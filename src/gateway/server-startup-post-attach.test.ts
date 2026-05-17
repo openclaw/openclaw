@@ -886,6 +886,65 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("returns plugin services already reported by deferred sidecars", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        let releaseStartupLog: (() => void) | undefined;
+        let releaseChannels: (() => void) | undefined;
+        const pluginServices = { stop: vi.fn(async () => {}) } as never;
+        const onPluginServices = vi.fn();
+        const onSidecarsReady = vi.fn();
+        const logGatewayStartup = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseStartupLog = resolve;
+            }),
+        );
+        const startChannels = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseChannels = resolve;
+            }),
+        );
+        hoisted.startPluginServices.mockResolvedValueOnce(pluginServices);
+
+        const runtimePromise = startGatewayPostAttachRuntime(
+          {
+            ...createPostAttachParams({
+              deferSidecars: true,
+              onPluginServices,
+              onSidecarsReady,
+            }),
+            startChannels,
+          },
+          createPostAttachRuntimeDeps({
+            logGatewayStartup,
+            startGatewaySidecars,
+          }),
+        );
+
+        await vi.waitFor(() => {
+          expect(onPluginServices).toHaveBeenCalledWith(pluginServices);
+        });
+
+        if (!releaseStartupLog) {
+          throw new Error("Expected startup log release callback to be initialized");
+        }
+        releaseStartupLog();
+        await expect(runtimePromise).resolves.toMatchObject({ pluginServices });
+
+        if (!releaseChannels) {
+          throw new Error("Expected channel startup release callback to be initialized");
+        }
+        releaseChannels();
+        await vi.waitFor(() => {
+          expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+        });
+      },
+    );
+  });
+
   it("emits a startup trace span when channel startup is skipped", async () => {
     const trace = createStartupTraceRecorder();
     const logChannels = { info: vi.fn(), error: vi.fn() };
