@@ -303,6 +303,7 @@ final class ChannelsStore {
 
     let interval: TimeInterval = 45
     let isPreview: Bool
+    var startCount = 0
     var pollTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
