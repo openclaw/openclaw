@@ -132,6 +132,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain('eventName === "pull_request_target"');
     expect(workflowText).toContain("context.payload.pull_request?.number");
     expect(workflowText).toContain("Accepted Mantis label trigger");
+    expect(workflowText).toContain("allow-bot-users: clawsweeper[bot]");
   });
 
   it("can publish an existing proof artifact without recapturing", () => {
