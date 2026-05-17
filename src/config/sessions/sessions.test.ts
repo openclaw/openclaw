@@ -16,7 +16,12 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+  updateSessionStore,
+} from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
@@ -655,6 +660,53 @@ describe("session store writer queue", () => {
     expect(store[key]?.acp).toEqual(acp);
     expect(store[key]?.modelProvider).toBe("openai-codex");
     expect(store[key]?.model).toBe("gpt-5.4");
+  });
+
+  it("preserves caller-provided ACP metadata on direct session-store saves", async () => {
+    const key = "agent:codex:acp:direct-save";
+    const initialAcp: NonNullable<SessionEntry["acp"]> = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex-direct-initial",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 100,
+    };
+    const updatedAcp: NonNullable<SessionEntry["acp"]> = {
+      ...initialAcp,
+      runtimeSessionName: "codex-direct-updated",
+      state: "running",
+      lastActivityAt: 200,
+    };
+    const now = Date.now();
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-direct-save",
+        updatedAt: now,
+      },
+    });
+
+    await saveSessionStore(storePath, {
+      [key]: {
+        sessionId: "sess-acp-direct-save",
+        updatedAt: now,
+        acp: initialAcp,
+      },
+    });
+
+    let store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.acp).toEqual(initialAcp);
+
+    await saveSessionStore(storePath, {
+      [key]: {
+        sessionId: "sess-acp-direct-save",
+        updatedAt: now,
+        acp: updatedAcp,
+      },
+    });
+
+    store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.acp).toEqual(updatedAcp);
   });
 
   it("preserves ACP metadata already written on disk during a stale session-store update", async () => {

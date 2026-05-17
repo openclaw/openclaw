@@ -445,12 +445,12 @@ async function saveSessionStoreUnlocked(
     opts ?? {},
     "refreshAcpMetadataIfFileChangedSince",
   );
-  const shouldRefreshAcpMetadataFromDisk = hasRefreshBaseline
-    ? hasSessionStoreFileStatChanged(
-        opts?.refreshAcpMetadataIfFileChangedSince ?? null,
-        getFileStatSnapshot(storePath),
-      )
-    : true;
+  const shouldRefreshAcpMetadataFromDisk =
+    hasRefreshBaseline &&
+    hasSessionStoreFileStatChanged(
+      opts?.refreshAcpMetadataIfFileChangedSince ?? null,
+      getFileStatSnapshot(storePath),
+    );
   const freshAcpSnapshot = shouldRefreshAcpMetadataFromDisk
     ? collectFreshAcpMetadataSnapshot(storePath)
     : { ok: false as const };
@@ -460,9 +460,9 @@ async function saveSessionStoreUnlocked(
       nextStore: store,
       allowDrop: allowDropAcp,
     });
-  } else {
+  } else if (opts?.preserveAcpMetadataFallback) {
     preserveExistingAcpMetadata({
-      previousAcpByKey: opts?.preserveAcpMetadataFallback ?? new Map(),
+      previousAcpByKey: opts.preserveAcpMetadataFallback,
       nextStore: store,
       allowDrop: allowDropAcp,
     });
