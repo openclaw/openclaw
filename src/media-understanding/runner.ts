@@ -244,6 +244,9 @@ async function resolveAutoImageModelId(params: {
       return explicit;
     }
   }
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return "MiniMax-VL-01";
+  }
   const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
     return configuredModel;

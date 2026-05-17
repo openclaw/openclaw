@@ -487,6 +487,65 @@ describe("runCapability image skip", () => {
     }
   });
 
+  it("keeps MiniMax auto routing on VLM when registry lacks a default model", async () => {
+    let seenModel: string | undefined;
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-minimax-vlm-default",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              minimax: {
+                apiKey: "test-minimax-key",
+                models: [
+                  {
+                    id: "MiniMax-M2.5",
+                    input: ["text", "image"],
+                  },
+                ],
+              },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "minimax",
+              {
+                id: "minimax",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  seenModel = req.model;
+                  return { text: "vlm ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenModel).toBe("MiniMax-VL-01");
+        expect(requireCapabilityOutput(result, 0)).toMatchObject({
+          provider: "minimax",
+          model: "MiniMax-VL-01",
+          text: "vlm ok",
+        });
+      },
+    );
+  });
+
   it("keeps non-MiniMax media aliases canonical for image execution", async () => {
     const seenProviders: string[] = [];
     const cfg = {
