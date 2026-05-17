@@ -2818,18 +2818,22 @@ function injectToolCallThoughtSignatures(
       if (typeof id !== "string") {
         continue;
       }
-      const sig = sigById.get(id) ?? fallbackSig;
-      // Same truncation guard as extensions/google/transport-stream.ts
-      // sanitizeGeminiToolCallThoughtSignature(): reject only concrete
-      // truncation footprints, not opaque-shape signatures.
+      let sig: string | undefined = sigById.get(id) ?? fallbackSig;
+      // Reject only concrete compaction-truncation footprints. If the captured
+      // same-route signature is truncated, fall back to `fallbackSig` so the
+      // Gemini 3 skip-validator contract (skip_thought_signature_validator) is
+      // preserved instead of emitting an unsigned function-call replay.
+      // Opaque-shape signatures (containing -, _, ~, .) pass through unchanged.
+      if (typeof sig === "string" && sig.length > 0) {
+        const trimmed = sig.trim();
+        const isTruncated =
+          /[\u2026]|\.\.\./.test(trimmed) ||
+          (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 !== 0);
+        if (isTruncated) {
+          sig = fallbackSig;
+        }
+      }
       if (typeof sig !== "string" || sig.length === 0) {
-        continue;
-      }
-      const trimmed = sig.trim();
-      if (/[…]|\.\.\./.test(trimmed)) {
-        continue;
-      }
-      if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 !== 0) {
         continue;
       }
       const extra =
