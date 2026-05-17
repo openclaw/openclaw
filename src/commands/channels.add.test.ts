@@ -522,6 +522,27 @@ describe("channelsAddCommand", () => {
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
   });
 
+  it("uses the active setup plugin before scanning catalog entries", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      { channel: "lifecycle-chat", account: "ops", token: "tenant-scoped" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(catalogMocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(writtenChannel("lifecycle-chat")).toEqual({
+      enabled: true,
+      accounts: {
+        ops: {
+          token: "tenant-scoped",
+        },
+      },
+    });
+  });
+
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
     const applyAccountConfig = vi.fn(({ cfg, input }) => ({
       ...cfg,
