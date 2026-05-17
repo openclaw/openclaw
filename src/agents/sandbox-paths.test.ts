@@ -4,7 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resolveAllowedManagedMediaPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
+import {
+  resolveAllowedManagedMediaPath,
+  resolveSandboxedMediaSource,
+  resolveSandboxPath,
+} from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
@@ -432,5 +436,49 @@ describe("resolveSandboxedMediaSource", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+});
+
+describe("resolveSandboxPath tilde-root handling (#83007)", () => {
+  it("treats a `~/`-prefixed root the same as the expanded absolute root", () => {
+    const homedir = os.homedir();
+    const fileAbsolute = path.join(homedir, ".openclaw", "workspace", "BOOTSTRAP.md");
+    const cwd = path.join(homedir, ".openclaw", "workspace");
+
+    const tildeRoot = resolveSandboxPath({
+      filePath: fileAbsolute,
+      cwd,
+      root: "~/.openclaw/workspace",
+    });
+    const absoluteRoot = resolveSandboxPath({
+      filePath: fileAbsolute,
+      cwd,
+      root: path.join(homedir, ".openclaw", "workspace"),
+    });
+
+    expect(tildeRoot.resolved).toBe(absoluteRoot.resolved);
+    expect(tildeRoot.relative).toBe(absoluteRoot.relative);
+    expect(tildeRoot.relative).toBe("BOOTSTRAP.md");
+  });
+
+  it("still rejects paths that genuinely escape a `~/`-prefixed root", () => {
+    const homedir = os.homedir();
+    expect(() =>
+      resolveSandboxPath({
+        filePath: path.join(homedir, ".ssh", "id_rsa"),
+        cwd: path.join(homedir, ".openclaw", "workspace"),
+        root: "~/.openclaw/workspace",
+      }),
+    ).toThrow(/Path escapes sandbox root/);
+  });
+
+  it("accepts a bare `~` root", () => {
+    const homedir = os.homedir();
+    const result = resolveSandboxPath({
+      filePath: path.join(homedir, "AGENTS.md"),
+      cwd: homedir,
+      root: "~",
+    });
+    expect(result.relative).toBe("AGENTS.md");
   });
 });

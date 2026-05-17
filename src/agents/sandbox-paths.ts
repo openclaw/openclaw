@@ -63,7 +63,16 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   relative: string;
 } {
   const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
-  const rootResolved = path.resolve(params.root);
+  // #83007: `params.root` can arrive with a literal `~/` prefix on some code
+  // paths (config-derived workspace roots in particular). `path.resolve("~/x")`
+  // on POSIX treats `~` as a regular directory name (resolving to
+  // `<cwd>/~/x`), so the relative compare below then reports the target as
+  // "Path escapes sandbox root" even when the file is provably inside the
+  // resolved sandbox root. Expand the leading `~/` (and bare `~`) the same
+  // way the user-supplied `filePath` is already expanded via
+  // `resolveSandboxInputPath` → `resolveToCwd` → `expandPath`. Absolute and
+  // non-tilde roots pass through unchanged.
+  const rootResolved = path.resolve(expandPath(params.root));
   const relative = path.relative(rootResolved, resolved);
   if (!relative || relative === "") {
     return { resolved, relative: "" };
