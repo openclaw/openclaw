@@ -250,9 +250,9 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
   <Step title="Allow responses without @mention">
     By default, your agent only responds in guild channels when @mentioned. For a private server, you probably want it to respond to every message.
 
-    In guild channels, visible Discord output should use the `message` tool by default, so the agent can lurk and only post when it decides a channel reply is useful. For normal requests, OpenClaw falls back to the assistant's final text when the model misses the tool; ambient room events stay quiet unless the tool sends.
+    In guild channels, visible Discord output should use the `message` tool by default, so the agent can lurk and only post when it decides a channel reply is useful. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
 
-    This means the selected model should reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or use the config below to restore legacy automatic final replies.
+    This means the selected model should reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or use the config below to restore legacy automatic final replies for normal group requests.
 
     <Tabs>
       <Tab title="Ask your agent">
