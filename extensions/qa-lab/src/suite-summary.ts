@@ -23,6 +23,13 @@ export type QaSuiteSummaryJson = {
     gatewayProcessRssStartBytes?: number | null;
     gatewayProcessRssEndBytes?: number | null;
     gatewayProcessRssDeltaBytes?: number | null;
+    gatewayProcessRssPeakBytes?: number | null;
+    gatewayProcessRssPeakDeltaBytes?: number | null;
+    gatewayProcessRssSamples?: Array<{
+      label: string;
+      at: string;
+      gatewayProcessRssBytes: number;
+    }>;
   };
   run: {
     startedAt: string;

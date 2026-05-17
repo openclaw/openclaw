@@ -156,6 +156,20 @@ describe("buildQaSuiteSummaryJson", () => {
         gatewayProcessRssStartBytes: 100_000_000,
         gatewayProcessRssEndBytes: 125_000_000,
         gatewayProcessRssDeltaBytes: 25_000_000,
+        gatewayProcessRssPeakBytes: 140_000_000,
+        gatewayProcessRssPeakDeltaBytes: 40_000_000,
+        gatewayProcessRssSamples: [
+          {
+            label: "suite-start",
+            at: "2026-04-22T12:00:00.000Z",
+            gatewayProcessRssBytes: 100_000_000,
+          },
+          {
+            label: "scenario:canary:finish",
+            at: "2026-04-22T12:00:10.000Z",
+            gatewayProcessRssBytes: 140_000_000,
+          },
+        ],
       },
     });
     expect(json.metrics).toEqual({
@@ -165,6 +179,20 @@ describe("buildQaSuiteSummaryJson", () => {
       gatewayProcessRssStartBytes: 100_000_000,
       gatewayProcessRssEndBytes: 125_000_000,
       gatewayProcessRssDeltaBytes: 25_000_000,
+      gatewayProcessRssPeakBytes: 140_000_000,
+      gatewayProcessRssPeakDeltaBytes: 40_000_000,
+      gatewayProcessRssSamples: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:00.000Z",
+          gatewayProcessRssBytes: 100_000_000,
+        },
+        {
+          label: "scenario:canary:finish",
+          at: "2026-04-22T12:00:10.000Z",
+          gatewayProcessRssBytes: 140_000_000,
+        },
+      ],
     });
   });
 });

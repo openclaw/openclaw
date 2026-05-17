@@ -450,6 +450,10 @@ export type QaSuiteSummaryJsonParams = {
  */
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
+type QaSuiteGatewayRssSample = NonNullable<
+  NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayProcessRssSamples"]
+>[number];
+
 /**
  * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.5
  * parity gate (agentic-parity-report.ts, #64441) and any future parity
@@ -762,8 +766,16 @@ function buildQaSuiteRuntimeMetrics(params: {
   gatewayProcessCpuEndMs: number | null;
   gatewayProcessRssStartBytes: number | null;
   gatewayProcessRssEndBytes: number | null;
+  gatewayProcessRssSamples?: QaSuiteGatewayRssSample[];
 }): QaSuiteSummaryJson["metrics"] {
   const wallMs = Math.max(1, params.finishedAt.getTime() - params.startedAt.getTime());
+  const gatewayProcessRssSamples = params.gatewayProcessRssSamples ?? [];
+  const gatewayProcessRssPeakBytes =
+    gatewayProcessRssSamples.length > 0
+      ? Math.max(...gatewayProcessRssSamples.map((sample) => sample.gatewayProcessRssBytes))
+      : params.gatewayProcessRssStartBytes === null || params.gatewayProcessRssEndBytes === null
+        ? null
+        : Math.max(params.gatewayProcessRssStartBytes, params.gatewayProcessRssEndBytes);
   const rssMetrics =
     params.gatewayProcessRssStartBytes === null || params.gatewayProcessRssEndBytes === null
       ? {}
@@ -772,6 +784,16 @@ function buildQaSuiteRuntimeMetrics(params: {
           gatewayProcessRssEndBytes: params.gatewayProcessRssEndBytes,
           gatewayProcessRssDeltaBytes:
             params.gatewayProcessRssEndBytes - params.gatewayProcessRssStartBytes,
+          ...(gatewayProcessRssPeakBytes === null
+            ? {}
+            : {
+                gatewayProcessRssPeakBytes,
+                gatewayProcessRssPeakDeltaBytes:
+                  gatewayProcessRssPeakBytes - params.gatewayProcessRssStartBytes,
+              }),
+          ...(gatewayProcessRssSamples.length === 0
+            ? {}
+            : { gatewayProcessRssSamples }),
         };
   if (params.gatewayProcessCpuStartMs === null || params.gatewayProcessCpuEndMs === null) {
     return { wallMs, ...rssMetrics };
@@ -1196,14 +1218,27 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       scenarios: liveScenarioOutcomes,
     });
 
+    const gatewayProcessRssSamples: QaSuiteGatewayRssSample[] = [];
+    const sampleGatewayProcessRss = (label: string) => {
+      const gatewayProcessRssBytes = gateway.getProcessRssBytes?.() ?? null;
+      if (gatewayProcessRssBytes !== null) {
+        gatewayProcessRssSamples.push({
+          label,
+          at: new Date().toISOString(),
+          gatewayProcessRssBytes,
+        });
+      }
+      return gatewayProcessRssBytes;
+    };
     const gatewayProcessCpuStartMs = gateway.getProcessCpuMs?.() ?? null;
-    const gatewayProcessRssStartBytes = gateway.getProcessRssBytes?.() ?? null;
+    const gatewayProcessRssStartBytes = sampleGatewayProcessRss("suite-start");
     for (const [index, scenario] of selectedCatalogScenarios.entries()) {
       const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
       writeQaSuiteProgress(
         progressEnabled,
         `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
       );
+      sampleGatewayProcessRss(`scenario:${scenario.id}:start`);
       liveScenarioOutcomes[index] = {
         id: scenario.id,
         name: scenario.title,
@@ -1218,6 +1253,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       });
 
       const result = await runScenarioDefinition(env, scenario);
+      sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
       scenarios.push(result);
       writeQaSuiteProgress(
         progressEnabled,
@@ -1260,7 +1296,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       gatewayProcessCpuStartMs,
       gatewayProcessCpuEndMs: gateway.getProcessCpuMs?.() ?? null,
       gatewayProcessRssStartBytes,
-      gatewayProcessRssEndBytes: gateway.getProcessRssBytes?.() ?? null,
+      gatewayProcessRssEndBytes: sampleGatewayProcessRss("suite-finish"),
+      gatewayProcessRssSamples,
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     if (scenarios.some((scenario) => scenario.status === "fail")) {
@@ -1336,6 +1373,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 }
 
 export const qaSuiteProgressTesting = {
+  buildQaSuiteRuntimeMetrics,
   buildQaRuntimeEnvPatch,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
