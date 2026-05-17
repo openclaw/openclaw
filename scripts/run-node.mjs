@@ -5,6 +5,10 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  collectBundledPluginBuildEntries,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+} from "./lib/bundled-plugin-build-entries.mjs";
+import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
@@ -15,7 +19,10 @@ import {
   writeBuildStamp as writeDistBuildStamp,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
-import { listStaticExtensionAssetSources } from "./lib/static-extension-assets.mjs";
+import {
+  discoverStaticExtensionAssets,
+  listStaticExtensionAssetSources,
+} from "./lib/static-extension-assets.mjs";
 import {
   extensionRestartMetadataFiles,
   isBuildRelevantRunNodePath,
@@ -25,12 +32,14 @@ import {
   runNodeSourceRoots,
   runNodeWatchedPaths,
 } from "./run-node-watch-paths.mjs";
-import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
+import { listCoreRuntimePostBuildOutputs, runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
 const buildScript = "scripts/tsdown-build.mjs";
+const bundledPluginAssetsScript = "scripts/bundled-plugin-assets.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
+const bundledPluginAssetBuildArgs = [bundledPluginAssetsScript, "--phase", "build"];
 
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
@@ -65,6 +74,11 @@ const resolvePrivateQaRequiredDistEntries = (distRoot) => [
   path.join(distRoot, "plugin-sdk", "qa-lab.js"),
   path.join(distRoot, "plugin-sdk", "qa-runtime.js"),
 ];
+const shouldIncludePrivateQaBundledOutputs = (env = process.env) =>
+  env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+
+const shouldRequireBundledPluginRuntimeOutput = (pluginId, env = process.env) =>
+  shouldIncludePrivateQaBundledOutputs(env) || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(pluginId);
 
 const isExcludedSource = (filePath, sourceRoot, sourceRootName) => {
   const relativePath = normalizePath(path.relative(sourceRoot, filePath));
@@ -144,7 +158,13 @@ const hasDirtySourceTree = (deps) => {
   if (output === null) {
     return null;
   }
-  return parseGitStatusPaths(output).some((repoPath) => isBuildRelevantRunNodePath(repoPath));
+  return parseGitStatusPaths(output).some((repoPath) => {
+    const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+    return (
+      isBuildRelevantRunNodePath(normalizedPath) ||
+      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(normalizedPath, deps)
+    );
+  });
 };
 
 const isRuntimePostBuildRelevantPath = (repoPath) => {
@@ -165,7 +185,8 @@ const isRuntimePostBuildRelevantPath = (repoPath) => {
     return false;
   }
   const pluginRelativePath = normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length);
-  if (pluginRelativePath.startsWith("skills/")) {
+  const pluginLocalPath = pluginRelativePath.split("/").slice(1).join("/");
+  if (pluginLocalPath === "skills" || pluginLocalPath.startsWith("skills/")) {
     return true;
   }
   return extensionRestartMetadataFiles.has(path.posix.basename(pluginRelativePath));
@@ -255,6 +276,196 @@ const hasRuntimePostBuildInputMtimeChanged = (stampMtime, deps) => {
   return latestInputMtime != null && latestInputMtime > stampMtime;
 };
 
+const resolveRuntimePostBuildDistRoot = (deps) => deps.distRoot ?? path.join(deps.cwd, "dist");
+const resolveRuntimePostBuildRuntimeRoot = (deps) => path.join(deps.cwd, "dist-runtime");
+
+const collectRunNodeBundledPluginBuildEntries = (deps) => {
+  if (!deps.fs.existsSync(path.join(deps.cwd, BUNDLED_PLUGIN_ROOT_DIR))) {
+    return [];
+  }
+  return collectBundledPluginBuildEntries({ cwd: deps.cwd, env: deps.env });
+};
+
+const resolveBuiltBundledPluginRuntimeEntryPath = (distRoot, pluginId, sourceEntry) =>
+  path.join(
+    distRoot,
+    "extensions",
+    pluginId,
+    sourceEntry.replace(/^\.\//, "").replace(/\.[^.]+$/u, ".js"),
+  );
+
+const listBundledPluginRuntimeEntryPaths = (pluginEntry, deps) => {
+  const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  return pluginEntry.sourceEntries
+    .map((sourceEntry) =>
+      resolveBuiltBundledPluginRuntimeEntryPath(distRoot, pluginEntry.id, sourceEntry),
+    )
+    .toSorted((left, right) => left.localeCompare(right));
+};
+
+const isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs = (normalizedPath, deps) => {
+  if (!normalizedPath.startsWith("extensions/") || !normalizedPath.endsWith("/package.json")) {
+    return false;
+  }
+  const [, pluginId] = normalizedPath.split("/");
+  if (!pluginId || !shouldRequireBundledPluginRuntimeOutput(pluginId, deps.env)) {
+    return false;
+  }
+  const pluginEntry = collectRunNodeBundledPluginBuildEntries(deps).find(
+    (entry) => entry.id === pluginId,
+  );
+  if (!pluginEntry) {
+    return false;
+  }
+  return listBundledPluginRuntimeEntryPaths(pluginEntry, deps).some(
+    (filePath) => !deps.fs.existsSync(filePath),
+  );
+};
+
+const hasMissingBuiltBundledPluginRuntimeEntryOutput = (deps) => {
+  return collectRunNodeBundledPluginBuildEntries(deps)
+    .filter(({ id }) => shouldRequireBundledPluginRuntimeOutput(id, deps.env))
+    .some((pluginEntry) => {
+      const entryPaths = listBundledPluginRuntimeEntryPaths(pluginEntry, deps);
+      return entryPaths.some((filePath) => !deps.fs.existsSync(filePath));
+    });
+};
+
+const listBuiltBundledPluginEntries = (deps) => {
+  return collectRunNodeBundledPluginBuildEntries(deps)
+    .filter(({ id }) => shouldRequireBundledPluginRuntimeOutput(id, deps.env))
+    .filter((pluginEntry) =>
+      listBundledPluginRuntimeEntryPaths(pluginEntry, deps).some((filePath) =>
+        deps.fs.existsSync(filePath),
+      ),
+    )
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+};
+
+const listBuiltBundledPluginRuntimeOverlayDirs = (deps) => {
+  const distExtensionsRoot = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions");
+  let entries = [];
+  try {
+    entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
+    .map((entry) => entry.name)
+    .toSorted((left, right) => left.localeCompare(right));
+};
+
+const listRequiredBundledPluginMetadataOutputs = (pluginEntries, deps) =>
+  pluginEntries.flatMap(({ id, hasManifest, hasPackageJson }) => {
+    const builtPluginDir = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions", id);
+    const requiredPaths = [];
+    if (hasPackageJson) {
+      requiredPaths.push(path.join(builtPluginDir, "package.json"));
+    }
+    if (hasManifest) {
+      requiredPaths.push(path.join(builtPluginDir, "openclaw.plugin.json"));
+    }
+    return requiredPaths;
+  });
+
+const listRuntimeOverlaySourcePaths = (sourceDir, deps) => {
+  const paths = [];
+  const queue = [sourceDir];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (!current) {
+      continue;
+    }
+    let entries = [];
+    try {
+      entries = deps.fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name === "node_modules") {
+        continue;
+      }
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() || entry.isSymbolicLink()) {
+        paths.push(entryPath);
+      }
+    }
+  }
+  return paths.toSorted((left, right) => left.localeCompare(right));
+};
+
+const listRequiredBundledPluginRuntimeOverlayOutputs = (deps) => {
+  const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const runtimeRoot = resolveRuntimePostBuildRuntimeRoot(deps);
+  const runtimePaths = [];
+  for (const pluginId of listBuiltBundledPluginRuntimeOverlayDirs(deps)) {
+    const distPluginDir = path.join(distRoot, "extensions", pluginId);
+    const runtimePluginDir = path.join(runtimeRoot, "extensions", pluginId);
+    for (const sourcePath of listRuntimeOverlaySourcePaths(distPluginDir, deps)) {
+      runtimePaths.push(path.join(runtimePluginDir, path.relative(distPluginDir, sourcePath)));
+    }
+  }
+  return [...new Set(runtimePaths)].toSorted((left, right) => left.localeCompare(right));
+};
+
+const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
+  const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const distExtensionsRoot = path.join(distRoot, "extensions");
+  if (!deps.fs.existsSync(distExtensionsRoot)) {
+    return [];
+  }
+  const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+  let dirents = [];
+  try {
+    dirents = deps.fs.readdirSync(pluginSdkDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw");
+  return [
+    path.join(aliasDir, "package.json"),
+    ...dirents
+      .filter((dirent) => dirent.isFile() && path.extname(dirent.name) === ".js")
+      .map((dirent) => path.join(aliasDir, "plugin-sdk", dirent.name)),
+  ].toSorted((left, right) => left.localeCompare(right));
+};
+
+const listRequiredStaticExtensionAssetOutputs = (deps) => {
+  const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
+    .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
+    .map((asset) => path.join(distRoot, normalizePath(asset.dest).replace(/^dist\//u, "")))
+    .toSorted((left, right) => left.localeCompare(right));
+};
+
+const listRequiredCoreRuntimePostBuildOutputs = (deps) =>
+  listCoreRuntimePostBuildOutputs({ rootDir: deps.cwd, fs: deps.fs }).map((relativePath) =>
+    path.join(deps.cwd, normalizePath(relativePath)),
+  );
+
+export const listRequiredRuntimePostBuildOutputs = (deps) => {
+  const builtPluginEntries = listBuiltBundledPluginEntries(deps);
+  return [
+    ...listRequiredCoreRuntimePostBuildOutputs(deps),
+    ...listRequiredOpenClawExtensionAliasOutputs(deps),
+    ...listRequiredStaticExtensionAssetOutputs(deps),
+    ...listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),
+    ...listRequiredBundledPluginRuntimeOverlayOutputs(deps),
+  ];
+};
+
+const hasMissingRequiredRuntimePostBuildOutput = (deps) =>
+  listRequiredRuntimePostBuildOutputs(deps).some(
+    (filePath) => statMtime(filePath, deps.fs) == null,
+  );
+
 export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return { shouldBuild: true, reason: "force_build" };
@@ -295,8 +506,15 @@ export const resolveBuildRequirement = (deps) => {
       return { shouldBuild: true, reason: "dirty_watched_tree" };
     }
     if (dirty === false) {
+      if (hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)) {
+        return { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" };
+      }
       return { shouldBuild: false, reason: "clean" };
     }
+  }
+
+  if (hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)) {
+    return { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" };
   }
 
   if (hasSourceMtimeChanged(stamp.mtime, deps)) {
@@ -336,12 +554,19 @@ export const resolveRuntimePostBuildRequirement = (deps) => {
       return { shouldSync: true, reason: "dirty_runtime_postbuild_inputs" };
     }
     if (dirty === false) {
+      if (hasMissingRequiredRuntimePostBuildOutput(deps)) {
+        return { shouldSync: true, reason: "missing_runtime_postbuild_output" };
+      }
       return { shouldSync: false, reason: "clean" };
     }
   }
 
   if (hasRuntimePostBuildInputMtimeChanged(stamp.mtime, deps)) {
     return { shouldSync: true, reason: "runtime_postbuild_input_mtime_newer" };
+  }
+
+  if (hasMissingRequiredRuntimePostBuildOutput(deps)) {
+    return { shouldSync: true, reason: "missing_runtime_postbuild_output" };
   }
 
   return { shouldSync: false, reason: "clean" };
@@ -355,6 +580,7 @@ const BUILD_REASON_LABELS = {
   build_stamp_missing_head: "build stamp missing git head",
   git_head_changed: "git head changed",
   dirty_watched_tree: "dirty watched source tree",
+  missing_bundled_plugin_dist_entry: "bundled plugin dist entry missing",
   source_mtime_newer: "source mtime newer than build stamp",
   missing_private_qa_dist: "private QA dist entry missing",
   clean: "clean",
@@ -362,6 +588,7 @@ const BUILD_REASON_LABELS = {
 
 const RUNTIME_POSTBUILD_REASON_LABELS = {
   force_runtime_postbuild: "forced by OPENCLAW_FORCE_RUNTIME_POSTBUILD",
+  missing_runtime_postbuild_output: "required runtime postbuild output missing",
   missing_runtime_postbuild_stamp: "runtime postbuild stamp missing",
   missing_build_stamp: "build stamp missing",
   build_stamp_newer: "build stamp newer than runtime postbuild stamp",
@@ -455,9 +682,87 @@ const logRunner = (message, deps) => {
     return;
   }
   const line = `[openclaw] ${message}\n`;
+  deps.runNodeProgress?.clearLine();
   deps.stderr.write(line);
+  deps.runNodeProgress?.render();
   deps.outputTee?.write(line);
 };
+
+const RUN_NODE_PROGRESS_FRAMES = ["-", "\\", "|", "/"];
+
+const shouldUseRunNodeProgress = (deps) =>
+  deps.stderr?.isTTY === true &&
+  deps.env.OPENCLAW_RUNNER_PROGRESS !== "0" &&
+  deps.env.CI !== "true" &&
+  !deps.outputTee;
+
+const createRunNodeProgress = (label, deps) => {
+  if (!shouldUseRunNodeProgress(deps)) {
+    return null;
+  }
+  const startedAt = Date.now();
+  let frameIndex = 0;
+  let active = true;
+  let visible = false;
+
+  const clearLine = () => {
+    if (!visible) {
+      return;
+    }
+    deps.stderr.write("\r\x1b[2K");
+    visible = false;
+  };
+  const render = () => {
+    if (!active) {
+      return;
+    }
+    const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const frame = RUN_NODE_PROGRESS_FRAMES[frameIndex % RUN_NODE_PROGRESS_FRAMES.length];
+    frameIndex += 1;
+    deps.stderr.write(`\r[openclaw] ${frame} ${label} (${elapsedSeconds}s)`);
+    visible = true;
+  };
+  const timer = setInterval(render, 120);
+  timer.unref?.();
+  render();
+
+  return {
+    clearLine,
+    render,
+    stop() {
+      if (!active) {
+        return;
+      }
+      active = false;
+      clearInterval(timer);
+      clearLine();
+    },
+  };
+};
+
+const withRunNodeProgress = async (deps, label, callback) => {
+  const previousProgress = deps.runNodeProgress;
+  const progress = createRunNodeProgress(label, deps);
+  if (progress) {
+    deps.runNodeProgress = progress;
+  }
+  try {
+    return await callback();
+  } finally {
+    if (progress) {
+      progress.stop();
+      deps.runNodeProgress = previousProgress;
+    }
+  }
+};
+
+const writeRunnerStream = (deps, stream, chunk) => {
+  deps.runNodeProgress?.clearLine();
+  stream.write(chunk);
+  deps.runNodeProgress?.render();
+};
+
+const shouldPipeSpawnedOutput = (deps) => Boolean(deps.outputTee || deps.runNodeProgress);
 
 const sanitizeCpuProfileNamePart = (value) => {
   const normalized = String(value ?? "")
@@ -583,7 +888,7 @@ const runOpenClaw = async (deps) => {
 };
 
 const pipeSpawnedOutput = (childProcess, deps) => {
-  if (!deps.outputTee) {
+  if (!shouldPipeSpawnedOutput(deps)) {
     return;
   }
   const stderrFilter =
@@ -591,16 +896,18 @@ const pipeSpawnedOutput = (childProcess, deps) => {
       ? createSyncIoTraceStderrFilter(deps)
       : null;
   childProcess.stdout?.on("data", (chunk) => {
-    deps.stdout.write(chunk);
-    deps.outputTee.write(chunk);
+    writeRunnerStream(deps, deps.stdout, chunk);
+    deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
+    deps.runNodeProgress?.clearLine();
     if (stderrFilter) {
       stderrFilter.write(chunk);
     } else {
       deps.stderr.write(chunk);
     }
-    deps.outputTee.write(chunk);
+    deps.runNodeProgress?.render();
+    deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("end", () => {
     stderrFilter?.flush();
@@ -858,7 +1165,8 @@ const writeBuildStamp = (deps) => {
 const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   deps.env.OPENCLAW_WATCH_MODE === "1" &&
   requirement.reason === "missing_runtime_postbuild_stamp" &&
-  hasDirtyRuntimePostBuildInputs(deps) !== true;
+  hasDirtyRuntimePostBuildInputs(deps) !== true &&
+  !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
   args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
@@ -952,6 +1260,7 @@ export async function runNodeMain(params = {}) {
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    deps.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "0";
   }
   deps.outputTee = createRunNodeOutputTee(deps);
 
@@ -1022,22 +1331,47 @@ export async function runNodeMain(params = {}) {
         `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
         deps,
       );
+      logRunner("Building bundled plugin assets.", deps);
       const buildCmd = deps.execPath;
-      const buildArgs = compilerArgs;
-      const build = deps.spawn(buildCmd, buildArgs, {
-        cwd: deps.cwd,
-        env: deps.env,
-        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
-      });
-      pipeSpawnedOutput(build, deps);
+      const compileExitCode = await withRunNodeProgress(
+        deps,
+        "Building local CLI artifacts",
+        async () => {
+          const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
+            cwd: deps.cwd,
+            env: deps.env,
+            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+          });
+          pipeSpawnedOutput(assetBuild, deps);
+          const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
+          const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
+          if (assetBuildInterruptedExitCode !== null) {
+            return assetBuildInterruptedExitCode;
+          }
+          if (assetBuildRes.exitCode !== 0 && assetBuildRes.exitCode !== null) {
+            return assetBuildRes.exitCode;
+          }
 
-      const buildRes = await waitForSpawnedProcess(build, deps);
-      const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
-      if (interruptedExitCode !== null) {
-        return interruptedExitCode;
-      }
-      if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
-        return buildRes.exitCode;
+          const build = deps.spawn(buildCmd, compilerArgs, {
+            cwd: deps.cwd,
+            env: deps.env,
+            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+          });
+          pipeSpawnedOutput(build, deps);
+
+          const buildRes = await waitForSpawnedProcess(build, deps);
+          const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
+          if (interruptedExitCode !== null) {
+            return interruptedExitCode;
+          }
+          if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
+            return buildRes.exitCode;
+          }
+          return 0;
+        },
+      );
+      if (compileExitCode !== 0) {
+        return compileExitCode;
       }
       if (!(await syncRuntimeArtifacts(deps))) {
         return 1;

@@ -174,15 +174,21 @@ function assertCorruptPluginCleanOrRepaired(evidence) {
 function assertCorruptPluginDetails(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
-  if (!outcome || outcome.status !== "error") {
+  if (
+    !outcome ||
+    (outcome.status !== "error" && !isCorruptPluginDisabledAfterUpdate(evidence, pluginId))
+  ) {
     throw new Error(
-      `expected error outcome for ${pluginId}, got ${JSON.stringify({
+      `expected error or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify({
         outcomes: plugins.npm?.outcomes ?? [],
         warnings: plugins.warnings ?? [],
         sync: plugins.sync,
         integrityDrifts: plugins.integrityDrifts ?? [],
       })}`,
     );
+  }
+  if (isCorruptPluginDisabledAfterUpdate(evidence, pluginId)) {
+    return;
   }
   const warning = evidence.warning;
   if (!warning) {

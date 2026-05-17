@@ -4,7 +4,7 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-message";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import {
   classifyMSTeamsSendError,
@@ -391,12 +391,13 @@ async function sendTextWithMedia(
     tokenProvider,
     sharePointSiteId,
     mediaMaxBytes,
+    replyStyle,
   } = ctx;
 
   let platformMessageIds: string[];
   try {
     platformMessageIds = await sendMSTeamsMessages({
-      replyStyle: "top-level",
+      replyStyle,
       adapter,
       appId,
       conversationRef: ref,

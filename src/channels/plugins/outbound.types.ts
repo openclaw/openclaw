@@ -23,7 +23,7 @@ export type ChannelOutboundContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
-  /** Send image as document to avoid Telegram compression. */
+  /** Send image, GIF, or video as document to avoid channel compression. */
   forceDocument?: boolean;
   replyToId?: string | null;
   replyToIdSource?: "explicit" | "implicit";
@@ -90,10 +90,17 @@ export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
+export type ChannelOutboundNormalizePayloadParams = {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
   textChunkLimit?: number;
@@ -101,7 +108,7 @@ export type ChannelOutboundAdapter = {
   pollMaxOptions?: number;
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
-  normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
+  normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
   sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {

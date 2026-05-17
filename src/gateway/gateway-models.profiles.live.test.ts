@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -6,18 +7,21 @@ import path from "node:path";
 import {
   clampThinkingLevel,
   type Api,
+  getModels,
+  getProviders,
+  type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
-  collectAnthropicApiKeys,
-  isAnthropicBillingError,
-  isAnthropicRateLimitError,
-} from "../agents/live-auth-keys.js";
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
@@ -29,12 +33,15 @@ import {
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import {
+  isLiveBillingDrift,
+  isLiveRateLimitDrift,
+  shouldSkipLiveProviderDrift,
+} from "../agents/live-test-provider-drift.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
-import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
@@ -44,6 +51,7 @@ import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
+import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -66,7 +74,6 @@ const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
@@ -75,6 +82,10 @@ const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
 );
+const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
+);
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
 const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   1_000,
@@ -82,7 +93,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
@@ -95,7 +105,10 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-flash-lite-preview",
 ]);
-const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
+const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  "google/gemini-3-flash-preview",
+  "google/gemini-3.1-pro-preview",
+]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 const QUIET_LIVE_LOGS = process.env.OPENCLAW_LIVE_TEST_QUIET !== "0";
@@ -107,11 +120,58 @@ function parseFilter(raw?: string): Set<string> | null {
   if (!trimmed || trimmed === "all") {
     return null;
   }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const ids: string[] = [];
+  for (const rawId of trimmed.split(",")) {
+    const id = rawId.trim();
+    if (id.length > 0) {
+      ids.push(id);
+    }
+  }
   return ids.length ? new Set(ids) : null;
+}
+
+function providerFilterList(): string[] | undefined {
+  return PROVIDERS
+    ? [...PROVIDERS].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+function providerListFromExplicitModelFilter(params: {
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (!params.modelFilter || params.modelFilter.size === 0) {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const raw of params.modelFilter) {
+    const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
+    if (!ref) {
+      return undefined;
+    }
+    providers.add(ref.provider);
+  }
+  return providers.size > 0
+    ? [...providers].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+function providerScopedModelRegistryProviders(params: {
+  providerList: string[] | undefined;
+  useExplicit: boolean;
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (params.providerList) {
+    return params.providerList;
+  }
+  if (!params.useExplicit) {
+    return undefined;
+  }
+  return providerListFromExplicitModelFilter({
+    modelFilter: params.modelFilter,
+    providerFilter: params.providerFilter,
+  });
 }
 
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
@@ -194,7 +254,7 @@ function isGatewayLiveModelTimeout(error: string): boolean {
 async function withGatewayLiveTimeout<T>(params: {
   operation: Promise<T>;
   timeoutMs: number;
-  timeoutLabel: "probe" | "model";
+  timeoutLabel: "setup" | "probe" | "model";
   context: string;
 }): Promise<T> {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -233,6 +293,19 @@ async function withGatewayLiveTimeout<T>(params: {
   }
 }
 
+async function withGatewayLiveSetupTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+  timeoutMs = GATEWAY_LIVE_SETUP_TIMEOUT_MS,
+): Promise<T> {
+  return await withGatewayLiveTimeout({
+    operation,
+    timeoutMs,
+    timeoutLabel: "setup",
+    context,
+  });
+}
+
 async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
   return await withGatewayLiveTimeout({
     operation,
@@ -252,7 +325,7 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
 }
 
 function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
+  writeSync(2, `[live] ${message}\n`);
 }
 
 function enterProductionEnvForLiveRun() {
@@ -307,7 +380,7 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
-  if (THINKING_TAG_RE.test(params.text) || FINAL_TAG_RE.test(params.text)) {
+  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -326,7 +399,7 @@ function isMeaningful(text: string): boolean {
   if (trimmed.length < 60) {
     return false;
   }
-  const words = trimmed.split(/\s+/g).filter(Boolean);
+  const words = trimmed.split(/\s+/g);
   if (words.length < 12) {
     return false;
   }
@@ -370,10 +443,10 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
 }
 
 function stripKnownLiveReasoningWrappers(text: string): string {
-  return text
+  const withoutThinking = text
     .replace(/<\s*think\b[^<>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
-    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "")
-    .replace(/<\s*final\b[^<>]*>([\s\S]*?)<\s*\/\s*final\s*>/gi, "$1");
+    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "");
+  return stripFinalTags(withoutThinking);
 }
 
 function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
@@ -420,6 +493,12 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<final>Visible</final>",
+        "google/gemini-3-flash-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final data-model=openrouter/google/gemini/>Visible",
         "google/gemini-3-flash-preview",
       ),
     ).toBe("Visible");
@@ -547,7 +626,7 @@ describe("resolveGatewayLiveSuiteTimeoutMs", () => {
   });
 
   it("scales model-capped sweeps for multi-probe retries", () => {
-    expect(resolveGatewayLiveSuiteTimeoutMs(3)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
+    expect(resolveGatewayLiveSuiteTimeoutMs(4)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
   });
 
   it("caps very large model sweeps", () => {
@@ -634,6 +713,32 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
+  it("normalizes retired Google Gemini refs before targeted lookup", () => {
+    const model = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["google"]),
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("google");
+          expect(modelId).toBe("gemini-3.1-pro-preview");
+          return model;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      providerFilter: new Set(["google"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates).toEqual([model]);
+  });
+
   it("falls back to enumeration for ambiguous model-only filters", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: null,
@@ -659,13 +764,48 @@ describe("resolveExplicitLiveModelCandidates", () => {
   });
 });
 
+describe("providerScopedModelRegistryProviders", () => {
+  it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]),
+        providerFilter: null,
+      }),
+    ).toEqual(["anthropic", "openai"]);
+  });
+
+  it("uses a single provider filter for explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: new Set(["openai"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
+  it("falls back to the full registry for ambiguous explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: null,
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
         cfg: {},
         model: {
-          ...createGatewayLiveTestModel("xai", "grok-4.3"),
+          ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
           thinkingLevelMap: {
             off: null,
@@ -717,20 +857,6 @@ function isAccountIdExtractionError(error: string): boolean {
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
-}
-
-function isProviderUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    msg.includes("no allowed providers are available") ||
-    msg.includes("provider unavailable") ||
-    msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google") ||
-    msg.includes("temporarily rate-limited upstream") ||
-    msg.includes("unable to access non-serverless model") ||
-    msg.includes("create and start a new dedicated endpoint") ||
-    msg.includes("no available capacity was found for the model")
-  );
 }
 
 function isOllamaUnavailableErrorMessage(raw: string): boolean {
@@ -820,6 +946,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
+    { modelKey: "google/gemini-3.1-pro-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
@@ -1226,7 +1353,8 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.profiles.codexProfile?.type).toBe("oauth");
+      expect(sanitized.profiles.codexProfile?.provider).toBe("openai-codex");
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -1256,17 +1384,17 @@ function extractTranscriptMessageText(message: unknown): string {
   if (!Array.isArray(record.content)) {
     return "";
   }
-  return record.content
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return "";
-      }
+  const textParts: string[] = [];
+  for (const entry of record.content) {
+    if (entry && typeof entry === "object") {
       const text = (entry as { text?: unknown }).text;
-      return typeof text === "string" && text.trim() ? text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      if (trimmed.length > 0) {
+        textParts.push(trimmed);
+      }
+    }
+  }
+  return textParts.join("\n").trim();
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
@@ -1381,6 +1509,139 @@ type LiveModelRegistry = {
   getAll(): Array<Model<Api>>;
 };
 
+function resolveKnownProvider(provider: string): KnownProvider | undefined {
+  const normalized = provider.trim();
+  return getProviders().find((knownProvider) => knownProvider === normalized);
+}
+
+function toGatewayLiveModel(params: {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+  modelConfig: NonNullable<ModelProviderConfig["models"]>[number];
+}): Model<Api> | null {
+  const id = params.modelConfig.id?.trim();
+  const api = params.modelConfig.api ?? params.providerConfig.api;
+  const baseUrl = params.modelConfig.baseUrl ?? params.providerConfig.baseUrl;
+  if (!id || !api || !baseUrl) {
+    return null;
+  }
+  const input = params.modelConfig.input.filter(
+    (value): value is "text" | "image" => value === "text" || value === "image",
+  );
+  return {
+    id,
+    name: params.modelConfig.name ?? id,
+    api: api as Api,
+    provider: params.provider,
+    baseUrl,
+    reasoning: params.modelConfig.reasoning ?? false,
+    input: input.length > 0 ? input : ["text"],
+    cost: params.modelConfig.cost ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: params.modelConfig.contextWindow ?? 128_000,
+    maxTokens: params.modelConfig.maxTokens ?? 16_384,
+    compat: params.modelConfig.compat,
+  };
+}
+
+async function loadProviderScopedConfiguredModels(params: {
+  agentDir: string;
+  providerList: readonly string[];
+}): Promise<Array<Model<Api>>> {
+  const modelsPath = path.join(params.agentDir, "models.json");
+  let parsed: { providers?: Record<string, ModelProviderConfig> };
+  try {
+    parsed = JSON.parse(await fs.readFile(modelsPath, "utf8")) as {
+      providers?: Record<string, ModelProviderConfig>;
+    };
+  } catch {
+    return [];
+  }
+
+  const providers = parsed.providers ?? {};
+  const models: Array<Model<Api>> = [];
+  const seen = new Set<string>();
+  for (const rawProvider of params.providerList) {
+    const normalizedProvider = normalizeProviderId(rawProvider);
+    const entry = Object.entries(providers).find(
+      ([provider]) => normalizeProviderId(provider) === normalizedProvider,
+    );
+    if (!entry) {
+      continue;
+    }
+    const [provider, providerConfig] = entry;
+    for (const modelConfig of providerConfig.models ?? []) {
+      const model = toGatewayLiveModel({ provider, providerConfig, modelConfig });
+      if (!model) {
+        continue;
+      }
+      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model<Api>> {
+  const models: Array<Model<Api>> = [];
+  const seen = new Set<string>();
+  for (const rawProvider of providerList) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    const knownProvider = resolveKnownProvider(provider);
+    if (!knownProvider) {
+      continue;
+    }
+    for (const model of getModels(knownProvider)) {
+      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+async function loadProviderScopedModels(params: {
+  agentDir: string;
+  providerList: readonly string[];
+}): Promise<Array<Model<Api>>> {
+  const configured = await loadProviderScopedConfiguredModels(params);
+  if (configured.length > 0) {
+    return configured;
+  }
+  return loadProviderScopedBuiltInModels(params.providerList);
+}
+
+function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegistry {
+  return {
+    find(provider, modelId) {
+      const normalizedProvider = normalizeProviderId(provider);
+      const normalizedModelId = modelId.toLowerCase();
+      return models.find(
+        (model) =>
+          normalizeProviderId(model.provider) === normalizedProvider &&
+          model.id.toLowerCase() === normalizedModelId,
+      );
+    },
+    getAll() {
+      return models;
+    },
+  };
+}
+
 function parseExplicitLiveModelRef(
   raw: string,
   providerFilter: Set<string> | null,
@@ -1392,7 +1653,11 @@ function parseExplicitLiveModelRef(
   const slash = trimmed.indexOf("/");
   if (slash !== -1) {
     const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const modelId = trimmed.slice(slash + 1).trim();
+    const rawModelId = trimmed.slice(slash + 1).trim();
+    const modelId =
+      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+        ? normalizeGoogleModelId(rawModelId)
+        : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
   if (!providerFilter || providerFilter.size !== 1) {
@@ -2134,18 +2399,18 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           const message = String(err);
           if (
             model.provider === "anthropic" &&
-            isAnthropicRateLimitError(message) &&
+            isLiveRateLimitDrift(message) &&
             attempt + 1 < attemptMax
           ) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
-          if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+          if (model.provider === "anthropic" && isLiveRateLimitDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic rate limit)`);
             break;
           }
-          if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+          if (model.provider === "anthropic" && isLiveBillingDrift(message)) {
             if (attempt + 1 < attemptMax) {
               logProgress(`${progressLabel}: billing issue, retrying with next key`);
               continue;
@@ -2177,14 +2442,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
             break;
           }
-          if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
+          if (isGoogleishProvider(model.provider) && isLiveRateLimitDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (google rate limit)`);
             break;
           }
-          if (isBillingErrorMessage(message)) {
+          const driftSkip = shouldSkipLiveProviderDrift({
+            error: message,
+            allowAuth: true,
+            allowBilling: true,
+            allowProviderUnavailable: true,
+          });
+          if (driftSkip) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (billing drift)`);
+            logProgress(`${progressLabel}: skip (${driftSkip.label})`);
             break;
           }
           if (
@@ -2192,15 +2463,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               model.provider === "opencode" ||
               model.provider === "opencode-go" ||
               model.provider === "zai") &&
-            isRateLimitErrorMessage(message)
+            isLiveRateLimitDrift(message)
           ) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (rate limit)`);
-            break;
-          }
-          if (isProviderUnavailableErrorMessage(message)) {
-            skippedCount += 1;
-            logProgress(`${progressLabel}: skip (provider unavailable)`);
             break;
           }
           if (isAudioOnlyModelErrorMessage(message)) {
@@ -2362,18 +2628,83 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
+        const providerList = providerFilterList();
+        const providerLog = providerList?.join(",") ?? "all";
+        logProgress(`[all-models] discover candidates providers=${providerLog}`);
+        logProgress("[all-models] loading config");
         clearRuntimeConfigSnapshot();
-        const cfg = getRuntimeConfig();
-        await ensureOpenClawModelsJson(cfg);
+        const cfg = await withGatewayLiveSetupTimeout(
+          Promise.resolve().then(() => getRuntimeConfig()),
+          "[all-models] load config",
+        );
+        const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+        logProgress("[all-models] preparing models.json");
+        await withGatewayLiveSetupTimeout(
+          ensureOpenClawModelsJson(cfg, undefined, {
+            workspaceDir,
+            ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
+            providerDiscoveryEntriesOnly: true,
+          }),
+          "[all-models] prepare models.json",
+        );
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        const authStorage = discoverAuthStorage(agentDir);
-        const modelRegistry = discoverModels(authStorage, agentDir);
-
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
+        const providerScopedModelProviders = providerScopedModelRegistryProviders({
+          providerList,
+          useExplicit,
+          modelFilter: filter,
+          providerFilter: PROVIDERS,
+        });
+        let authProfileStore: AuthProfileStore | undefined;
+        let modelRegistry: LiveModelRegistry;
+        let all: Array<Model<Api>>;
+        if (providerScopedModelProviders) {
+          logProgress("[all-models] loading provider-scoped model refs");
+          all = await withGatewayLiveSetupTimeout(
+            loadProviderScopedModels({ agentDir, providerList: providerScopedModelProviders }),
+            "[all-models] load provider-scoped model refs",
+          );
+          modelRegistry = createStaticLiveModelRegistry(all);
+        } else {
+          logProgress("[all-models] loading auth profiles");
+          authProfileStore = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() =>
+              providerList
+                ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                    allowKeychainPrompt: false,
+                  })
+                : ensureAuthProfileStore(agentDir, {
+                    allowKeychainPrompt: false,
+                  }),
+            ),
+            "[all-models] load auth profiles",
+          );
+          const authStorage = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() =>
+              discoverAuthStorage(agentDir, {
+                config: cfg,
+                env: process.env,
+                ...(providerList
+                  ? {
+                      skipExternalAuthProfiles: true,
+                      syntheticAuthProviderRefs: [],
+                    }
+                  : {}),
+              }),
+            ),
+            "[all-models] load auth storage",
+          );
+          logProgress("[all-models] loading model registry");
+          modelRegistry = discoverModels(authStorage, agentDir);
+          all = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() => modelRegistry.getAll()),
+            "[all-models] load model registry",
+          );
+        }
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
         const targetMatcher = createLiveTargetMatcher({
           providerFilter: PROVIDERS,
@@ -2390,7 +2721,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             })
           : null;
         if (!wanted) {
-          const all = modelRegistry.getAll();
           wanted = filter
             ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
             : all.filter(
@@ -2404,6 +2734,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
               );
         }
+        logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
 
         const candidates: Array<Model<Api>> = [];
         const skipped: Array<{ model: string; error: string }> = [];
@@ -2416,11 +2747,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
           const modelRef = `${model.provider}/${model.id}`;
           try {
-            const apiKeyInfo = await getApiKeyForModel({
-              model,
-              cfg,
-              credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
-            });
+            const apiKeyInfo = await withGatewayLiveSetupTimeout(
+              getApiKeyForModel({
+                model,
+                cfg,
+                store: authProfileStore,
+                agentDir,
+                workspaceDir,
+                credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+              }),
+              `[all-models] auth ${modelRef}`,
+              GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+            );
             if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
               skipped.push({
                 model: modelRef,
@@ -2433,6 +2771,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             skipped.push({ model: modelRef, error: String(error) });
           }
         }
+        logProgress(`[all-models] candidates=${candidates.length} skipped=${skipped.length}`);
 
         if (candidates.length === 0) {
           if (skipped.length > 0) {
@@ -2455,6 +2794,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
           );
         }
+        expect(selectedCandidates.length).toBeGreaterThan(0);
         const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");

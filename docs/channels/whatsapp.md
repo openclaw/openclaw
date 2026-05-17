@@ -14,27 +14,19 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: uses the npm package `@openclaw/whatsapp` on the current official
-  release tag.
+- Stable/Beta: installs the official `@openclaw/whatsapp` plugin from ClawHub
+  first, with npm as the fallback.
+- The WhatsApp runtime is distributed outside the core OpenClaw npm package so
+  WhatsApp-specific runtime dependencies stay with the external plugin.
 
 Manual install stays available:
 
 ```bash
-openclaw plugins install @openclaw/whatsapp
+openclaw plugins install clawhub:@openclaw/whatsapp
 ```
 
-Use the bare package to follow the current official release tag. Pin an exact
-version only when you need a reproducible install.
-
-On Windows, the WhatsApp plugin needs Git on `PATH` during npm install because
-one of its Baileys/libsignal dependencies is fetched from a git URL. Install
-Git for Windows, then restart the shell and rerun the install:
-
-```powershell
-winget install --id Git.Git -e
-```
-
-Portable Git also works if its `bin` directory is on `PATH`.
+Use the bare npm package (`@openclaw/whatsapp`) only when you need the registry
+fallback. Pin an exact version only when you need a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -401,6 +393,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
     - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current WhatsApp chat
     - animated GIF playback is supported via `gifPlayback: true` on video sends
+    - `forceDocument` / `asDocument` sends outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp media compression while preserving the resolved filename and MIME type
     - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
 
@@ -410,7 +403,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - inbound media save cap: `channels.whatsapp.mediaMaxMb` (default `50`)
     - outbound media send cap: `channels.whatsapp.mediaMaxMb` (default `50`)
     - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
-    - images are auto-optimized (resize/quality sweep) to fit limits
+    - images are auto-optimized (resize/quality sweep) to fit limits unless `forceDocument` / `asDocument` requests document delivery
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
 
   </Accordion>
@@ -489,6 +482,32 @@ Behavior notes:
 - failures are logged but do not block normal reply delivery
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
+
+## Lifecycle status reactions
+
+Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack reaction during a turn instead of leaving a static receipt emoji. When enabled, OpenClaw uses the same inbound message reaction slot for lifecycle states such as queued, thinking, tool activity, compaction, done, and error.
+
+```json5
+{
+  messages: {
+    statusReactions: {
+      enabled: true,
+      emojis: {
+        deploy: "🛫",
+        build: "🏗️",
+        concierge: "💁",
+      },
+    },
+  },
+}
+```
+
+Behavior notes:
+
+- `channels.whatsapp.ackReaction` still controls whether status reactions are eligible for direct messages and groups.
+- WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place.
+- `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold.
+- Tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
 
 ## Multi-account and credentials
 

@@ -95,12 +95,6 @@ describe("subagent registry persistence resume", () => {
     });
   };
 
-  const flushQueuedRegistryWork = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  };
-
   beforeAll(async () => {
     vi.resetModules();
     mod = await import("./subagent-registry.js");
@@ -184,17 +178,16 @@ describe("subagent registry persistence resume", () => {
           requesterOrigin?: { channel?: string; accountId?: string };
         }
       | undefined;
-    expect(run).toBeDefined();
-    if (run) {
-      expect("requesterAccountId" in run).toBe(false);
-      expect("requesterChannel" in run).toBe(false);
+    if (run === undefined) {
+      throw new Error("expected persisted run");
     }
-    expect(run?.requesterOrigin?.channel).toBe("whatsapp");
+    expect("requesterAccountId" in run).toBe(false);
+    expect("requesterChannel" in run).toBe(false);
+    expect(run.requesterOrigin?.channel).toBe("whatsapp");
     expect(run?.requesterOrigin?.accountId).toBe("acct-main");
 
     mod.initSubagentRegistry();
 
-    await flushQueuedRegistryWork();
     await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
       timeout: 1_000,
       interval: 10,
@@ -212,18 +205,14 @@ describe("subagent registry persistence resume", () => {
           outcome?: { status?: string };
         }
       | undefined;
-    expect(announce).toMatchObject({
-      childRunId: "run-1",
-      childSessionKey: "agent:main:subagent:test",
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: {
-        channel: "whatsapp",
-        accountId: "acct-main",
-      },
-      task: "do the thing",
-      cleanup: "keep",
-      outcome: { status: "ok" },
-    });
+    expect(announce?.childRunId).toBe("run-1");
+    expect(announce?.childSessionKey).toBe("agent:main:subagent:test");
+    expect(announce?.requesterSessionKey).toBe("agent:main:main");
+    expect(announce?.requesterOrigin?.channel).toBe("whatsapp");
+    expect(announce?.requesterOrigin?.accountId).toBe("acct-main");
+    expect(announce?.task).toBe("do the thing");
+    expect(announce?.cleanup).toBe("keep");
+    expect(announce?.outcome?.status).toBe("ok");
 
     const restored = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(restored?.childSessionKey).toBe("agent:main:subagent:test");

@@ -16,15 +16,11 @@ type AjvLike = {
           validate: (value: string) => boolean;
         },
   ) => AjvLike;
-  compile: (schema: JsonSchemaObject) => ValidateFunction;
+  compile: (schema: JsonSchemaValue) => ValidateFunction;
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
-function getAjv(mode: "default" | "defaults"): AjvLike {
-  const cached = ajvSingletons.get(mode);
-  if (cached) {
-    return cached;
-  }
+function createAjv(mode: "default" | "defaults"): AjvLike {
   const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
   const AjvCtor =
     typeof ajvModule.default === "function"
@@ -44,6 +40,15 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
       return URL.canParse(value);
     },
   });
+  return instance;
+}
+
+function getAjv(mode: "default" | "defaults"): AjvLike {
+  const cached = ajvSingletons.get(mode);
+  if (cached) {
+    return cached;
+  }
+  const instance = createAjv(mode);
   ajvSingletons.set(mode, instance);
   return instance;
 }
@@ -51,13 +56,15 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
 type CachedValidator = {
   hasDefaults: boolean;
   validate: ValidateFunction;
-  schema: JsonSchemaObject;
+  schema: JsonSchemaValue;
   schemaFingerprint: string;
 };
 
+export type JsonSchemaValue = JsonSchemaObject | boolean;
+
 const schemaCache = new PluginLruCache<CachedValidator>(512);
 
-function fingerprintSchema(schema: JsonSchemaObject): string {
+function fingerprintSchema(schema: JsonSchemaValue): string {
   return JSON.stringify(schema);
 }
 
@@ -193,11 +200,28 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
 }
 
 export function validateJsonSchemaValue(params: {
-  schema: JsonSchemaObject;
+  schema: JsonSchemaValue;
   cacheKey: string;
   value: unknown;
   applyDefaults?: boolean;
+  cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
+  const useCache = params.cache !== false;
+  if (!useCache) {
+    const validate = createAjv(params.applyDefaults ? "defaults" : "default").compile(
+      params.schema,
+    );
+    const value =
+      params.applyDefaults && schemaHasDefaults(params.schema)
+        ? cloneValidationValue(params.value)
+        : params.value;
+    const ok = validate(value);
+    if (ok) {
+      return { ok: true, value };
+    }
+    return { ok: false, errors: formatAjvErrors(validate.errors) };
+  }
+
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
   const schemaFingerprint =

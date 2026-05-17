@@ -31,6 +31,15 @@ function createChannelsSnapshot(name = "saved"): ChannelsStatusSnapshot {
   };
 }
 
+function requireConfigSnapshot(
+  host: ChannelsActionHostForTest,
+): NonNullable<ConfigState["configSnapshot"]> {
+  if (!host.configSnapshot) {
+    throw new Error("expected config snapshot");
+  }
+  return host.configSnapshot;
+}
+
 function createHost(request: ReturnType<typeof vi.fn> = vi.fn()): ChannelsActionHostForTest {
   return {
     applySessionKey: "main",
@@ -130,10 +139,10 @@ describe("channel config actions", () => {
 
     await handleChannelConfigSave(host);
 
-    expect(host.lastError).toContain("Config hash mismatch");
+    expect(host.lastError).toBe("Error: Config hash mismatch");
     expect(host.configFormDirty).toBe(true);
     expect(host.configForm).toEqual({ gateway: { mode: "local" } });
-    expect(host.configSnapshot?.config).toEqual({ gateway: { mode: "remote" } });
-    expect(request.mock.calls.some(([method]) => method === "channels.status")).toBe(false);
+    expect(requireConfigSnapshot(host).config).toEqual({ gateway: { mode: "remote" } });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config.set", "config.get"]);
   });
 });

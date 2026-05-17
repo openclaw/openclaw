@@ -154,6 +154,14 @@ const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
 );
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
+  loadBundledWebFetchProviderEntriesFromDir: (params: { pluginId: string }) => {
+    const provider = COVERAGE_WEB_FETCH_PROVIDERS.get(params.pluginId);
+    return provider ? [provider] : null;
+  },
+  loadBundledWebSearchProviderEntriesFromDir: (params: { pluginId: string }) => {
+    const provider = COVERAGE_WEB_SEARCH_PROVIDERS.get(params.pluginId);
+    return provider ? [provider] : null;
+  },
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: (params: {
     onlyPluginIds: readonly string[];
   }) => {
@@ -230,6 +238,7 @@ const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
   // Doctor migrates legacy web search config into plugin-owned webSearch config.
   "tools.web.search.apiKey",
+  "tools.web.search.*.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
 ]);
 
@@ -277,9 +286,11 @@ async function ensureRuntimeWebToolsLoaded(): Promise<void> {
 }
 
 function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): string[] {
-  const segments = pathPattern.split(".").filter(Boolean);
   const out: string[] = [];
-  for (const segment of segments) {
+  for (const segment of pathPattern.split(".")) {
+    if (!segment) {
+      continue;
+    }
     if (segment === "*") {
       out.push(wildcardToken);
       continue;
@@ -824,7 +835,9 @@ describe("secrets runtime target coverage", () => {
         loadAuthStore: () => authStore,
       });
       const resolvedStore = snapshot.authStores[0]?.store;
-      expect(resolvedStore).toBeDefined();
+      if (!resolvedStore) {
+        throw new Error("expected resolved auth store snapshot");
+      }
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(
           resolvedStore,

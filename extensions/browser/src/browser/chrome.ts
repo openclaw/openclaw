@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
@@ -59,6 +61,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
+import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
@@ -423,7 +426,7 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
-  fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+  await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
@@ -440,16 +443,22 @@ export async function launchOpenClawChrome(
       userDataDir,
       ...launchOptions,
     });
+    const env: NodeJS.ProcessEnv = {
+      ...omitChromeProxyEnv(process.env),
+      // Reduce accidental sharing with the user's env.
+      HOME: os.homedir(),
+    };
+    if (process.platform === "linux") {
+      const chromiumStateDir = path.join(resolvePreferredOpenClawTmpDir(), ".chromium");
+      env.XDG_CONFIG_HOME ??= chromiumStateDir;
+      env.XDG_CACHE_HOME ??= chromiumStateDir;
+    }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
-      env: {
-        ...omitChromeProxyEnv(process.env),
-        // Reduce accidental sharing with the user's env.
-        HOME: os.homedir(),
-      },
+      env,
     });
     return spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],
@@ -535,6 +544,7 @@ export async function launchOpenClawChrome(
           .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
         const stderrOutput =
           normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+        const redactedStderrOutput = redactToolPayloadText(stderrOutput);
         if (
           allowSingletonRecovery &&
           CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
@@ -546,8 +556,8 @@ export async function launchOpenClawChrome(
           await terminateChromeForRetry(proc, userDataDir);
           return await launchOnceAndWait(false);
         }
-        const stderrHint = stderrOutput
-          ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+        const stderrHint = redactedStderrOutput
+          ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
           : "";
         const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
         try {

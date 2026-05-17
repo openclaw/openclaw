@@ -37,6 +37,8 @@ Order of "how early it fires":
 
 ## Configuration
 
+Set the agent-level default:
+
 ```json5
 {
   agents: {
@@ -49,7 +51,7 @@ Order of "how early it fires":
 }
 ```
 
-You can override mode or cadence per session:
+Override mode or cadence per session:
 
 ```json5
 {

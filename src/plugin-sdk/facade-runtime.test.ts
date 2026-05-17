@@ -242,7 +242,8 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(loaded.marker).toBe("post-load-ok");
     expect(reentryMarkers.length).toBeGreaterThan(0);
-    expect(reentryMarkers.every((marker) => marker === "post-load-ok")).toBe(true);
+    const unexpectedReentryMarkers = reentryMarkers.filter((marker) => marker !== "post-load-ok");
+    expect(unexpectedReentryMarkers).toStrictEqual([]);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
     expect(loader).toHaveBeenCalledTimes(1);
   });
@@ -257,7 +258,7 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toThrow("plugin load failure");
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>
@@ -289,7 +290,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(access.allowed).toBe(false);
     expect(access.pluginId).toBe("discord");
-    expect(access.reason).toBeTruthy();
+    expect(access.reason).toMatch(/disabled|not enabled|not active/i);
     expect(() =>
       throwForBundledPluginPublicSurfaceAccess({
         access,
@@ -396,6 +397,56 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toEqual({
       modulePath: path.join(lineDir, "runtime-api.js"),
+      boundaryRoot: lineDir,
+    });
+  });
+
+  it("resolves a globally-installed plugin public surface from package dist", () => {
+    const lineDir = createTempDirSync("openclaw-facade-global-line-dist-");
+    fs.mkdirSync(path.join(lineDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(lineDir, "dist", "runtime-api.js"),
+      'export const marker = "global-line-dist";\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(lineDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/line",
+        version: "0.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          runtimeExtensions: ["./dist/index.js"],
+          channel: { id: "line" },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(lineDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "line",
+        channels: ["line"],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+        registry: [
+          {
+            id: "line",
+            rootDir: lineDir,
+            channels: ["line"],
+          },
+        ],
+        dirName: "line",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toEqual({
+      modulePath: path.join(lineDir, "dist", "runtime-api.js"),
       boundaryRoot: lineDir,
     });
   });

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -62,10 +61,14 @@ describe("json file helpers", () => {
 
       await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
       await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
-      await expect(readDurableJsonFile(invalidPath)).rejects.toMatchObject({
-        filePath: invalidPath,
-        reason: "parse",
-      } satisfies Partial<JsonFileReadError>);
+      let readError: unknown;
+      try {
+        await readDurableJsonFile(invalidPath);
+      } catch (error) {
+        readError = error;
+      }
+      expect((readError as JsonFileReadError | undefined)?.filePath).toBe(invalidPath);
+      expect((readError as JsonFileReadError | undefined)?.reason).toBe("parse");
     });
   });
 
@@ -96,7 +99,19 @@ describe("json file helpers", () => {
     });
   });
 
-  it("falls back to copy-on-replace for Windows rename EPERM", async () => {
+  it("can skip durable fsync work for hot state writes", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "state.json");
+      const openSpy = vi.spyOn(fs, "open");
+
+      await writeTextAtomic(filePath, "new", { durable: false });
+
+      expect(openSpy).not.toHaveBeenCalled();
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
+  it("preserves text when Windows rename reports EPERM", async () => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
       await fs.writeFile(filePath, "old", "utf8");
@@ -104,12 +119,10 @@ describe("json file helpers", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
       const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
-      const copySpy = vi.spyOn(fs, "copyFile");
 
       await writeTextAtomic(filePath, "new");
 
       expect(renameSpy).toHaveBeenCalledOnce();
-      expect(copySpy).toHaveBeenCalledOnce();
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
     });
   });
@@ -129,7 +142,8 @@ describe("json file helpers", () => {
         "Refusing copy fallback through symlink destination",
       );
 
-      await expect(fs.lstat(filePath)).resolves.toSatisfy((stat) => stat.isSymbolicLink());
+      const fileStat = await fs.lstat(filePath);
+      expect(fileStat.isSymbolicLink()).toBe(true);
       await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });
@@ -139,7 +153,7 @@ describe("json file helpers", () => {
       name: "serializes async lock callers even across rejections",
       firstTask: async (events: string[]) => {
         events.push("first:start");
-        await sleep(20);
+        await Promise.resolve();
         events.push("first:end");
         throw new Error("boom");
       },

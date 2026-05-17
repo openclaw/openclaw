@@ -21,6 +21,7 @@ const hoisted = await vi.hoisted(async () => {
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
     exportHtmlTemplateContents: new Map<string, string>(),
+    sessionTranscriptContent: "",
   };
 });
 
@@ -73,7 +74,7 @@ vi.mock("node:fs/promises", async () => {
     writeFile: hoisted.writeFileMock,
     readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
       if (filePath === "/tmp/target-store/session.jsonl") {
-        return "";
+        return hoisted.sessionTranscriptContent;
       }
       for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
         if (filePath.endsWith(suffix)) {
@@ -88,6 +89,8 @@ vi.mock("node:fs/promises", async () => {
     default: mockedFsPromises,
   };
 });
+
+import { buildExportSessionReply } from "./commands-export-session.js";
 
 function makeParams(): HandleCommandsParams {
   return {
@@ -124,6 +127,33 @@ function makeParams(): HandleCommandsParams {
   } as unknown as HandleCommandsParams;
 }
 
+function writeFileArg(callIndex: number, argIndex: number): unknown {
+  const call = hoisted.writeFileMock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected writeFile call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`Expected writeFile call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
+function writeFilePath(callIndex: number): string {
+  const value = writeFileArg(callIndex, 0);
+  if (typeof value !== "string") {
+    throw new Error(`Expected writeFile call ${callIndex} path`);
+  }
+  return value;
+}
+
+function writtenHtml(): string {
+  const value = writeFileArg(0, 1);
+  if (typeof value !== "string") {
+    throw new Error("Expected exported HTML");
+  }
+  return value;
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -153,11 +183,10 @@ describe("buildExportSessionReply", () => {
     hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.pathExistsMock.mockResolvedValue(true);
     hoisted.exportHtmlTemplateContents.clear();
+    hoisted.sessionTranscriptContent = "";
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
-
     await buildExportSessionReply(makeParams());
 
     expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
@@ -168,7 +197,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("prefers the active command storePath over the default target-agent store", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-1",
@@ -192,7 +220,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("uses the target store entry even when the wrapper sessionEntry is missing", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-from-store",
@@ -206,22 +233,16 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(reply.text).toContain("✅ Session exported!");
-    expect(hoisted.resolveCommandsSystemPromptBundleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "session-from-store",
-        }),
-      }),
-    );
+    const [[systemPromptBundleParams]] = hoisted.resolveCommandsSystemPromptBundleMock.mock
+      .calls as unknown as Array<[{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]>;
+    expect(systemPromptBundleParams?.sessionEntry?.sessionId).toBe("session-from-store");
+    expect(systemPromptBundleParams?.sessionEntry?.updatedAt).toBe(2);
   });
 
   it("injects scripts and session data through the real export template", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
-
     await buildExportSessionReply(makeParams());
 
-    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
-    expect(typeof html).toBe("string");
+    const html = writtenHtml();
     expect(html).not.toContain("{{CSS}}");
     expect(html).not.toContain("{{JS}}");
     expect(html).not.toContain("{{SESSION_DATA}}");
@@ -243,7 +264,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-05T10:11:12.345Z"));
     const collision = Object.assign(new Error("exists"), { code: "EEXIST" });
@@ -259,17 +279,16 @@ describe("buildExportSessionReply", () => {
       "/tmp/workspace",
       "openclaw-session-session--2026-05-05T10-11-12-2.html",
     );
-    expect(hoisted.writeFileMock.mock.calls[0]?.[0]).toBe(expectedBase);
-    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(writeFilePath(0)).toBe(expectedBase);
+    expect(writeFileArg(0, 2)).toEqual({
       encoding: "utf-8",
       flag: "wx",
     });
-    expect(hoisted.writeFileMock.mock.calls[1]?.[0]).toBe(expectedSuffix);
+    expect(writeFilePath(1)).toBe(expectedSuffix);
     expect(reply.text).toContain("📄 File: openclaw-session-session--2026-05-05T10-11-12-2.html");
   });
 
   it("preserves replacement text with dollar sequences", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.exportHtmlTemplateContents.set(
       "template.html",
       [
@@ -290,10 +309,46 @@ describe("buildExportSessionReply", () => {
 
     await buildExportSessionReply(makeParams());
 
-    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
+    const html = writtenHtml();
     expect(html).toContain("$&$1");
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");
     expect(html).toContain("const highlightMarker = '$&$1';");
+  });
+
+  it("reports malformed transcript rows without leaking parser details", async () => {
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      '{"type":"message",',
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "valid user" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { content: "missing role" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-3",
+        timestamp: "2026-05-16T00:00:02.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("📊 Entries: 2");
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not valid JSON. rows 2",
+    );
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 4",
+    );
+    expect(reply.text).not.toMatch(/Unexpected|SyntaxError|position/i);
   });
 });

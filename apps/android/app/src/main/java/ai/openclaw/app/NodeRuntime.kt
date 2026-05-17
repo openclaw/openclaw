@@ -233,13 +233,13 @@ class NodeRuntime(
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       debugBuild = { BuildConfig.DEBUG },
-      refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
       onCanvasA2uiPush = {
         _canvasA2uiHydrated.value = true
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
       },
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
+      refreshCanvasHostUrl = { nodeSession.refreshCanvasHostUrl() },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     )
@@ -1608,15 +1608,6 @@ internal fun resolveOperatorSessionConnectAuth(
     return NodeRuntime.GatewayConnectAuth(
       token = null,
       bootstrapToken = null,
-      password = null,
-    )
-  }
-
-  val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitBootstrapToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = explicitBootstrapToken,
       password = null,
     )
   }

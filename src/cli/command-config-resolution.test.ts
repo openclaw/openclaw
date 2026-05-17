@@ -79,4 +79,29 @@ describe("resolveCommandConfigWithSecrets", () => {
     });
     expect(result.effectiveConfig).toBe(effectiveConfig);
   });
+
+  it("passes scoped target paths to command secret resolution", async () => {
+    const config = { tools: { web: { search: { provider: "tavily" } } } };
+    const allowedPaths = new Set(["plugins.entries.tavily.config.webSearch.apiKey"]);
+    const forcedActivePaths = new Set(["plugins.entries.tavily.config.webSearch.apiKey"]);
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: config,
+      diagnostics: [],
+    });
+
+    await resolveCommandConfigWithSecrets({
+      config,
+      commandName: "infer web search",
+      targetIds: new Set(["plugins.entries.*.config.webSearch.apiKey"]),
+      allowedPaths,
+      forcedActivePaths,
+    });
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedPaths,
+        forcedActivePaths,
+      }),
+    );
+  });
 });

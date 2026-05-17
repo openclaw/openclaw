@@ -151,7 +151,7 @@ candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`.
+    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`; `provider/*` entries filter `/model`, `/models`, and model pickers to selected providers while still using dynamic model discovery.
     - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
@@ -175,14 +175,15 @@ candidate contains redacted secret placeholders such as `***`.
   </Accordion>
 
   <Accordion title="Set up group chat mention gating">
-    Group messages default to **require mention**. Configure trigger patterns per agent, and keep visible room replies on the default message-tool path unless you intentionally want legacy automatic final replies:
+    Group messages default to **require mention**. Configure trigger patterns per agent, and keep visible room replies on the default message-tool path unless you intentionally want every normal group reply to use the legacy automatic final-reply path:
 
     ```json5
     {
       messages: {
         visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
         groupChat: {
-          visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+          visibleReplies: "message_tool", // default; visible output requires message(action=send)
+          unmentionedInbound: "room_event", // unmentioned always-on group chatter is quiet context
         },
       },
       agents: {
@@ -575,7 +576,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Tools & media       | `tools`, `browser`, `skills`, `mcp`, `audio`, `talk`              | No              |
 | UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
 | Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
-| Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
+| Infrastructure      | `discovery`, `plugins`                                            | **Yes**         |
 
 <Note>
 `gateway.reload` and `gateway.remote` are exceptions - changing them does **not** trigger a restart.

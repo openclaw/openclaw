@@ -27,7 +27,8 @@ type CliRoutedCommandId =
   | "tasks-list"
   | "tasks-audit"
   | "channels-list"
-  | "channels-status";
+  | "channels-status"
+  | "plugins-list";
 
 export type CliCommandPathPolicy = {
   bypassConfigGuard: boolean;
@@ -104,6 +105,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never" },
   },
   { commandPath: ["configure"], policy: { bypassConfigGuard: true, loadPlugins: "never" } },
+  {
+    commandPath: ["config"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["config", "models"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
   {
     commandPath: ["migrate"],
     policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
@@ -306,6 +317,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["plugins", "update"],
     exact: true,
     policy: { hideBanner: true },
+  },
+  {
+    commandPath: ["plugins", "list"],
+    exact: true,
+    policy: { ensureCliPath: false, loadPlugins: "never", networkProxy: "bypass" },
+    route: { id: "plugins-list" },
   },
   {
     commandPath: ["onboard"],

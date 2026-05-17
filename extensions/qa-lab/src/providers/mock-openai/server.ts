@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
@@ -153,6 +156,7 @@ const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check
 const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
+const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
@@ -168,17 +172,22 @@ const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
+const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
+const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
+  subagentHandoffSpawned: boolean;
 };
 
+const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+
 function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+  return readRequestBodyWithLimit(req, {
+    maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
+    timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
   });
 }
 
@@ -278,15 +287,137 @@ function findLastUserIndex(input: ResponsesInputItem[]) {
   return -1;
 }
 
+function isToolOutputContinuationText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    /^(?:continue|keep going|resume|retry|carry on)(?:[.!?])?$/i.test(trimmed) ||
+    /\b(?:continue|continuation|compaction|post-compaction|retry|resume)\b/i.test(trimmed)
+  );
+}
+
+function stringifyFunctionCallOutput(output: unknown): string {
+  if (typeof output === "string") {
+    return output;
+  }
+  if (Array.isArray(output)) {
+    return output
+      .map((entry) => {
+        if (typeof entry === "string") {
+          return entry;
+        }
+        if (!entry || typeof entry !== "object") {
+          return "";
+        }
+        const record = entry as Record<string, unknown>;
+        if (typeof record.text === "string") {
+          return record.text;
+        }
+        if (typeof record.output_text === "string") {
+          return record.output_text;
+        }
+        if (typeof record.content === "string") {
+          return record.content;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (output && typeof output === "object") {
+    const record = output as Record<string, unknown>;
+    if (typeof record.text === "string") {
+      return record.text;
+    }
+    if (typeof record.output_text === "string") {
+      return record.output_text;
+    }
+    if (typeof record.content === "string") {
+      return record.content;
+    }
+    try {
+      return JSON.stringify(output);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function extractFunctionCallOutputText(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return "";
+  }
+  return stringifyFunctionCallOutput(item.output);
+}
+
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
   for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
     const item = input[index];
-    if (item.type === "function_call_output" && typeof item.output === "string" && item.output) {
-      return item.output;
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return output;
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return output;
+      }
+      continue;
     }
   }
   return "";
+}
+
+function extractLatestToolOutput(input: ResponsesInputItem[]) {
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return output;
+    }
+  }
+  return "";
+}
+
+function extractAllToolOutputText(input: ResponsesInputItem[]) {
+  return input
+    .map((item) => extractFunctionCallOutputText(item))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
+  let latestToolOutputIndex = -1;
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    if (extractFunctionCallOutputText(input[index])) {
+      latestToolOutputIndex = index;
+      break;
+    }
+  }
+  if (latestToolOutputIndex < 0) {
+    return "";
+  }
+  return input
+    .slice(latestToolOutputIndex + 1)
+    .filter((item) => item.role === "user" && Array.isArray(item.content))
+    .map((item) => extractInputText(item.content as unknown[]))
+    .filter(Boolean)
+    .join("\n");
 }
 
 function extractInputText(content: unknown[]): string {
@@ -315,6 +446,27 @@ function extractAllUserTexts(input: ResponsesInputItem[]) {
     }
   }
   return texts;
+}
+
+function extractSystemInputText(input: ResponsesInputItem[]) {
+  const texts: string[] = [];
+  for (const item of input) {
+    if (item.role !== "system") {
+      continue;
+    }
+    if (typeof item.content === "string" && item.content.trim()) {
+      texts.push(item.content.trim());
+      continue;
+    }
+    if (!Array.isArray(item.content)) {
+      continue;
+    }
+    const text = extractInputText(item.content);
+    if (text) {
+      texts.push(text);
+    }
+  }
+  return texts.join("\n");
 }
 
 function extractAllInputTexts(input: ResponsesInputItem[]) {
@@ -438,14 +590,21 @@ function readTargetFromPrompt(prompt: string) {
 }
 
 function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
-  const callId = `call_mock_${name}_1`;
   const serialized = JSON.stringify(args);
+  const callSuffix = createHash("sha1")
+    .update(name)
+    .update("\0")
+    .update(serialized)
+    .digest("hex")
+    .slice(0, 10);
+  const callId = `call_mock_${name}_${callSuffix}`;
+  const itemId = `fc_mock_${name}_${callSuffix}`;
   return [
     {
       type: "response.output_item.added",
       item: {
         type: "function_call",
-        id: `fc_mock_${name}_1`,
+        id: itemId,
         call_id: callId,
         name,
         arguments: "",
@@ -456,7 +615,7 @@ function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>
       type: "response.output_item.done",
       item: {
         type: "function_call",
-        id: `fc_mock_${name}_1`,
+        id: itemId,
         call_id: callId,
         name,
         arguments: serialized,
@@ -465,12 +624,12 @@ function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>
     {
       type: "response.completed",
       response: {
-        id: `resp_mock_${name}_1`,
+        id: `resp_mock_${name}_${callSuffix}`,
         status: "completed",
         output: [
           {
             type: "function_call",
-            id: `fc_mock_${name}_1`,
+            id: itemId,
             call_id: callId,
             name,
             arguments: serialized,
@@ -514,6 +673,74 @@ function decodeXmlEntities(text: string) {
 function extractActiveMemorySummary(text: string) {
   const match = /<active_memory_plugin>\s*([\s\S]*?)\s*<\/active_memory_plugin>/i.exec(text);
   return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
+}
+
+function extractToolSearchTarget(text: string): string | null {
+  const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
+  return match?.[1]?.trim() || null;
+}
+
+function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+  if (failureMode) {
+    return { __qaFailureMode: "denied-input" };
+  }
+  if (targetTool === "exec") {
+    return { command: "echo runtime-tool-fixture", timeout: 5 };
+  }
+  if (targetTool === "read") {
+    return { path: "QA_KICKOFF_TASK.md" };
+  }
+  if (targetTool === "write") {
+    return { path: "runtime-tool-fixture-write.txt", content: "runtime tool fixture\n" };
+  }
+  if (targetTool === "edit") {
+    return {
+      path: "runtime-tool-fixture-edit.txt",
+      edits: [{ oldText: "before edit\n", newText: "after edit\n" }],
+    };
+  }
+  if (targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Add File: runtime-tool-fixture-patch.txt",
+        "+runtime patch",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
+  }
+  if (targetTool === "web_search") {
+    return { query: "OpenClaw runtime parity fixed query", count: 1 };
+  }
+  if (targetTool === "web_fetch") {
+    return { url: "https://example.com/", maxChars: 500 };
+  }
+  if (targetTool === "image_generate") {
+    return { prompt: "QA lighthouse runtime parity fixture", filename: "runtime-tool-fixture" };
+  }
+  if (targetTool === "tts") {
+    return { text: "Runtime parity voice fixture." };
+  }
+  if (targetTool === "message") {
+    return { action: "send", message: "runtime parity message fixture" };
+  }
+  if (targetTool === "session_status") {
+    return { sessionKey: "current" };
+  }
+  if (targetTool === "sessions_spawn") {
+    return {
+      task: "Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
+      label: "runtime-tool-fixture",
+      mode: "run",
+      thread: false,
+      runTimeoutSeconds: 30,
+    };
+  }
+  if (targetTool === "memory_recall") {
+    return { query: "runtime parity memory fixture" };
+  }
+  return { marker: "normal" };
 }
 
 function isActiveMemorySubagentPrompt(text: string) {
@@ -577,7 +804,7 @@ function extractExactMarkerDirective(text: string) {
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
-  const escapedLabel = label.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedLabel = escapeRegExp(label);
   const backtickedMatch = extractLastCapture(
     text,
     new RegExp(`${escapedLabel}:\\s*\`([^\\\`]+)\``, "i"),
@@ -592,30 +819,53 @@ function extractLabeledMarkerDirective(text: string, label: string) {
 }
 
 function extractQuotedToolArg(text: string, name: string) {
-  const escapedName = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedName = escapeRegExp(name);
   return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*"([^"]+)"`, "i"));
 }
 
 function extractBareToolArg(text: string, name: string) {
-  const escapedName = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedName = escapeRegExp(name);
   return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*([^\\s\\\`.,;:!?]+)`, "i"));
 }
 
 function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
-  return tools.some((tool) => {
-    if (!tool || typeof tool !== "object") {
-      return false;
-    }
-    const record = tool as Record<string, unknown>;
-    if (record.name === name) {
+  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
+  if (
+    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
+    instructionTextMentionsToolName(extractInstructionsText(body), name)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
+  if (depth > 6 || !value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => toolDefinitionMentionsName(item, name, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["name", "tool", "functionName"]) {
+    if (record[key] === name) {
       return true;
     }
-    const nested = record.function;
-    return Boolean(
-      nested && typeof nested === "object" && (nested as { name?: unknown }).name === name,
-    );
-  });
+  }
+  return Object.values(record).some((item) => toolDefinitionMentionsName(item, name, depth + 1));
+}
+
+function instructionTextMentionsToolName(text: string, name: string) {
+  if (!text) {
+    return false;
+  }
+  const escapedName = escapeRegExp(name);
+  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+}
+
+function isQaToolSearchFixture(text: string) {
+  return QA_TOOL_SEARCH_PROMPT_RE.test(text) || QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(text);
 }
 
 function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
@@ -714,7 +964,14 @@ function buildAssistantText(
 ) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
-  const toolJson = parseToolOutputJson(toolOutput);
+  const scenarioToolOutput =
+    toolOutput ||
+    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
+      extractAllRequestTexts(input, body),
+    )
+      ? extractLatestToolOutput(input)
+      : "");
+  const toolJson = parseToolOutputJson(scenarioToolOutput);
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
@@ -724,8 +981,8 @@ function buildAssistantText(
       ? toolJson.text
       : Array.isArray(toolJson?.results)
         ? JSON.stringify(toolJson.results)
-        : toolOutput;
-  const orbitCode = extractOrbitCode(memorySnippet);
+        : scenarioToolOutput;
+  const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
@@ -785,10 +1042,11 @@ function buildAssistantText(
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
   }
-  if (toolOutput && /repo contract followthrough check/i.test(prompt)) {
+  if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
+    const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
     if (
-      /successfully (?:wrote|created|updated|replaced)/i.test(toolOutput) ||
-      /status:\s*complete/i.test(toolOutput)
+      /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
+      /status:\s*complete/i.test(repoEvidenceText)
     ) {
       return [
         "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
@@ -871,7 +1129,11 @@ function buildAssistantText(
       "- None.",
     ].join("\n");
   }
-  if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
+  if (
+    toolOutput &&
+    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
+      /subagent handoff/i.test(allInputText))
+  ) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
     return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
   }
@@ -884,7 +1146,11 @@ function buildAssistantText(
     }
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
   }
-  if (toolOutput && /compaction retry mutating tool check/i.test(prompt)) {
+  if (
+    toolOutput &&
+    (/compaction retry mutating tool check/i.test(allInputText) ||
+      /compaction-retry-summary\.txt/i.test(toolOutput))
+  ) {
     if (
       toolOutput.includes("Replay safety: unsafe after write.") ||
       /compaction-retry-summary\.txt/i.test(toolOutput) ||
@@ -894,6 +1160,22 @@ function buildAssistantText(
       return "Protocol note: replay unsafe after write.";
     }
     return "";
+  }
+  if (
+    toolOutput &&
+    /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
+  ) {
+    return [
+      "Worked:",
+      "- Read all three seeded files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
+      "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
+      "Failed:",
+      "- None observed in mock mode.",
+      "Blocked:",
+      "- No live provider evidence in this lane.",
+      "Follow-up:",
+      "- Re-run with a real model for qualitative coverage.",
+    ].join("\n");
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -1039,7 +1321,7 @@ function splitMockStreamingText(text: string, parts = 3) {
 
 function buildTelegramLongFinalText({
   endMarker = "TELEGRAM-LONG-FINAL-END",
-  segmentCount = 54,
+  segmentCount = 42,
   startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
 }: {
   endMarker?: string;
@@ -1219,8 +1501,15 @@ async function buildResponsesPayload(
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
-  const toolJson = parseToolOutputJson(toolOutput);
   const allInputText = extractAllRequestTexts(input, body);
+  const scenarioToolOutput =
+    toolOutput ||
+    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
+      allInputText,
+    )
+      ? extractLatestToolOutput(input)
+      : "");
+  const toolJson = parseToolOutputJson(scenarioToolOutput);
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
@@ -1237,14 +1526,46 @@ async function buildResponsesPayload(
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
-  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
-  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  const canCallMockSubagentTool =
+    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
+    /subagent fanout synthesis check/i.test(allInputText) ||
+    /forked subagent context qa check/i.test(allInputText) ||
+    /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
+    /subagent handoff/i.test(allInputText) ||
+    buildExplicitSessionsSpawnArgs(allInputText) !== null;
+  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
+  const canCallSessionsYield =
+    hasDeclaredTool(body, "sessions_yield") ||
+    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
   const buildToolProgressReadEvents = (pattern: RegExp) => {
     const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
     return buildToolCallEventsWithArgs("read", {
       path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
     });
   };
+  if (
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
+    !toolOutput
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    const plannedArgs = targetTool
+      ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+      : {};
+    if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
+      return buildToolCallEventsWithArgs("tool_search_code", {
+        code: [
+          `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
+          "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
+          "if (!match) throw new Error('target tool not found');",
+          `return await openclaw.tools.call(match.id, ${JSON.stringify(plannedArgs)});`,
+        ].join("\n"),
+      });
+    }
+    if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
+      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
+    }
+  }
   if (
     allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
     /Internal task completion event/i.test(allInputText)
@@ -1280,7 +1601,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("BETA-OK");
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     if (!hasReasoningOnlyRetryInstruction) {
@@ -1292,7 +1613,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("REASONING-RECOVERED-OK");
   }
   if (QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "reasoning-only-side-effect.txt",
         content: "side effects already happened\n",
@@ -1353,6 +1674,19 @@ async function buildResponsesPayload(
         phase: "final_answer",
         streamDeltas: splitMockStreamingText(text),
         text,
+      },
+    ]);
+  }
+  if (
+    QA_STREAMING_PROMPT_RE.test(allInputText) &&
+    allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
+  ) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_telegram_quiet_stream",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(QA_TELEGRAM_STREAM_SINGLE_MARKER),
+        text: QA_TELEGRAM_STREAM_SINGLE_MARKER,
       },
     ]);
   }
@@ -1418,7 +1752,16 @@ async function buildResponsesPayload(
       exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
     );
   }
-  if (QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText)) {
+  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+  }
+  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+    return buildAssistantEvents(exactMarkerDirective);
+  }
+  const isTelegramCurrentSessionStatusTurn =
+    QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
+    (Boolean(toolOutput) && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
+  if (isTelegramCurrentSessionStatusTurn) {
     if (!toolOutput && hasDeclaredTool(body, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
@@ -1507,7 +1850,11 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/compaction retry mutating tool check/i.test(prompt)) {
+  if (
+    /compaction retry mutating tool check/i.test(allInputText) ||
+    /compaction retry evidence/i.test(toolOutput) ||
+    /compaction-retry-summary\.txt/i.test(toolOutput)
+  ) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
     }
@@ -1609,7 +1956,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("NONE");
   }
   if (/session memory ranking check/i.test(prompt)) {
-    if (!toolOutput) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
         maxResults: 3,
@@ -1619,13 +1966,16 @@ async function buildResponsesPayload(
     const results = Array.isArray(toolJson?.results)
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
-    const first = results[0];
-    const firstPath = typeof first?.path === "string" ? first.path : undefined;
-    if (first?.source === "sessions" || firstPath?.startsWith("sessions/")) {
+    const preferredSessionResult = results.find((result) => {
+      const resultPath = typeof result.path === "string" ? result.path : undefined;
+      return result.source === "sessions" || resultPath?.startsWith("sessions/");
+    });
+    if (preferredSessionResult) {
       return buildAssistantEvents(
         "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
       );
     }
+    const first = results[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -1644,11 +1994,20 @@ async function buildResponsesPayload(
     }
   }
   if (/thread memory check/i.test(allInputText)) {
-    if (!toolOutput) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",
         maxResults: 3,
       });
+    }
+    const transcriptOrbitCode =
+      extractOrbitCode(scenarioToolOutput) ??
+      extractOrbitCode(extractUserTextAfterLatestToolOutput(input)) ??
+      extractOrbitCode(extractSystemInputText(input));
+    if (transcriptOrbitCode) {
+      return buildAssistantEvents(
+        `Protocol note: I checked memory in-thread and the hidden thread codename is ${transcriptOrbitCode}.`,
+      );
     }
     const results = Array.isArray(toolJson?.results)
       ? (toolJson.results as Array<Record<string, unknown>>)
@@ -1678,7 +2037,7 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(prompt)) {
+  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -1697,7 +2056,7 @@ async function buildResponsesPayload(
     }
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
-  if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
+  if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
   if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
@@ -1711,19 +2070,31 @@ async function buildResponsesPayload(
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
-  if (/repo contract followthrough check/i.test(prompt)) {
-    if (!toolOutput) {
+  if (/repo contract followthrough check/i.test(allInputText)) {
+    const repoEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (
+      /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
+      /status:\s*complete/i.test(repoEvidenceText)
+    ) {
+      return buildAssistantEvents(
+        [
+          "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
+          "Wrote: repo-contract-summary.txt",
+          "Status: complete",
+        ].join("\n"),
+      );
+    }
+    if (!repoEvidenceText) {
       return buildToolCallEventsWithArgs("read", { path: "AGENT.md" });
     }
-    if (toolOutput.includes("# Repo contract")) {
-      return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
-    }
-    if (toolOutput.includes("# Execution style")) {
-      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_INPUT.md" });
-    }
     if (
-      toolOutput.includes("Mission: prove you followed the repo contract.") &&
-      toolOutput.includes("Evidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md")
+      repoEvidenceText.includes("Mission: prove you followed the repo contract.") &&
+      repoEvidenceText.includes("Evidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md")
     ) {
       return buildToolCallEventsWithArgs("write", {
         path: "repo-contract-summary.txt",
@@ -1734,12 +2105,21 @@ async function buildResponsesPayload(
         ].join("\n"),
       });
     }
+    if (repoEvidenceText.includes("# Execution style")) {
+      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_INPUT.md" });
+    }
+    if (repoEvidenceText.includes("# Repo contract")) {
+      return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
+    }
   }
   if (
     canCallSessionsSpawn &&
-    (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) &&
-    !toolOutput
+    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
+      /subagent handoff/i.test(allInputText)) &&
+    !toolOutput &&
+    !scenarioState.subagentHandoffSpawned
   ) {
+    scenarioState.subagentHandoffSpawned = true;
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Inspect the QA workspace and return one concise protocol note.",
       label: "qa-sidecar",
@@ -1750,7 +2130,7 @@ async function buildResponsesPayload(
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
     !toolOutput
   ) {
-    return buildToolCallEventsWithArgs("read", { path: "QA_SCENARIO_PLAN.md" });
+    return buildToolCallEventsWithArgs("read", { path: "repo/qa/scenarios/index.md" });
   }
   if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
@@ -2154,7 +2534,10 @@ async function buildMessagesPayload(
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
-  const scenarioState: MockScenarioState = { subagentFanoutPhase: 0 };
+  const scenarioState: MockScenarioState = {
+    subagentFanoutPhase: 0,
+    subagentHandoffSpawned: false,
+  };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -2248,8 +2631,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
-      if (requests.length > 50) {
-        requests.splice(0, requests.length - 50);
+      if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+        requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
       }
       if (body.stream === false) {
         const completion = events.at(-1);
@@ -2304,8 +2687,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
-      if (requests.length > 50) {
-        requests.splice(0, requests.length - 50);
+      if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+        requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
       }
       if (body.stream === true) {
         writeAnthropicSse(res, streamEvents);

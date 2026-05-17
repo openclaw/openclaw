@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -76,7 +77,7 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.session-rate-limit.test.ts",
   "src/acp/translator.set-session-mode.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
-  "src/canvas-host/server.test.ts",
+  "extensions/canvas/src/host/server.test.ts",
   "src/crestodian/audit.test.ts",
   "src/crestodian/assistant.configured.test.ts",
   "src/crestodian/crestodian.test.ts",
@@ -90,7 +91,7 @@ export const forcedUnitFastTestFiles = [
   "src/flows/doctor-health-contributions.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
-  "src/canvas-host/server.state-dir.test.ts",
+  "extensions/canvas/src/host/server.state-dir.test.ts",
   "src/docs/clawhub-plugin-docs.test.ts",
   "src/docs/channel-config-examples.test.ts",
   "src/docs/plugin-doc-examples.test.ts",
@@ -162,7 +163,7 @@ export const forcedUnitFastTestFiles = [
   "src/security/audit-summary.test.ts",
   "src/security/audit-synced-folder.test.ts",
   "src/security/audit-trust-model.test.ts",
-  "src/security/dm-policy-shared.test.ts",
+  "src/channels/message-access/message-access.test.ts",
   "src/security/audit-plugins-trust.test.ts",
   "src/security/audit-plugin-readonly-scope.test.ts",
   "src/security/audit-loopback-logging.test.ts",
@@ -309,15 +310,32 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
+function collectRepoTestFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", "src", "packages", "test"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((file) => normalizeRepoPath(file.trim()))
+    .filter((file) => file.endsWith(".test.ts"));
+}
+
 function collectRepoTestFiles(cwd) {
   const normalizedCwd = normalizeRepoPath(cwd);
   const cached = walkedTestFilesByCwd.get(normalizedCwd);
   if (cached) {
     return cached;
   }
-  const files = ["src", "packages", "test"]
-    .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-    .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  const files =
+    collectRepoTestFilesFromGit(cwd) ??
+    ["src", "packages", "test"]
+      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(normalizedCwd, files);
   return files;
 }

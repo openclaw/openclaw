@@ -20,14 +20,28 @@ describe("qa scenario catalog", () => {
     expect(listQaScenarioMarkdownPaths()).toContain(
       "qa/scenarios/media/image-generation-roundtrip.md",
     );
-    expect(pack.scenarios.some((scenario) => scenario.id === "image-generation-roundtrip")).toBe(
-      true,
-    );
-    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-gollum")).toBe(true);
-    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-c3po")).toBe(true);
-    expect(pack.scenarios.every((scenario) => scenario.execution?.kind === "flow")).toBe(true);
-    expect(pack.scenarios.some((scenario) => scenario.execution.flow?.steps.length)).toBe(true);
-    expect(pack.scenarios.every((scenario) => scenario.coverage?.primary.length)).toBe(true);
+    const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
+    const requiredScenarioIds = [
+      "image-generation-roundtrip",
+      "character-vibes-gollum",
+      "character-vibes-c3po",
+    ].toSorted();
+    expect(
+      scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
+    ).toEqual(requiredScenarioIds);
+    expect(
+      pack.scenarios
+        .filter((scenario) => scenario.execution?.kind !== "flow")
+        .map((scenario) => scenario.id),
+    ).toStrictEqual([]);
+    expect(
+      pack.scenarios.filter((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
+    ).not.toStrictEqual([]);
+    expect(
+      pack.scenarios
+        .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
+        .map((scenario) => scenario.id),
+    ).toStrictEqual([]);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
@@ -36,14 +50,11 @@ describe("qa scenario catalog", () => {
 
     expect(catalog.agentIdentityMarkdown).toContain("protocol-minded");
     expect(catalog.kickoffTask).toContain("Track what worked");
-    expect(catalog.scenarios.some((scenario) => scenario.id === "subagent-fanout-synthesis")).toBe(
-      true,
-    );
+    const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
+    expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
-      QA_AGENTIC_PARITY_SCENARIO_IDS.every((scenarioId) =>
-        catalog.scenarios.some((scenario) => scenario.id === scenarioId),
-      ),
-    ).toBe(true);
+      QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
+    ).toStrictEqual([]);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {
@@ -90,6 +101,82 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+  });
+
+  it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
+    const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
+    const soak = readQaScenarioById("runtime-soak-100-turn");
+
+    expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+      turnCount: 20,
+    });
+    expect(soak.runtimeParityTier).toBe("soak");
+    expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
+  });
+
+  it("loads runtime tool fixture metadata for standard and optional lanes", () => {
+    const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
+    const messageTool = readQaScenarioById("runtime-tool-message-tool");
+    const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+
+    expect(applyPatch.runtimeParityTier).toBe("standard");
+    expect(messageTool.runtimeParityTier).toBe("optional");
+    expect(tavilySearch.runtimeParityTier).toBe("optional");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
+      toolName: "apply_patch",
+      toolCoverage: {
+        bucket: "codex-native-workspace",
+        expectedLayer: "codex-native-workspace",
+      },
+    });
+    expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
+      toolName: "message",
+      expectedAvailable: false,
+      toolCoverage: {
+        bucket: "optional-profile-or-plugin",
+        expectedLayer: "profile-or-plugin",
+        required: false,
+      },
+    });
+  });
+
+  it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
+    const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          runtimeParityComparison?: string;
+          fixtureFile?: string;
+          expectedMarker?: string;
+          unavailableNeedles?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-pi-shaped-read-vocabulary.md");
+    expect(scenario.runtimeParityTier).toBe("live-only");
+    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+    expect(config?.fixtureFile).toBe("PI_SHAPED_READ_FIXTURE.txt");
+    expect(config?.expectedMarker).toBe("PI_SHAPED_READ_OK");
+    expect(config?.unavailableNeedles).toContain("not in my available tool surface");
+  });
+
+  it("loads live gateway sentinel scenarios for harness self-health", () => {
+    const scenarioIds = [
+      "plugin-hook-health-sentinel",
+      "plugin-manifest-contract-health",
+      "webchat-direct-reply-routing",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("live-only");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+    }
+    expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
+      "qa/scenarios/channels/webchat-direct-reply-routing.md",
+    );
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {

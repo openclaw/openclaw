@@ -488,7 +488,10 @@ Key ideas:
 - Tailscale Serve identity headers and `gateway.auth.mode: "trusted-proxy"` do
   **not** authenticate this standalone loopback browser API.
 - If browser control is enabled and no shared-secret auth is configured, OpenClaw
-  auto-generates `gateway.auth.token` on startup and persists it to config.
+  generates a runtime-only gateway token for that startup. Configure
+  `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or
+  `OPENCLAW_GATEWAY_PASSWORD` explicitly if clients need a stable secret across
+  restarts.
 - OpenClaw does **not** auto-generate that token when `gateway.auth.mode` is
   already `password`, `none`, or `trusted-proxy`.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
@@ -674,7 +677,8 @@ Platforms:
 - macOS: checks `/Applications` and `~/Applications`.
 - Linux: checks common Chrome/Brave/Edge/Chromium locations under `/usr/bin`,
   `/snap/bin`, `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and
-  `/usr/lib/chromium-browser`.
+  `/usr/lib/chromium-browser`, plus Playwright-managed Chromium under
+  `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
 - Windows: checks common install locations.
 
 ## Control API (optional)

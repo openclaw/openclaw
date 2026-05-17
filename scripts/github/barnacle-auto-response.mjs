@@ -13,7 +13,7 @@ import {
 const activePrLimit = 20;
 
 const thirdPartyExtensionMessage =
-  "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/tools/clawhub";
+  "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/clawhub";
 
 const rules = [
   {
@@ -61,6 +61,13 @@ const rules = [
     message: thirdPartyExtensionMessage,
   },
   {
+    label: "r: bluebubbles",
+    close: true,
+    commentTriggers: ["bluebubbles", "blue bubbles"],
+    message:
+      "BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Use iMessage via `imsg` instead: https://docs.openclaw.ai/channels/imessage. If this needs to stay BlueBubbles-backed, publish it as a third-party plugin on ClawHub instead of adding it back to core.",
+  },
+  {
     label: "r: moltbook",
     close: true,
     lock: true,
@@ -103,6 +110,10 @@ export const managedLabelSpecs = {
   "r: third-party-extension": {
     color: "5319E7",
     description: "Auto-close: third-party plugins/capabilities belong on ClawHub.",
+  },
+  "r: bluebubbles": {
+    color: "D93F0B",
+    description: "Auto-close: BlueBubbles is deprecated; use iMessage via imsg or ClawHub.",
   },
   "r: moltbook": {
     color: "B60205",
@@ -817,6 +828,16 @@ function isAutomationActor(context) {
   return isAutomationUser(context.payload.sender, context.actor ?? "");
 }
 
+function isClawSweeperProofSufficientLabelEvent(context) {
+  const senderLogin = context.payload.sender?.login ?? context.actor ?? "";
+  return (
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === PROOF_SUFFICIENT_LABEL &&
+    isAutomationUser(context.payload.sender, senderLogin) &&
+    /clawsweeper/i.test(senderLogin)
+  );
+}
+
 function isGitHubAppPullRequestAuthor(pullRequest) {
   return isAutomationUser(pullRequest.user);
 }
@@ -1060,6 +1081,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (labelSet.has(badBarnacleLabel)) {
       core.info(
         `Skipping PR auto-response checks for #${pullRequest.number} because ${badBarnacleLabel} is present.`,
+      );
+      return;
+    }
+
+    if (isClawSweeperProofSufficientLabelEvent(context)) {
+      core.info(
+        `Skipping PR auto-response checks for #${pullRequest.number} because ClawSweeper owns ${PROOF_SUFFICIENT_LABEL}.`,
       );
       return;
     }

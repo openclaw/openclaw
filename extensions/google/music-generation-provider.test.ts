@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, generateContentMock } = vi.hoisted(() => {
   const generateContentMock = vi.fn();
@@ -20,11 +20,46 @@ import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime"
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
 
+type GoogleGenAIConfig = {
+  apiKey?: string;
+  httpOptions?: {
+    baseUrl?: string;
+  };
+};
+
+type GenerateContentRequest = {
+  model?: string;
+  config?: unknown;
+};
+
+function lastGoogleGenAIConfig(): GoogleGenAIConfig {
+  const calls = createGoogleGenAIMock.mock.calls as unknown[][];
+  const config = calls.at(-1)?.[0];
+  if (!config) {
+    throw new Error("Expected GoogleGenAI config");
+  }
+  return config as GoogleGenAIConfig;
+}
+
+function firstGenerateContentRequest(): GenerateContentRequest {
+  const calls = generateContentMock.mock.calls as unknown[][];
+  const request = calls[0]?.[0];
+  if (!request) {
+    throw new Error("Expected generateContent request");
+  }
+  return request as GenerateContentRequest;
+}
+
 describe("google music generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     generateContentMock.mockReset();
     createGoogleGenAIMock.mockClear();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
   });
 
   it("declares explicit mode capabilities", () => {
@@ -64,22 +99,15 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(generateContentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "lyria-3-clip-preview",
-        config: {
-          responseModalities: ["AUDIO", "TEXT"],
-        },
-      }),
-    );
+    const generateRequest = firstGenerateContentRequest();
+    expect(generateRequest.model).toBe("lyria-3-clip-preview");
+    expect(generateRequest.config).toEqual({
+      responseModalities: ["AUDIO", "TEXT"],
+    });
     expect(result.tracks).toHaveLength(1);
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
     expect(result.lyrics).toEqual(["wake the city up"]);
-    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: "google-key",
-      }),
-    );
+    expect(lastGoogleGenAIConfig().apiKey).toBe("google-key");
   });
 
   it("strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK", async () => {
@@ -120,12 +148,8 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpOptions: expect.objectContaining({
-          baseUrl: "https://generativelanguage.googleapis.com",
-        }),
-      }),
+    expect(lastGoogleGenAIConfig().httpOptions?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com",
     );
   });
 
@@ -160,12 +184,8 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpOptions: expect.objectContaining({
-          baseUrl: "https://proxy.example.com/v1beta/route",
-        }),
-      }),
+    expect(lastGoogleGenAIConfig().httpOptions?.baseUrl).toBe(
+      "https://proxy.example.com/v1beta/route",
     );
   });
 
@@ -202,12 +222,8 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpOptions: expect.objectContaining({
-          baseUrl: "https://generativelanguage.googleapis.com",
-        }),
-      }),
+    expect(lastGoogleGenAIConfig().httpOptions?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com",
     );
   });
 
@@ -238,13 +254,7 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpOptions: expect.not.objectContaining({
-          baseUrl: expect.anything(),
-        }),
-      }),
-    );
+    expect(lastGoogleGenAIConfig().httpOptions?.baseUrl).toBeUndefined();
   });
 
   it("rejects unsupported wav output on clip model", async () => {

@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
@@ -93,6 +95,11 @@ function collectBundledChannelEntrypointOffenders(
 
 function listSourceBundledPluginRoots(): string[] {
   const extensionsDir = path.resolve("extensions");
+  const externalRoots = listExternalSourceBundledPluginRoots(extensionsDir);
+  if (externalRoots) {
+    return externalRoots;
+  }
+
   return fs
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -102,6 +109,73 @@ function listSourceBundledPluginRoots(): string[] {
         fs.existsSync(path.join(entryPath, "package.json")) ||
         fs.existsSync(path.join(entryPath, "openclaw.plugin.json")),
     );
+}
+
+function listExternalSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  return (
+    listGitSourceBundledPluginRoots(extensionsDir) ??
+    listFindSourceBundledPluginRoots(extensionsDir)
+  );
+}
+
+function listGitSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["ls-files", "--", "extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return packageMarkerPathsToRoots(result.stdout.split("\n"), extensionsDir);
+}
+
+function listFindSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      extensionsDir,
+      "-mindepth",
+      "2",
+      "-maxdepth",
+      "2",
+      "(",
+      "-name",
+      "package.json",
+      "-o",
+      "-name",
+      "openclaw.plugin.json",
+      ")",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return packageMarkerPathsToRoots(result.stdout.split("\n"), extensionsDir);
+}
+
+function packageMarkerPathsToRoots(markerPaths: string[], extensionsDir: string): string[] {
+  return [
+    ...new Set(
+      markerPaths
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => path.resolve(line))
+        .map((line) => path.dirname(line))
+        .filter((line) => path.dirname(line) === extensionsDir),
+    ),
+  ].toSorted();
 }
 
 afterEach(() => {
@@ -114,11 +188,21 @@ afterEach(() => {
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../plugins/channel-catalog-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
+  vi.doUnmock("./bundled-root.js");
   vi.doUnmock("jiti");
 });
 
 describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
+
+  it("lists source bundled plugin roots without in-process directory scans", () => {
+    expectNoReaddirSyncDuring(() => {
+      const roots = listSourceBundledPluginRoots();
+
+      expect(roots.length).toBeGreaterThan(0);
+      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(true);
+    });
+  });
 
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
@@ -135,8 +219,8 @@ describe("bundled channel entry shape guards", () => {
       "./bundled.js?scope=missing-bundled-discovery",
     );
 
-    expect(bundled.listBundledChannelPlugins()).toEqual([]);
-    expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
+    expect(bundled.listBundledChannelPlugins()).toStrictEqual([]);
+    expect(bundled.listBundledChannelSetupPlugins()).toStrictEqual([]);
   });
 
   it("loads real bundled channel entry contracts from the source tree", async () => {
@@ -222,13 +306,11 @@ describe("bundled channel entry shape guards", () => {
       );
 
       const plugin = bundled.requireBundledChannelPlugin("alpha");
-      expect(plugin.meta).toMatchObject({
-        id: "alpha",
-        label: "Alpha",
-        selectionLabel: "Use Alpha",
-        docsPath: "/channels/alpha",
-        blurb: "Alpha channel metadata.",
-      });
+      expect(plugin.meta.id).toBe("alpha");
+      expect(plugin.meta.label).toBe("Alpha");
+      expect(plugin.meta.selectionLabel).toBe("Use Alpha");
+      expect(plugin.meta.docsPath).toBe("/channels/alpha");
+      expect(plugin.meta.blurb).toBe("Alpha channel metadata.");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -489,6 +571,63 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
+  it("uses dist-runtime as the boundary root for packaged setup entries", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-runtime-root-"));
+    const pluginDir = path.join(root, "dist-runtime", "extensions", "alpha");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupPlugin() {",
+        "    return {",
+        "      id: 'alpha',",
+        "      meta: { id: 'alpha', label: 'Setup dist-runtime' },",
+        "      capabilities: {},",
+        "      config: {},",
+        "    };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    vi.doMock("./bundled-root.js", () => ({
+      resolveBundledChannelRootScope: () => ({
+        packageRoot: root,
+        cacheKey: `${root}:dist-runtime`,
+      }),
+    }));
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [alphaChannelMetadata({ includeSetup: true })],
+      resolveBundledChannelGeneratedPath: (
+        rootDir: string,
+        entry: BundledEntrySource | undefined,
+        pluginDirName?: string,
+      ) =>
+        path.join(
+          rootDir,
+          "dist-runtime",
+          "extensions",
+          pluginDirName ?? "alpha",
+          (entry?.built ?? entry?.source ?? "./index.js").replace(/^\.\//u, ""),
+        ),
+    }));
+
+    try {
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-dist-runtime-boundary",
+      );
+
+      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup dist-runtime");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("loads setup-entry feature plugins without loading the main channel entry", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-only-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -547,7 +686,7 @@ describe("bundled channel entry shape guards", () => {
         bundled.listBundledChannelLegacyStateMigrationDetectors({
           config: { channels: { alpha: { enabled: false } } },
         }),
-      ).toEqual([]);
+      ).toStrictEqual([]);
       expect(testGlobal.__bundledSetupOnlySetupLoaded).toBeUndefined();
 
       const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
@@ -721,7 +860,7 @@ describe("bundled channel entry shape guards", () => {
         source.includes('from "openclaw/plugin-sdk/channel-core"'),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps setup-entry legacy feature hints mirrored in package metadata", () => {
@@ -748,7 +887,7 @@ describe("bundled channel entry shape guards", () => {
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled channel entrypoints free of static src imports", () => {
@@ -756,7 +895,7 @@ describe("bundled channel entry shape guards", () => {
       /^(?:import|export)\s.+["']\.\/src\//mu.test(source),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps channel implementations off the broad core SDK surface", () => {
@@ -778,14 +917,14 @@ describe("bundled channel entry shape guards", () => {
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps plugin-sdk channel-core free of chat metadata bootstrap imports", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/channel-core.ts"), "utf8");
 
-    expect(source.includes("../channels/chat-meta.js")).toBe(false);
-    expect(source.includes("getChatChannelMeta")).toBe(false);
+    expect(source).not.toContain("../channels/chat-meta.js");
+    expect(source).not.toContain("getChatChannelMeta");
   });
 
   it("keeps bundled hot runtime barrels off the broad core SDK surface", () => {
@@ -797,7 +936,7 @@ describe("bundled channel entry shape guards", () => {
       fs.readFileSync(path.resolve(filePath), "utf8").includes("openclaw/plugin-sdk/core"),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps runtime helper surfaces off bootstrap-registry", () => {
@@ -810,13 +949,13 @@ describe("bundled channel entry shape guards", () => {
       fs.readFileSync(path.resolve(filePath), "utf8").includes("bootstrap-registry.js"),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension-shared off the broad runtime barrel", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/extension-shared.ts"), "utf8");
 
-    expect(source.includes('from "./runtime.js"')).toBe(false);
+    expect(source).not.toContain('from "./runtime.js"');
   });
 
   it("keeps bundled doctor surfaces off the broad runtime barrel", () => {
@@ -832,7 +971,7 @@ describe("bundled channel entry shape guards", () => {
         .includes('from "openclaw/plugin-sdk/runtime"'),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("breaks reentrant bundled channel discovery cycles with an empty fallback", async () => {
@@ -906,7 +1045,7 @@ module.exports = {
     ).__openclawBundledChannelReenter = () => {
       if (!reentered) {
         reentered = true;
-        expect(bundled.listBundledChannelPlugins()).toEqual([]);
+        expect(bundled.listBundledChannelPlugins()).toStrictEqual([]);
       }
     };
 
@@ -943,6 +1082,6 @@ module.exports = {
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

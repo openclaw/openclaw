@@ -26,6 +26,7 @@ import {
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+export { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 
 type GatewayAuxHandlerLogger = {
   warn?: (message: string) => void;
@@ -222,11 +223,24 @@ export function createGatewayAuxHandlers(params: {
               }
             }),
           log: params.log,
-          resolveSecrets: async ({ commandName, targetIds }) => {
+          resolveSecrets: async ({
+            allowedPaths,
+            commandName,
+            forcedActivePaths,
+            optionalActivePaths,
+            providerOverrides,
+            targetIds,
+          }) => {
             const { assignments, diagnostics, inactiveRefPaths } =
-              resolveCommandSecretsFromActiveRuntimeSnapshot({
+              await resolveCommandSecretsFromActiveRuntimeSnapshot({
                 commandName,
                 targetIds: new Set(targetIds),
+                ...(allowedPaths ? { allowedPaths: new Set(allowedPaths) } : {}),
+                ...(forcedActivePaths ? { forcedActivePaths: new Set(forcedActivePaths) } : {}),
+                ...(optionalActivePaths
+                  ? { optionalActivePaths: new Set(optionalActivePaths) }
+                  : {}),
+                ...(providerOverrides ? { providerOverrides } : {}),
               });
             if (assignments.length === 0) {
               return {

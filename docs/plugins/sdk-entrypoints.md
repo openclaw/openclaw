@@ -140,8 +140,13 @@ export default defineChannelPluginEntry({
   memoizes the resolved schema on first access.
 - For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
   when you want the command to stay lazy-loaded without disappearing from the
-  root CLI parse tree. For channel plugins, prefer registering those descriptors
-  from `registerCliMetadata(...)` and keep `registerFull(...)` focused on runtime-only work.
+  root CLI parse tree. For paired-node feature commands, prefer
+  `api.registerNodeCliFeature(...)` so the command lands under `openclaw nodes`.
+  For other nested plugin commands, add `parentPath` and register commands on
+  the `program` object passed to the registrar; OpenClaw resolves it to the
+  parent command before calling the plugin. For channel plugins, prefer
+  registering those descriptors from `registerCliMetadata(...)` and keep
+  `registerFull(...)` focused on runtime-only work.
 - If `registerFull(...)` also registers gateway RPC methods, keep them on a
   plugin-specific prefix. Reserved core admin namespaces (`config.*`,
   `exec.approvals.*`, `wizard.*`, `update.*`) are always coerced to
@@ -168,7 +173,7 @@ In practice, pair `defineSetupPluginEntry(...)` with the narrow setup helper
 families:
 
 - `openclaw/plugin-sdk/setup-runtime` for runtime-safe setup helpers such as
-  import-safe setup patch adapters, lookup-note output,
+  `createSetupTranslator`, import-safe setup patch adapters, lookup-note output,
   `promptResolvedAllowFrom`, `splitSetupEntries`, and delegated setup proxies
 - `openclaw/plugin-sdk/channel-setup` for optional-install setup surfaces
 - `openclaw/plugin-sdk/setup-tools` for setup/install CLI/archive/docs helpers

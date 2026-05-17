@@ -32,12 +32,15 @@ import {
   resolveChannelSourceReplyDeliveryMode,
 } from "./channel-reply-pipeline.js";
 import {
-  dispatchInboundReplyWithBase,
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,
   recordInboundSessionAndDispatchReply,
   resolveInboundReplyDispatchCounts,
 } from "./inbound-reply-dispatch.js";
+
+function readFirstMockArg(fn: unknown): unknown {
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
+}
 
 describe("recordInboundSessionAndDispatchReply", () => {
   beforeEach(() => {
@@ -87,12 +90,11 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
 
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:test:peer",
-        ctx: ctxPayload,
-      }),
-    );
+    const recordParams = readFirstMockArg(recordInboundSession) as
+      | { ctx?: unknown; sessionKey?: string }
+      | undefined;
+    expect(recordParams?.sessionKey).toBe("agent:main:test:peer");
+    expect(recordParams?.ctx).toBe(ctxPayload);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({
       text: "hello",
@@ -199,17 +201,24 @@ describe("recordInboundSessionAndDispatchReply", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        agentId: "main",
-        ctxPayload,
-        payload: expect.objectContaining({ text: "hello durable" }),
-        info: { kind: "final" },
-        replyToMode: "first",
-      }),
-    );
+    const durableParams = readFirstMockArg(deliverInboundReplyWithMessageSendContext) as
+      | {
+          accountId?: string;
+          agentId?: string;
+          channel?: string;
+          ctxPayload?: unknown;
+          info?: unknown;
+          payload?: { text?: string };
+          replyToMode?: string;
+        }
+      | undefined;
+    expect(durableParams?.channel).toBe("telegram");
+    expect(durableParams?.accountId).toBe("default");
+    expect(durableParams?.agentId).toBe("main");
+    expect(durableParams?.ctxPayload).toBe(ctxPayload);
+    expect(durableParams?.payload?.text).toBe("hello durable");
+    expect(durableParams?.info).toEqual({ kind: "final" });
+    expect(durableParams?.replyToMode).toBe("first");
     expect(deliver).not.toHaveBeenCalled();
   });
 
@@ -247,10 +256,6 @@ describe("recordInboundSessionAndDispatchReply", () => {
     expect(createChannelMessageReplyPrefixContext).toBe(createReplyPrefixContext);
     expect(createChannelMessageReplyPrefixOptions).toBe(createReplyPrefixOptions);
     expect(createChannelMessageTypingCallbacks).toBe(createTypingCallbacks);
-    expect(typeof dispatchChannelMessageReplyWithBase).toBe("function");
-    expect(typeof dispatchInboundReplyWithBase).toBe("function");
     expect(hasFinalChannelMessageReplyDispatch).toBe(hasFinalInboundReplyDispatch);
-    expect(typeof recordChannelMessageReplyDispatch).toBe("function");
-    expect(typeof recordInboundSessionAndDispatchReply).toBe("function");
   });
 });

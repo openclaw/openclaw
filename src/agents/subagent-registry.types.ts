@@ -29,6 +29,7 @@ export type SubagentRunRecord = {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
+  taskName?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -66,6 +67,18 @@ export type SubagentRunRecord = {
   pendingFinalDeliveryAttemptCount?: number;
   pendingFinalDeliveryLastError?: string | null;
   pendingFinalDeliveryPayload?: PendingFinalDeliveryPayload;
+  deliverySuspendedAt?: number;
+  deliverySuspendedReason?: "retry-limit" | "expiry";
+  deliveryDiscardedAt?: number;
+  deliveryDiscardReason?: "expired" | "pressure-pruned";
+  deliveryDiscardedPayloadSummary?: {
+    requesterSessionKey?: string;
+    childSessionKey?: string;
+    childRunId?: string;
+    endedAt?: number;
+    status?: string;
+    lastError?: string | null;
+  };
   completionAnnouncedAt?: number;
   attachmentsDir?: string;
   attachmentsRootDir?: string;

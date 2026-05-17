@@ -40,6 +40,11 @@ Use `--agent <id>` to inspect a configured agent's model/auth state. When omitte
 the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
 Probe rows can come from auth profiles, env credentials, or `models.json`.
+For Codex OAuth troubleshooting, `openclaw models status`,
+`openclaw models auth list --provider openai-codex`, and
+`openclaw config get agents.defaults.model --json` are the quickest way to
+confirm whether an agent has a usable `openai-codex` auth profile for
+`openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai#check-and-recover-codex-oauth-routing).
 
 Notes:
 
@@ -183,11 +188,17 @@ specific configured agent store. The parent `--agent` flag is honored by
 `add`, `list`, `login`, `setup-token`, `paste-token`, and
 `login-github-copilot`.
 
+For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
+Use `--method api-key` only when you want to add an OpenAI API-key profile,
+usually as a backup for Codex subscription limits. The legacy
+`--provider openai-codex` spelling still works for existing scripts.
+
 Examples:
 
 ```bash
-openclaw models auth login --provider openai-codex --set-default
-openclaw models auth list --provider openai-codex
+openclaw models auth login --provider openai --set-default
+openclaw models auth login --provider openai --method api-key
+openclaw models auth list --provider openai
 ```
 
 Notes:

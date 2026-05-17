@@ -5,7 +5,7 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -776,6 +776,9 @@ async function refreshPageRelatedBlocks(params: {
       continue;
     }
     const original = await root.readText(page.relativePath);
+    if (original.trim().length === 0) {
+      continue;
+    }
     const updated = withTrailingNewline(
       replaceManagedMarkdownBlock({
         original,

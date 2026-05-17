@@ -2,7 +2,7 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
@@ -55,11 +55,46 @@ function installGoogleTtsRequestMock(pcm = Buffer.from([1, 0, 2, 0])) {
   return postJsonRequestMock;
 }
 
+function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+  return actual;
+}
+
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
+function requireFirstRecordArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): Record<string, unknown> {
+  const value = requireFirstMockArg(mock, label);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("Google speech provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     transcodeAudioBufferToOpusMock.mockReset();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    vi.resetModules();
   });
 
   it("synthesizes Gemini PCM as WAV and preserves audio tags in the request text", async () => {
@@ -78,33 +113,30 @@ describe("Google speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(requestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
-        body: {
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: "[whispers] The door is open." }],
-            },
-          ],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: "Puck",
-                },
+    const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "[whispers] The door is open." }],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: "Puck",
               },
             },
           },
         },
-        fetchFn: fetch,
-        pinDns: false,
-        timeoutMs: 12_345,
-      }),
-    );
-    const request = requestMock.mock.calls[0]?.[0] as { headers?: HeadersInit };
+      },
+      fetchFn: fetch,
+      pinDns: false,
+      timeoutMs: 12_345,
+    }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("google-test-key");
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
@@ -137,13 +169,16 @@ describe("Google speech provider", () => {
       fileExtension: ".opus",
       voiceCompatible: true,
     });
-    expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
-      audioBuffer: expect.any(Buffer),
-      inputExtension: "wav",
-      tempPrefix: "tts-google-",
-      timeoutMs: 12_000,
-    });
-    const [{ audioBuffer }] = transcodeAudioBufferToOpusMock.mock.calls[0];
+    const transcodeArg = expectRecordFields(
+      requireFirstRecordArg(transcodeAudioBufferToOpusMock, "Google TTS transcode request"),
+      {
+        inputExtension: "wav",
+        tempPrefix: "tts-google-",
+        timeoutMs: 12_000,
+      },
+    );
+    expect(Buffer.isBuffer(transcodeArg.audioBuffer)).toBe(true);
+    const audioBuffer = transcodeArg.audioBuffer as Buffer;
     expect(audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
     expect(audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
   });
@@ -349,12 +384,9 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    expect(requestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
-      }),
-    );
-    const request = requestMock.mock.calls[0]?.[0] as { headers?: HeadersInit };
+    const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+    }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
 
@@ -383,7 +415,9 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    const request = requestMock.mock.calls[0]?.[0] as { headers?: HeadersInit };
+    const request = requireFirstRecordArg(requestMock, "Google TTS request") as {
+      headers?: HeadersInit;
+    };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("model-provider-google-key");
   });
 
@@ -411,30 +445,29 @@ describe("Google speech provider", () => {
       timeoutMs: 5_000,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const request = expectRecordFields(
+      requireFirstRecordArg(postJsonRequestMock, "Google telephony TTS request"),
+      {
         url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-tts:generateContent",
-        body: expect.objectContaining({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: "Speak brightly.\n\nSpeaker name: Override speaker\n\nPhone call audio." },
-              ],
-            },
-          ],
-          generationConfig: expect.objectContaining({
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: "Puck",
-                },
-              },
-            },
-          }),
-        }),
-      }),
+      },
     );
+    const body = request.body as {
+      contents?: unknown;
+      generationConfig?: { speechConfig?: unknown };
+    };
+    expect(body.contents).toEqual([
+      {
+        role: "user",
+        parts: [{ text: "Speak brightly.\n\nSpeaker name: Override speaker\n\nPhone call audio." }],
+      },
+    ]);
+    expect(body.generationConfig?.speechConfig).toEqual({
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: "Puck",
+        },
+      },
+    });
     expect(result).toEqual({
       audioBuffer: pcm,
       outputFormat: "pcm",
@@ -458,20 +491,14 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    expect(requestMock.mock.calls[0]?.[0].body).toMatchObject({
-      contents: [
-        {
-          parts: [
-            {
-              text:
-                "Speak professionally with a calm executive tone.\n\n" +
-                "Speaker name: Alex\n\n" +
-                "Status update starts now.",
-            },
-          ],
-        },
-      ],
-    });
+    const request = requireFirstRecordArg(requestMock, "Google TTS request") as {
+      body?: { contents?: Array<{ parts?: Array<{ text?: string }> }> };
+    };
+    expect(request.body?.contents?.[0]?.parts?.[0]?.text).toBe(
+      "Speak professionally with a calm executive tone.\n\n" +
+        "Speaker name: Alex\n\n" +
+        "Status update starts now.",
+    );
   });
 
   it("resolves provider config and directive overrides", () => {
@@ -550,12 +577,10 @@ describe("Google speech provider", () => {
   it("lists Gemini prebuilt TTS voices", async () => {
     const provider = buildGoogleSpeechProvider();
 
-    await expect(provider.listVoices?.({ providerConfig: {} })).resolves.toEqual(
-      expect.arrayContaining([
-        { id: "Kore", name: "Kore" },
-        { id: "Puck", name: "Puck" },
-      ]),
-    );
+    const voices = await provider.listVoices?.({ providerConfig: {} });
+    const voiceLabels = voices?.map((voice) => `${voice.id}:${voice.name}`);
+    expect(voiceLabels).toContain("Kore:Kore");
+    expect(voiceLabels).toContain("Puck:Puck");
   });
 
   it("formats Google TTS HTTP errors with provider details", async () => {
@@ -616,12 +641,13 @@ describe("Google speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const requestConfig = expectRecordFields(
+      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
+      {
         allowPrivateNetwork: true,
-        request: expect.objectContaining({ allowPrivateNetwork: true }),
-      }),
+      },
     );
+    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
   });
 
   it("honors configured private-network opt-in for Google telephony TTS", async () => {
@@ -645,11 +671,12 @@ describe("Google speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const requestConfig = expectRecordFields(
+      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
+      {
         allowPrivateNetwork: true,
-        request: expect.objectContaining({ allowPrivateNetwork: true }),
-      }),
+      },
     );
+    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
   });
 });

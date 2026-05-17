@@ -42,6 +42,8 @@ export type ChannelStreamingProgressConfig = {
   labels?: string[];
   /** Maximum number of progress lines to keep below the label. Default: 8. */
   maxLines?: number;
+  /** Maximum characters per compact progress line before truncation. Default: 120. */
+  maxLineChars?: number;
   /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
   render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
@@ -206,7 +208,7 @@ export type SessionConfig = {
   /** Session transcript write-lock acquisition policy. */
   writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
-    /** Max ping-pong turns between requester/target (0–5). Default: 5. */
+    /** Max ping-pong turns between requester/target (0-20). Default: 5. */
     maxPingPongTurns?: number;
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
@@ -312,6 +314,8 @@ export type DiagnosticsConfig = {
   stuckSessionWarnMs?: number;
   /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
   stuckSessionAbortMs?: number;
+  /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
+  memoryPressureSnapshot?: boolean;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

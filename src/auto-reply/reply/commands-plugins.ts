@@ -8,15 +8,13 @@ import {
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import {
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
@@ -35,7 +33,6 @@ import {
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
-import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -43,9 +40,10 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
@@ -135,6 +133,25 @@ function formatPluginsList(report: PluginStatusReport): string {
     }),
   ];
   return lines.join("\n");
+}
+
+function isPluginsWriteAction(action: string): boolean {
+  return action === "install" || action === "enable" || action === "disable";
+}
+
+function rejectNixModePluginWrite(): {
+  shouldContinue: false;
+  reply: { text: string };
+} | null {
+  try {
+    assertConfigWriteAllowedInCurrentMode();
+    return null;
+  } catch (error) {
+    return {
+      shouldContinue: false,
+      reply: { text: `⚠️ ${formatErrorMessage(error)}` },
+    };
+  }
 }
 
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
@@ -404,13 +421,20 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
-    label: "/plugins write",
-    allowedScopes: ["operator.admin"],
-    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
-  });
-  if (missingAdminScope) {
-    return missingAdminScope;
+  if (isPluginsWriteAction(pluginsCommand.action)) {
+    const missingAdminScope = requireGatewayClientScope(params, {
+      label: "/plugins write",
+      allowedScopes: ["operator.admin"],
+      missingText:
+        "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
+    });
+    if (missingAdminScope) {
+      return missingAdminScope;
+    }
+    const nixModeWrite = rejectNixModePluginWrite();
+    if (nixModeWrite) {
+      return nixModeWrite;
+    }
   }
 
   if (pluginsCommand.action === "install") {
@@ -507,28 +531,22 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const next = setPluginEnabledInConfig(
-    structuredClone(loaded.config),
-    plugin.id,
-    pluginsCommand.action === "enable",
-  );
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = validated.issues[0];
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Config invalid after /plugins ${pluginsCommand.action} (${issue.path}: ${issue.message}).`,
-      },
-    };
+  let committedConfig: OpenClawConfig;
+  try {
+    committedConfig = await setPluginEnabledFromCommand({
+      pluginId: plugin.id,
+      enabled: pluginsCommand.action === "enable",
+      action: pluginsCommand.action,
+    });
+  } catch (error) {
+    if (error instanceof AutoReplyConfigMutationError) {
+      return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+    }
+    throw error;
   }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    afterWrite: { mode: "auto" },
-  });
   let registryWarning: string | undefined;
   await refreshPluginRegistryAfterConfigMutation({
-    config: validated.config,
+    config: committedConfig,
     reason: "policy-changed",
     logger: {
       warn: (message) => {

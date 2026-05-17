@@ -1,6 +1,10 @@
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
-import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+import {
+  addActiveManagedProxyTlsOptions,
+  resolveManagedEnvHttpProxyAgentOptions,
+} from "./proxy/managed-proxy-undici.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
@@ -44,18 +48,21 @@ function normalizeInitForUndici(
   if (!init) {
     return init;
   }
+  const normalizedHeaders = normalizeHeadersInitForFetch(init.headers);
+  const initWithNormalizedHeaders =
+    normalizedHeaders === init.headers ? init : { ...init, headers: normalizedHeaders };
   const body = init.body;
   if (!isFormDataLike(body) || body instanceof UndiciFormData) {
-    return init;
+    return initWithNormalizedHeaders;
   }
   const form = new UndiciFormData();
   for (const [key, value] of body.entries()) {
     appendFormDataEntry(form, key, value);
   }
-  const headers = new Headers(init.headers);
+  const headers = new Headers(normalizedHeaders);
   headers.delete("content-length");
   headers.delete("content-type");
-  return { ...init, headers, body: form as unknown as BodyInit };
+  return { ...initWithNormalizedHeaders, headers, body: form as unknown as BodyInit };
 }
 
 /**
@@ -71,7 +78,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   let agent: InstanceType<UndiciRuntimeDeps["ProxyAgent"]> | null = null;
   const resolveAgent = (): InstanceType<UndiciRuntimeDeps["ProxyAgent"]> => {
     if (!agent) {
-      agent = new ProxyAgent(proxyUrl);
+      agent = new ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
     }
     return agent;
   };
@@ -109,7 +116,7 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
 export function resolveProxyFetchFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): typeof fetch | undefined {
-  const proxyOptions = resolveEnvHttpProxyAgentOptions(env);
+  const proxyOptions = resolveManagedEnvHttpProxyAgentOptions(env);
   if (!proxyOptions) {
     return undefined;
   }

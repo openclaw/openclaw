@@ -13,8 +13,16 @@ import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registr
 installDiscordRegistryHooks();
 
 describe("resolveCommandAuthorization", () => {
-  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-    allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+    const values: string[] = [];
+    for (const entry of allowFrom) {
+      const value = String(entry).trim();
+      if (value) {
+        values.push(value);
+      }
+    }
+    return values;
+  };
 
   function createAllowFromPlugin(
     id: string,
@@ -42,6 +50,20 @@ describe("resolveCommandAuthorization", () => {
     return createAllowFromPlugin(id, () => {
       throw new Error(error);
     });
+  }
+
+  function createOwnerEnforcingAllowFromPlugin(
+    id: string,
+    resolveAllowFrom: () => Array<string | number> | undefined,
+  ) {
+    const entry = createAllowFromPlugin(id, resolveAllowFrom);
+    return {
+      ...entry,
+      plugin: {
+        ...entry.plugin,
+        commands: { enforceOwnerForCommands: true },
+      },
+    };
   }
 
   function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
@@ -202,7 +224,7 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(false);
   });
 
-  it("allows channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
+  it("rejects channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -242,7 +264,7 @@ describe("resolveCommandAuthorization", () => {
     });
 
     expect(auth.senderIsOwner).toBe(false);
-    expect(auth.isAuthorizedSender).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(false);
   });
 
   it("uses explicit owner allowlist when allowFrom is empty", () => {
@@ -632,6 +654,62 @@ describe("resolveCommandAuthorization", () => {
       expect(auth.isAuthorizedSender).toBe(true);
     });
 
+    it("requires owner identity before commands.allowFrom when the plugin enforces owner-only commands", () => {
+      registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("telegram", () => ["*"]));
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["*"],
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          From: "telegram:999",
+          SenderId: "999",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("keeps commands.allowFrom available to non-owner command users when an owner allowlist is configured", () => {
+      const cfg = {
+        commands: {
+          ownerAllowFrom: ["discord:owner"],
+          allowFrom: {
+            discord: ["helper"],
+          },
+        },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          From: "discord:helper",
+          SenderId: "helper",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
     it("does not treat conversation ids in From as sender identities", () => {
       const cfg = {
         commands: {
@@ -935,8 +1013,9 @@ describe("resolveCommandAuthorization", () => {
           commandAuthorized: true,
         });
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("Error");
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
+        const warning = String(warn.mock.calls[0]?.[0] ?? "");
+        expect(warning).toContain("Error");
+        expect(warning).not.toContain("SECRET-TOKEN-123");
       } finally {
         warn.mockRestore();
       }

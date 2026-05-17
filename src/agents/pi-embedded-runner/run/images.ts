@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -30,19 +30,25 @@ const IMAGE_EXTENSION_NAMES = [
   "heic",
   "heif",
 ] as const;
-const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
+const IMAGE_EXTENSIONS = new Set<string>();
+for (const ext of IMAGE_EXTENSION_NAMES) {
+  IMAGE_EXTENSIONS.add(`.${ext}`);
+}
 const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
 const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
   "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
+  "(?:^|\\s|[\"'`(])([A-Za-z]:[\\\\/][^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
 const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
 const MESSAGE_IMAGE_PATTERN = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
 const FILE_URL_PATTERN = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+const WINDOWS_DRIVE_PATH_PATTERN = new RegExp(WINDOWS_DRIVE_PATH_REGEX_SOURCE, "gi");
 const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 
 /**
@@ -159,7 +165,12 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     if (!match?.[1]) {
       break;
     }
-    uris.unshift(match[1]);
+    uris.push(match[1]);
+  }
+  for (let left = 0, right = uris.length - 1; left < right; left += 1, right -= 1) {
+    const uri = uris[left];
+    uris[left] = uris[right];
+    uris[right] = uri;
   }
   return uris;
 }
@@ -257,6 +268,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   MEDIA_ATTACHED_PATTERN.lastIndex = 0;
   MESSAGE_IMAGE_PATTERN.lastIndex = 0;
   FILE_URL_PATTERN.lastIndex = 0;
+  WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
   PATH_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
@@ -315,6 +327,13 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
+    }
+  }
+
+  // Pattern for Windows drive paths.
+  while ((match = WINDOWS_DRIVE_PATH_PATTERN.exec(prompt)) !== null) {
+    if (match[1]) {
+      addPathRef(match[1]);
     }
   }
 
@@ -459,8 +478,13 @@ export async function detectAndLoadPromptImages(params: {
   const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {
+    const sanitizedExistingImages = await sanitizeImagesWithLog(
+      params.existingImages ?? [],
+      "prompt:images",
+      { maxDimensionPx: params.maxDimensionPx },
+    );
     return {
-      images: params.existingImages ?? [],
+      images: sanitizedExistingImages,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,

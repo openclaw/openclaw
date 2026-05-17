@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
@@ -9,7 +9,7 @@ import {
   createRealtimeVoiceAgentTalkbackQueue,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
-  recordTalkDiagnosticEvent,
+  recordTalkObservabilityEvent,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderPlugin,
@@ -41,6 +41,7 @@ import {
   convertGoogleMeetTtsAudioForBridge,
   formatGoogleMeetAgentAudioModelLog,
   formatGoogleMeetAgentTtsResultLog,
+  formatGoogleMeetTranscriptSummaryLog,
   formatGoogleMeetRealtimeVoiceModelLog,
   type GoogleMeetRealtimeEventEntry,
   type GoogleMeetRealtimeTranscriptEntry,
@@ -181,7 +182,9 @@ export async function startNodeAgentAudioBridge(params: {
           return;
         }
         recordGoogleMeetRealtimeTranscript(transcript, "assistant", normalized);
-        params.logger.info(`[google-meet] node agent assistant: ${normalized}`);
+        params.logger.info(
+          formatGoogleMeetTranscriptSummaryLog("node agent assistant", normalized),
+        );
         const result = await params.runtime.tts.textToSpeechTelephony({
           text: normalized,
           cfg: params.fullConfig,
@@ -226,6 +229,7 @@ export async function startNodeAgentAudioBridge(params: {
   });
 
   sttSession = resolved.provider.createSession({
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     onTranscript: (text) => {
       const trimmed = text.trim();
@@ -233,10 +237,13 @@ export async function startNodeAgentAudioBridge(params: {
         return;
       }
       recordGoogleMeetRealtimeTranscript(transcript, "user", trimmed);
-      params.logger.info(`[google-meet] node agent user: ${trimmed}`);
+      params.logger.info(formatGoogleMeetTranscriptSummaryLog("node agent user", trimmed));
       if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text: trimmed })) {
         params.logger.info(
-          `[google-meet] node agent ignored assistant echo transcript: ${trimmed}`,
+          formatGoogleMeetTranscriptSummaryLog(
+            "node agent ignored assistant echo transcript",
+            trimmed,
+          ),
         );
         return;
       }
@@ -368,7 +375,7 @@ export async function startNodeRealtimeAudioBridge(params: {
       brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
       provider: resolved.provider.id,
     },
-    { onEvent: recordTalkDiagnosticEvent },
+    { onEvent: recordTalkObservabilityEvent },
   );
   const recentTalkEvents: TalkEvent[] = [];
   const rememberTalkEvent = (event: TalkEvent | undefined): void => {
@@ -473,6 +480,7 @@ export async function startNodeRealtimeAudioBridge(params: {
 
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,
@@ -577,11 +585,14 @@ export async function startNodeRealtimeAudioBridge(params: {
       }
       if (isFinal) {
         recordGoogleMeetRealtimeTranscript(transcript, role, text);
-        params.logger.info(`[google-meet] node realtime ${role}: ${text}`);
+        params.logger.info(formatGoogleMeetTranscriptSummaryLog(`node realtime ${role}`, text));
         if (role === "user" && strategy === "agent") {
           if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text })) {
             params.logger.info(
-              `[google-meet] node realtime ignored assistant echo transcript: ${text}`,
+              formatGoogleMeetTranscriptSummaryLog(
+                "node realtime ignored assistant echo transcript",
+                text,
+              ),
             );
             return;
           }

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-coding-agent";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
@@ -53,6 +53,7 @@ type ReadTruncationDetails = {
   firstLineExceedsLimit: boolean;
 };
 
+const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 
@@ -197,6 +198,38 @@ function stripReadTruncationContentDetails(
   };
 }
 
+function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
+  const offset = args.offset;
+  return (
+    typeof offset === "number" &&
+    Number.isFinite(offset) &&
+    offset > 0 &&
+    error instanceof Error &&
+    OFFSET_BEYOND_EOF_RE.test(error.message)
+  );
+}
+
+function emptyReadResult(): AgentToolResult<unknown> {
+  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
+  return { content: [textBlock], details: undefined };
+}
+
+async function executeReadPage(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  try {
+    return await params.base.execute(params.toolCallId, params.args, params.signal);
+  } catch (error) {
+    if (isOffsetBeyondEof(error, params.args)) {
+      return emptyReadResult();
+    }
+    throw error;
+  }
+}
+
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -208,7 +241,7 @@ async function executeReadWithAdaptivePaging(params: {
   const hasExplicitLimit =
     typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
   if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPage(params);
   }
 
   const offsetRaw = params.args.offset;
@@ -224,7 +257,12 @@ async function executeReadWithAdaptivePaging(params: {
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    const pageResult = await executeReadPage({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: pageArgs,
+      signal: params.signal,
+    });
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -239,7 +277,7 @@ async function executeReadWithAdaptivePaging(params: {
       (truncation?.outputLines ?? 0) > 0 &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
     const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
-    const delimiter = aggregatedText ? "\n\n" : "";
+    const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
 
     if (aggregatedText && aggregatedBytes + nextBytes > params.maxBytes) {
@@ -265,7 +303,7 @@ async function executeReadWithAdaptivePaging(params: {
   }
 
   if (!firstResult) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPage(params);
   }
 
   let finalText = aggregatedText;
@@ -351,19 +389,15 @@ function mapContainerPathToWorkspaceRoot(params: {
   root: string;
   containerWorkdir?: string;
 }): string {
-  const containerWorkdir = params.containerWorkdir?.trim();
-  if (!containerWorkdir) {
-    return params.filePath;
-  }
-  const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!normalizedWorkdir.startsWith("/")) {
-    return params.filePath;
-  }
-  if (!normalizedWorkdir) {
-    return params.filePath;
-  }
+  return mapContainerPathToRoot({
+    filePath: params.filePath,
+    root: params.root,
+    containerRoot: params.containerWorkdir,
+  }).filePath;
+}
 
-  let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
+function resolveContainerPathCandidate(filePath: string): string | null {
+  let candidate = filePath.startsWith("@") ? filePath.slice(1) : filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
     if (localFilePath) {
@@ -375,47 +409,65 @@ function mapContainerPathToWorkspaceRoot(params: {
       try {
         parsed = new URL(candidate);
       } catch {
-        return params.filePath;
+        return filePath;
       }
       if (parsed.protocol !== "file:") {
-        return params.filePath;
+        return filePath;
       }
       const host = parsed.hostname.trim().toLowerCase();
       if (host && host !== "localhost") {
-        return params.filePath;
+        return filePath;
       }
       if (hasEncodedFileUrlSeparator(parsed.pathname)) {
-        return params.filePath;
+        return filePath;
       }
       let normalizedPathname: string;
       try {
         normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
       } catch {
-        return params.filePath;
-      }
-      if (
-        normalizedPathname !== normalizedWorkdir &&
-        !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
-      ) {
-        return params.filePath;
+        return filePath;
       }
       candidate = normalizedPathname;
     }
   }
+  return candidate;
+}
+
+function mapContainerPathToRoot(params: {
+  filePath: string;
+  root: string;
+  containerRoot?: string;
+}): { filePath: string; matched: boolean } {
+  const containerRoot = params.containerRoot?.trim();
+  if (!containerRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+  const normalizedRoot = containerRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedRoot.startsWith("/") || !normalizedRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+
+  const candidate = resolveContainerPathCandidate(params.filePath);
+  if (candidate === null) {
+    return { filePath: params.filePath, matched: false };
+  }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
-  if (normalizedCandidate === normalizedWorkdir) {
-    return path.resolve(params.root);
+  if (normalizedCandidate === normalizedRoot) {
+    return { filePath: path.resolve(params.root), matched: true };
   }
-  const prefix = `${normalizedWorkdir}/`;
+  const prefix = `${normalizedRoot}/`;
   if (!normalizedCandidate.startsWith(prefix)) {
-    return candidate;
+    return { filePath: candidate, matched: false };
   }
   const relative = normalizedCandidate.slice(prefix.length);
   if (!relative) {
-    return path.resolve(params.root);
+    return { filePath: path.resolve(params.root), matched: true };
   }
-  return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+  return {
+    filePath: path.resolve(params.root, ...relative.split("/").filter(Boolean)),
+    matched: true,
+  };
 }
 
 export function resolveToolPathAgainstWorkspaceRoot(params: {
@@ -572,10 +624,51 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
+function isSandboxRootEscapeError(error: unknown): boolean {
+  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+async function assertSandboxPathWithinAnyRoot(params: {
+  filePath: string;
+  roots: readonly string[];
+}) {
+  let firstRootEscapeError: unknown;
+  const seen = new Set<string>();
+  for (const candidateRoot of params.roots) {
+    const trimmedRoot = candidateRoot.trim();
+    if (!trimmedRoot) {
+      continue;
+    }
+    const root = path.resolve(trimmedRoot);
+    if (seen.has(root)) {
+      continue;
+    }
+    seen.add(root);
+    try {
+      return await assertSandboxPath({
+        filePath: params.filePath,
+        cwd: root,
+        root,
+      });
+    } catch (error) {
+      if (!isSandboxRootEscapeError(error)) {
+        throw error;
+      }
+      firstRootEscapeError ??= error;
+    }
+  }
+  throw firstRootEscapeError ?? new Error("Path guard has no configured roots.");
+}
+
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,
   options?: {
+    additionalRoots?: readonly string[];
+    additionalContainerMounts?: readonly {
+      containerRoot: string;
+      hostRoot: string;
+    }[];
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
@@ -593,12 +686,33 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof filePath !== "string" || !filePath.trim()) {
           continue;
         }
-        const sandboxPath = mapContainerPathToWorkspaceRoot({
+        let guardedRoot = root;
+        const workspaceMapping = mapContainerPathToRoot({
           filePath,
           root,
-          containerWorkdir: options?.containerWorkdir,
+          containerRoot: options?.containerWorkdir,
         });
-        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        let sandboxPath = workspaceMapping.filePath;
+        if (!workspaceMapping.matched) {
+          for (const mount of options?.additionalContainerMounts ?? []) {
+            const mountMapping = mapContainerPathToRoot({
+              filePath,
+              root: mount.hostRoot,
+              containerRoot: mount.containerRoot,
+            });
+            if (mountMapping.matched) {
+              guardedRoot = path.resolve(mount.hostRoot);
+              sandboxPath = mountMapping.filePath;
+              break;
+            }
+          }
+        }
+        const additionalRoots =
+          guardedRoot === root && !workspaceMapping.matched ? (options?.additionalRoots ?? []) : [];
+        const sandboxResult = await assertSandboxPathWithinAnyRoot({
+          filePath: sandboxPath,
+          roots: [guardedRoot, ...additionalRoots],
+        });
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = sandboxResult.resolved;

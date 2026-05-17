@@ -1,11 +1,17 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  appendReplyMediaFailureWarning,
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -30,6 +36,7 @@ function loadReplyPayloadsDedupeRuntime() {
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  suppressMediaFailureWarning?: boolean;
 }): Promise<ReplyPayload> {
   if (!params.normalizeMediaPaths || !resolveSendableOutboundReplyParts(params.payload).hasMedia) {
     return params.payload;
@@ -42,6 +49,9 @@ async function normalizeReplyPayloadMedia(params: {
     logVerbose(`reply payload media normalization failed: ${String(err)}`);
     return copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
+      text: params.suppressMediaFailureWarning
+        ? params.payload.text
+        : appendReplyMediaFailureWarning(params.payload.text),
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -91,7 +101,20 @@ async function normalizeSentMediaUrlsForDedupe(params: {
 }
 
 function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  if (payload.isError) {
+    return true;
+  }
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
+}
+
+function sanitizeFinalReplyText(
+  payload: ReplyPayload,
+  text: string | undefined,
+): string | undefined {
+  if (!text) {
+    return text;
+  }
+  return sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
 }
 
 function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
@@ -99,12 +122,37 @@ function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
   if (!text) {
     return payload;
   }
-  const cleaned = stripLegacyBracketToolCallBlocks(text);
+  const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
+  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks);
   if (cleaned === text) {
     return payload;
   }
-  logVerbose("Stripped legacy tool-call block from heartbeat reply");
-  return copyReplyPayloadMetadata(payload, { ...payload, text: cleaned });
+  if (withoutLegacyBlocks !== text) {
+    logVerbose("Stripped legacy tool-call block from heartbeat reply");
+  }
+  return copyPayloadWithSanitizedText(payload, cleaned);
+}
+
+function copyPayloadWithSanitizedText(
+  payload: ReplyPayload,
+  text: string | undefined,
+): ReplyPayload {
+  const sanitizedText = sanitizeFinalReplyText(payload, text);
+  const next = copyReplyPayloadMetadata(payload, {
+    ...payload,
+    text: sanitizedText,
+  });
+  const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+  if (!mirror?.text) {
+    return next;
+  }
+  setReplyPayloadMetadata(next, {
+    sourceReplyTranscriptMirror: {
+      ...mirror,
+      text: sanitizeFinalReplyText(payload, mirror.text) || undefined,
+    },
+  });
+  return next;
 }
 
 export async function buildReplyPayloads(params: {
@@ -115,6 +163,7 @@ export async function buildReplyPayloads(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   /** Payload keys sent directly (not via pipeline) during tool flush. */
+  previewStreamedText?: string;
   directlySentBlockKeys?: Set<string>;
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
@@ -131,63 +180,78 @@ export async function buildReplyPayloads(params: {
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
-  const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads.map((payload) => sanitizeHeartbeatPayload(payload))
-    : params.payloads.flatMap((payload) => {
-        let text = payload.text;
+  const sanitizedPayloads: ReplyPayload[] = [];
+  if (params.isHeartbeat) {
+    for (const payload of params.payloads) {
+      sanitizedPayloads.push(sanitizeHeartbeatPayload(payload));
+    }
+  } else {
+    for (const payload of params.payloads) {
+      let text = payload.text;
 
-        if (payload.isError && text && isBunFetchSocketError(text)) {
-          text = formatBunFetchSocketError(text);
-        }
+      if (payload.isError && text && isBunFetchSocketError(text)) {
+        text = formatBunFetchSocketError(text);
+      }
 
-        if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [copyReplyPayloadMetadata(payload, { ...payload, text })];
-        }
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        if (stripped.didStrip && !didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-        }
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-        if (stripped.shouldSkip && !hasMedia) {
-          return [];
-        }
-        return [copyReplyPayloadMetadata(payload, { ...payload, text: stripped.text })];
-      });
+      if (!text || !text.includes("HEARTBEAT_OK")) {
+        sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text));
+        continue;
+      }
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.didStrip && !didLogHeartbeatStrip) {
+        didLogHeartbeatStrip = true;
+        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+      }
+      const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+      if (stripped.shouldSkip && !hasMedia) {
+        continue;
+      }
+      sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, stripped.text));
+    }
+  }
 
-  const replyTaggedPayloads = (
-    await Promise.all(
-      applyReplyThreading({
-        payloads: sanitizedPayloads,
-        replyToMode: params.replyToMode,
-        replyToChannel: params.replyToChannel,
+  const replyTaggedPayloadCandidates = await Promise.all(
+    applyReplyThreading({
+      payloads: sanitizedPayloads,
+      replyToMode: params.replyToMode,
+      replyToChannel: params.replyToChannel,
+      currentMessageId: params.currentMessageId,
+      replyThreading: params.replyThreading,
+    }).map(async (payload) => {
+      const parsed = normalizeReplyPayloadDirectives({
+        payload,
         currentMessageId: params.currentMessageId,
-        replyThreading: params.replyThreading,
-      }).map(async (payload) => {
-        const parsed = normalizeReplyPayloadDirectives({
-          payload,
-          currentMessageId: params.currentMessageId,
-          silentToken: SILENT_REPLY_TOKEN,
-          parseMode: "always",
-          extractMarkdownImages: params.extractMarkdownImages,
-        });
-        const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
-          payload: parsed.payload,
-          normalizeMediaPaths: params.normalizeMediaPaths,
-        });
-        if (
-          parsed.isSilent &&
-          !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia
-        ) {
-          mediaNormalizedPayload.text = undefined;
-        }
-        return mediaNormalizedPayload;
-      }),
-    )
-  ).filter(isRenderablePayload);
-  const silentFilteredPayloads = params.silentExpected
-    ? replyTaggedPayloads.filter(shouldKeepPayloadDuringSilentTurn)
-    : replyTaggedPayloads;
+        silentToken: SILENT_REPLY_TOKEN,
+        parseMode: "always",
+        extractMarkdownImages: params.extractMarkdownImages,
+      });
+      const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
+        payload: parsed.payload,
+        normalizeMediaPaths: params.normalizeMediaPaths,
+        suppressMediaFailureWarning: parsed.isSilent,
+      });
+      if (parsed.isSilent) {
+        mediaNormalizedPayload.text = undefined;
+      }
+      return mediaNormalizedPayload;
+    }),
+  );
+  const replyTaggedPayloads: ReplyPayload[] = [];
+  for (const payload of replyTaggedPayloadCandidates) {
+    if (isRenderablePayload(payload)) {
+      replyTaggedPayloads.push(payload);
+    }
+  }
+  const silentFilteredPayloads: ReplyPayload[] = [];
+  if (params.silentExpected) {
+    for (const payload of replyTaggedPayloads) {
+      if (shouldKeepPayloadDuringSilentTurn(payload)) {
+        silentFilteredPayloads.push(payload);
+      }
+    }
+  } else {
+    silentFilteredPayloads.push(...replyTaggedPayloads);
+  }
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -266,8 +330,56 @@ export async function buildReplyPayloads(params: {
     : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
+  const normalizePreviewDedupeText = (value: string | undefined): string =>
+    (value ?? "").replace(/\s+/g, " ").trim();
+  const buildPreviewDedupeTextSet = (value: string | undefined): Set<string> => {
+    const dedupeText = new Set<string>();
+    const normalizedWhole = normalizePreviewDedupeText(value);
+    if (normalizedWhole) {
+      dedupeText.add(normalizedWhole);
+    }
+    for (const block of (value ?? "").split(/\n{2,}/u)) {
+      const normalizedBlock = normalizePreviewDedupeText(block);
+      if (normalizedBlock) {
+        dedupeText.add(normalizedBlock);
+      }
+    }
+    return dedupeText;
+  };
+  const previewStreamedText = buildPreviewDedupeTextSet(params.previewStreamedText);
+  const isPreviewStreamedTextPayload = (payload: ReplyPayload): boolean => {
+    if (previewStreamedText.size === 0 || payload.isError) {
+      return false;
+    }
+    const text = normalizePreviewDedupeText(payload.text);
+    return Boolean(text && previewStreamedText.has(text));
+  };
+  const preserveUnsentMediaAfterPreviewStream = (payload: ReplyPayload): ReplyPayload | null => {
+    if (!isPreviewStreamedTextPayload(payload)) {
+      return payload;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    if (!reply.hasMedia) {
+      return null;
+    }
+    return copyReplyPayloadMetadata(payload, {
+      ...payload,
+      text: undefined,
+      audioAsVoice: payload.audioAsVoice || undefined,
+    });
+  };
+  const suppressPreviewStreamedPayloads = (payloads: ReplyPayload[]): ReplyPayload[] => {
+    const unsent: ReplyPayload[] = [];
+    for (const payload of payloads) {
+      const next = preserveUnsentMediaAfterPreviewStream(payload);
+      if (next) {
+        unsent.push(next);
+      }
+    }
+    return unsent;
+  };
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError) {
+    if (payload.isError || payload.isFallbackNotice) {
       return payload;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
@@ -293,18 +405,42 @@ export async function buildReplyPayloads(params: {
     });
   };
   const contentSuppressedPayloads = shouldDropFinalPayloads
-    ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockStream(payload) ?? [])
+    ? (() => {
+        const preserved: ReplyPayload[] = [];
+        for (const payload of dedupedPayloads) {
+          const next = preserveUnsentMediaAfterBlockStream(payload);
+          if (next) {
+            preserved.push(next);
+          }
+        }
+        return preserved;
+      })()
     : params.blockStreamingEnabled
-      ? dedupedPayloads.filter(
-          (payload) =>
-            !params.blockReplyPipeline?.hasSentPayload(payload) &&
-            !isDirectlySentBlockPayload(payload),
-        )
+      ? (() => {
+          const unsent: ReplyPayload[] = [];
+          for (const payload of dedupedPayloads) {
+            if (
+              !params.blockReplyPipeline?.hasSentPayload(payload) &&
+              !isDirectlySentBlockPayload(payload)
+            ) {
+              unsent.push(payload);
+            }
+          }
+          return unsent;
+        })()
       : params.directlySentBlockKeys?.size
-        ? dedupedPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
-          )
-        : dedupedPayloads;
+        ? (() => {
+            const unsent: ReplyPayload[] = [];
+            for (const payload of dedupedPayloads) {
+              if (!params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
+                unsent.push(payload);
+              }
+            }
+            return unsent;
+          })()
+        : previewStreamedText.size > 0
+          ? suppressPreviewStreamedPayloads(dedupedPayloads)
+          : dedupedPayloads;
   const blockSentMediaUrls = params.blockStreamingEnabled
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],
@@ -320,7 +456,12 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = filteredPayloads.filter(isRenderablePayload);
+  const replyPayloads: ReplyPayload[] = [];
+  for (const payload of filteredPayloads) {
+    if (isRenderablePayload(payload)) {
+      replyPayloads.push(payload);
+    }
+  }
 
   return {
     replyPayloads,

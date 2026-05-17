@@ -15,7 +15,7 @@ IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
+PROFILE_FILE="$(openclaw_live_default_profile_file)"
 CODEX_HARNESS_AUTH_MODE="${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
@@ -51,6 +51,13 @@ case "$CODEX_HARNESS_AUTH_MODE" in
     exit 1
     ;;
 esac
+
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PROFILE_FILE"
+  set +a
+fi
 
 if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" && -z "${OPENAI_API_KEY:-}" ]]; then
   echo "ERROR: OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key requires OPENAI_API_KEY." >&2
@@ -99,12 +106,27 @@ if openclaw_live_codex_harness_is_ci; then
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
   DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
 fi
+if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
+  if [[ -z "${DOCKER_HOME_DIR:-}" ]]; then
+    DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
+    TEMP_DIRS+=("$DOCKER_HOME_DIR")
+    DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
+  fi
+  CONFIG_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-config.XXXXXX")"
+  WORKSPACE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-workspace.XXXXXX")"
+  TEMP_DIRS+=("$CONFIG_DIR" "$WORKSPACE_DIR")
+  chmod 0777 "$DOCKER_HOME_DIR" "$CONFIG_DIR" "$WORKSPACE_DIR" || true
+  DOCKER_CACHE_CONTAINER_DIR="/home/node/.cache"
+  DOCKER_CLI_TOOLS_CONTAINER_DIR="/home/node/.npm-global"
+fi
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
-if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" && -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
+elif [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
+  PROFILE_STATUS="api-key-env"
 fi
 
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
@@ -146,6 +168,7 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
   docker_env_file="$docker_env_dir/openai.env"
   {
     printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY}"
+    printf 'CODEX_API_KEY=%s\n' "${CODEX_API_KEY:-$OPENAI_API_KEY}"
     if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
       printf 'OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL}"
     fi
@@ -162,6 +185,10 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
 export npm_config_cache="$NPM_CONFIG_CACHE"
+cleanup_codex_live_mounts() {
+  chmod -R a+rwX "$HOME" "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" 2>/dev/null || true
+}
+trap cleanup_codex_live_mounts EXIT
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_DEBUG:-}" = "1" ]; then
   id
   mount | grep -E 'openclaw-cache|openclaw-npm|/home/node' || true
@@ -246,7 +273,7 @@ if ! "$NPM_CONFIG_PREFIX/bin/codex" exec \
   cat "$codex_preflight_log" >&2
   exit 1
 fi
-pnpm test:live ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
+node scripts/test-live.mjs -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
 EOF
 
 openclaw_live_codex_harness_append_build_extension codex
@@ -306,6 +333,7 @@ DOCKER_RUN_ARGS=(docker run --rm -t \
   -e OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR="$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR" \
   -e OPENCLAW_LIVE_CODEX_BIND="${OPENCLAW_LIVE_CODEX_BIND:-}" \
   -e OPENCLAW_LIVE_CODEX_BIND_MODEL="${OPENCLAW_LIVE_CODEX_BIND_MODEL:-}" \
+  -e OPENCLAW_LIVE_CODEX_BIND_PROVIDER="${OPENCLAW_LIVE_CODEX_BIND_PROVIDER:-}" \
   -e OPENCLAW_LIVE_CODEX_TEST_FILES="${OPENCLAW_LIVE_CODEX_TEST_FILES:-}" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0)
@@ -314,11 +342,14 @@ openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_EXTRA_ENV_FILES
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\
-  -v "$CACHE_HOME_DIR":"$DOCKER_CACHE_CONTAINER_DIR" \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
-  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
-  -v "$CLI_TOOLS_DIR":"$DOCKER_CLI_TOOLS_CONTAINER_DIR")
+  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace)
+if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" ]]; then
+  DOCKER_RUN_ARGS+=(\
+    -v "$CACHE_HOME_DIR":"$DOCKER_CACHE_CONTAINER_DIR" \
+    -v "$CLI_TOOLS_DIR":"$DOCKER_CLI_TOOLS_CONTAINER_DIR")
+fi
 openclaw_live_append_array DOCKER_RUN_ARGS EXTERNAL_AUTH_MOUNTS
 openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT
 DOCKER_RUN_ARGS+=(\

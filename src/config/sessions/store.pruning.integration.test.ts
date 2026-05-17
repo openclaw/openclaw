@@ -17,9 +17,11 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -70,6 +72,20 @@ function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) 
 
 async function createCaseDir(prefix: string): Promise<string> {
   return await suiteRootTracker.make(prefix);
+}
+
+async function expectPathExists(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -123,7 +139,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.stale).toBeUndefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("fresh");
   });
 
   it("archives transcript files for stale sessions pruned on write", async () => {
@@ -145,9 +161,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(loaded.stale).toBeUndefined();
-    expect(loaded.fresh).toBeDefined();
-    await expect(fs.stat(staleTranscript)).rejects.toThrow();
-    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    expect(loaded).toHaveProperty("fresh");
+    await expectPathMissing(staleTranscript);
+    await expectPathExists(freshTranscript);
     const dirEntries = await fs.readdir(testDir);
     const archived = dirEntries.filter((entry) =>
       entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
@@ -206,10 +222,10 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await saveSessionStore(storePath, store);
 
-    await expect(fs.stat(staleRuntime)).rejects.toThrow();
-    await expect(fs.stat(stalePointer)).rejects.toThrow();
-    await expect(fs.stat(freshRuntime)).resolves.toBeDefined();
-    await expect(fs.stat(freshPointer)).resolves.toBeDefined();
+    await expectPathMissing(staleRuntime);
+    await expectPathMissing(stalePointer);
+    await expectPathExists(freshRuntime);
+    await expectPathExists(freshPointer);
   });
 
   it("sessions cleanup prunes old unreferenced session artifacts without touching referenced files", async () => {
@@ -277,15 +293,11 @@ describe("Integration: saveSessionStore with pruning", () => {
       opts: { store: storePath, dryRun: true, enforce: true },
       targets: [{ agentId: "main", storePath }],
     });
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 4,
-      }),
-    );
-    await expect(fs.stat(oldOrphanTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(orphanRuntime)).resolves.toBeDefined();
-    await expect(fs.stat(orphanPointer)).resolves.toBeDefined();
-    await expect(fs.stat(orphanCheckpoint)).resolves.toBeDefined();
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(4);
+    await expectPathExists(oldOrphanTranscript);
+    await expectPathExists(orphanRuntime);
+    await expectPathExists(orphanPointer);
+    await expectPathExists(orphanCheckpoint);
 
     const applied = await runSessionsCleanup({
       cfg: {},
@@ -293,18 +305,185 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(applied.appliedSummaries[0]?.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 4,
-      }),
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(4);
+    await expectPathMissing(oldOrphanTranscript);
+    await expectPathMissing(orphanRuntime);
+    await expectPathMissing(orphanPointer);
+    await expectPathMissing(orphanCheckpoint);
+    await expectPathExists(referencedTranscript);
+    await expectPathExists(referencedCheckpointPath);
+    await expectPathExists(freshOrphanTranscript);
+  });
+
+  it("sessions cleanup fix-missing prunes malformed stored session rows", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const validTranscript = path.join(testDir, "valid-present.jsonl");
+    const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+          "invalid-bad-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "../outside.jsonl",
+            updatedAt: now,
+          },
+          "invalid-missing-relative-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "missing.jsonl",
+            updatedAt: now,
+          },
+          "agent:main:metadata": {
+            sessionId: "agent:main:metadata",
+            updatedAt: now,
+            groupActivation: "always",
+          },
+          "legacy-present-invalid-id": {
+            sessionId: "agent:main:main",
+            sessionFile: "legacy-present.jsonl",
+            updatedAt: now,
+          },
+          "valid-present": { sessionId: "valid-present", updatedAt: now },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
     );
-    await expect(fs.stat(oldOrphanTranscript)).rejects.toThrow();
-    await expect(fs.stat(orphanRuntime)).rejects.toThrow();
-    await expect(fs.stat(orphanPointer)).rejects.toThrow();
-    await expect(fs.stat(orphanCheckpoint)).rejects.toThrow();
-    await expect(fs.stat(referencedTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
-    await expect(fs.stat(freshOrphanTranscript)).resolves.toBeDefined();
+    await fs.writeFile(validTranscript, "valid", "utf-8");
+    await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.missing).toBe(3);
+    expect(preview?.summary.beforeCount).toBe(6);
+    expect(preview?.summary.afterCount).toBe(3);
+    expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
+    expect(preview?.missingKeys.has("agent:main:metadata")).toBe(false);
+    expect(preview?.missingKeys.has("legacy-present-invalid-id")).toBe(false);
+    const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(rawAfterDryRun).toHaveProperty("invalid-no-file");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(3);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(3);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(persisted)).toEqual([
+      "agent:main:metadata",
+      "legacy-present-invalid-id",
+      "valid-present",
+    ]);
+    expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
+    expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
+    expect(persisted["legacy-present-invalid-id"]?.sessionId).toBe("agent:main:main");
+    await expectPathExists(validTranscript);
+    await expectPathExists(legacyPresentTranscript);
+  });
+
+  it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const directTranscript = path.join(testDir, "direct-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(directTranscript, "direct", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: { session: { dmScope: "main" } },
+      opts: { store: storePath, dryRun: true, enforce: true, fixDmScope: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.dmScopeRetired).toBe(1);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    await expectPathExists(directTranscript);
+  });
+
+  it("sessions cleanup retires stale direct DM rows and archives their transcripts", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const directTranscript = path.join(testDir, "direct-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            sessionFile: directTranscript,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(directTranscript, "direct", "utf-8");
+
+    const applied = await runSessionsCleanup({
+      cfg: { session: { dmScope: "main" } },
+      opts: { store: storePath, enforce: true, fixDmScope: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted).toHaveProperty("agent:main:main");
+    expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
+    await expectPathMissing(directTranscript);
+    const files = await fs.readdir(testDir);
+    const archivedDirectTranscripts = files.filter((name) =>
+      name.startsWith("direct-session.jsonl.deleted."),
+    );
+    expect(archivedDirectTranscripts.length).toBeGreaterThan(0);
   });
 
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
@@ -335,17 +514,13 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(dryRun.previewResults[0]?.summary.diskBudget).toEqual(
-      expect.objectContaining({
-        removedFiles: 1,
-      }),
-    );
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 0,
-      }),
-    );
-    await expect(fs.stat(oldOrphanTranscript)).resolves.toBeDefined();
+    const diskBudgetSummary = dryRun.previewResults[0]?.summary.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected disk budget cleanup summary");
+    }
+    expect(diskBudgetSummary.removedFiles).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    await expectPathExists(oldOrphanTranscript);
   });
 
   it("sessions cleanup dry-run excludes stale and capped entry transcripts from orphan counts", async () => {
@@ -382,18 +557,12 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(dryRun.previewResults[0]?.summary).toEqual(
-      expect.objectContaining({
-        pruned: 1,
-        capped: 1,
-        unreferencedArtifacts: expect.objectContaining({
-          removedFiles: 0,
-        }),
-      }),
-    );
-    await expect(fs.stat(staleTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(cappedTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    expect(dryRun.previewResults[0]?.summary.pruned).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.capped).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    await expectPathExists(staleTranscript);
+    await expectPathExists(cappedTranscript);
+    await expectPathExists(freshTranscript);
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {
@@ -427,9 +596,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await saveSessionStore(storePath, store);
 
-    await expect(fs.stat(oldArchived)).rejects.toThrow();
-    await expect(fs.stat(recentArchived)).resolves.toBeDefined();
-    await expect(fs.stat(bakArchived)).resolves.toBeDefined();
+    await expectPathMissing(oldArchived);
+    await expectPathExists(recentArchived);
+    await expectPathExists(bakArchived);
   });
 
   it("cleans up reset archives using resetArchiveRetention", async () => {
@@ -461,8 +630,8 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await saveSessionStore(storePath, store);
 
-    await expect(fs.stat(oldReset)).rejects.toThrow();
-    await expect(fs.stat(freshReset)).resolves.toBeDefined();
+    await expectPathMissing(oldReset);
+    await expectPathExists(freshReset);
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
@@ -481,8 +650,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
-    expect(loaded.stale).toBeDefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("stale");
+    expect(loaded).toHaveProperty("fresh");
     expect(Object.keys(loaded)).toHaveLength(2);
   });
 
@@ -505,9 +674,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(3);
-    expect(loaded.stale).toBeDefined();
-    expect(loaded.recent).toBeDefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("stale");
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("loadSessionStore applies maintenance only when explicitly requested", async () => {
@@ -531,7 +700,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     expect(loaded.stale).toBeUndefined();
     expect(loaded.recent).toBeUndefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("loadSessionStore does not cap oversized stores during normal reads", async () => {
@@ -553,9 +722,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(3);
-    expect(loaded.oldest).toBeDefined();
-    expect(loaded.recent).toBeDefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("oldest");
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("explicit loadSessionStore maintenance batches entry-count cleanup until the high-water mark", async () => {
@@ -596,7 +765,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(50);
-    expect(loaded["session-0"]).toBeDefined();
+    expect(loaded).toHaveProperty("session-0");
     expect(loaded["session-74"]).toBeUndefined();
   });
 
@@ -624,10 +793,93 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(50);
-    expect(loaded[channelKey]).toBeDefined();
-    expect(loaded[threadKey]).toBeDefined();
-    expect(loaded[topicKey]).toBeDefined();
+    expect(loaded).toHaveProperty(channelKey);
+    expect(loaded).toHaveProperty(threadKey);
+    expect(loaded).toHaveProperty(topicKey);
     expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("explicit loadSessionStore maintenance preserves runtime-provided subagent sessions", async () => {
+    const now = Date.now();
+    const childKey = "agent:main:subagent:pending-delivery";
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    store[childKey] = {
+      ...makeEntry(now - 100 * DAY_MS),
+      spawnedBy: "agent:main:slack:direct:U1",
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
+
+    try {
+      const loaded = loadSessionStore(storePath, {
+        skipCache: true,
+        runMaintenance: true,
+        maintenanceConfig: {
+          ...ENFORCED_MAINTENANCE_OVERRIDE,
+          maxEntries: 50,
+          pruneAfterMs: 365 * DAY_MS,
+        },
+      });
+
+      expect(Object.keys(loaded)).toHaveLength(50);
+      expect(loaded).toHaveProperty(childKey);
+      expect(loaded["session-74"]).toBeUndefined();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("persists quota suspension TTL transitions through writer maintenance", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      suspended: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "suspended",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      active: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 61_000,
+          expectedResumeBy: now - 31_000,
+          state: "active",
+          reason: "circuit_open",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const result = await runQuotaSuspensionMaintenance({
+      storePath,
+      now,
+      ttlMs: 30_000,
+      log: false,
+    });
+
+    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(loaded.active?.quotaSuspension).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(persisted.active?.quotaSuspension).toBeUndefined();
   });
 
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
@@ -652,7 +904,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(loaded)).toHaveLength(51);
-    expect(loaded["session-50"]).toBeDefined();
+    expect(loaded).toHaveProperty("session-50");
   });
 
   it("loadSessionStore honors configured maxEntries without an explicit override", async () => {
@@ -698,8 +950,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
     expect(Object.keys(loaded)).toHaveLength(2);
-    expect(loaded.oldest).toBeDefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("oldest");
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("archives transcript files for entries evicted by maxEntries capping", async () => {
@@ -721,11 +973,14 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(loaded.oldest).toBeUndefined();
-    expect(loaded.newest).toBeDefined();
-    await expect(fs.stat(oldestTranscript)).rejects.toThrow();
-    await expect(fs.stat(newestTranscript)).resolves.toBeDefined();
+    expect(loaded).toHaveProperty("newest");
+    await expectPathMissing(oldestTranscript);
+    await expectPathExists(newestTranscript);
     const files = await fs.readdir(testDir);
-    expect(files.some((name) => name.startsWith(`${oldestSessionId}.jsonl.deleted.`))).toBe(true);
+    const archivedOldestTranscripts = files.filter((name) =>
+      name.startsWith(`${oldestSessionId}.jsonl.deleted.`),
+    );
+    expect(archivedOldestTranscripts.length).toBeGreaterThan(0);
   });
 
   it("does not archive external transcript paths when capping entries", async () => {
@@ -749,10 +1004,10 @@ describe("Integration: saveSessionStore with pruning", () => {
       await saveSessionStore(storePath, store);
       const loaded = loadSessionStore(storePath);
       expect(loaded.oldest).toBeUndefined();
-      expect(loaded.newest).toBeDefined();
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      expect(loaded).toHaveProperty("newest");
+      await expectPathExists(externalTranscript);
     } finally {
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      await expectPathExists(externalTranscript);
     }
   });
 
@@ -783,9 +1038,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(Object.keys(loaded).length).toBe(1);
-    expect(loaded.recent).toBeDefined();
-    await expect(fs.stat(path.join(testDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
-    await expect(fs.stat(path.join(testDir, `${newSessionId}.jsonl`))).resolves.toBeDefined();
+    expect(loaded).toHaveProperty("recent");
+    await expectPathMissing(path.join(testDir, `${oldSessionId}.jsonl`));
+    await expectPathExists(path.join(testDir, `${newSessionId}.jsonl`));
   });
 
   it("uses projected sessions.json size to avoid over-eviction", async () => {
@@ -815,8 +1070,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
-    expect(loaded.older).toBeDefined();
-    expect(loaded.newer).toBeDefined();
+    expect(loaded).toHaveProperty("older");
+    expect(loaded).toHaveProperty("newer");
   });
 
   it("does not create rotation backups for hot oversized store writes", async () => {
@@ -893,7 +1148,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(backups).toHaveLength(0);
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.old).toBeUndefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("fresh");
   });
 
   it("never deletes transcripts outside the agent sessions directory during budget cleanup", async () => {
@@ -929,9 +1184,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     try {
       await saveSessionStore(storePath, store);
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      await expectPathExists(externalTranscript);
     } finally {
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      await expectPathExists(externalTranscript);
     }
   });
 });

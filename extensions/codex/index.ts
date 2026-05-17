@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -10,6 +10,13 @@ import {
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
+import {
+  createCodexCliSessionNodeHostCommands,
+  createCodexCliSessionNodeInvokePolicies,
+  listCodexCliSessionsOnNode,
+  resumeCodexCliSessionOnNode,
+  resolveCodexCliSessionForBindingOnNode,
+} from "./src/node-cli-sessions.js";
 
 export default definePluginEntry({
   id: "codex",
@@ -29,11 +36,29 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider());
-    api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
+    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
+    for (const command of createCodexCliSessionNodeHostCommands()) {
+      api.registerNodeHostCommand(command);
+    }
+    for (const policy of createCodexCliSessionNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
+    api.registerCommand(
+      createCodexCommand({
+        pluginConfig: api.pluginConfig,
+        deps: {
+          listCodexCliSessionsOnNode: (params) =>
+            listCodexCliSessionsOnNode({ runtime: api.runtime, ...params }),
+          resolveCodexCliSessionForBindingOnNode: (params) =>
+            resolveCodexCliSessionForBindingOnNode({ runtime: api.runtime, ...params }),
+        },
+      }),
+    );
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {
         pluginConfig: resolveCurrentPluginConfig(),
+        resumeCodexCliSessionOnNode: (params) =>
+          resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),
     );
     api.onConversationBindingResolved?.(handleCodexConversationBindingResolved);

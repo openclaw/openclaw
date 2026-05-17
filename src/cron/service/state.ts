@@ -1,6 +1,9 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
+  CronAgentExecutionStarted,
+  CronFailureNotificationDelivery,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -8,7 +11,6 @@ import type {
   CronJobPatch,
   CronRunDiagnostics,
   CronMessageChannel,
-  CronAgentExecutionStarted,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -29,6 +31,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
@@ -75,7 +78,12 @@ export type CronServiceDeps = {
   startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      forceSenderIsOwnerFalse?: boolean;
+    },
   ) => void;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
@@ -85,7 +93,7 @@ export type CronServiceDeps = {
     agentId?: string;
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: { target?: string };
+    heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
@@ -100,6 +108,7 @@ export type CronServiceDeps = {
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   }) => Promise<
     {
       summary?: string;
@@ -153,6 +162,11 @@ export type CronServiceState = {
    * single broken job does not spam the log on every scheduler cycle.
    */
   warnedMissingSessionTargetJobIds: Set<string>;
+  /**
+   * Persisted job rows with non-canonical storage shape are skipped in memory
+   * until doctor/fix or an explicit config write repairs the store.
+   */
+  warnedInvalidPersistedJobKeys: Set<string>;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
 };
@@ -166,6 +180,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
+    warnedInvalidPersistedJobKeys: new Set<string>(),
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
   };

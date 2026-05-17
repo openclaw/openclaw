@@ -3,7 +3,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 const staleOpenAICodexReason =
-  'is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.';
+  "is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.";
 
 function createModelSuppressionRegistry(): PluginManifestRegistry {
   return {
@@ -69,11 +69,13 @@ describe("config model reference validation", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.primary",
-      message:
-        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-    });
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      },
+    ]);
   });
 
   it("accepts supported openai-codex provider/model pairs", () => {
@@ -120,15 +122,17 @@ describe("config model reference validation", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.fallbacks.0",
-      message:
-        'Unknown model: openai-codex/gpt-5.2-codex. gpt-5.2-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.',
-    });
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.fallbacks.1",
-      message:
-        'Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.',
-    });
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.fallbacks.0",
+        message:
+          "Unknown model: openai-codex/gpt-5.2-codex. gpt-5.2-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
+      },
+      {
+        path: "agents.defaults.model.fallbacks.1",
+        message:
+          "Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
+      },
+    ]);
   });
 });

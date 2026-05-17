@@ -231,6 +231,9 @@ Host and Multipass suite runs execute multiple selected scenarios in parallel
 with isolated gateway workers by default. `qa-channel` defaults to concurrency
 4, capped by the selected scenario count. Use `--concurrency <count>` to tune
 the worker count, or `--concurrency 1` for serial execution.
+Use `--pack personal-agent` to run the personal assistant benchmark pack. The
+pack selector is additive with repeated `--scenario` flags: explicit scenarios
+run first, then pack scenarios run in pack order with duplicates removed.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
@@ -278,7 +281,7 @@ Optional:
 
 - `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts (default redacts).
 
-Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts:44`):
+Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
 
 - `telegram-canary`
 - `telegram-mention-gating`
@@ -287,15 +290,42 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-commands-command`
 - `telegram-tools-compact-command`
 - `telegram-whoami-command`
+- `telegram-status-command`
+- `telegram-repeated-command-authorization`
+- `telegram-other-bot-command-gating`
 - `telegram-context-command`
+- `telegram-current-session-status-tool`
+- `telegram-reply-chain-exact-marker`
+- `telegram-stream-final-single-message`
 - `telegram-long-final-reuses-preview`
 - `telegram-long-final-three-chunks`
+
+The implicit default set always covers canary, mention gating, native command replies, command addressing, and bot-to-bot group replies. `mock-openai` defaults also include deterministic reply-chain and final-message streaming checks. `telegram-current-session-status-tool` remains opt-in because it is only stable when threaded directly after canary, not after arbitrary native command replies. Use `pnpm openclaw qa telegram --list-scenarios --provider-mode mock-openai` to print the current default/optional split with regression refs.
 
 Output artifacts:
 
 - `telegram-qa-report.md`
 - `telegram-qa-summary.json` - includes per-reply RTT (driver send → observed SUT reply) starting with the canary.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
+
+Package RTT comparison uses the same Telegram credential contract while keeping
+its RTT sample controls on the RTT harness path:
+
+```bash
+pnpm rtt openclaw@beta \
+  --credential-source convex \
+  --credential-role maintainer \
+  --samples 20 \
+  --sample-timeout-ms 30000
+```
+
+When `--credential-source convex` is set, the RTT Docker wrapper leases a
+`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
+the installed-package run, heartbeats the lease, and releases it on shutdown.
+`--samples` and `--sample-timeout-ms` still feed
+`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
+`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
+across env-backed and Convex-backed RTT runs.
 
 ### Discord QA
 
@@ -316,13 +346,23 @@ Required env when `--credential-source env`:
 Optional:
 
 - `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts.
+- `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID` selects the voice/stage channel for `discord-voice-autojoin`; without it, the scenario picks the first visible voice/stage channel for the SUT bot.
 
 Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts:36`):
 
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
+- `discord-voice-autojoin` - opt-in voice scenario. Runs by itself, enables `channels.discord.voice.autoJoin`, and verifies the SUT bot's current Discord voice state is the target voice/stage channel. Convex Discord credentials may include optional `voiceChannelId`; otherwise the runner discovers the first visible voice/stage channel in the guild.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus HTML/PNG visual artifacts. Mantis before/after reports also preserve scenario-provided MP4 artifacts as `baseline.mp4` and `candidate.mp4`.
+
+Run the Discord voice auto-join scenario explicitly:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-voice-autojoin \
+  --provider-mode mock-openai
+```
 
 Run the Mantis status-reaction scenario explicitly:
 
@@ -549,15 +589,43 @@ A green run completes in well under 30 seconds and `slack-qa-report.md` shows bo
 
 ### Convex credential pool
 
-Telegram, Discord, and Slack lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, and `"slack"`.
+Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, `"slack"`, and `"whatsapp"`.
 
 Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` - `groupId` must be a numeric chat-id string.
+- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` - one exclusive burner-account lease used by both the TDLib CLI driver and Telegram Desktop visual witness.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
-- Slack (`kind: "slack"`): `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }` - `channelId` must match `^[A-Z][A-Z0-9]+$` (a Slack id like `Cxxxxxxxxxx`). See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
+- WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }` - phone numbers must be distinct E.164 strings.
 
-Operational env vars and the Convex broker endpoint contract live in [Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1) (the section name predates Discord support; the broker semantics are identical for both kinds).
+For visual real-user Telegram proof, prefer a held Crabbox session:
+
+```bash
+pnpm qa:telegram-user:crabbox -- start --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
+pnpm qa:telegram-user:crabbox -- send --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json --text /status
+pnpm qa:telegram-user:crabbox -- finish --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
+```
+
+`start` holds one exclusive Convex `telegram-user` lease for both the TDLib CLI
+driver and Telegram Desktop witness, starts desktop recording, and leaves the
+Crabbox alive for arbitrary agent-driven repro steps. Agents can use `send`,
+`run`, `screenshot`, and `status` until they are satisfied, then `finish`
+collects the screenshot, video, motion-trimmed video/GIF, TDLib probe outputs,
+and logs before releasing the credential. `publish --session <file> --pr
+<number>` comments only the motion GIF by default; `--full-artifacts` is the
+explicit opt-in for logs and JSON output. The default `probe` command remains a
+one-command shorthand for quick `/status` smoke checks.
+
+Use `--mock-response-file <path>` when a PR needs a deterministic visual diff:
+the same mock model reply can be run on `main` and on the PR head while the
+Telegram formatter or delivery layer changes. Capture defaults are tuned for PR
+comments: standard Crabbox class, 24fps desktop recording, 24fps motion GIF, and
+1920px preview width. Before/after comments should publish a clean bundle that
+contains only the intended GIFs.
+
+Slack lanes can also use the pool. Slack payload shape checks currently live in the Slack QA runner rather than the broker; use `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`, with a Slack channel id like `Cxxxxxxxxxx`. See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
+
+Operational env vars and the Convex broker endpoint contract live in [Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1) (the section name predates the multi-channel pool; the lease semantics are shared across kinds).
 
 ## Repo-backed seeds
 
@@ -760,6 +828,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)
 - [Dashboard](/web/dashboard)

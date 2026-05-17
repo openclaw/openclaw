@@ -8,6 +8,7 @@ import {
   buildExecApprovalRequestMessage,
   createExecApprovalForwarder,
 } from "./exec-approval-forwarder.js";
+import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 const baseRequest = {
   id: "req-1",
@@ -192,10 +193,39 @@ const defaultRegistry = createTestRegistry([
 ]);
 
 function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
-  const firstCall = deliver.mock.calls[0]?.[0] as
-    | { payloads?: Array<{ text?: string }> }
-    | undefined;
-  return firstCall?.payloads?.[0]?.text ?? "";
+  const firstCall = requireFirstCallArg(deliver, "delivery params") as {
+    payloads?: Array<{ text?: string }>;
+  };
+  return firstCall.payloads?.[0]?.text ?? "";
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstCallArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): Record<string, unknown> {
+  const firstCall = mock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error(`expected ${label} call`);
+  }
+  return requireRecord(firstCall[0], label);
+}
+
+function requireFirstPayload(deliver: ReturnType<typeof vi.fn>): ReplyPayload {
+  const delivery = requireFirstCallArg(deliver, "delivery params") as {
+    payloads?: ReplyPayload[];
+  };
+  const payload = delivery.payloads?.[0];
+  if (!payload) {
+    throw new Error("expected first delivery payload");
+  }
+  return payload;
 }
 
 function makeTargetsCfg(targets: Array<{ channel: string; to: string }>): OpenClawConfig {
@@ -308,7 +338,11 @@ async function expectSessionFilterRequestResult(params: {
   expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
 }
 
-async function expectForwardedApprovalText(params: { command?: string; expectedText: string }) {
+async function expectForwardedApprovalText(params: {
+  command?: string;
+  request?: Partial<ExecApprovalRequest["request"]>;
+  expectedText: string;
+}) {
   vi.useFakeTimers();
   const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
   await expect(
@@ -317,6 +351,7 @@ async function expectForwardedApprovalText(params: { command?: string; expectedT
       request: {
         ...baseRequest.request,
         ...(params.command ? { command: params.command } : {}),
+        ...params.request,
       },
     }),
   ).resolves.toBe(true);
@@ -429,12 +464,11 @@ describe("exec approval forwarder", () => {
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
     await flushPendingDelivery();
     expect(deliver).toHaveBeenCalled();
-    expect(beforeDeliverPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        hint: { kind: "approval-pending", approvalKind: "exec" },
-        target: expect.objectContaining({ channel: "slack", to: "U123" }),
-      }),
-    );
+    const hookParams = requireFirstCallArg(beforeDeliverPayload, "beforeDeliverPayload params");
+    expect(hookParams.hint).toEqual({ kind: "approval-pending", approvalKind: "exec" });
+    const target = requireRecord(hookParams.target, "delivery target");
+    expect(target.channel).toBe("slack");
+    expect(target.to).toBe("U123");
   });
 
   it("skips telegram forwarding when telegram exec approvals handler is enabled", async () => {
@@ -496,45 +530,35 @@ describe("exec approval forwarder", () => {
     ).resolves.toBe(true);
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123",
-        payloads: [
-          expect.objectContaining({
-            channelData: expect.objectContaining({
-              execApproval: expect.objectContaining({
-                approvalId: "req-1",
-              }),
-            }),
-            interactive: expect.objectContaining({
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [
-                    {
-                      label: "Allow Once",
-                      value: "/approve req-1 allow-once",
-                      style: "success",
-                    },
-                    {
-                      label: "Allow Always",
-                      value: "/approve req-1 allow-always",
-                      style: "primary",
-                    },
-                    {
-                      label: "Deny",
-                      value: "/approve req-1 deny",
-                      style: "danger",
-                    },
-                  ],
-                },
-              ],
-            }),
-          }),
-        ],
-      }),
-    );
+    const delivery = requireFirstCallArg(deliver, "delivery params");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("123");
+    const payload = requireFirstPayload(deliver);
+    expect(payload.channelData?.execApproval).toEqual({ approvalId: "req-1" });
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-1 allow-once",
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              value: "/approve req-1 allow-always",
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-1 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("stores exec metadata on generic forwarded fallback payloads", async () => {
@@ -544,22 +568,12 @@ describe("exec approval forwarder", () => {
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        payloads: [
-          expect.objectContaining({
-            channelData: expect.objectContaining({
-              execApproval: expect.objectContaining({
-                approvalId: "req-1",
-                approvalKind: "exec",
-                agentId: "main",
-                sessionKey: "agent:main:main",
-              }),
-            }),
-          }),
-        ],
-      }),
-    );
+    const payload = requireFirstPayload(deliver);
+    const execApproval = requireRecord(payload.channelData?.execApproval, "exec approval metadata");
+    expect(execApproval.approvalId).toBe("req-1");
+    expect(execApproval.approvalKind).toBe("exec");
+    expect(execApproval.agentId).toBe("main");
+    expect(execApproval.sessionKey).toBe("agent:main:main");
   });
 
   it("formats single-line commands as inline code", async () => {
@@ -574,7 +588,7 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
-  it("includes command analysis warnings in fallback delivery text", async () => {
+  it("includes command analysis warnings in fallback delivery text", () => {
     const text = buildExecApprovalRequestMessage(
       {
         ...baseRequest,

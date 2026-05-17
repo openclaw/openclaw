@@ -38,6 +38,9 @@ import {
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsStatusParamsSchema,
+  SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   ToolCatalogEntrySchema,
   ToolCatalogGroupSchema,
@@ -113,6 +116,7 @@ import {
 } from "./config.js";
 import {
   CronAddParamsSchema,
+  CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronRemoveParamsSchema,
@@ -162,8 +166,12 @@ import {
   TickEventSchema,
 } from "./frames.js";
 import {
+  ChatAbortedEventSchema,
   ChatAbortParamsSchema,
+  ChatDeltaEventSchema,
+  ChatErrorEventSchema,
   ChatEventSchema,
+  ChatFinalEventSchema,
   ChatHistoryParamsSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
@@ -199,6 +207,10 @@ import {
 } from "./plugin-approvals.js";
 import {
   PluginControlUiDescriptorSchema,
+  PluginsSessionActionFailureResultSchema,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
+  PluginsSessionActionSuccessResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
 } from "./plugins.js";
@@ -221,6 +233,7 @@ import {
   SessionsCompactionRestoreParamsSchema,
   SessionsCompactionRestoreResultSchema,
   SessionCompactionCheckpointSchema,
+  SessionOperationEventSchema,
   SessionsCleanupParamsSchema,
   SessionsCreateParamsSchema,
   SessionsDeleteParamsSchema,
@@ -238,6 +251,15 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import {
+  TasksCancelParamsSchema,
+  TasksCancelResultSchema,
+  TasksGetParamsSchema,
+  TasksGetResultSchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+  TaskSummarySchema,
+} from "./tasks.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -308,6 +330,7 @@ export const ProtocolSchemas = {
   SessionsDescribeParams: SessionsDescribeParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
   SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
+  SessionOperationEvent: SessionOperationEventSchema,
   SessionsCompactionListParams: SessionsCompactionListParamsSchema,
   SessionsCompactionGetParams: SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParams: SessionsCompactionBranchParamsSchema,
@@ -328,6 +351,13 @@ export const ProtocolSchemas = {
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
+  TaskSummary: TaskSummarySchema,
+  TasksListParams: TasksListParamsSchema,
+  TasksListResult: TasksListResultSchema,
+  TasksGetParams: TasksGetParamsSchema,
+  TasksGetResult: TasksGetResultSchema,
+  TasksCancelParams: TasksCancelParamsSchema,
+  TasksCancelResult: TasksCancelResultSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,
@@ -423,11 +453,15 @@ export const ProtocolSchemas = {
   SkillsSearchResult: SkillsSearchResultSchema,
   SkillsDetailParams: SkillsDetailParamsSchema,
   SkillsDetailResult: SkillsDetailResultSchema,
+  SkillsUploadBeginParams: SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParams: SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
   CronStatusParams: CronStatusParamsSchema,
+  CronGetParams: CronGetParamsSchema,
   CronAddParams: CronAddParamsSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,
@@ -447,6 +481,10 @@ export const ProtocolSchemas = {
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
+  PluginsSessionActionFailureResult: PluginsSessionActionFailureResultSchema,
+  PluginsSessionActionParams: PluginsSessionActionParamsSchema,
+  PluginsSessionActionResult: PluginsSessionActionResultSchema,
+  PluginsSessionActionSuccessResult: PluginsSessionActionSuccessResultSchema,
   PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,
@@ -461,6 +499,10 @@ export const ProtocolSchemas = {
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
+  ChatDeltaEvent: ChatDeltaEventSchema,
+  ChatFinalEvent: ChatFinalEventSchema,
+  ChatAbortedEvent: ChatAbortedEventSchema,
+  ChatErrorEvent: ChatErrorEventSchema,
   ChatEvent: ChatEventSchema,
   UpdateStatusParams: UpdateStatusParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
@@ -468,4 +510,8 @@ export const ProtocolSchemas = {
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
 
-export { PROTOCOL_VERSION } from "../version.js";
+export {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../version.js";

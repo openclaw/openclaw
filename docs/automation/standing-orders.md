@@ -90,7 +90,7 @@ openclaw cron add \
   --tz America/New_York \
   --timeout-seconds 300 \
   --announce \
-  --channel bluebubbles \
+  --channel imessage \
   --to "+1XXXXXXXXXX" \
   --message "Execute daily inbox triage per standing orders. Check mail for new alerts. Parse, categorize, and persist each item. Report summary to owner. Escalate unknowns."
 ```
@@ -243,7 +243,7 @@ Each program should have:
 
 ## Related
 
-- [Automation and tasks](/automation): all automation mechanisms at a glance.
+- [Automation](/automation): all automation mechanisms at a glance.
 - [Cron jobs](/automation/cron-jobs): schedule enforcement for standing orders.
 - [Hooks](/automation/hooks): event-driven scripts for agent lifecycle events.
 - [Webhooks](/automation/cron-jobs#webhooks): inbound HTTP event triggers.

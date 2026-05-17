@@ -38,6 +38,17 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
+function splitSetupEntriesForMock(raw: string): string[] {
+  const entries: string[] = [];
+  for (const entry of raw.split(",")) {
+    const normalized = entry.trim();
+    if (normalized.length > 0) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
+
 vi.mock("./login.js", () => ({
   loginWeb: hoisted.loginWeb,
 }));
@@ -58,16 +69,19 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
     ...actual,
     DEFAULT_ACCOUNT_ID,
     normalizeAccountId: (value?: string | null) => value?.trim() || DEFAULT_ACCOUNT_ID,
-    normalizeAllowFromEntries: (entries: string[], normalize: (value: string) => string) => [
-      ...new Set(entries.map((entry) => (entry === "*" ? "*" : normalize(entry))).filter(Boolean)),
-    ],
+    normalizeAllowFromEntries: (entries: string[], normalize: (value: string) => string) => {
+      const normalized = new Set<string>();
+      for (const entry of entries) {
+        const value = entry === "*" ? "*" : normalize(entry);
+        if (value) {
+          normalized.add(value);
+        }
+      }
+      return [...normalized];
+    },
     normalizeE164,
     pathExists: hoisted.pathExists,
-    splitSetupEntries: (raw: string) =>
-      raw
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean),
+    splitSetupEntries: splitSetupEntriesForMock,
     setSetupChannelEnabled: (cfg: OpenClawConfig, channel: string, enabled: boolean) => ({
       ...cfg,
       channels: {
@@ -180,13 +194,15 @@ describe("whatsapp setup wizard", () => {
       forceAllowFrom: true,
     });
 
-    const prompt = harness.text.mock.calls[0]?.[0] as
+    const prompt = harness.text.mock.calls.at(0)?.[0] as
       | { validate?: (value: string) => string | undefined }
       | undefined;
-    expect(prompt?.validate).toEqual(expect.any(Function));
-    expect(prompt?.validate?.("abc")).toBe("Invalid number: abc");
-    expect(prompt?.validate?.("whatsapp:")).toBe("Invalid number: whatsapp:");
-    expect(prompt?.validate?.("+1 (555) 555-0123")).toBeUndefined();
+    if (!prompt?.validate) {
+      throw new Error("expected owner number validator");
+    }
+    expect(prompt.validate("abc")).toBe("Invalid number: abc");
+    expect(prompt.validate("whatsapp:")).toBe("Invalid number: whatsapp:");
+    expect(prompt.validate("+1 (555) 555-0123")).toBeUndefined();
   });
 
   it("supports disabled DM policy for separate-phone setup", async () => {
