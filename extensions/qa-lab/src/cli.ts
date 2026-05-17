@@ -51,6 +51,7 @@ async function runQaSuite(opts: {
   disk?: string;
   preflight?: boolean;
   runtimePair?: string;
+  runtimeParityTier?: string[];
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -286,6 +287,12 @@ export function registerQaLabCli(program: Command) {
     .option("--memory <size>", "Multipass memory size")
     .option("--disk <size>", "Multipass disk size")
     .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. pi,codex")
+    .option(
+      "--runtime-parity-tier <tier>",
+      "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
+      collectString,
+      [],
+    )
     .action(
       async (opts: {
         repoRoot?: string;
@@ -310,6 +317,7 @@ export function registerQaLabCli(program: Command) {
         disk?: string;
         preflight?: boolean;
         runtimePair?: string;
+        runtimeParityTier?: string[];
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -334,6 +342,7 @@ export function registerQaLabCli(program: Command) {
           disk: opts.disk,
           preflight: opts.preflight,
           runtimePair: opts.runtimePair,
+          runtimeParityTier: opts.runtimeParityTier,
         });
       },
     );

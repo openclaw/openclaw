@@ -897,6 +897,7 @@ jobs:
         run: pnpm build
 
       - name: Run runtime parity lane
+        id: runtime_parity_lane
         run: |
           set -euo pipefail
           pnpm openclaw qa suite \
@@ -908,6 +909,19 @@ jobs:
             --runtime-pair pi,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
+      - name: Run standard runtime parity tier
+        if: ${{ always() && steps.runtime_parity_lane.outcome != 'skipped' && steps.runtime_parity_lane.outcome != 'cancelled' }}
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-parity-tier standard \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "openai/gpt-5.5-alt" \
+            --runtime-pair pi,codex \
+            --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
+
       - name: Generate runtime parity report
         if: always()
         run: |
@@ -917,6 +931,16 @@ jobs:
             --runtime-axis \
             --summary .artifacts/qa-e2e/runtime-parity/qa-suite-summary.json \
             --output-dir .artifacts/qa-e2e/runtime-parity-report
+
+      - name: Generate standard runtime parity report
+        if: always()
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json \
+            --output-dir .artifacts/qa-e2e/runtime-parity-standard-report
 
       - name: Upload runtime parity artifacts
         if: always()

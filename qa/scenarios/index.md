@@ -25,6 +25,18 @@ Coverage tracking:
 - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
 - keep source-path tracking in the report, not in the scenario schema
 
+Runtime parity tiers:
+
+- `standard`: required Codex-vs-Pi mock gate coverage for first-hour depth and
+  default runtime-tool fixtures; selected with
+  `openclaw qa suite --runtime-pair pi,codex --runtime-parity-tier standard`
+- `optional`: profile-, plugin-, or external-service-dependent runtime-tool
+  fixtures that stay out of the default release gate
+- `live-only`: scenarios that need real provider/runtime behavior rather than
+  mock-openai fixtures
+- `soak`: long-running scheduled or Testbox lanes such as the 100-turn parity
+  soak
+
 Theme directories:
 
 - `agents/` - agent behavior, instructions, subagent flows, and persisted child-link regressions

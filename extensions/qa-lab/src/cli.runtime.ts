@@ -42,7 +42,11 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
+import {
+  QA_RUNTIME_PARITY_TIERS,
+  readQaScenarioPack,
+  type QaRuntimeParityTier,
+} from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
@@ -161,6 +165,47 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
   return ["pi", "codex"];
+}
+
+function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntimeParityTier[] {
+  const rawValues = [
+    ...new Set(
+      (input ?? [])
+        .flatMap((value) => value.split(","))
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const validTiers = new Set<string>(QA_RUNTIME_PARITY_TIERS);
+  for (const value of rawValues) {
+    if (!validTiers.has(value)) {
+      throw new Error(
+        `--runtime-parity-tier must be one of ${QA_RUNTIME_PARITY_TIERS.join(", ")}, got "${value}".`,
+      );
+    }
+  }
+  return rawValues as QaRuntimeParityTier[];
+}
+
+function resolveQaRuntimeParityTierScenarioIds(params: {
+  scenarioIds: string[];
+  runtimeParityTiers: readonly QaRuntimeParityTier[];
+}): string[] {
+  if (params.runtimeParityTiers.length === 0) {
+    return params.scenarioIds;
+  }
+  const tierSet = new Set(params.runtimeParityTiers);
+  const matchingScenarioIds = readQaScenarioPack()
+    .scenarios.filter(
+      (scenario) => scenario.runtimeParityTier && tierSet.has(scenario.runtimeParityTier),
+    )
+    .map((scenario) => scenario.id);
+  if (matchingScenarioIds.length === 0) {
+    throw new Error(
+      `--runtime-parity-tier matched no scenarios for ${params.runtimeParityTiers.join(", ")}.`,
+    );
+  }
+  return [...new Set([...params.scenarioIds, ...matchingScenarioIds])];
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
@@ -513,16 +558,22 @@ export async function runQaSuiteCommand(opts: {
   disk?: string;
   preflight?: boolean;
   runtimePair?: string;
+  runtimeParityTier?: string[];
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
-  const scenarioIds = resolveQaScenarioPackScenarioIds({
+  const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
     scenarioIds: resolveQaParityPackScenarioIds({
       parityPack: opts.parityPack,
       scenarioIds: opts.scenarioIds,
     }),
+  });
+  const runtimeParityTiers = parseQaRuntimeParityTierFilters(opts.runtimeParityTier);
+  const scenarioIds = resolveQaRuntimeParityTierScenarioIds({
+    scenarioIds: explicitScenarioIds,
+    runtimeParityTiers,
   });
   const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {

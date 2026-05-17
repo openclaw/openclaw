@@ -782,6 +782,66 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("expands runtime parity tier selections onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimeParityTier: ["standard"],
+      scenarioIds: ["channel-chat-baseline", "runtime-tool-bash"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      scenarioIds: [
+        "channel-chat-baseline",
+        "runtime-tool-bash",
+        "runtime-first-hour-20-turn",
+        "runtime-tool-apply-patch",
+        "runtime-tool-edit",
+        "runtime-tool-exec",
+        "runtime-tool-fs-list",
+        "runtime-tool-fs-read",
+        "runtime-tool-fs-write",
+        "runtime-tool-grep",
+        "runtime-tool-image-generate",
+        "runtime-tool-session-status",
+        "runtime-tool-sessions-spawn",
+        "runtime-tool-web-fetch",
+        "runtime-tool-web-search",
+      ],
+    });
+  });
+
+  it("accepts comma-separated runtime parity tier filters", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimeParityTier: ["optional,soak"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      scenarioIds: [
+        "runtime-soak-100-turn",
+        "runtime-tool-memory-add",
+        "runtime-tool-memory-recall",
+        "runtime-tool-message-tool",
+        "runtime-tool-skill-invocation",
+        "runtime-tool-tavily-extract",
+        "runtime-tool-tavily-search",
+        "runtime-tool-tts",
+      ],
+    });
+  });
+
+  it("rejects unknown runtime parity tier filters", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runtimeParityTier: ["standardish"],
+      }),
+    ).rejects.toThrow(
+      '--runtime-parity-tier must be one of standard, optional, live-only, soak, got "standardish".',
+    );
+  });
+
   it("rejects unknown suite packs", async () => {
     await expect(
       runQaSuiteCommand({
