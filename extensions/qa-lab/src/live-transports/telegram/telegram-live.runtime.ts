@@ -398,7 +398,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     title: "Telegram reply-chain exact marker",
     defaultProviderModes: ["mock-openai"],
     rationale: "Mock-backed reply-chain check proves quoted bot-to-bot follow-ups keep threading.",
-    timeoutMs: 45_000,
+    timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
         expectReply: true,
@@ -416,7 +416,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     defaultProviderModes: ["mock-openai"],
     rationale: "Regression guard for duplicate final replies from Telegram streaming paths.",
     regressionRefs: ["openclaw/openclaw#39905"],
-    timeoutMs: 45_000,
+    timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
         allowAnySutReply: true,

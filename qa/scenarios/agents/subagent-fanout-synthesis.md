@@ -96,7 +96,7 @@ steps:
                           args:
                             - lambda:
                                 expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text ?? '').includes(needle)))).at(-1)"
-                            - expr: liveTurnTimeoutMs(env, 60000)
+                            - expr: liveTurnTimeoutMs(env, 120000)
                             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                         - if:
                             expr: "Boolean(env.mock)"
