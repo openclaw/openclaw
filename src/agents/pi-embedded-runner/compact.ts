@@ -65,7 +65,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModel,
-  type ProviderRuntimeModel,
+  resolveModelAuthMode,
 } from "../model-auth.js";
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
