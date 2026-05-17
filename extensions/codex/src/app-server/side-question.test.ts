@@ -491,12 +491,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(preToolUseState?.enabled).toBe(true);
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
-    const turnConfig = (turnStartCall?.[1] as { config?: Record<string, unknown> } | undefined)
-      ?.config;
-    expect(turnConfig).toMatchObject(config ?? {});
-    expect(codexHookCommand(turnConfig, "hooks.PreToolUse")?.command).toBe(
-      preToolUseCommand?.command,
-    );
+    expect(turnStartCall?.[1]).not.toHaveProperty("config");
     expect(relayIdDuringFork).toBeDefined();
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
