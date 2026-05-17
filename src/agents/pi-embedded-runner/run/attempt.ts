@@ -3245,6 +3245,8 @@ export async function runEmbeddedAttempt(
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
+      let lastCallUsage: NormalizedUsage | undefined;
+      let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
@@ -4154,7 +4156,7 @@ export async function runEmbeddedAttempt(
           // Using a cumulative count (> 0) instead of a delta check avoids missing
           // compactions that complete during activeSession.prompt() before the delta
           // baseline is sampled.
-          const compactionOccurredThisAttempt = getCompactionCount() > 0;
+          compactionOccurredThisAttempt = getCompactionCount() > 0;
           // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
           // Previously this was before the prompt, which caused a custom entry to be
           // inserted between compaction and the next prompt — breaking the
@@ -4212,7 +4214,7 @@ export async function runEmbeddedAttempt(
                 usage: attemptUsage,
               })
             : null;
-          const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+          lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
           const promptCacheObservation =
             cacheObservabilityEnabled &&
             (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
@@ -4259,49 +4261,56 @@ export async function runEmbeddedAttempt(
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
             }
           }
+        });
 
-          // Let the active context engine run its post-turn lifecycle.
-          if (activeContextEngine) {
-            const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
-              attempt: params,
-              workspaceDir: effectiveWorkspace,
-              agentDir,
-              tokenBudget: params.contextTokenBudget,
-              lastCallUsage,
-              promptCache,
-              activeAgentId: sessionAgentId,
-              contextEnginePluginId: activeContextEnginePluginId,
-            });
-            await finalizeAttemptContextEngineTurn({
-              contextEngine: activeContextEngine,
-              promptError: Boolean(promptError),
-              aborted,
-              yieldAborted,
-              sessionIdUsed,
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
-              messagesSnapshot,
-              prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
-              tokenBudget: params.contextTokenBudget,
-              runtimeContext: afterTurnRuntimeContext,
-              runMaintenance: async (contextParams) =>
-                await runContextEngineMaintenance({
-                  contextEngine: contextParams.contextEngine as never,
-                  sessionId: contextParams.sessionId,
-                  sessionKey: contextParams.sessionKey,
-                  sessionFile: contextParams.sessionFile,
-                  reason: contextParams.reason,
-                  sessionManager: contextParams.sessionManager as never,
-                  runtimeContext: contextParams.runtimeContext,
-                  config: params.config,
-                  agentId: sessionAgentId,
-                }),
-              sessionManager,
-              config: params.config,
-              warn: (message) => log.warn(message),
-            });
-          }
+        // Let the active context engine run its post-turn lifecycle. These hooks
+        // may call runtime LLM capabilities, so only their transcript rewrite
+        // helper reacquires the session write lock.
+        if (activeContextEngine) {
+          const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
+            attempt: params,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
+            tokenBudget: params.contextTokenBudget,
+            lastCallUsage,
+            promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: activeContextEnginePluginId,
+          });
+          await finalizeAttemptContextEngineTurn({
+            contextEngine: activeContextEngine,
+            promptError: Boolean(promptError),
+            aborted,
+            yieldAborted,
+            sessionIdUsed,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            messagesSnapshot,
+            prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
+            tokenBudget: params.contextTokenBudget,
+            runtimeContext: afterTurnRuntimeContext,
+            runMaintenance: async (contextParams) =>
+              await runContextEngineMaintenance({
+                contextEngine: contextParams.contextEngine as never,
+                sessionId: contextParams.sessionId,
+                sessionKey: contextParams.sessionKey,
+                sessionFile: contextParams.sessionFile,
+                reason: contextParams.reason,
+                sessionManager: contextParams.sessionManager as never,
+                withSessionManagerRewriteLock: async (operation) =>
+                  await sessionLockController.withSessionWriteLock(operation),
+                runtimeContext: contextParams.runtimeContext,
+                config: params.config,
+                agentId: sessionAgentId,
+              }),
+            sessionManager,
+            config: params.config,
+            warn: (message) => log.warn(message),
+          });
+        }
 
+        await sessionLockController.waitForSessionEvents(activeSession);
+        await sessionLockController.withSessionWriteLock(async () => {
           if (
             shouldPersistCompletedBootstrapTurn({
               shouldRecordCompletedBootstrapTurn,
