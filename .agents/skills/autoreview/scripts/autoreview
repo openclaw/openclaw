@@ -119,7 +119,7 @@ done
 
 case "$yolo" in
   0|false|False|FALSE|no|No|NO|off|Off|OFF) ;;
-  *) codex_args+=(--dangerously-bypass-approvals-and-sandbox) ;;
+  *) codex_args+=(--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access) ;;
 esac
 
 case "$mode" in

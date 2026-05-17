@@ -112,7 +112,7 @@ The helper:
 - falls back only when Codex is unavailable or exits nonzero, not when Codex reports findings
 - writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
-- runs nested review with `--dangerously-bypass-approvals-and-sandbox` by default
+- runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
 - keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
 - still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
