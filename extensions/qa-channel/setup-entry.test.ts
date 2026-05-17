@@ -8,5 +8,10 @@ describe("qa-channel setup entry", () => {
     const setupPlugin = setupEntry.loadSetupPlugin();
     expect(setupPlugin.id).toBe("qa-channel");
     expect(setupPlugin.capabilities.chatTypes).toEqual(["direct", "group"]);
+    expect(setupPlugin.meta.exposure).toEqual({
+      configured: false,
+      setup: false,
+      docs: false,
+    });
   });
 });

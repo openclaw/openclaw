@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getWebAuthAgeMs,
   logoutWeb,
   pickWebChannel,
   readWebAuthSnapshot,
@@ -120,6 +121,16 @@ describe("auth-store", () => {
         lid: null,
       },
     });
+  });
+
+  it("clamps auth age when creds mtime is slightly ahead of the local clock", () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-future-mtime");
+    const credsPath = path.join(authDir, "creds.json");
+    fsSync.writeFileSync(credsPath, JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }));
+    const future = new Date(Date.now() + 1_000);
+    fsSync.utimesSync(credsPath, future, future);
+
+    expect(getWebAuthAgeMs(authDir)).toBe(0);
   });
 
   it("reports unstable auth state when the shared barrier read times out", async () => {

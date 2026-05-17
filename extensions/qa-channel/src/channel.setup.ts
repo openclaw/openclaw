@@ -1,17 +1,14 @@
-import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   listQaChannelAccountIds,
   resolveDefaultQaChannelAccountId,
   resolveQaChannelAccount,
   type ResolvedQaChannelAccount,
 } from "./accounts.js";
+import { QA_CHANNEL_ID as CHANNEL_ID, qaChannelMeta as meta } from "./channel-meta.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
 import type { ChannelPlugin } from "./runtime-api.js";
 import { applyQaSetup } from "./setup.js";
 import type { CoreConfig } from "./types.js";
-
-const CHANNEL_ID = "qa-channel" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
 
 export const qaChannelSetupPlugin: ChannelPlugin<ResolvedQaChannelAccount> = {
   id: CHANNEL_ID,

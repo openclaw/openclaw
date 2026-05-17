@@ -128,11 +128,11 @@ function requireNestedRecord(value: unknown, label: string, path: string[]) {
   return requireRecord(current, label);
 }
 
-function expectInteractiveApprovalButtons(
+function expectApprovalPresentationButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  expect(requireNestedRecord(result, "interactive payload", ["interactive"])).toEqual({
+  expect(requireNestedRecord(result, "approval presentation", ["presentation"])).toEqual({
     blocks: [{ type: "buttons", buttons: expectedButtons }],
   });
 }
@@ -570,7 +570,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       },
     );
-    expectInteractiveApprovalButtons(result, [
+    expectApprovalPresentationButtons(result, [
       {
         label: "Allow Once",
         value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
@@ -628,7 +628,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         allowedDecisions: ["allow-once", "deny"],
       },
     );
-    expectInteractiveApprovalButtons(result, [
+    expectApprovalPresentationButtons(result, [
       {
         label: "Allow Once",
         value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",

@@ -749,8 +749,11 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
+  const resolvedCandidateRoot = resolveUserPath(params.candidate.rootDir, params.env);
   const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
-  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
+  const candidatePaths = [resolvedCandidateRoot, resolvedCandidateSource].map(
+    (candidatePath) => safeRealpathSync(candidatePath) ?? candidatePath,
+  );
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
@@ -760,9 +763,11 @@ function matchesInstalledPluginRecord(params: {
   if (trackedPaths.length === 0) {
     return false;
   }
-  return trackedPaths.some((trackedPath) => {
-    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
-  });
+  return trackedPaths.some((trackedPath) =>
+    candidatePaths.some(
+      (candidatePath) => candidatePath === trackedPath || isPathInside(trackedPath, candidatePath),
+    ),
+  );
 }
 
 function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {

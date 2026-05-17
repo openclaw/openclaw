@@ -885,11 +885,14 @@ describe("gateway node command allowlist", () => {
         .poll(
           async () => {
             const node = await findConnectedNodeByDisplayName(displayName);
-            return node?.commands?.toSorted() ?? [];
+            return {
+              hasNodeId: Boolean(node?.nodeId),
+              commands: node?.commands?.toSorted() ?? [],
+            };
           },
           { timeout: 2_000, interval: 10 },
         )
-        .toEqual(["canvas.snapshot"]);
+        .toEqual({ hasNodeId: true, commands: ["canvas.snapshot"] });
 
       const node = await findConnectedNodeByDisplayName(displayName);
       const nodeId = requireNodeId(node?.nodeId, displayName);

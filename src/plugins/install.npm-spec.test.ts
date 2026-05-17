@@ -223,7 +223,19 @@ function prunePluginLocalOpenClawPeerLinks(npmRoot: string) {
           .map((scopedEntry) => path.join(entryPath, scopedEntry.name))
       : [entryPath];
     for (const packageDir of packageDirs) {
-      fs.rmSync(path.join(packageDir, "node_modules", "openclaw"), {
+      const localNodeModules = path.join(packageDir, "node_modules");
+      let localNodeModulesStat: fs.Stats | undefined;
+      try {
+        localNodeModulesStat = fs.lstatSync(localNodeModules);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      }
+      if (!localNodeModulesStat?.isDirectory()) {
+        continue;
+      }
+      fs.rmSync(path.join(localNodeModules, "openclaw"), {
         recursive: true,
         force: true,
       });

@@ -507,12 +507,13 @@ describe("exec approvals", () => {
     if (process.platform !== "win32") {
       await fs.chmod(exePath, 0o755);
     }
+    const allowlistPath = await fs.realpath(exePath);
     const approvalsFile = {
       version: 1,
       defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
       agents: {
         main: {
-          allowlist: [{ pattern: exePath }],
+          allowlist: [{ pattern: allowlistPath }],
         },
       },
     };
@@ -1243,13 +1244,14 @@ describe("exec approvals", () => {
       await fs.writeFile(skillPath, "# gog skill\n");
       await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
       await fs.chmod(wrapperPath, 0o755);
+      const allowlistWrapperPath = await fs.realpath(wrapperPath);
 
       await writeExecApprovalsConfig({
         version: 1,
         defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
         agents: {
           main: {
-            allowlist: [{ pattern: wrapperPath }],
+            allowlist: [{ pattern: allowlistWrapperPath }],
           },
         },
       });

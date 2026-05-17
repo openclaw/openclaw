@@ -38,6 +38,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
 }));
 
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   resetProviderAuthAliasMapCacheForTest,
   resolveProviderIdForAuth,
@@ -45,6 +46,7 @@ import {
 
 describe("provider auth aliases", () => {
   beforeEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     resetProviderAuthAliasMapCacheForTest();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();

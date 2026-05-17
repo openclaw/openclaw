@@ -7,7 +7,6 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-message";
-import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,
   listQaChannelAccountIds,
@@ -16,6 +15,7 @@ import {
 } from "./accounts.js";
 import { buildQaTarget, normalizeQaTarget, parseQaTarget } from "./bus-client.js";
 import { qaChannelMessageActions } from "./channel-actions.js";
+import { QA_CHANNEL_ID as CHANNEL_ID, qaChannelMeta as meta } from "./channel-meta.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
 import { startQaGatewayAccount } from "./gateway.js";
 import { sendQaChannelText } from "./outbound.js";
@@ -23,9 +23,6 @@ import type { ChannelPlugin } from "./runtime-api.js";
 import { applyQaSetup } from "./setup.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
-
-const CHANNEL_ID = "qa-channel" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
 
 const qaChannelMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,

@@ -3,7 +3,7 @@ import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
-import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
+import { expectNoNodeFsScans } from "../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -186,15 +186,35 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 
 describe("non-extension test boundaries", () => {
   it("lists boundary scan files from git without walking repo roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const srcTests = walk(path.join(repoRoot, "src"));
-      const srcCode = walkCode(path.join(repoRoot, "src"));
-      const pluginIds = collectBundledPluginIds();
+    const payload = expectNoNodeFsScans<{
+      pluginIds: number;
+      srcCode: number;
+      srcTests: number;
+    }>(
+      `
+        const { listGitTrackedFiles } = await import("./src/test-utils/repo-files.ts");
+        const repoRoot = process.cwd();
+        const srcFiles = listGitTrackedFiles({ repoRoot, pathspecs: "src" }) ?? [];
+        const extensionFiles = listGitTrackedFiles({ repoRoot, pathspecs: "extensions" }) ?? [];
+        const pluginIds = new Set(
+          extensionFiles
+            .map((file) => /^extensions\\/([^/]+)\\//u.exec(file)?.[1])
+            .filter(Boolean),
+        );
+        return {
+          pluginIds: pluginIds.size,
+          srcCode: srcFiles.filter((file) => file.endsWith(".ts") || file.endsWith(".tsx")).length,
+          srcTests: srcFiles.filter(
+            (file) => file.endsWith(".test.ts") || file.endsWith(".test.tsx"),
+          ).length,
+        };
+      `,
+      { imports: ["tsx"] },
+    );
 
-      expect(srcTests.length).toBeGreaterThan(0);
-      expect(srcCode.length).toBeGreaterThan(0);
-      expect(pluginIds.size).toBeGreaterThan(0);
-    });
+    expect(payload.srcTests).toBeGreaterThan(0);
+    expect(payload.srcCode).toBeGreaterThan(0);
+    expect(payload.pluginIds).toBeGreaterThan(0);
   });
 
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {

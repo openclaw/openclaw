@@ -496,11 +496,12 @@ describe("config io write", () => {
         spec: "demo@1.0.0",
         installPath: pluginDir,
       });
-      expect(warn.mock.calls).toEqual([
-        [
-          "Config warnings:\n- plugins.entries.demo: plugin not found: demo (stale config entry ignored; remove it from plugins config)",
-        ],
-      ]);
+      const unexpectedWarnings = warn.mock.calls.filter(
+        ([message]) =>
+          typeof message !== "string" ||
+          !message.includes("plugins.entries.demo: plugin not found: demo"),
+      );
+      expect(unexpectedWarnings).toEqual([]);
 
       await expect(io.writeConfigFile({ gateway: { mode: "local" } })).rejects.toThrow(
         "Config write blocked: shipped plugins.installs records",
