@@ -655,9 +655,7 @@ describe("runCodexAppServerAttempt", () => {
     };
 
     expect(
-      __testing
-        .filterCodexDynamicTools(tools, {}, privateQaCodexEnv)
-        .map((tool) => tool.name),
+      __testing.filterCodexDynamicTools(tools, {}, privateQaCodexEnv).map((tool) => tool.name),
     ).toEqual(["read", "write", "image_generate", "message"]);
     expect(__testing.resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
   });
@@ -1657,7 +1655,7 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 100;
+    params.timeoutMs = 250;
 
     const result = await runCodexAppServerAttempt(params);
 
@@ -1694,6 +1692,13 @@ describe("runCodexAppServerAttempt", () => {
       turnTerminalIdleTimeoutMs: 300,
     });
     await harness.waitForMethod("turn/start");
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "turn:start" }),
+        ),
+      fastWait,
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 60));
     await harness.notify({
@@ -1756,6 +1761,13 @@ describe("runCodexAppServerAttempt", () => {
       turnTerminalIdleTimeoutMs: 500,
     });
     await harness.waitForMethod("turn/start");
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "turn:start" }),
+        ),
+      fastWait,
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 60));
     await harness.handleServerRequest({
@@ -1840,6 +1852,8 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 100;
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
 
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 300,
@@ -1847,6 +1861,13 @@ describe("runCodexAppServerAttempt", () => {
       turnTerminalIdleTimeoutMs: 300,
     });
     await harness.waitForMethod("turn/start");
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "turn:start" }),
+        ),
+      fastWait,
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 60));
     await harness.handleServerRequest({
@@ -1879,17 +1900,26 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 100;
+    params.timeoutMs = 250;
     params.onBlockReply = vi.fn();
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
 
     const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 300,
-      turnAssistantCompletionIdleTimeoutMs: 300,
-      turnTerminalIdleTimeoutMs: 300,
+      turnCompletionIdleTimeoutMs: 600,
+      turnAssistantCompletionIdleTimeoutMs: 600,
+      turnTerminalIdleTimeoutMs: 600,
     });
     await harness.waitForMethod("turn/start");
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "turn:start" }),
+        ),
+      fastWait,
+    );
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => setTimeout(resolve, 75));
     const response = harness.handleServerRequest({
       id: "request-user-input",
       method: "item/tool/requestUserInput",
@@ -1913,7 +1943,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => setTimeout(resolve, 125));
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
