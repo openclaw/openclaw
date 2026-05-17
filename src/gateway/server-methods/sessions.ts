@@ -18,6 +18,7 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
   loadSessionStore,
+  reconcileStaleRunningSessions,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   resolveMainSessionKey,
@@ -51,6 +52,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { listTaskRecords } from "../../tasks/runtime-internal.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -94,6 +96,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
+  type GatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -322,6 +325,13 @@ function emitSessionsChanged(
               requestedKey: payload.sessionKey ?? sessionRow.key,
               canonicalKey: sessionRow.key,
             }),
+            stalePersistedRunning:
+              sessionRow.stalePersistedRunning &&
+              !hasTrackedActiveSessionRun({
+                context,
+                requestedKey: payload.sessionKey ?? sessionRow.key,
+                canonicalKey: sessionRow.key,
+              }),
             startedAt: sessionRow.startedAt,
             endedAt: sessionRow.endedAt,
             runtimeMs: sessionRow.runtimeMs,
@@ -644,6 +654,17 @@ function hasTrackedActiveSessionRun(params: {
   return activeSessionKeys.has(params.canonicalKey) || activeSessionKeys.has(params.requestedKey);
 }
 
+function listActiveRunSessionKeys(
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+): string[] {
+  if (!(context.chatAbortControllers instanceof Map)) {
+    return [];
+  }
+  return [...context.chatAbortControllers.values()]
+    .map((active) => normalizeOptionalString(active.sessionKey))
+    .filter((sessionKey): sessionKey is string => Boolean(sessionKey));
+}
+
 async function interruptSessionRunIfActive(params: {
   req: GatewayRequestHandlerOptions["req"];
   context: GatewayRequestContext;
@@ -933,11 +954,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           "gateway.sessions.list.active_run_flags",
           () => {
             const activeSessionKeys = collectTrackedActiveSessionRunKeys(context);
-            return result.sessions.map((session) =>
-              Object.assign({}, session, {
-                hasActiveRun: activeSessionKeys.has(session.key),
-              }),
-            );
+            return result.sessions.map((session) => {
+              const hasActiveRun = activeSessionKeys.has(session.key);
+              return Object.assign({}, session, {
+                hasActiveRun,
+                stalePersistedRunning:
+                  (session as GatewaySessionRow).stalePersistedRunning && !hasActiveRun,
+              });
+            });
           },
           {
             config: cfg,
@@ -977,6 +1001,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           activeKey: params.activeKey,
           fixMissing: params.fixMissing,
           fixDmScope: params.fixDmScope,
+          activeRunSessionKeys: listActiveRunSessionKeys(context),
+          activeTasks: listTaskRecords(),
         },
       });
       const result = serializeSessionCleanupResult({
@@ -1791,7 +1817,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const { canonicalKey } = loadSessionEntry(key);
+    const { canonicalKey, storePath } = loadSessionEntry(key);
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&
@@ -1819,6 +1845,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
     let abortedRunId: string | null = null;
+    let abortRespondedOk = false;
     await chatHandlers["chat.abort"]({
       req,
       params: {
@@ -1830,6 +1857,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           respond(ok, payload, error, meta);
           return;
         }
+        abortRespondedOk = true;
         const runIds =
           payload &&
           typeof payload === "object" &&
@@ -1879,6 +1907,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionKey: canonicalKey,
         reason: "abort",
       });
+    } else if (abortRespondedOk) {
+      const repaired = await reconcileStaleRunningSessions({
+        storePath,
+        sessionKeys: [key, canonicalKey],
+        activeRunSessionKeys: listActiveRunSessionKeys(context),
+        activeTasks: listTaskRecords(),
+        minAgeMs: 0,
+      });
+      if (repaired.repaired.length > 0) {
+        emitSessionsChanged(context, {
+          sessionKey: canonicalKey,
+          reason: "abort",
+        });
+      }
     }
   },
   "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {

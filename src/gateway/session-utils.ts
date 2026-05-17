@@ -402,7 +402,14 @@ function isFinitePositiveTimestamp(value: unknown): value is number {
 }
 
 function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+  return (
+    status === "done" ||
+    status === "failed" ||
+    status === "killed" ||
+    status === "timeout" ||
+    status === "lost" ||
+    status === "aborted"
+  );
 }
 
 function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
@@ -1932,6 +1939,7 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    stalePersistedRunning: entry?.status === "running" && !liveSubagentRunActive,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

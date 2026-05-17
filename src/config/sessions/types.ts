@@ -237,7 +237,7 @@ export type SessionEntry = {
   /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
   runtimeMs?: number;
   /** Final persisted subagent run status, used after in-memory run archival. */
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  status?: "running" | "done" | "failed" | "killed" | "timeout" | "lost" | "aborted";
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
@@ -309,6 +309,12 @@ export type SessionEntry = {
   pendingFinalDeliveryContext?: DeliveryContext;
   /** Durable send intent backing pending final delivery, when already created. */
   pendingFinalDeliveryIntentId?: string | null;
+  /** Durable topic/main-turn state used to detect unclosed visible turns after restart. */
+  replyTurnState?: "running" | "completed" | "failed" | "aborted";
+  replyTurnStartedAt?: number;
+  replyTurnUpdatedAt?: number;
+  replyTurnRunId?: string | null;
+  replyTurnLastError?: string | null;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

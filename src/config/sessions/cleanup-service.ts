@@ -4,6 +4,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { listTaskRecords } from "../../tasks/runtime-internal.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   enforceSessionDiskBudget,
@@ -30,6 +31,7 @@ import {
   updateSessionStore,
   type SessionMaintenanceApplyReport,
 } from "./store.js";
+import { reconcileStaleRunningSessions } from "./stale-running.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -44,6 +46,8 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   json?: boolean;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  activeRunSessionKeys?: Iterable<string | undefined>;
+  activeTasks?: ReturnType<typeof listTaskRecords>;
 };
 
 export type SessionCleanupAction =
@@ -63,6 +67,7 @@ export type SessionCleanupSummary = {
   afterCount: number;
   missing: number;
   dmScopeRetired: number;
+  staleRunningRepaired: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -369,6 +374,7 @@ async function previewStoreCleanup(params: {
     afterCount: afterPreviewCount,
     missing,
     dmScopeRetired,
+    staleRunningRepaired: 0,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -427,6 +433,7 @@ export async function runSessionsCleanup(params: {
       const dmScopeRemovedSessionFiles = new Map<string, string | undefined>();
       let missingApplied = 0;
       let dmScopeRetiredApplied = 0;
+      let staleRunningRepairedApplied = 0;
       await updateSessionStore(
         target.storePath,
         async (store) => {
@@ -476,6 +483,12 @@ export async function runSessionsCleanup(params: {
           restrictToStoreDir: true,
         });
       }
+      const staleRunningRepair = await reconcileStaleRunningSessions({
+        storePath: target.storePath,
+        activeRunSessionKeys: opts.activeRunSessionKeys,
+        activeTasks: opts.activeTasks ?? listTaskRecords(),
+      });
+      staleRunningRepairedApplied = staleRunningRepair.repaired.length;
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
       const unreferencedArtifacts =
         mode === "warn"
@@ -507,6 +520,7 @@ export async function runSessionsCleanup(params: {
                 afterCount: 0,
                 missing: 0,
                 dmScopeRetired: 0,
+                staleRunningRepaired: 0,
                 pruned: 0,
                 capped: 0,
                 unreferencedArtifacts,
@@ -516,7 +530,10 @@ export async function runSessionsCleanup(params: {
               dryRun: false,
               unreferencedArtifacts,
               wouldMutate:
-                (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
+                (preview?.summary.wouldMutate ?? false) ||
+                staleRunningRepairedApplied > 0 ||
+                unreferencedArtifacts.removedFiles > 0,
+              staleRunningRepaired: staleRunningRepairedApplied,
               applied: true,
               appliedCount: Object.keys(afterStore).length,
             }
@@ -529,6 +546,7 @@ export async function runSessionsCleanup(params: {
               afterCount: appliedReport.afterCount,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
+              staleRunningRepaired: staleRunningRepairedApplied,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
@@ -536,6 +554,7 @@ export async function runSessionsCleanup(params: {
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
+                staleRunningRepairedApplied > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||

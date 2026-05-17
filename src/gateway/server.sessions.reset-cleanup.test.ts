@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
+import { createActiveRun, createChatAbortContext } from "./server-methods/chat.abort.test-helpers.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -106,6 +108,152 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.abort repairs stale running row when no active run exists", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    `${dir}/sess-stale.jsonl`,
+    `${JSON.stringify({ message: { role: "assistant", content: "already done" } })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      "telegram:group:-1003789377335:topic:2": sessionStoreEntry("sess-stale", {
+        status: "running",
+        updatedAt: Date.now() - 10 * 60_000,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003789377335",
+          threadId: 2,
+        },
+        lastThreadId: 2,
+      }),
+    },
+  });
+
+  const abort = await directSessionReq<{ ok: true; status: string; abortedRunId: null }>(
+    "sessions.abort",
+    {
+      key: "agent:main:telegram:group:-1003789377335:topic:2",
+    },
+    {
+      context: createChatAbortContext(),
+    },
+  );
+
+  expect(abort.ok).toBe(true);
+  expect(abort.payload).toMatchObject({ status: "no-active-run", abortedRunId: null });
+  const store = loadSessionStore(storePath, { skipCache: true });
+  expect(store["agent:main:telegram:group:-1003789377335:topic:2"]).toMatchObject({
+    status: "done",
+    deliveryContext: {
+      channel: "telegram",
+      to: "-1003789377335",
+      threadId: 2,
+    },
+    lastThreadId: 2,
+  });
+});
+
+test("sessions.cleanup repairs stale running rows", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    `${dir}/sess-cleanup-stale.jsonl`,
+    `${JSON.stringify({ message: { role: "assistant", content: "already done" } })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      "telegram:group:-1003789377335:topic:2": sessionStoreEntry("sess-cleanup-stale", {
+        status: "running",
+        updatedAt: Date.now() - 10 * 60_000,
+      }),
+    },
+  });
+
+  const cleanup = await directSessionReq<{ staleRunningRepaired: number }>("sessions.cleanup", {});
+
+  expect(cleanup.ok).toBe(true);
+  expect(cleanup.payload?.staleRunningRepaired).toBe(1);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  expect(store["agent:main:telegram:group:-1003789377335:topic:2"]?.status).toBe("done");
+});
+
+test("sessions.cleanup does not close rows with active abort controllers", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "telegram:group:-1003789377335:topic:2": sessionStoreEntry("sess-active", {
+        status: "running",
+        updatedAt: Date.now() - 10 * 60_000,
+      }),
+    },
+  });
+
+  const cleanup = await directSessionReq<{ staleRunningRepaired: number }>("sessions.cleanup", {}, {
+    context: {
+      chatAbortControllers: new Map([
+        [
+          "run-active",
+          createActiveRun("agent:main:telegram:group:-1003789377335:topic:2", {
+            sessionId: "sess-active",
+          }),
+        ],
+      ]),
+    },
+  });
+
+  expect(cleanup.ok).toBe(true);
+  expect(cleanup.payload?.staleRunningRepaired).toBe(0);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  expect(store["agent:main:telegram:group:-1003789377335:topic:2"]?.status).toBe("running");
+});
+
+test("sessions.reset preserves Telegram topic delivery context and thread id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "telegram:group:-1003789377335:topic:2": sessionStoreEntry("sess-topic", {
+        status: "running",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003789377335",
+          threadId: 2,
+        },
+        lastThreadId: 2,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      deliveryContext?: { channel?: string; to?: string; threadId?: number };
+      lastThreadId?: number;
+    };
+  }>("sessions.reset", {
+    key: "agent:main:telegram:group:-1003789377335:topic:2",
+    reason: "reset",
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).not.toBe("sess-topic");
+  expect(reset.payload?.entry.deliveryContext).toMatchObject({
+    channel: "telegram",
+    to: "-1003789377335",
+    threadId: 2,
+  });
+  expect(reset.payload?.entry.lastThreadId).toBe(2);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  expect(store["agent:main:telegram:group:-1003789377335:topic:2"]?.deliveryContext).toMatchObject({
+    channel: "telegram",
+    to: "-1003789377335",
+    threadId: 2,
+  });
+  expect(store["agent:main:telegram:group:-1003789377335:topic:2"]?.lastThreadId).toBe(2);
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
