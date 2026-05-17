@@ -1,4 +1,5 @@
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { formatCodexDisplayText } from "./command-formatters.js";
 
 /**
  * Lightweight read/write surface over the Openclaw config file. Plugged in by
@@ -51,19 +52,19 @@ export async function handleCodexPluginsSubcommand(
     const current = (await io.readConfig()).plugins ?? {};
     if (!current[target]) {
       return {
-        text: `Codex sub-plugin '${target}' is not configured. Run '/codex plugins list' to see configured plugins.`,
+        text: `Codex sub-plugin '${formatCodexDisplayText(target)}' is not configured. Run '/codex plugins list' to see configured plugins.`,
       };
     }
     await io.mutate((block) => {
       block[target] = { ...block[target], enabled: wantEnabled };
     });
     return {
-      text: `${target}: ${wantEnabled ? "enabled" : "disabled"} in openclaw.json. ${POLICY_REFRESH_HINT}`,
+      text: `${formatCodexDisplayText(target)}: ${wantEnabled ? "enabled" : "disabled"} in openclaw.json. ${POLICY_REFRESH_HINT}`,
     };
   }
 
   return {
-    text: `Unknown /codex plugins subcommand: ${verb}\n\n${buildPluginsHelp()}`,
+    text: `Unknown /codex plugins subcommand: ${formatCodexDisplayText(verb)}\n\n${buildPluginsHelp()}`,
   };
 }
 
@@ -78,25 +79,26 @@ export function buildPluginsHelp(): string {
 }
 
 export function formatPluginList(plugins: Record<string, CodexPluginConfigEntry>): string {
-  const keys = Object.keys(plugins).sort();
+  const keys = Object.keys(plugins).toSorted();
   if (keys.length === 0) {
     return "No Codex sub-plugins configured under plugins.entries.codex.config.codexPlugins.plugins";
   }
   const rows = keys.map((key) => {
     const entry = plugins[key] ?? {};
     const state = entry.enabled === false ? "OFF" : "ON ";
-    const pluginName = entry.pluginName ?? key;
-    const marketplace = entry.marketplaceName ?? "?";
-    return { key, state, pluginName, marketplace };
+    const displayKey = formatCodexDisplayText(key);
+    const pluginName = formatCodexDisplayText(entry.pluginName ?? key);
+    const marketplace = formatCodexDisplayText(entry.marketplaceName ?? "?");
+    return { displayKey, state, pluginName, marketplace };
   });
-  const keyW = Math.max(...rows.map((r) => r.key.length));
+  const keyW = Math.max(...rows.map((r) => r.displayKey.length));
   const pluginW = Math.max(...rows.map((r) => r.pluginName.length));
   return [
     "Codex sub-plugins in Openclaw config (~/.openclaw/openclaw.json):",
     "",
     ...rows.map(
       (r) =>
-        `  ${r.state}  ${r.key.padEnd(keyW)}  ${r.pluginName.padEnd(pluginW)}  [${r.marketplace}]`,
+        `  ${r.state}  ${r.displayKey.padEnd(keyW)}  ${r.pluginName.padEnd(pluginW)}  [${r.marketplace}]`,
     ),
     "",
     "New Codex conversations pick up policy changes automatically; /new or /reset to refresh the current one.",

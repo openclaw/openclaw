@@ -56,10 +56,30 @@ describe("Codex /codex plugins subcommand", () => {
     expect(io.current().chrome.enabled).toBe(true);
   });
 
+  it("escapes configured plugin fields before listing them in chat", async () => {
+    const io = inMemoryIO({
+      "plugin_@team": {
+        enabled: true,
+        marketplaceName: "market[`place`]",
+        pluginName: "plugin_*name*",
+      },
+    });
+
+    const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
+    expect(result.text).toContain("plugin＿＠team");
+    expect(result.text).toContain("plugin＿∗name∗");
+    expect(result.text).toContain("market［｀place｀］");
+    expect(result.text).not.toContain("@team");
+    expect(result.text).not.toContain("*name*");
+    expect(result.text).not.toContain("[`place`]");
+  });
+
   it("reports when a target plugin is not configured rather than silently no-oping", async () => {
     const io = inMemoryIO();
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["disable", "chrome"], io);
+    const result = await handleCodexPluginsSubcommand(fakeCtx, ["disable", "chrome_@ops"], io);
     expect(result.text).toContain("not configured");
+    expect(result.text).toContain("chrome＿＠ops");
+    expect(result.text).not.toContain("@ops");
   });
 
   it("returns usage when list, enable, or disable receives the wrong arity", async () => {
