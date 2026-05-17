@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/auth: include the checked credential source in missing API key errors, so users can see which env var, profile, or config path to fix. Fixes #82785. Thanks @loeclos.
 - Mac app: let menu gateway/session error text wrap across a few lines and stop rebuilding dynamic Context/Gateway menu rows while the menu is open, reducing flicker.
 - Mac app: make device pairing approval sheets friendlier, with concise Mac/device copy, shortened identifiers, friendly scope labels, and Approve as the primary action.
 - Feishu/wiki: reject numeric wiki space IDs before creating Lark clients and keep numeric-looking IDs documented as quoted opaque strings, preventing JavaScript precision loss in knowledge base calls. Fixes #45301. (#82769) Thanks @hyspacex.
