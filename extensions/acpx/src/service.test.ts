@@ -89,6 +89,7 @@ vi.mock("./process-reaper.js", () => ({
 }));
 
 import { getAcpRuntimeBackend } from "../runtime-api.js";
+import type { OpenClawPluginServiceContext } from "../runtime-api.js";
 import { createAcpxRuntimeService } from "./service.js";
 
 const tempDirs: string[] = [];
@@ -129,7 +130,7 @@ afterEach(async () => {
   }
 });
 
-function createServiceContext(workspaceDir: string) {
+function createServiceContext(workspaceDir: string): OpenClawPluginServiceContext {
   return {
     workspaceDir,
     stateDir: path.join(workspaceDir, ".openclaw-plugin-state"),
@@ -153,6 +154,27 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
     isHealthy: vi.fn(() => true),
     doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
     ...overrides,
+  };
+}
+
+function createStartupTraceRecorder() {
+  const measured: string[] = [];
+  const details: Array<{
+    name: string;
+    metrics: ReadonlyArray<readonly [string, number | string]>;
+  }> = [];
+  return {
+    measured,
+    details,
+    startupTrace: {
+      measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
+        measured.push(name);
+        return await run();
+      },
+      detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => {
+        details.push({ name, metrics });
+      },
+    },
   };
 }
 
@@ -257,6 +279,46 @@ describe("createAcpxRuntimeService", () => {
 
     expect(resolved).toBe(true);
     expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend ready");
+
+    await service.stop?.(ctx);
+  });
+
+  it("emits ACPX-owned startup trace subspans", async () => {
+    delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const trace = createStartupTraceRecorder();
+    ctx.startupTrace = trace.startupTrace;
+    const runtime = createMockRuntime();
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    expect(trace.measured).toEqual([
+      "sidecars.plugin-services.acpx.acpx-runtime.config.resolve",
+      "sidecars.plugin-services.acpx.acpx-runtime.config.prepare-codex-auth",
+      "sidecars.plugin-services.acpx.acpx-runtime.filesystem.prepare",
+      "sidecars.plugin-services.acpx.acpx-runtime.gateway-instance-id",
+      "sidecars.plugin-services.acpx.acpx-runtime.process-leases.reap",
+      "sidecars.plugin-services.acpx.acpx-runtime.runtime.create",
+      "sidecars.plugin-services.acpx.acpx-runtime.backend.register",
+      "sidecars.plugin-services.acpx.acpx-runtime.probe.availability",
+    ]);
+    expect(trace.details).toEqual([
+      {
+        name: "sidecars.plugin-services.acpx.acpx-runtime.probe-policy",
+        metrics: [
+          ["startupProbeEnabledCount", 1],
+          ["probeAgent", "default"],
+        ],
+      },
+      {
+        name: "sidecars.plugin-services.acpx.acpx-runtime.probe.result",
+        metrics: [["healthyCount", 1]],
+      },
+    ]);
 
     await service.stop?.(ctx);
   });

@@ -22,6 +22,7 @@ function createPluginLogger(): PluginLogger {
 
 function createServiceContext(params: {
   config: OpenClawConfig;
+  startupTrace?: PluginServiceStartupTrace;
   workspaceDir?: string;
   service?: PluginServiceRegistration;
 }): OpenClawPluginServiceContext {
@@ -38,6 +39,7 @@ function createServiceContext(params: {
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
+    ...(params.startupTrace ? { startupTrace: params.startupTrace } : {}),
     ...(grantsInternalDiagnostics
       ? {
           internalDiagnostics: {
@@ -73,6 +75,7 @@ export async function startPluginServices(params: {
     const service = entry.service;
     const serviceContext = createServiceContext({
       config: params.config,
+      startupTrace: params.startupTrace,
       workspaceDir: params.workspaceDir,
       service: entry,
     });
