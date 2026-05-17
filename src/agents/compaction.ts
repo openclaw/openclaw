@@ -19,7 +19,7 @@ const log = createSubsystemLogger("compaction");
 
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
-export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
+export const SAFETY_MARGIN = 1.5; // 50% buffer for estimateTokens() inaccuracy (chars/4 heuristic underestimates CJK, code tokens, and special tokens)
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS = [
