@@ -6,8 +6,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/skills: apply the full effective tool policy pipeline to inline `command-dispatch: tool` skill dispatch before owner-only filtering, preserving configured allow, deny, sandbox, sender, group, and subagent restrictions. (#78525)
+- Providers/GitHub Copilot: request identity-encoded Copilot API responses across token exchange, catalog, model calls, usage, and embeddings so compressed Business-account error payloads no longer reach JSON parsers as gzip bytes. Fixes #82871. Thanks @tonyfe01.
+- Telegram: preserve replied-to bot messages, captions, and media metadata in group reply chains so follow-up replies understand what the user is reacting to. (#82863)
 - Agents/diagnostics: split slow embedded-run `attempt-dispatch` startup summaries into workspace, prompt, runtime-plan, and final dispatch subspans so traces identify the delayed setup phase. Fixes #82782. (#82783) Thanks @galiniliev.
 - CLI/media: accept HTTP(S) URLs in `openclaw infer image describe --file`, fetching remote images through the guarded media path instead of treating URLs as local files. Fixes #82837. (#82854) Thanks @neeravmakwana.
+- Agents/subagents: keep session-backed parent runs active when the child wait call times out before the child session has actually settled, so late subagent completions are reconciled instead of being lost. Fixes #82787. Thanks @ramitrkar-hash.
+- Control UI: advertise shared Gateway protocol constants in browser connect frames, fixing protocol mismatch handshakes after the protocol 5 bump. Fixes #82882. Thanks @galiniliev.
 - Agents/subagents: route group/channel subagent completions through message-tool-only handoffs when required and keep active-requester wake failures from dropping completion delivery. Fixes #82803. Thanks @galiniliev, @yozakura-ava, and @moeedahmed.
 - Memory-core: scan persisted memory source sessions on startup, comparing on-disk transcripts against the index and marking only missing/newer/resized files dirty for incremental sync. Fixes #82341. (#82341) Thanks @giodl73-repo.
 - Telegram: keep the top-level default account in the account list when named accounts or bindings are added alongside top-level credentials, preserving default polling while still letting named-only configs resolve to a single account. Fixes #82794. (#82794) Thanks @giodl73-repo.
@@ -16,11 +21,15 @@ Docs: https://docs.openclaw.ai
 - Agents/tools: keep the `message` tool available in embedded runs when it is explicitly allowed through `tools.alsoAllow` or runtime tool allowlists, so channel plugins with custom reply delivery can still use configured message sends. Fixes #82833. Thanks @cn1313113.
 - WhatsApp: honor forced document delivery for outbound image, GIF, and video media so `forceDocument`/`asDocument` sends preserve original media bytes instead of using compressed media payloads. (#79272) Thanks @itsuzef.
 - WhatsApp: name outbound document attachments from their MIME type when no filename is provided, so PDF and CSV sends arrive as `file.pdf` and `file.csv` instead of an extensionless `file`. Thanks @mcaxtr.
+- Process/diagnostics: report active lane blockers in lane wait warnings so `queueAhead=0` no longer hides commands waiting behind active work. Fixes #82791. (#82792) Thanks @galiniliev.
 
 ## 2026.5.17
 
 ### Changes
 
+- Control UI: move settings-only destinations into the Settings workspace and add sidebar recent-session shortcuts plus a one-click new-session action.
+- Control UI: speed up scoped settings pages by loading required config before schema refreshes, caching burst schema responses, and opening Communications on lighter message settings first.
+- Control UI: simplify the Cron Jobs workspace with modal job creation, collapsed filters, and an empty state aimed at first-time setup.
 - Security/audit: add `security.audit.suppressions` for intentionally accepted audit findings, keeping suppressed matches out of the active summary while preserving them in JSON output with an active suppression notice. (#76949) Thanks @100menotu001.
 - Agents/subagents: label delegated task and subagent completion handoffs as ready for parent review, and tell requester agents to review/verify results before calling them done. (#78985) Thanks @100menotu001.
 - Providers/media: add fal and OpenRouter music-generation providers for the shared `music_generate` tool, including fal MiniMax/ACE/Stable Audio endpoints and OpenRouter Lyria audio output.
@@ -44,6 +53,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Docker: fail closed for non-loopback gateway starts without explicit shared-secret or trusted-proxy auth, and stop the image default command from bypassing config validation. Fixes #82865. (#82866) Thanks @coygeek.
+- Agents/followups: route queued followup turns through CLI runtime backends instead of embedded harness lookup, preventing `claude-cli`/`google-gemini-cli` followups from failing before delivery. Fixes #82847. (#82857) Thanks @hclsys.
 - CLI/sessions: let `openclaw sessions cleanup --fix-missing` prune malformed rows with unresolvable transcript metadata instead of throwing. Fixes #80970. (#82745) Thanks @IWhatsskill.
 - Gateway/usage: refresh large session usage summaries in the background and reuse durable transcript metadata so `sessions.usage` no longer blocks Gateway requests on full transcript rescans. Fixes #82773. (#82778) Thanks @hclsys.
 - TUI: restore the submitted draft when chat is busy instead of clearing it or queueing another run. Fixes #45326. (#82774) Thanks @hyspacex.
@@ -61,6 +72,10 @@ Docs: https://docs.openclaw.ai
 - CLI/web: resolve provider-scoped web search/fetch SecretRefs for `infer web ... --provider ...` while leaving unrelated plugin secrets untouched. Fixes #82621. Thanks @leno23.
 - Providers/Anthropic Vertex: resolve installed provider public surfaces from package-local `dist/`, restoring `anthropic-vertex/*` model calls after plugin externalization. Fixes #82781. Thanks @0L1v3DaD.
 - Gateway/exec approvals: bind path-shaped allowlists, safe-bin trust, skill auto-allow, Allow Always persistence, and approval audit metadata to the executable realpath so symlinked binaries cannot keep approvals after retargeting. Fixes #45595. Thanks @jasonftl.
+- Mac app: reorganize Settings around a grouped sidebar, with separate Connection and Exec Approvals pages so everyday permissions and app toggles are easier to scan.
+- Mac app: redraw the animated menu bar critter to match the rounded app mascot with antennae, side arms, two feet, and smoother template rendering.
+- Mac app: cache settings config schema/drafts and load channel config in parallel with channel probes, making repeated Channels and Config tab switches responsive over remote tunnels.
+- Control UI: negotiate the Gateway protocol from shared constants so rebuilt dashboards connect to current gateways instead of reporting a protocol mismatch.
 - Mac app: let menu gateway/session error text wrap across a few lines and stop rebuilding dynamic Context/Gateway menu rows while the menu is open, reducing flicker.
 - Mac app: make device pairing approval sheets friendlier, with concise Mac/device copy, shortened identifiers, friendly scope labels, and Approve as the primary action.
 - Providers/Qwen: honor session thinking level for `qwen-chat-template` payloads so `/think off` disables nested llama.cpp chat-template thinking controls. Fixes #82768. Thanks @bfox55.
@@ -85,6 +100,7 @@ Docs: https://docs.openclaw.ai
 - QQBot: treat only explicit truthy `QQBOT_DEBUG` values as enabling debug logs, so false-like values such as `0` no longer expose debug output. Fixes #82644. (#82697) Thanks @leno23.
 - Agents/session_status: resolve implicit no-arg status lookups against the live run session, so `/think` changes report the current thinking level instead of stale sandbox state. Fixes #82669. (#82696) Thanks @leno23.
 - Discord: keep progress drafts visible for message-tool-only guild replies under the default coding tool profile. Fixes #82747. Thanks @eliranwong.
+- Agents: prefer current structured assistant final answers when assembling final reply payloads, reducing reliance on streamed preview fragments after channel transcript recovery. (#82850) Thanks @joshavant.
 - Discord: keep unmentioned room-event history until a visible Discord send succeeds, so quiet ambient context does not disappear before message-tool delivery. (#82573) Thanks @obviyus.
 - CLI/setup: order the model/auth provider picker as OpenAI, Anthropic, xAI, Google, then the remaining providers alphabetically.
 - Diagnostics/usage/voice-call: treat explicit zero and non-finite limits as empty results and reject invalid voice-call numeric CLI flags. Fixes #82646, #82650, #82651, and #82653. (#82679) Thanks @leno23.
@@ -118,6 +134,7 @@ Docs: https://docs.openclaw.ai
 - Providers/xAI: continue polling video generations while xAI reports in-flight jobs as `pending`, so Grok video requests no longer fail before the final `done` response. (#82610) Thanks @Manzojunior.
 - Logs: redact raw Basic auth and named security headers from `logs.tail` output before returning lines to read-scoped clients. Fixes #66832. Thanks @Magicray1217.
 - CLI/gateway: emit structured JSON for gateway transport close/timeout failures when `--json` is requested by health, gateway health, and devices list commands. Fixes #79108. Thanks @TurboTheTurtle.
+- Agents/Telegram: retry Bedrock non-visible terminal turns and mark non-deliverable attempts as trajectory errors instead of silent success. Fixes #82394. (#82905) Thanks @joshavant.
 - Telegram: normalize announce group targets via a new `resolveSessionTarget` channel hook so scheduled announcements resolve consistently against the same Telegram session conversation registry as inbound turns. Fixes #81229. Thanks @giodl73-repo.
 - QA/RTT: let `pnpm rtt` lease Convex-backed Telegram credentials while preserving RTT sample counts, sample timeouts, and result stats on the RTT harness path.
 - Discord: bind delayed gateway `identify` retries to the originating socket generation so retries triggered after a reconnect do not identify against a fresh socket. Fixes #82225. Thanks @giodl73-repo.
