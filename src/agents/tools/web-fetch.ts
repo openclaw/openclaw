@@ -267,6 +267,27 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   return trimmed || undefined;
 }
 
+function normalizeExtractedTextForComparison(value: string | undefined): string {
+  return normalizeLowercaseStringOrEmpty(value).replace(/\s+/g, " ").trim();
+}
+
+function shouldPreferBasicHtmlOverReadable(params: {
+  readableText: string;
+  readableTitle?: string;
+  basicText?: string;
+}): boolean {
+  const readable = normalizeExtractedTextForComparison(params.readableText);
+  const title = normalizeExtractedTextForComparison(params.readableTitle);
+  const basic = normalizeExtractedTextForComparison(params.basicText);
+  if (!readable || !basic || basic.length <= readable.length) {
+    return false;
+  }
+  // Some Readability extractors can return only the document title/head metadata
+  // for small static pages. Prefer the raw HTML body cleanup in that case so the
+  // page body is not silently dropped.
+  return Boolean(title && readable === title);
+}
+
 type WebFetchRuntimeParams = {
   url: string;
   extractMode: ExtractMode;
@@ -524,6 +545,22 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           text = readable.text;
           title = readable.title;
           extractor = readable.extractor;
+          const basic = await extractBasicHtmlContent({
+            html: body,
+            extractMode: params.extractMode,
+          });
+          if (
+            shouldPreferBasicHtmlOverReadable({
+              readableText: readable.text,
+              readableTitle: readable.title,
+              basicText: basic?.text,
+            }) &&
+            basic?.text
+          ) {
+            text = basic.text;
+            title = basic.title ?? title;
+            extractor = "raw-html";
+          }
         } else {
           let payload: Record<string, unknown> | null = null;
           try {

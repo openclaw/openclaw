@@ -460,6 +460,31 @@ describe("web_fetch extraction fallbacks", () => {
     ).rejects.toThrow("Readability, Test Fetch, and basic HTML cleanup returned no content");
   });
 
+  it("uses basic HTML cleanup when readability only returns title metadata", async () => {
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Example Title</title></head><body><main><h1>Example Title</h1><p>Body section that should be visible to the model.</p></main></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+    extractReadableContentMock.mockResolvedValue({
+      text: "Example Title",
+      title: "Example Title",
+      extractor: "readability",
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, { url: "https://example.com/title-only" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Body section that should be visible to the model.");
+    expect(details.title).toContain("Example Title");
+  });
+
   it("falls back to basic HTML cleanup after readability and before giving up", async () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
