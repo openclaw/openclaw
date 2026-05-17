@@ -38,8 +38,5 @@ console.log(
   "resolveCommandConfigWithSecrets apiKey is string =",
   typeof apiKey === "string" && apiKey.length > 0,
 );
-console.log(
-  "resolved apiKey prefix =",
-  typeof apiKey === "string" ? `${apiKey.slice(0, 8)}…` : apiKey,
-);
+console.log("resolved apiKey remains redacted =", typeof apiKey === "string");
 console.log("diagnostics count =", diagnostics.length);

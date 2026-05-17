@@ -551,6 +551,36 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
+  it("falls back to local resolution for legacy web fetch SecretRefs", async () => {
+    const envKey = "WEB_FETCH_LEGACY_FIRECRAWL_API_KEY_LOCAL_FALLBACK";
+    await withEnvValue(envKey, "firecrawl-legacy-local-fallback-key", async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          tools: {
+            web: {
+              fetch: {
+                provider: "firecrawl",
+                firecrawl: {
+                  apiKey: { source: "env", provider: "default", id: envKey },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        commandName: "infer web fetch",
+        targetIds: new Set(["tools.web.fetch.firecrawl.apiKey"]),
+      });
+
+      const fetchConfig = result.resolvedConfig.tools?.web?.fetch as
+        | { firecrawl?: { apiKey?: unknown } }
+        | undefined;
+      expect(fetchConfig?.firecrawl?.apiKey).toBe("firecrawl-legacy-local-fallback-key");
+      expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
+  });
+
   it("treats command-scoped web fetch fallback SecretRefs as active even when web search is disabled", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_SEARCH_FALLBACK_KEY";
     await withEnvValue(envKey, "firecrawl-search-fallback-key", async () => {

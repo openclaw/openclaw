@@ -63,7 +63,7 @@ describe("runtime command secrets", () => {
     });
     activateSecretsRuntimeSnapshot(snapshot);
 
-    const resolved = resolveCommandSecretsFromActiveRuntimeSnapshot({
+    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
       commandName: "infer web fetch",
       targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
       forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),

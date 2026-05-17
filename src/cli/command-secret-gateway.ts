@@ -56,8 +56,16 @@ type GatewaySecretsResolveResult = {
   inactiveRefPaths?: string[];
 };
 
-const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
-const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
+const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
+  "tools.web.search",
+  "tools.web.fetch",
+  "plugins.entries.",
+] as const;
+const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
+  "tools.web.search.",
+  "tools.web.fetch.",
+  "plugins.entries.",
+] as const;
 
 type CommandSecretGatewayDeps = {
   analyzeCommandSecretAssignmentsFromSnapshot: typeof analyzeCommandSecretAssignmentsFromSnapshot;
@@ -140,6 +148,18 @@ function classifyRuntimeWebTargetPathState(params: {
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
   }
+  const fetchMatch = /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(params.path);
+  if (fetchMatch) {
+    const fetch = params.config.tools?.web?.fetch;
+    if (fetch?.enabled === false) {
+      return "inactive";
+    }
+    const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
+    if (!configuredProvider) {
+      return "active";
+    }
+    return configuredProvider === fetchMatch[1] ? "active" : "inactive";
+  }
 
   const pluginId = pluginIdFromRuntimeWebPath(params.path);
   if (pluginId) {
@@ -205,6 +225,18 @@ function describeInactiveRuntimeWebTargetPath(params: {
     return params.config.tools?.web?.search?.enabled === false
       ? "tools.web.search is disabled."
       : undefined;
+  }
+  const fetchMatch = /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(params.path);
+  if (fetchMatch) {
+    const fetch = params.config.tools?.web?.fetch;
+    if (fetch?.enabled === false) {
+      return "tools.web.fetch is disabled.";
+    }
+    const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
+    if (configuredProvider && configuredProvider !== fetchMatch[1]) {
+      return `tools.web.fetch.provider is "${configuredProvider}".`;
+    }
+    return undefined;
   }
 
   const pluginId = pluginIdFromRuntimeWebPath(params.path);
@@ -478,7 +510,8 @@ async function callGatewaySecretsResolve(params: {
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
     /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
-    /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
+    /^tools\.web\.search\.[^.]+\.apiKey$/.test(path) ||
+    /^tools\.web\.fetch\.[^.]+\.apiKey$/.test(path)
   );
 }
 
