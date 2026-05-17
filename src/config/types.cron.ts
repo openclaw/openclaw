@@ -58,4 +58,14 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /**
+   * Max milliseconds to wait for the agent runner to start before aborting
+   * an isolated cron job.  Default: 180_000 (3 minutes).
+   */
+  setupWatchdogMs?: number;
+  /**
+   * Max milliseconds to wait for the execution phase (first model call) after
+   * the runner starts.  Capped at `jobTimeoutMs / 2`.  Default: 180_000 (3 minutes).
+   */
+  preExecutionWatchdogMs?: number;
 };
