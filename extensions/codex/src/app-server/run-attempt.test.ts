@@ -1424,9 +1424,9 @@ describe("runCodexAppServerAttempt", () => {
         turnId: "turn-1",
         callId: "call-1",
         namespace: null,
-        tool: "message",
+        tool: "lookup",
         arguments: {
-          action: "send",
+          action: "search",
           token: "plain-secret-value-12345",
           text: "hello",
         },
@@ -1437,9 +1437,7 @@ describe("runCodexAppServerAttempt", () => {
     };
     expect(toolResult.success).toBe(false);
     expect(toolResult.contentItems?.[0]?.type).toBe("inputText");
-    expect(toolResult.contentItems?.[0]?.text).toMatch(
-      /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
-    );
+    expect(toolResult.contentItems?.[0]?.text).toMatch(/^Unknown OpenClaw tool: lookup$/u);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -1458,15 +1456,18 @@ describe("runCodexAppServerAttempt", () => {
     const startEvent = agentEvents.find(
       (event) => event.stream === "tool" && event.data?.phase === "start",
     );
-    expect(startEvent?.data?.name).toBe("message");
+    expect(startEvent?.data?.name).toBe("lookup");
     expect(startEvent?.data?.toolCallId).toBe("call-1");
-    expect(startEvent?.data?.args?.action).toBe("send");
+    expect(startEvent?.data?.args?.action).toBe("search");
     expect(startEvent?.data?.args?.token).toBe("plain-…2345");
     expect(startEvent?.data?.args?.text).toBe("hello");
     const resultEvent = agentEvents.find(
-      (event) => event.stream === "tool" && event.data?.phase === "result",
+      (event) =>
+        event.stream === "tool" &&
+        event.data?.phase === "result" &&
+        event.data.result !== undefined,
     );
-    expect(resultEvent?.data?.name).toBe("message");
+    expect(resultEvent?.data?.name).toBe("lookup");
     expect(resultEvent?.data?.toolCallId).toBe("call-1");
     expect(resultEvent?.data?.isError).toBe(true);
     expect(resultEvent?.data?.result?.success).toBe(false);
@@ -1476,7 +1477,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(globalStartEvent?.runId).toBe("run-1");
     expect(globalStartEvent?.sessionKey).toBe("agent:main:session-1");
-    expect(globalStartEvent?.data.name).toBe("message");
+    expect(globalStartEvent?.data.name).toBe("lookup");
     expect(onExecutionPhase).toHaveBeenCalledWith({
       phase: "turn_accepted",
       provider: "codex",
@@ -1488,7 +1489,7 @@ describe("runCodexAppServerAttempt", () => {
       provider: "codex",
       model: "gpt-5.4-codex",
       backend: "codex-app-server",
-      tool: "message",
+      tool: "lookup",
       toolCallId: "call-1",
     });
   });
@@ -1500,6 +1501,7 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
     __testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
+
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -1543,6 +1545,44 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("suppresses normalized tool progress for activity-log dynamic bash requests", async () => {
+    const harness = createStartedThreadHarness();
+    const onRunAgentEvent = vi.fn();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onAgentEvent = onRunAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-tool-activity-log",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-log-activity-1",
+        namespace: null,
+        tool: "bash",
+        arguments: {
+          command:
+            '/bin/bash -lc \'/home/openclaw/.openclaw/workspace/bin/log_activity.sh "web_search" "Grilled salmon research"\'',
+        },
+      },
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const toolEvents = onRunAgentEvent.mock.calls.filter(([event]) => {
+      const record = event as { stream?: string };
+      return record.stream === "tool";
+    });
+    expect(toolEvents).toHaveLength(0);
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
