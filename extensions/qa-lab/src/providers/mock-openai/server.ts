@@ -2053,6 +2053,10 @@ async function buildResponsesPayload(
       });
     }
   }
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+    scenarioState.subagentFanoutPhase = 3;
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);

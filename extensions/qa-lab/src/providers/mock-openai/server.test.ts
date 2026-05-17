@@ -1983,7 +1983,9 @@ describe("qa mock openai server", () => {
         stream: false,
         tools: [SESSIONS_SPAWN_TOOL],
         input: [
-          makeUserInput("Continue with the QA scenario plan."),
+          makeUserInput(
+            "Continue with the QA scenario plan and report grouped into Worked, Failed, Blocked, and Follow-up.",
+          ),
           {
             type: "function_call_output",
             output: '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta"}',
