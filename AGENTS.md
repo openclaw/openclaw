@@ -65,6 +65,7 @@ Skills own workflows; root owns hard policy and routing.
 ## Validation
 
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
+- Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Small/narrow tests, lints, format checks, and type probes are fine locally only in a healthy normal checkout.
 - In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
