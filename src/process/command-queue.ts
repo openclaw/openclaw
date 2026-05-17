@@ -64,6 +64,8 @@ type QueueEntry = {
   sequence: number;
   priority: number;
   warnAfterMs: number;
+  queuedAheadAtEnqueue: number;
+  activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   onWait?: (waitMs: number, queuedAhead: number) => void;
@@ -125,9 +127,16 @@ function getQueueState() {
   }
   let maxQueueSequence = state.nextQueueSequence - 1;
   for (const lane of state.lanes.values()) {
-    for (const entry of lane.queue as Array<
-      QueueEntry & { priority?: number; sequence?: number }
-    >) {
+    for (const [index, entry] of (
+      lane.queue as Array<
+        QueueEntry & {
+          activeAheadAtEnqueue?: number;
+          priority?: number;
+          queuedAheadAtEnqueue?: number;
+          sequence?: number;
+        }
+      >
+    ).entries()) {
       if (typeof entry.priority !== "number") {
         entry.priority = 0;
       }
@@ -135,6 +144,12 @@ function getQueueState() {
         entry.sequence = state.nextQueueSequence++;
       } else {
         maxQueueSequence = Math.max(maxQueueSequence, entry.sequence);
+      }
+      if (typeof entry.queuedAheadAtEnqueue !== "number") {
+        entry.queuedAheadAtEnqueue = index;
+      }
+      if (typeof entry.activeAheadAtEnqueue !== "number") {
+        entry.activeAheadAtEnqueue = lane.activeTaskIds.size;
       }
     }
   }
@@ -245,6 +260,8 @@ function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
       queued.priority < entry.priority ||
       (queued.priority === entry.priority && queued.sequence > entry.sequence),
   );
+  entry.queuedAheadAtEnqueue = insertAt < 0 ? state.queue.length : insertAt;
+  entry.activeAheadAtEnqueue = state.activeTaskIds.size;
   if (insertAt < 0) {
     state.queue.push(entry);
     return;
@@ -325,12 +342,13 @@ function drainLane(lane: string) {
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
-            entry.onWait?.(waitedMs, state.queue.length);
+            entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue);
           } catch (err) {
             diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
           }
           diag.warn(
-            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
+            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
+              `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${state.activeTaskIds.size} queueBehind=${state.queue.length}`,
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
@@ -418,6 +436,8 @@ export function enqueueCommandInLane<T>(
       sequence: queueState.nextQueueSequence++,
       priority: resolveQueuePriority(opts?.priority),
       warnAfterMs,
+      queuedAheadAtEnqueue: 0,
+      activeAheadAtEnqueue: 0,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       onWait: opts?.onWait,

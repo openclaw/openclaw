@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tools: keep the `message` tool available in embedded runs when it is explicitly allowed through `tools.alsoAllow` or runtime tool allowlists, so channel plugins with custom reply delivery can still use configured message sends. Fixes #82833. Thanks @cn1313113.
 - WhatsApp: honor forced document delivery for outbound image, GIF, and video media so `forceDocument`/`asDocument` sends preserve original media bytes instead of using compressed media payloads. (#79272) Thanks @itsuzef.
 - WhatsApp: name outbound document attachments from their MIME type when no filename is provided, so PDF and CSV sends arrive as `file.pdf` and `file.csv` instead of an extensionless `file`. Thanks @mcaxtr.
+- Process/diagnostics: report active lane blockers in lane wait warnings so `queueAhead=0` no longer hides commands waiting behind active work. Fixes #82791. (#82792) Thanks @galiniliev.
 
 ## 2026.5.17
 
