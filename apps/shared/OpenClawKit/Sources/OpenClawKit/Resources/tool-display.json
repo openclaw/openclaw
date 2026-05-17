@@ -172,6 +172,105 @@
         }
       }
     },
+    "peekaboo": {
+      "emoji": "👁️",
+      "title": "Peekaboo",
+      "actions": {
+        "status": {
+          "label": "status"
+        },
+        "permissions": {
+          "label": "permissions"
+        },
+        "open": {
+          "label": "open",
+          "detailKeys": [
+            "url",
+            "app"
+          ]
+        },
+        "list_windows": {
+          "label": "list windows",
+          "detailKeys": [
+            "app"
+          ]
+        },
+        "see": {
+          "label": "see",
+          "detailKeys": [
+            "app",
+            "windowTitle",
+            "windowId",
+            "screenIndex",
+            "mode"
+          ]
+        },
+        "image": {
+          "label": "image",
+          "detailKeys": [
+            "app",
+            "windowTitle",
+            "windowId",
+            "screenIndex",
+            "mode",
+            "format"
+          ]
+        },
+        "click": {
+          "label": "click",
+          "detailKeys": [
+            "on",
+            "id",
+            "coords",
+            "x",
+            "y",
+            "app"
+          ]
+        },
+        "type": {
+          "label": "type",
+          "detailKeys": [
+            "text",
+            "app"
+          ]
+        },
+        "press": {
+          "label": "press",
+          "detailKeys": [
+            "key",
+            "count",
+            "app"
+          ]
+        },
+        "hotkey": {
+          "label": "hotkey",
+          "detailKeys": [
+            "keys",
+            "app"
+          ]
+        },
+        "scroll": {
+          "label": "scroll",
+          "detailKeys": [
+            "direction",
+            "amount",
+            "app"
+          ]
+        },
+        "window_set_bounds": {
+          "label": "window bounds",
+          "detailKeys": [
+            "app",
+            "windowTitle",
+            "windowId",
+            "x",
+            "y",
+            "width",
+            "height"
+          ]
+        }
+      }
+    },
     "canvas": {
       "emoji": "🖼️",
       "title": "Canvas",
