@@ -33,6 +33,7 @@ import {
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
+  type ChromeCdpDiagnostic,
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
