@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -476,6 +477,217 @@ function isCodexAppServerApprovalPolicy(value: unknown): boolean {
   );
 }
 
+const CODEX_APP_SERVER_ACTIVE_TRANSCRIPT_MAX_BYTES = 1024 * 1024;
+const CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS = 70_000;
+
+function parseCodexAppServerByteLimit(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value !== "string") {
+    return CODEX_APP_SERVER_ACTIVE_TRANSCRIPT_MAX_BYTES;
+  }
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(b|kb|kib|mb|mib|gb|gib)?$/i);
+  if (!match) {
+    return CODEX_APP_SERVER_ACTIVE_TRANSCRIPT_MAX_BYTES;
+  }
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return CODEX_APP_SERVER_ACTIVE_TRANSCRIPT_MAX_BYTES;
+  }
+  const unit = (match[2] ?? "b").toLowerCase();
+  const multiplier =
+    unit === "gb" || unit === "gib"
+      ? 1024 * 1024 * 1024
+      : unit === "mb" || unit === "mib"
+        ? 1024 * 1024
+        : unit === "kb" || unit === "kib"
+          ? 1024
+          : 1;
+  return Math.max(1, Math.floor(amount * multiplier));
+}
+
+async function listCodexAppServerRolloutFilesForThread(
+  agentDir: string,
+  threadId: string,
+): Promise<Array<{ path: string; bytes: number }>> {
+  const resolvedAgentDir = path.resolve(agentDir);
+  const roots = [
+    path.join(resolvedAgentDir, "codex-home", "sessions"),
+    path.join(resolvedAgentDir, "agent", "codex-home", "sessions"),
+    path.join(path.dirname(resolvedAgentDir), "codex-home", "sessions"),
+  ];
+  const files: Array<{ path: string; bytes: number }> = [];
+  const visited = new Set<string>();
+  for (const root of roots) {
+    if (visited.has(root)) {
+      continue;
+    }
+    visited.add(root);
+    const stack = [root];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      if (!dir) {
+        continue;
+      }
+      let entries: Dirent[];
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(file);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl") || !entry.name.includes(threadId)) {
+          continue;
+        }
+        try {
+          files.push({ path: file, bytes: (await fs.stat(file)).size });
+        } catch {
+          // Ignore rollout files that disappeared while the guard was scanning.
+        }
+      }
+    }
+  }
+  return files;
+}
+
+async function readCodexSessionRecordForSessionFile(
+  sessionFile: string,
+): Promise<(Record<string, unknown> & { sessionKey: string }) | undefined> {
+  const sessionsFile = path.join(path.dirname(sessionFile), "sessions.json");
+  let store: JsonValue | undefined;
+  try {
+    store = JSON.parse(await fs.readFile(sessionsFile, "utf8")) as JsonValue;
+  } catch {
+    return undefined;
+  }
+  if (!isJsonObject(store)) {
+    return undefined;
+  }
+  const resolvedSessionFile = path.resolve(sessionFile);
+  for (const [sessionKey, record] of Object.entries(store)) {
+    if (!isJsonObject(record) || typeof record.sessionFile !== "string") {
+      continue;
+    }
+    if (path.resolve(record.sessionFile) !== resolvedSessionFile) {
+      continue;
+    }
+    return { sessionKey, ...record };
+  }
+  return undefined;
+}
+
+async function readCodexAppServerRolloutTokenUsage(file: string): Promise<number | undefined> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  let totalTokens: number | undefined;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as JsonValue;
+      const payload = isJsonObject(parsed) ? parsed.payload : undefined;
+      const info =
+        isJsonObject(payload) && payload.type === "token_count" && isJsonObject(payload.info)
+          ? payload.info
+          : undefined;
+      const usage = isJsonObject(info?.total_token_usage)
+        ? info.total_token_usage
+        : isJsonObject(info?.last_token_usage)
+          ? info.last_token_usage
+          : undefined;
+      const value = usage?.total_tokens ?? usage?.totalTokens;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        totalTokens = value;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return totalTokens;
+}
+
+function maxFiniteNumber(values: Array<number | undefined>): number | undefined {
+  const nums = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  if (nums.length === 0) {
+    return undefined;
+  }
+  return Math.max(...nums);
+}
+
+async function rotateOversizedCodexAppServerStartupBinding(params: {
+  binding: CodexAppServerThreadBinding | undefined;
+  sessionFile: string;
+  agentDir: string;
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+}): Promise<CodexAppServerThreadBinding | undefined> {
+  const binding = params.binding;
+  if (!binding?.threadId) {
+    return binding;
+  }
+  if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction !== true) {
+    return binding;
+  }
+  const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
+  const maxBytes = parseCodexAppServerByteLimit(
+    params.config?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
+  );
+  const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
+    params.agentDir,
+    binding.threadId,
+  );
+  const nativeTokens = maxFiniteNumber(
+    await Promise.all(
+      rolloutFiles.map(async (file) => readCodexAppServerRolloutTokenUsage(file.path)),
+    ),
+  );
+  const sessionTokens =
+    typeof sessionRecord?.totalTokens === "number" && Number.isFinite(sessionRecord.totalTokens)
+      ? sessionRecord.totalTokens
+      : undefined;
+  const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
+  if (tokenCount !== undefined && tokenCount >= CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS) {
+    embeddedAgentLog.warn(
+      "codex app-server native transcript exceeded active token limit; starting a fresh thread",
+      {
+        threadId: binding.threadId,
+        maxTokens: CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS,
+        sessionKey: sessionRecord?.sessionKey,
+        sessionTokens,
+        nativeTokens,
+      },
+    );
+    await clearCodexAppServerBinding(params.sessionFile);
+    return undefined;
+  }
+  const oversizedFiles = rolloutFiles.filter((file) => file.bytes > maxBytes);
+  if (oversizedFiles.length === 0) {
+    return binding;
+  }
+  embeddedAgentLog.warn(
+    "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
+    {
+      threadId: binding.threadId,
+      maxBytes,
+      files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
+    },
+  );
+  await clearCodexAppServerBinding(params.sessionFile);
+  return undefined;
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -544,11 +756,19 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  let startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  const startupBindingAuthProfileId = startupBinding?.authProfileId;
+  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+    binding: startupBinding,
+    sessionFile: params.sessionFile,
+    agentDir,
+    config: params.config,
+  });
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
-    startupBinding?.authProfileId;
+    startupBinding?.authProfileId ??
+    startupBindingAuthProfileId;
   const startupAuthProfileId = params.authProfileStore
     ? resolveCodexAppServerAuthProfileId({
         authProfileId: startupAuthProfileCandidate,
@@ -3940,6 +4160,7 @@ export const __testing = {
   remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
   resolveCodexDynamicToolsLoading,
+  rotateOversizedCodexAppServerStartupBinding,
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
   resolveOpenClawCodingToolsSessionKeys,

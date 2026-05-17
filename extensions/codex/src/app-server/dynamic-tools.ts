@@ -60,6 +60,7 @@ export type CodexDynamicToolBridge = {
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
@@ -69,6 +70,7 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
+  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
   const tools = params.tools.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
       ? tool
@@ -157,7 +159,9 @@ export function createCodexDynamicToolBridge(params: {
           startedAt,
         });
         return {
-          contentItems: result.content.flatMap(convertToolContent),
+          contentItems: result.content.flatMap((content) =>
+            convertToolContent(content, toolResultMaxChars),
+          ),
           success: !resultIsError,
         };
       } catch (error) {
@@ -223,6 +227,56 @@ function toToolResultHookContext(
     ...(sessionKey && { sessionKey }),
     ...(runId && { runId }),
   };
+}
+
+function resolveCodexDynamicToolResultMaxChars(
+  ctx: CodexDynamicToolHookContext | undefined,
+): number {
+  const configured = resolveAgentContextLimitValue({
+    config: ctx?.config,
+    agentId: ctx?.agentId,
+    key: "toolResultMaxChars",
+  });
+  return configured ?? DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+}
+
+function resolveAgentContextLimitValue(params: {
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId?: string;
+  key: string;
+}): number | undefined {
+  const agents = readRecord(params.config?.agents);
+  const defaults = readRecord(readRecord(agents?.defaults)?.contextLimits);
+  const defaultValue = readPositiveInteger(defaults?.[params.key]);
+  if (!params.agentId) {
+    return defaultValue;
+  }
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return defaultValue;
+  }
+  const agent = list.find((entry) => readRecord(entry)?.id === params.agentId);
+  const agentValue = readPositiveInteger(
+    readRecord(readRecord(agent)?.contextLimits)?.[params.key],
+  );
+  return agentValue ?? defaultValue;
+}
+
+function truncateCodexDynamicToolText(text: string, maxChars: number): string {
+  const limit =
+    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
+      ? Math.floor(maxChars)
+      : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+  if (text.length <= limit) {
+    return text;
+  }
+  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${text.length} chars, showing ${limit}; rerun with narrower args.)`;
+  const notice = `\n${noticeText}`;
+  if (notice.length >= limit) {
+    return noticeText.slice(0, limit);
+  }
+  const sliceLength = Math.max(0, limit - notice.length);
+  return `${text.slice(0, sliceLength).trimEnd()}${notice}`.slice(0, limit);
 }
 
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
@@ -344,6 +398,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
 function isToolResultError(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   if (!isRecord(details)) {
@@ -372,9 +437,12 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
 
 function convertToolContent(
   content: TextContent | ImageContent,
+  toolResultMaxChars = DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
   if (content.type === "text") {
-    return [{ type: "inputText", text: content.text }];
+    return [
+      { type: "inputText", text: truncateCodexDynamicToolText(content.text, toolResultMaxChars) },
+    ];
   }
   const imageUrl = sanitizeInlineImageDataUrl(`data:${content.mimeType};base64,${content.data}`);
   if (!imageUrl) {
