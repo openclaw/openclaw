@@ -32,6 +32,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
+  listConfigBackupPaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -211,8 +212,10 @@ function collectConfigSecrets(params: {
   config: OpenClawConfig;
   configPath: string;
   collector: AuditCollector;
+  includeRefs?: boolean;
 }): void {
   const defaults = params.config.secrets?.defaults;
+  const includeRefs = params.includeRefs ?? true;
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInAudit) {
       continue;
@@ -223,15 +226,17 @@ function collectConfigSecrets(params: {
       defaults,
     });
     if (ref) {
-      params.collector.refAssignments.push({
-        file: params.configPath,
-        path: target.path,
-        ref,
-        expected: target.entry.expectedResolvedValue,
-        provider: target.providerId,
-      });
-      if (target.entry.trackProviderShadowing && target.providerId) {
-        collectProviderRefPath(params.collector, target.providerId, target.path);
+      if (includeRefs) {
+        params.collector.refAssignments.push({
+          file: params.configPath,
+          path: target.path,
+          ref,
+          expected: target.entry.expectedResolvedValue,
+          provider: target.providerId,
+        });
+        if (target.entry.trackProviderShadowing && target.providerId) {
+          collectProviderRefPath(params.collector, target.providerId, target.path);
+        }
       }
       continue;
     }
@@ -258,6 +263,29 @@ function collectConfigSecrets(params: {
       provider: target.providerId,
     });
   }
+}
+
+function collectConfigBackupPlaintext(params: {
+  configBackupPath: string;
+  collector: AuditCollector;
+}): void {
+  if (!fs.existsSync(params.configBackupPath)) {
+    return;
+  }
+  params.collector.filesScanned.add(params.configBackupPath);
+  const parsedResult = readJsonObjectIfExists(params.configBackupPath, {
+    requireRegularFile: true,
+    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
+  });
+  if (parsedResult.error || !parsedResult.value) {
+    return;
+  }
+  collectConfigSecrets({
+    config: parsedResult.value as OpenClawConfig,
+    configPath: params.configBackupPath,
+    collector: params.collector,
+    includeRefs: false,
+  });
 }
 
 function collectAuthStoreSecrets(params: {
@@ -677,6 +705,12 @@ export async function runSecretsAudit(
       configPath,
       collector,
     });
+    for (const configBackupPath of listConfigBackupPaths(configPath)) {
+      collectConfigBackupPlaintext({
+        configBackupPath,
+        collector,
+      });
+    }
     for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
       collectAuthStoreSecrets({
         authStorePath,
