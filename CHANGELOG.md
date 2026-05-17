@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: validate Capture saved views loaded from browser storage so malformed local state cannot poison Capture inspector filters or layout controls. (#77722) Thanks @AsaZhou923.
 - Agents/performance: reuse prepared plugin manifest metadata across local CLI turns, model catalog normalization, auth lookups, and tool capability checks, restoring fast pre-provider startup for plugin-heavy installs. Thanks @shakkernerd.
 - CLI/config: add `--dry-run` support to `openclaw config unset`, with `--json` output and allow-exec validation parity with `config set`/`config patch` dry-run handling. (#81895) Thanks @giodl73-repo.
+- CLI/infer: resolve command SecretRefs before local provider-backed capability runs, so web search/fetch and other local infer commands can use plugin-scoped credential refs. Fixes #82621. (#82798) Thanks @joshavant.
 - Memory-core: retry disabled dreaming cron cleanup until cron is available after startup, so persisted managed dreaming jobs are removed after restart. Fixes #82383. (#82389) Thanks @neeravmakwana.
 - Providers/xAI: keep retired Grok 3, Grok 4 Fast, Grok 4.1 Fast, and Grok Code slugs out of model pickers while preserving compatibility resolution for existing configs.
 - Providers/xAI: replace the retired `grok-imagine-image-pro` image model with `grok-imagine-image-quality` in the bundled image-generation provider and docs. (#81399) Thanks @KateWilkins.
