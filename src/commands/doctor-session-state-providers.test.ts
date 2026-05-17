@@ -15,6 +15,24 @@ const codexOwner = {
   authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
 };
 
+const anthropicOwner = {
+  id: "anthropic",
+  label: "Anthropic",
+  providerIds: ["anthropic", "claude-cli"],
+  runtimeIds: ["claude-cli"],
+  cliSessionKeys: ["claude-cli"],
+  authProfilePrefixes: ["anthropic:", "claude-cli:"],
+};
+
+const googleOwner = {
+  id: "google",
+  label: "Google",
+  providerIds: ["google", "google-gemini-cli", "google-vertex"],
+  runtimeIds: ["google-gemini-cli"],
+  cliSessionKeys: ["google-gemini-cli"],
+  authProfilePrefixes: ["google:", "google-gemini-cli:", "google-vertex:"],
+};
+
 describe("doctor session state provider routes", () => {
   it("skips plugin route-state scans for unrelated recovery metadata", () => {
     expect(
@@ -113,6 +131,7 @@ describe("doctor session state provider routes", () => {
       fallbackNoticeActiveModel: "openai-codex/gpt-5.4",
       fallbackNoticeReason: "rate-limit",
       agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
       authProfileOverride: "openai-codex:default",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 2,
@@ -145,7 +164,7 @@ describe("doctor session state provider routes", () => {
         ownerId: "codex",
         ownerLabel: "Codex",
         cliSessionKeys: ["codex-cli"],
-        pinnedRuntimeKeys: ["agentHarnessId"],
+        pinnedRuntimeKeys: ["agentHarnessId", "agentRuntimeOverride"],
         reasons: [
           "auto model override",
           "pinned runtime",
@@ -173,6 +192,7 @@ describe("doctor session state provider routes", () => {
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.systemPromptReport).toBeUndefined();
     expect(entry.agentHarnessId).toBeUndefined();
+    expect(entry.agentRuntimeOverride).toBeUndefined();
     expect(entry.authProfileOverride).toBeUndefined();
     expect(entry.authProfileOverrideSource).toBeUndefined();
     expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
@@ -269,6 +289,47 @@ describe("doctor session state provider routes", () => {
     });
   });
 
+  it.each([
+    { owner: anthropicOwner, runtime: "claude-cli", sessionId: "sess-claude-cli" },
+    { owner: googleOwner, runtime: "google-gemini-cli", sessionId: "sess-gemini-cli" },
+  ])("clears stale runtime override-only state for $runtime", ({ owner, runtime, sessionId }) => {
+    const sessionKey = `agent:main:telegram:direct:${runtime}`;
+    const entry: Record<string, unknown> = {
+      sessionId,
+      updatedAt: 1,
+      agentRuntimeOverride: runtime,
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [owner],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "openai",
+          configuredModelRefs: ["openai/gpt-5.5"],
+          runtime: "pi",
+        },
+      },
+    });
+
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: owner.id,
+        ownerLabel: owner.label,
+        cliSessionKeys: [runtime],
+        pinnedRuntimeKeys: ["agentRuntimeOverride"],
+        reasons: ["pinned runtime"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 456 })).toBe(true);
+    expect(entry.sessionId).toBe(sessionId);
+    expect(entry.updatedAt).toBe(456);
+    expect(entry.agentRuntimeOverride).toBeUndefined();
+  });
+
   it("keeps owner CLI state when owner runtime is still configured", () => {
     const sessionKey = "agent:main:telegram:direct:4";
     const entry: Record<string, unknown> = {
@@ -276,6 +337,7 @@ describe("doctor session state provider routes", () => {
       updatedAt: 1,
       modelProvider: "codex-cli",
       model: "gpt-5.5",
+      agentRuntimeOverride: "codex-cli",
       cliSessionBindings: {
         "codex-cli": { sessionId: "codex-cli-session" },
       },
