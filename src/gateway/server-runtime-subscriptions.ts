@@ -2,6 +2,7 @@ import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { startAgentEventChannelMirror } from "./agent-event-channel-mirror.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type {
   ChatRunState,
@@ -85,6 +86,7 @@ export function startGatewayEventSubscriptions(params: {
   const agentUnsub = onAgentEvent((evt) => {
     void getAgentEventHandler().then((handler) => handler(evt));
   });
+  const agentChannelMirrorUnsub = startAgentEventChannelMirror();
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
@@ -100,6 +102,7 @@ export function startGatewayEventSubscriptions(params: {
 
   return {
     agentUnsub,
+    agentChannelMirrorUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
