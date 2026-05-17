@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -495,6 +496,10 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
     });
   }
   return converted;
+}
+
+function parseAnthropicToolCallArguments(inputJson: string): unknown {
+  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
 }
 
 function mapStopReason(reason: string | undefined): string {
@@ -1268,7 +1273,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               typeof delta.partial_json === "string"
             ) {
               block.partialJson += delta.partial_json;
-              block.arguments = parseStreamingJson(block.partialJson);
+              block.arguments = parseAnthropicToolCallArguments(block.partialJson);
               stream.push({
                 type: "toolcall_delta",
                 contentIndex: index,
@@ -1316,7 +1321,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             }
             if (block.type === "toolCall") {
               if (typeof block.partialJson === "string" && block.partialJson.length > 0) {
-                block.arguments = parseStreamingJson(block.partialJson);
+                block.arguments = parseAnthropicToolCallArguments(block.partialJson);
               }
               delete block.partialJson;
               stream.push({
