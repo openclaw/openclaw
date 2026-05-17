@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
@@ -9,6 +10,7 @@ import { addSession, resetProcessRegistryForTests } from "../../bash-process-reg
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
   buildContextEnginePromptCacheInfo,
@@ -22,6 +24,7 @@ import {
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
   normalizeMessagesForLlmBoundary,
+  pickLastAssistantAfterMessageIndex,
   prependSystemPromptAddition,
   remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -639,6 +642,43 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
     expect(userResult.prependContext).toBeUndefined();
     expect(userResult.appendContext).toBeUndefined();
+  });
+});
+
+describe("pickLastAssistantAfterMessageIndex", () => {
+  it("ignores assistant messages from previous turns", () => {
+    const previousAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "old answer" }],
+    }) as AgentMessage;
+    const messages: AgentMessage[] = [
+      { role: "user", content: "old question" } as AgentMessage,
+      previousAssistant,
+      { role: "user", content: "new question" } as AgentMessage,
+    ];
+
+    expect(pickLastAssistantAfterMessageIndex(messages, 2)).toBeUndefined();
+  });
+
+  it("returns the current turn assistant when one exists", () => {
+    const currentAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "new answer" }],
+    }) as AgentMessage;
+    const messages: AgentMessage[] = [
+      { role: "user", content: "old question" } as AgentMessage,
+      makeAssistantMessageFixture({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "old answer" }],
+      }) as AgentMessage,
+      { role: "user", content: "new question" } as AgentMessage,
+      currentAssistant,
+    ];
+
+    expect(pickLastAssistantAfterMessageIndex(messages, 2)).toBe(currentAssistant);
   });
 });
 
