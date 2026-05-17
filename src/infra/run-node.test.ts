@@ -1415,9 +1415,6 @@ describe("run-node script", () => {
           return true;
         }),
       } as unknown as NodeJS.WriteStream;
-      const stdout = {
-        write: vi.fn(() => true),
-      } as unknown as NodeJS.WriteStream;
 
       const exitCode = await runNodeMain({
         cwd: tmp,
@@ -1430,11 +1427,10 @@ describe("run-node script", () => {
         spawn,
         spawnSync,
         stderr,
-        stdout,
         runRuntimePostBuild: async () => {},
         execPath: process.execPath,
         platform: process.platform,
-      } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
+      } as Parameters<typeof runNodeMain>[0]);
 
       expect(exitCode).toBe(0);
       const stderrText = stderrChunks.join("");
