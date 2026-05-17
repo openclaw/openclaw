@@ -21,6 +21,35 @@ export type RawSessionConversationRef = {
   prefix: string;
 };
 
+export function normalizeSessionPeerId(params: {
+  channel: string;
+  peerKind?: string | null;
+  peerId?: string | null;
+}): string {
+  const peerId = (params.peerId ?? "").trim();
+  return normalizeLowercaseStringOrEmpty(params.channel) === "signal" &&
+    normalizeLowercaseStringOrEmpty(params.peerKind) === "group"
+    ? peerId
+    : normalizeLowercaseStringOrEmpty(peerId);
+}
+
+export function normalizeSessionKeyPreservingOpaqueIds(sessionKey: string): string {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const parts = trimmed.split(":");
+  return parts
+    .map((part, index) => {
+      const prev = normalizeLowercaseStringOrEmpty(parts[index - 1]);
+      const prevPrev = normalizeLowercaseStringOrEmpty(parts[index - 2]);
+      return prevPrev === "signal" && prev === "group"
+        ? part.trim()
+        : normalizeLowercaseStringOrEmpty(part);
+    })
+    .join(":");
+}
+
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
  * Returned values are normalized to lowercase for stable comparisons/routing.

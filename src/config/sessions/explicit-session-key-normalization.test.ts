@@ -45,7 +45,7 @@ describe("normalizeExplicitSessionKey", () => {
     ).toBe("agent:fina:discord:direct:123456");
   });
 
-  it("lowercases and passes through unknown providers unchanged", () => {
+  it("lowercases unknown providers while preserving opaque Signal group IDs", () => {
     expect(
       normalizeExplicitSessionKey(
         "Agent:Fina:Slack:DM:ABC",
@@ -55,5 +55,12 @@ describe("normalizeExplicitSessionKey", () => {
         }),
       ),
     ).toBe("agent:fina:slack:dm:abc");
+    const groupId = "VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
+    expect(
+      normalizeExplicitSessionKey(
+        `Agent:Main:Signal:Group:${groupId}`,
+        makeCtx({ Surface: "signal", ChatType: "group", From: `group:${groupId}` }),
+      ),
+    ).toBe(`agent:main:signal:group:${groupId}`);
   });
 });

@@ -7,6 +7,8 @@ import {
   resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentPeerSessionKey,
+  buildGroupHistoryKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
@@ -158,6 +160,24 @@ describe("session key canonicalization", () => {
     },
   ] as const)("$name", ({ run }) => {
     expectSessionKeyCanonicalizationCase({ run });
+  });
+});
+
+describe("Signal group session key casing", () => {
+  const groupId = "VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
+
+  it("preserves opaque Signal group IDs in peer and history keys", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "Main",
+        channel: "Signal",
+        peerKind: "group",
+        peerId: groupId,
+      }),
+    ).toBe(`agent:main:signal:group:${groupId}`);
+    expect(buildGroupHistoryKey({ channel: "Signal", peerKind: "group", peerId: groupId })).toBe(
+      `signal:default:group:${groupId}`,
+    );
   });
 });
 

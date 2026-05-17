@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { isCronRunSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  normalizeSessionPeerId,
+  parseAgentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 
@@ -208,7 +212,7 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId = normalizeSessionPeerId({ channel, peerKind, peerId: params.peerId }) || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -266,7 +270,9 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizeSessionPeerId({ channel, peerKind: params.peerKind, peerId: params.peerId }) ||
+    "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 

@@ -62,6 +62,22 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
 
+  it("preserves opaque Signal group IDs when recording inbound metadata", async () => {
+    const groupId = "VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
+    const canonicalKey = `agent:main:signal:group:${groupId}`;
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: `Agent:Main:Signal:Group:${groupId}`,
+      ctx: {
+        To: `group:${groupId}`,
+      },
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(store)).toEqual([canonicalKey]);
+    expect(store[canonicalKey]?.origin?.to).toBe(`group:${groupId}`);
+  });
+
   it("does not create a duplicate mixed-case key when last route is updated", async () => {
     await recordSessionMetaFromInbound({
       storePath,

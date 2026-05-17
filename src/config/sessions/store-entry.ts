@@ -1,8 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeSessionKeyPreservingOpaqueIds } from "../../sessions/session-key-utils.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
-  return normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalizeSessionKeyPreservingOpaqueIds(sessionKey);
 }
 
 export function resolveSessionStoreEntry(params: {
