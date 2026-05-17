@@ -2377,6 +2377,87 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("keeps distinct overlong Copilot Responses replay item ids distinct", () => {
+    const sharedToolItemPrefix = "iVec" + "A".repeat(160);
+    const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
+    const secondToolCallId = `call_second|${sharedToolItemPrefix}BB`;
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              { type: "toolCall", id: firstToolCallId, name: "read", arguments: { path: "a" } },
+              { type: "toolCall", id: secondToolCallId, name: "read", arguments: { path: "b" } },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: firstToolCallId,
+            toolName: "read",
+            content: [{ type: "text", text: "a" }],
+            isError: false,
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: secondToolCallId,
+            toolName: "read",
+            content: [{ type: "text", text: "b" }],
+            isError: false,
+            timestamp: 3,
+          },
+          { role: "user", content: "continue", timestamp: 4 },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; id?: string; call_id?: string }>;
+    };
+
+    const functionCalls = params.input?.filter((item) => item.type === "function_call") ?? [];
+    const functionOutputs =
+      params.input?.filter((item) => item.type === "function_call_output") ?? [];
+    expect(functionCalls).toHaveLength(2);
+    expect(functionOutputs).toHaveLength(2);
+    expect(functionCalls.map((item) => item.id)).toEqual([
+      expect.stringMatching(/^fc_/),
+      expect.stringMatching(/^fc_/),
+    ]);
+    expect(new Set(functionCalls.map((item) => item.id)).size).toBe(2);
+    for (const item of functionCalls) {
+      expect(item.id?.length).toBeLessThanOrEqual(64);
+    }
+    expect(functionOutputs.map((item) => item.call_id)).toEqual(["call_first", "call_second"]);
+  });
+
   it("adds minimal user input for Codex responses when only the system prompt is present", () => {
     const params = buildOpenAIResponsesParams(
       {
