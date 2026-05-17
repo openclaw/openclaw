@@ -1,6 +1,10 @@
+import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { CustomEditor } from "./components/custom-editor.js";
+import { editorTheme } from "./theme/theme.js";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
 import {
+  createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
@@ -54,11 +58,33 @@ describe("createEditorSubmitHandler", () => {
 
     onSubmit("  wait, use c++ instead  ");
 
-    expect(editor.setText).not.toHaveBeenCalled();
+    expect(editor.setText).toHaveBeenCalledWith("wait, use c++ instead");
     expect(editor.addToHistory).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+  });
+
+  it("restores the real editor value after pi-tui clears a busy submit", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const onBlockedMessageSubmit = vi.fn();
+    editor.setText("wait, use c++ instead");
+    editor.onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine: vi.fn(),
+      canSubmitMessage: () => false,
+      onBlockedMessageSubmit,
+    });
+
+    editor.handleInput("\r");
+
+    expect(editor.getText()).toBe("wait, use c++ instead");
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
   });
 

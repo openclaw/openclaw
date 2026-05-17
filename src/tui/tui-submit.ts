@@ -40,6 +40,7 @@ export function createEditorSubmitHandler(params: {
     }
 
     if (params.canSubmitMessage && !params.canSubmitMessage()) {
+      params.editor.setText(value);
       params.onBlockedMessageSubmit?.(value);
       return;
     }

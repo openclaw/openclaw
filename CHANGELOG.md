@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI: restore the submitted draft when chat is busy instead of clearing it or queueing another run. Fixes #45326. (#82774) Thanks @hyspacex.
 - Browser plugin: redact attach-details from Chrome MCP diagnostics and keep raw Chrome launch error output around long enough to surface in user reports without leaking sensitive paths.
 - System prompts: clarify MEMORY guidance over generic TTS hints in the embedded speech-core/system-prompt scaffolding so agents prefer memory-store usage over speech defaults. Fixes #81930. Thanks @giodl73-repo.
 - Agents/auth: include the checked credential source in missing API key errors, so users can see which env var, profile, or config path to fix. Fixes #82785. Thanks @loeclos.
