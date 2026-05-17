@@ -17,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -913,9 +913,10 @@ export async function registerSlackMonitorSlashCommands(params: {
     registerArgOptions();
   } catch (err) {
     supportsExternalArgMenus = false;
-    logVerbose(
-      `slack: external arg-menu registration failed, falling back to static menus: ${formatErrorMessage(err)}`,
-    );
+    const visibleWarning =
+      "slack: external arg-menu registration failed; falling back to static menus; external arg search is disabled";
+    logVerbose(`${visibleWarning}: ${formatErrorMessage(err)}`);
+    runtime.error?.(warn(visibleWarning));
   }
 
   const registerArgAction = (actionId: string | RegExp) => {

@@ -584,10 +584,11 @@ describe("Slack native command argument menus", () => {
     expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
-  it("falls back to static menus when app.options() throws during registration", async () => {
+  it("falls back to static menus and emits a visible warning when app.options() throws", async () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
     const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
     const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const runtimeError = vi.fn();
     const app = {
       client: { chat: { postEphemeral } },
       command: (name: string, handler: (args: unknown) => Promise<void>) => {
@@ -603,7 +604,7 @@ describe("Slack native command argument menus", () => {
     };
     const ctx = {
       cfg: { commands: { native: true, nativeSkills: false } },
-      runtime: {},
+      runtime: { error: runtimeError },
       botToken: "bot-token",
       botUserId: "bot",
       teamId: "T1",
@@ -636,6 +637,12 @@ describe("Slack native command argument menus", () => {
     // Registration should not throw despite app.options() throwing
     await registerCommands(ctx, account);
     expect(commands.size).toBeGreaterThan(0);
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    const visibleWarning = String(runtimeError.mock.calls[0]?.[0] ?? "");
+    expect(visibleWarning).toContain("slack: external arg-menu registration failed");
+    expect(visibleWarning).toContain("falling back to static menus");
+    expect(visibleWarning).toContain("external arg search is disabled");
+    expect(visibleWarning).not.toContain("listeners");
     expect(
       Array.from(actions.keys()).some(
         (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
