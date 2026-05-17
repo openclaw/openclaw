@@ -611,6 +611,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
+    expect(mockedEnsureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(mockedEnsureAuthProfileStore, 0, 1), {
+      externalCliProviderIds: ["openai-codex"],
+      allowKeychainPrompt: false,
+    });
+    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
     expectMockCallFields(mockedGetApiKeyForModel, {
       profileId: "openai-codex:work",
     });
@@ -621,6 +627,155 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
       resolvedApiKey: "test-key",
+    });
+  });
+
+  it("loads the external Codex auth overlay before auto-selecting forced Codex runtime profiles", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const codexAuthStorage = {
+      setRuntimeApiKey: vi.fn(),
+      getApiKey: vi.fn(async () => "stored-test-key"),
+    };
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai-codex",
+        authProfileProviderForAuth: "openai-codex",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:default",
+      },
+    });
+    const codexAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedEnsureAuthProfileStore.mockReturnValueOnce(codexAuthStore);
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce({
+      version: 1,
+      profiles: {},
+    });
+    mockedResolveAuthProfileOrder.mockImplementation(
+      ({
+        provider,
+        store,
+      }: {
+        provider?: string;
+        store?: { profiles?: Record<string, unknown> };
+      }) =>
+        provider === "openai-codex" && store?.profiles?.["openai-codex:default"]
+          ? ["openai-codex:default"]
+          : [],
+    );
+    mockedResolveModelAsync
+      .mockResolvedValueOnce({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai",
+          contextWindow: 200000,
+          api: "openai-responses",
+        },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      })
+      .mockResolvedValueOnce({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai-codex",
+          contextWindow: 200000,
+          api: "openai-codex-responses",
+        },
+        error: null,
+        authStorage: codexAuthStorage,
+        modelRegistry: {},
+      });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockImplementation(
+      async ({ profileId }: { profileId?: string } = {}) => {
+        if (!profileId) {
+          throw new Error('No API key found for provider "openai-codex"');
+        }
+        return {
+          apiKey: "test-key",
+          profileId,
+          source: "test",
+          mode: "api-key",
+        };
+      },
+    );
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        runId: "forced-openai-codex-responses-auto-selects-external-overlay",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedEnsureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(mockedEnsureAuthProfileStore, 0, 1), {
+      externalCliProviderIds: ["openai-codex"],
+      allowKeychainPrompt: false,
+    });
+    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+    expectMockCallFields(mockedResolveAuthProfileOrder, {
+      provider: "openai-codex",
+      store: codexAuthStore,
+    });
+    expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
+    expectMockCallFields(mockedGetApiKeyForModel, {
+      profileId: "openai-codex:default",
+    });
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenCalledWith("openai-codex", "test-key");
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "openai-codex",
+      authProfileId: "openai-codex:default",
+      authProfileIdSource: "auto",
+      resolvedApiKey: "test-key",
+    });
+    expectRuntimePlanFields(pluginParams.runtimePlan, {
+      resolvedRef: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:default",
+      },
     });
   });
 
@@ -699,7 +854,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       supports: () => ({ supported: false }),
       runAttempt: pluginRunAttempt,
     });
-    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
+    mockedEnsureAuthProfileStore.mockReturnValueOnce(codexAuthStore);
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:sub", "openai-codex:backup"]);
     mockedResolveModelAsync
       .mockResolvedValueOnce({
