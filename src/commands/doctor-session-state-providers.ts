@@ -114,6 +114,7 @@ function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
     normalizeString(record.modelProvider) !== undefined ||
     normalizeString(record.model) !== undefined ||
     normalizeString(record.agentHarnessId) !== undefined ||
+    normalizeString(record.agentRuntimeOverride) !== undefined ||
     record.cliSessionBindings !== undefined ||
     record.cliSessionIds !== undefined ||
     normalizeString(record.authProfileOverride) !== undefined ||
@@ -285,7 +286,11 @@ function scanEntryForOwner(params: {
       addReason(reasons, "runtime model state");
     }
     const harnessId = normalizeString(params.entry.agentHarnessId);
-    if (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) {
+    const runtimeOverride = normalizeString(params.entry.agentRuntimeOverride);
+    if (
+      (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) ||
+      (runtimeOverride && runtimeIds.has(normalizeProviderId(runtimeOverride)))
+    ) {
       addReason(reasons, "pinned runtime");
     }
     if (hasOwnedCliSession({ entry: params.entry, cliSessionKeys })) {
@@ -397,6 +402,7 @@ export function applySessionRouteStateRepair(params: {
   }
   if (params.repair.reasons.includes("pinned runtime")) {
     clear("agentHarnessId");
+    clear("agentRuntimeOverride");
   }
   if (params.repair.reasons.includes("CLI session binding")) {
     changed =
