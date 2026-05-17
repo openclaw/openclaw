@@ -17,7 +17,7 @@
   },
   {
     "source": "Compaction",
-    "target": "Compaction"
+    "target": "壓縮"
   },
   {
     "source": "Cron",
@@ -25,7 +25,7 @@
   },
   {
     "source": "Dreaming",
-    "target": "Dreaming"
+    "target": "夢境整理"
   },
   {
     "source": "Gateway",
@@ -33,7 +33,7 @@
   },
   {
     "source": "Heartbeat",
-    "target": "Heartbeat"
+    "target": "心跳偵測"
   },
   {
     "source": "Mintlify",
@@ -57,7 +57,7 @@
   },
   {
     "source": "Skills",
-    "target": "Skills"
+    "target": "技能"
   },
   {
     "source": "Tailscale",
@@ -69,10 +69,10 @@
   },
   {
     "source": "TUI",
-    "target": "TUI"
+    "target": "終端介面"
   },
   {
     "source": "Webhook",
-    "target": "Webhook"
+    "target": "網路鉤子"
   }
 ]
