@@ -196,6 +196,26 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
+  it("delivers explicit reasoning payloads before Matrix sends", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "Reasoning:\nvisible because this payload is explicit", isReasoning: true },
+        { text: "<think>still hidden</think>" },
+        { text: "Visible answer" },
+      ],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    expect(sendCall(0)[1]).toBe("Reasoning:\nvisible because this payload is explicit");
+    expect(sendCall(1)[1]).toBe("Visible answer");
+  });
+
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
     const explicitCfg = {
       channels: {

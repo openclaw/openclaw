@@ -436,6 +436,7 @@ export async function dispatchReplyFromConfig(
       config: cfg,
       attributes: traceAttributes,
     });
+  const shouldDeliverReasoningReplies = params.replyOptions?.deliverReasoningReplies === true;
 
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
@@ -1503,10 +1504,9 @@ export async function dispatchReplyFromConfig(
               if (suppressDelivery) {
                 return;
               }
-              // Suppress reasoning payloads — channels using this generic dispatch
-              // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
+              // Suppress reasoning payloads unless a channel explicitly opts in.
               // Telegram has its own dispatch path that handles reasoning splitting.
-              if (payload.isReasoning === true) {
+              if (payload.isReasoning === true && !shouldDeliverReasoningReplies) {
                 return;
               }
               // Accumulate block text for TTS generation after streaming.
@@ -1632,9 +1632,9 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
-      // Suppress reasoning payloads from channel delivery — channels using this
-      // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning === true) {
+      // Suppress reasoning payloads from channel delivery unless a channel
+      // explicitly opts in with a dedicated reasoning lane.
+      if (reply.isReasoning === true && !shouldDeliverReasoningReplies) {
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {

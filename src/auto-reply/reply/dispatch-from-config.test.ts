@@ -4021,6 +4021,31 @@ describe("dispatchReplyFromConfig", () => {
     expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
   });
 
+  it("delivers isReasoning final replies when the channel opts in", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix", Surface: "matrix" });
+    const replyResolver = async () =>
+      [
+        { text: "Reasoning:\nthinking...", isReasoning: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { deliverReasoningReplies: true },
+      replyResolver,
+    });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls.map((call) => (call[0] as ReplyPayload).text)).toEqual([
+      "Reasoning:\nthinking...",
+      "The answer is 42",
+    ]);
+  });
+
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -4047,6 +4072,39 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("thinking...");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("delivers isReasoning block replies when the channel opts in", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix", Surface: "matrix" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Reasoning:\nthinking...", isReasoning: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return { text: "The answer is 42" };
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { deliverReasoningReplies: true },
+      replyResolver,
+    });
+
+    expect(blockReplySentTexts).toEqual(["Reasoning:\nthinking...", "The answer is 42"]);
   });
 
   it("strips split TTS directives from streamed block text before delivery", async () => {

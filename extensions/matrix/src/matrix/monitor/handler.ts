@@ -1767,6 +1767,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+            if (payload.isReasoning === true) {
+              await deliverMatrixReplies({
+                cfg,
+                replies: [payload],
+                roomId,
+                client,
+                runtime,
+                textLimit,
+                replyToMode,
+                threadId: threadTarget,
+                accountId: _route.accountId,
+                mediaLocalRoots,
+                tableMode,
+              });
+              return;
+            }
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
               const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
@@ -2123,6 +2139,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       dispatcher,
                       replyOptions: {
                         ...replyOptions,
+                        deliverReasoningReplies: true,
                         skillFilter: roomConfig?.skills,
                         // Keep block streaming enabled when explicitly requested, even
                         // with draft previews on. The draft remains the live preview

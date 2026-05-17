@@ -58,7 +58,7 @@ export async function deliverMatrixReplies(params: {
   let hasReplied = false;
   let deliveredAny = false;
   for (const reply of params.replies) {
-    if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
+    if (reply.isReasoning !== true && shouldSuppressReasoningReplyText(reply.text)) {
       logVerbose("matrix reply suppressed as reasoning-only");
       continue;
     }

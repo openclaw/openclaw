@@ -90,6 +90,8 @@ export type GetReplyOptions = {
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<void> | void;
+  /** If true, generic dispatch may deliver explicit isReasoning payloads. */
+  deliverReasoningReplies?: boolean;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
   /** Called synchronously when a block reply is logically emitted, before async
