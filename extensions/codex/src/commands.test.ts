@@ -22,6 +22,7 @@ import {
   type CodexCommandDeps,
 } from "./command-handlers.js";
 import type {
+  CodexPluginsConfigBlock,
   CodexPluginConfigEntry,
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
@@ -79,13 +80,19 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
 
 function inMemoryCodexPluginsIO(
   initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
 ): CodexPluginsManagementIO & {
   current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
 } {
-  const store: Record<string, CodexPluginConfigEntry> = JSON.parse(JSON.stringify(initial));
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: JSON.parse(JSON.stringify(initial)),
+  };
   return {
-    current: () => JSON.parse(JSON.stringify(store)),
-    readConfig: () => Promise.resolve({ plugins: JSON.parse(JSON.stringify(store)) }),
+    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
+    currentConfig: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
     mutate: async (update) => {
       update(store);
     },
@@ -271,6 +278,7 @@ describe("codex command", () => {
       deps: createDeps({ codexPluginsManagementIo }),
     });
     expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
     expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
   });
 

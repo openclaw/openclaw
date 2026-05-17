@@ -1,19 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
   handleCodexPluginsSubcommand,
+  type CodexPluginsConfigBlock,
   type CodexPluginConfigEntry,
   type CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
 
 function inMemoryIO(
   initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
 ): CodexPluginsManagementIO & {
   current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
 } {
-  const store: Record<string, CodexPluginConfigEntry> = JSON.parse(JSON.stringify(initial));
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: JSON.parse(JSON.stringify(initial)),
+  };
   return {
-    current: () => JSON.parse(JSON.stringify(store)),
-    readConfig: () => Promise.resolve({ plugins: JSON.parse(JSON.stringify(store)) }),
+    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
+    currentConfig: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
     mutate: async (update) => {
       update(store);
     },
@@ -23,7 +30,11 @@ function inMemoryIO(
 const fakeCtx = {
   args: "",
   config: {},
-} as never;
+  channel: "test",
+  isAuthorizedSender: true,
+  senderIsOwner: true,
+  commandBody: "/codex plugins",
+} as const;
 
 describe("Codex /codex plugins subcommand", () => {
   it("lists a configured plugin with its enabled marker and explains the underlying file", async () => {
@@ -38,6 +49,23 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
     expect(result.text).toContain("ON   google-calendar");
     expect(result.text).toContain("openclaw.json");
+  });
+
+  it("lists effective disabled status when the global plugin switch is off", async () => {
+    const io = inMemoryIO(
+      {
+        "google-calendar": {
+          enabled: true,
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+        },
+      },
+      { enabled: false },
+    );
+
+    const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
+    expect(result.text).toContain("OFF  google-calendar");
+    expect(result.text).toContain("Global codexPlugins.enabled is off");
   });
 
   it("enables and disables a configured plugin and reflects the change in subsequent reads", async () => {
@@ -59,7 +87,38 @@ describe("Codex /codex plugins subcommand", () => {
 
     const enabled = await handleCodexPluginsSubcommand(fakeCtx, ["enable", "google-calendar"], io);
     expect(enabled.text).toContain("enabled");
+    expect(io.currentConfig().enabled).toBe(true);
     expect(io.current()["google-calendar"]?.enabled).toBe(true);
+  });
+
+  it("rejects enable and disable from non-owner non-admin callers", async () => {
+    const io = inMemoryIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+    const ctx = { ...fakeCtx, senderIsOwner: false, gatewayClientScopes: ["operator.write"] };
+
+    const result = await handleCodexPluginsSubcommand(ctx, ["disable", "google-calendar"], io);
+    expect(result.text).toContain("Only an owner or operator.admin");
+    expect(io.current()["google-calendar"]?.enabled).toBe(true);
+  });
+
+  it("allows operator.admin gateway callers to enable and disable", async () => {
+    const io = inMemoryIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+    const ctx = { ...fakeCtx, senderIsOwner: false, gatewayClientScopes: ["operator.admin"] };
+
+    const result = await handleCodexPluginsSubcommand(ctx, ["disable", "google-calendar"], io);
+    expect(result.text).toContain("disabled");
+    expect(io.current()["google-calendar"]?.enabled).toBe(false);
   });
 
   it("escapes configured plugin fields before listing them in chat", async () => {
