@@ -15,6 +15,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -125,6 +126,10 @@ export function resolveExtraParams(params: {
     merged.response_format = resolvedResponseFormat;
     delete merged.responseFormat;
   }
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [defaultParams, globalParams, agentParams],
+  });
 
   const resolvedCachedContent = resolveAliasedParamValue(
     [defaultParams, globalParams, agentParams],
@@ -251,6 +256,10 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [resolvedExtraParams, override],
+  });
   const resolvedCachedContent = resolveAliasedParamValue(
     [resolvedExtraParams, override],
     "cached_content",
@@ -305,6 +314,10 @@ export function resolvePreparedExtraParams(params: {
     },
   })?.patch;
   const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  canonicalizeMaxTokensParam({
+    merged: result,
+    sources: [prepared, transportPatch ?? undefined],
+  });
   if (cacheKey) {
     let bucket = preparedExtraParamsCache.get(cfg!);
     if (!bucket) {
@@ -419,8 +432,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.topP === "number") {
     streamParams.topP = extraParams.topP;
   }
-  if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
+  const maxTokens = resolveMaxTokensParam(extraParams);
+  if (maxTokens !== undefined) {
+    streamParams.maxTokens = maxTokens;
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],

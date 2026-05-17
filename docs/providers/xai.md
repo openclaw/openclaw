@@ -11,14 +11,17 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 ## Getting started
 
 <Steps>
-  <Step title="Create an API key">
-    Create an API key in the [xAI console](https://console.x.ai/).
+  <Step title="Choose auth">
+    Use either an API key from the [xAI console](https://console.x.ai/) or
+    xAI Grok OAuth with a SuperGrok subscription.
   </Step>
-  <Step title="Set your API key">
-    Set `XAI_API_KEY`, or run:
+  <Step title="Sign in">
+    Set `XAI_API_KEY`, run the API-key wizard, or start the OAuth flow:
 
     ```bash
     openclaw onboard --auth-choice xai-api-key
+    openclaw onboard --auth-choice xai-oauth
+    openclaw models auth login --provider xai --method oauth
     ```
 
   </Step>
@@ -33,9 +36,11 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-API key from `openclaw onboard --auth-choice xai-api-key` can also power
-first-class `x_search` and remote `code_execution`; `XAI_API_KEY` or plugin
-web-search config can power Grok-backed `web_search` too.
+credential from `openclaw onboard --auth-choice xai-api-key` or
+`openclaw onboard --auth-choice xai-oauth` can also power first-class
+`x_search`, remote `code_execution`, and xAI image/video generation.
+Speech and transcription currently require `XAI_API_KEY` or provider config.
+`XAI_API_KEY` or plugin web-search config can power Grok-backed `web_search` too.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
 Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
@@ -45,24 +50,21 @@ and, by default, `x_search` through an operator xAI Responses proxy.
 
 ## Built-in catalog
 
-OpenClaw includes these xAI model families out of the box:
+OpenClaw includes the current xAI chat models out of the box, ordered newest
+first in model pickers:
 
 | Family         | Model ids                                                                |
 | -------------- | ------------------------------------------------------------------------ |
-| Grok 3         | `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`               |
 | Grok 4.3       | `grok-4.3`                                                               |
-| Grok 4         | `grok-4`, `grok-4-0709`                                                  |
-| Grok 4 Fast    | `grok-4-fast`, `grok-4-fast-non-reasoning`                               |
-| Grok 4.1 Fast  | `grok-4-1-fast`, `grok-4-1-fast-non-reasoning`                           |
 | Grok 4.20 Beta | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
-| Grok Code      | `grok-code-fast-1`                                                       |
 
-The plugin also forward-resolves newer `grok-4*` and `grok-code-fast*` ids when
-they follow the same API shape.
+The plugin still forward-resolves older Grok 3, Grok 4, Grok 4 Fast, Grok 4.1
+Fast, and Grok Code slugs for existing configs, but OpenClaw no longer shows
+those retired upstream slugs in the selectable catalog.
 
 <Tip>
-`grok-4.3`, `grok-4-fast`, `grok-4-1-fast`, and the `grok-4.20-beta-*`
-variants are the current image-capable Grok refs in the bundled catalog.
+Use `grok-4.3` for new chat and coding workloads unless you explicitly need a
+Grok 4.20 beta alias.
 </Tip>
 
 ## OpenClaw feature coverage
@@ -178,7 +180,7 @@ Legacy aliases still normalize to the canonical bundled ids:
     `image_generate` tool.
 
     - Default image model: `xai/grok-imagine-image`
-    - Additional model: `xai/grok-imagine-image-pro`
+    - Additional model: `xai/grok-imagine-image-quality`
     - Modes: text-to-image and reference-image edit
     - Reference inputs: one `image` or up to five `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
@@ -411,9 +413,10 @@ Legacy aliases still normalize to the canonical bundled ids:
   </Accordion>
 
   <Accordion title="Known limits">
-    - Auth is API-key only today. The API key may be stored in an xAI auth
-      profile, environment variable, or plugin config; there is no xAI OAuth or
-      device-code flow in OpenClaw yet.
+    - xAI auth can use an API key, environment variable, plugin config fallback,
+      or xAI Grok OAuth with a SuperGrok subscription. OAuth uses a local
+      callback on `127.0.0.1:56121`; for remote hosts, forward that port before
+      opening the sign-in URL.
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.

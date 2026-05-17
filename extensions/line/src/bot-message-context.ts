@@ -14,7 +14,7 @@ import {
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { buildInboundHistoryFromMap, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -469,8 +469,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const historyKey = isGroup ? peerId : undefined;
   const inboundHistory =
     historyKey && groupHistories && (historyLimit ?? 0) > 0
-      ? buildInboundHistoryFromMap({
-          historyMap: groupHistories,
+      ? createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
           historyKey,
           limit: historyLimit ?? 0,
         })

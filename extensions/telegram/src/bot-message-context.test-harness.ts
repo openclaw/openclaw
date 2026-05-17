@@ -1,4 +1,4 @@
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
@@ -15,6 +15,8 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  historyLimit?: number;
+  groupHistories?: Map<string, import("openclaw/plugin-sdk/reply-history").HistoryEntry[]>;
   ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   botApi?: Record<string, unknown>;
   runtime?: BuildTelegramMessageContextParams["runtime"];
@@ -25,7 +27,7 @@ type BuildTelegramMessageContextForTestParams = {
 };
 
 const telegramMessageContextSessionRuntimeForTest = {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: async () => undefined,
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
@@ -77,8 +79,8 @@ export async function buildTelegramMessageContextForTest(
     },
     sessionRuntime,
     account: { accountId: params.accountId ?? "default" } as never,
-    historyLimit: 0,
-    groupHistories: new Map(),
+    historyLimit: params.historyLimit ?? 0,
+    groupHistories: params.groupHistories ?? new Map(),
     dmPolicy: "open",
     allowFrom: ["*"],
     groupAllowFrom: [],

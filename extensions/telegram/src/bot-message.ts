@@ -73,8 +73,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     opts,
   } = deps;
   const sessionRuntime = {
-    ...(telegramDeps.buildChannelTurnContext
-      ? { buildChannelTurnContext: telegramDeps.buildChannelTurnContext }
+    ...(telegramDeps.buildChannelInboundEventContext
+      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
       : {}),
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
@@ -155,9 +155,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    void context.sendTyping().catch((err) => {
-      logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
-    });
+    if (context.ctxPayload.InboundEventKind !== "room_event") {
+      void context.sendTyping().catch((err) => {
+        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+      });
+    }
     telegramInboundLog.info(
       formatTelegramInboundLogLine({
         from: context.ctxPayload.From,
