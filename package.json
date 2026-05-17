@@ -158,6 +158,10 @@
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
     },
+    "./plugin-sdk/proxy-runtime": {
+      "types": "./dist/plugin-sdk/proxy-runtime.d.ts",
+      "default": "./dist/plugin-sdk/proxy-runtime.js"
+    },
     "./plugin-sdk/runtime-secret-resolution": {
       "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
       "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
