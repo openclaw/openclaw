@@ -565,7 +565,11 @@ export function clearActiveEmbeddedRun(
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
 ) {
-  if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
+  const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (activeHandle === undefined) {
+    return;
+  }
+  if (activeHandle === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
