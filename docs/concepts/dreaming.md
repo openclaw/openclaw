@@ -107,22 +107,17 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
 
-## Shadow trial reports
+## QA shadow trial report coverage
 
-Shadow trials are report-only reviews for candidate memories before they become
-durable. A shadow trial compares how a future prompt would be answered without a
-candidate memory and with that candidate memory available, then records whether
-the candidate looks helpful, neutral, or harmful.
+QA Lab includes a report-only scenario for exploring how a future dreaming
+shadow trial could review a candidate memory before promotion. The scenario asks
+an agent to compare a baseline answer with an answer that can use the candidate
+memory, then write a local report with a verdict, reason, and risk flags.
 
-Shadow trial reports are useful when a memory candidate is plausible but risky:
-it may improve future answers, but it may also over-personalize, encode a stale
-preference, or conflict with older context. The report belongs in the dreaming
-review surface, not in `MEMORY.md` itself. Promotion still happens through the
-deep phase and its thresholds.
-
-The first QA coverage for this behavior is intentionally narrow: it verifies a
-local report artifact with baseline outcome, candidate outcome, verdict, reason,
-and risk flags. It does not change the promotion engine.
+This coverage is intentionally scoped to QA. It verifies that the report artifact
+stays separate from `MEMORY.md` and that the agent does not claim the candidate
+was promoted. It does not add production shadow-trial behavior or change the
+deep-phase promotion engine.
 
 ## Scheduling
 
