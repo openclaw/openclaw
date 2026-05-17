@@ -157,6 +157,7 @@ function isVisibleMentionLabel(params: {
     localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
     params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
+    params.displayName ? extractVisibleMentionText(`@[${params.displayName}]`) : null,
   ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
