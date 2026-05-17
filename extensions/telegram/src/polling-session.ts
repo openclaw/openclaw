@@ -16,7 +16,10 @@ import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
-import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
+import {
+  TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
+  resolveTelegramGetUpdatesLongPollTimeoutSeconds,
+} from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   claimTelegramSpooledUpdate,
@@ -523,6 +526,9 @@ export class TelegramPollingSession {
     }
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
+    const pollTimeoutSeconds = resolveTelegramGetUpdatesLongPollTimeoutSeconds(
+      ingress.timeoutSeconds,
+    );
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
     const worker = workerFactory({
       token: this.opts.token,
@@ -530,11 +536,13 @@ export class TelegramPollingSession {
       initialUpdateId: this.opts.getLastUpdateId(),
       spoolDir,
       apiRoot: ingress.apiRoot,
-      timeoutSeconds: ingress.timeoutSeconds,
+      timeoutSeconds: pollTimeoutSeconds,
       network: ingress.network,
       proxy: ingress.proxy,
     });
-    this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
+    this.opts.log(
+      `[telegram][diag] isolated polling ingress started spool=${spoolDir} configuredTimeoutSeconds=${ingress.timeoutSeconds ?? "default"} pollTimeoutSeconds=${pollTimeoutSeconds} requestTimeoutMs=${TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS}`,
+    );
     const pollState: {
       startedAt: number | null;
       offset: number | null;

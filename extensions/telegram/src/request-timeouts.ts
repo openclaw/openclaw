@@ -1,5 +1,6 @@
 export const TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS = 45_000;
 const TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS = 60_000;
+export const TELEGRAM_GET_UPDATES_LONG_POLL_TIMEOUT_SECONDS = 30;
 
 const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   // Bound startup/control-plane calls so the gateway cannot report Telegram as
@@ -33,6 +34,20 @@ function resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds: unknown): num
     return undefined;
   }
   return Math.max(1, Math.floor(timeoutSeconds)) * 1000;
+}
+
+export function resolveTelegramGetUpdatesLongPollTimeoutSeconds(timeoutSeconds?: unknown): number {
+  const configuredTimeoutMs = resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds);
+  if (configuredTimeoutMs === undefined) {
+    return TELEGRAM_GET_UPDATES_LONG_POLL_TIMEOUT_SECONDS;
+  }
+  return Math.max(
+    1,
+    Math.min(
+      TELEGRAM_GET_UPDATES_LONG_POLL_TIMEOUT_SECONDS,
+      Math.floor((TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS - 1_000) / 1000),
+    ),
+  );
 }
 
 export function resolveTelegramRequestTimeoutMs(
