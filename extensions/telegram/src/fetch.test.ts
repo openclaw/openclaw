@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import telegramPackageJson from "../package.json" with { type: "json" };
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const getDefaultResultOrder = vi.hoisted(() => vi.fn(() => "ipv4first"));
@@ -14,6 +15,7 @@ const loggerWarn = vi.hoisted(() => vi.fn());
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+const EXPECTED_TELEGRAM_USER_AGENT = `OpenClawBot/${telegramPackageJson.version}`;
 type MockDispatcherInstance = {
   options?: Record<string, unknown> | string;
   destroy: ReturnType<typeof vi.fn>;
@@ -185,6 +187,14 @@ function getDispatcherFromUndiciCall(nth: number) {
     throw new Error(`missing dispatcher for undici fetch call #${nth}`);
   }
   return dispatcher;
+}
+
+function getHeadersFromUndiciCall(nth: number): Headers {
+  const call = undiciFetch.mock.calls[nth - 1] as [RequestInfo | URL, RequestInit?] | undefined;
+  if (!call) {
+    throw new Error(`missing undici fetch call #${nth}`);
+  }
+  return new Headers(call[1]?.headers);
 }
 
 function constructorOptions(ctor: ReturnType<typeof vi.fn>, label: string): unknown {
@@ -392,13 +402,19 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).not.toHaveBeenCalled();
   });
 
-  it("does not double-wrap an already wrapped proxy fetch", () => {
-    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
+  it("wraps an already wrapped proxy fetch only at the Telegram header boundary", async () => {
+    const proxyFetchMock = vi.fn(async () => ({ ok: true }) as Response);
+    const proxyFetch = proxyFetchMock as unknown as typeof fetch;
     const wrapped = resolveFetch(proxyFetch);
 
     const resolved = resolveTelegramFetch(wrapped);
 
-    expect(resolved).toBe(wrapped);
+    expect(resolved).not.toBe(wrapped);
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(proxyFetchMock).toHaveBeenCalledTimes(1);
+    const proxyCall = proxyFetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit?];
+    expect(new Headers(proxyCall[1]?.headers).get("User-Agent")).toBe(EXPECTED_TELEGRAM_USER_AGENT);
   });
 
   it("uses resolver-scoped Agent dispatcher with configured transport policy", async () => {
@@ -421,6 +437,38 @@ describe("resolveTelegramFetch", () => {
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(true);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
+  });
+
+  it("stamps a versioned OpenClaw User-Agent on Telegram Bot API requests", async () => {
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(getHeadersFromUndiciCall(1).get("User-Agent")).toBe(EXPECTED_TELEGRAM_USER_AGENT);
+  });
+
+  it("preserves an explicitly supplied User-Agent", async () => {
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe", {
+      headers: { "User-Agent": "CustomTelegramClient/1.0" },
+    });
+
+    expect(getHeadersFromUndiciCall(1).get("User-Agent")).toBe("CustomTelegramClient/1.0");
   });
 
   it("emits default transport decisions at debug level", () => {
@@ -536,7 +584,8 @@ describe("resolveTelegramFetch", () => {
 
   it("preserves caller-provided custom fetch when OPENCLAW_PROXY_URL is present", async () => {
     vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
-    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
+    const proxyFetchMock = vi.fn(async () => ({ ok: true }) as Response);
+    const proxyFetch = proxyFetchMock as unknown as typeof fetch;
 
     const transport = resolveTelegramTransport(proxyFetch, {
       network: {
@@ -547,7 +596,9 @@ describe("resolveTelegramFetch", () => {
 
     await transport.fetch("https://api.telegram.org/botTOKEN/getMe");
 
-    expect(proxyFetch).toHaveBeenCalledTimes(1);
+    expect(proxyFetchMock).toHaveBeenCalledTimes(1);
+    const proxyCall = proxyFetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit?];
+    expect(new Headers(proxyCall[1]?.headers).get("User-Agent")).toBe(EXPECTED_TELEGRAM_USER_AGENT);
     expect(undiciFetch).not.toHaveBeenCalled();
     expect(ProxyAgentCtor).not.toHaveBeenCalled();
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
@@ -636,8 +687,11 @@ describe("resolveTelegramFetch", () => {
     ).resolves.toEqual({ ok: true });
     expect(undiciFetch).toHaveBeenCalledWith(
       "https://api.telegram.org/botTOKEN/getFile",
-      undefined,
+      expect.objectContaining({
+        headers: expect.any(Headers),
+      }),
     );
+    expect(getHeadersFromUndiciCall(1).get("User-Agent")).toBe(EXPECTED_TELEGRAM_USER_AGENT);
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
 
