@@ -699,18 +699,19 @@ export async function runSecretsAudit(
     resolvabilityComplete: true,
   };
 
+  for (const configBackupPath of listConfigBackupPaths(configPath)) {
+    collectConfigBackupPlaintext({
+      configBackupPath,
+      collector,
+    });
+  }
+
   if (snapshot.valid) {
     collectConfigSecrets({
       config,
       configPath,
       collector,
     });
-    for (const configBackupPath of listConfigBackupPaths(configPath)) {
-      collectConfigBackupPlaintext({
-        configBackupPath,
-        collector,
-      });
-    }
     for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
       collectAuthStoreSecrets({
         authStorePath,

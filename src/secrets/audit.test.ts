@@ -285,6 +285,75 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
+  it("scans rejected openclaw config payload artifacts for plaintext secret residues", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+    const rejectedPath = `${fixture.configPath}.rejected.20260517220000`;
+    await writeJsonFile(rejectedPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-rejected-plaintext", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(rejectedPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === rejectedPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
+  it("scans adjacent openclaw config backups when the active config is invalid", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+    await fs.writeFile(fixture.configPath, "{invalid-json", "utf8");
+    const backupPath = `${fixture.configPath}.bak`;
+    await writeJsonFile(backupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-invalid-active-backup-plaintext", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
   it("does not resolve SecretRefs found only in openclaw config backups", async () => {
     await writeJsonFile(fixture.authStorePath, {
       version: 1,
@@ -309,10 +378,7 @@ describe("secrets audit", () => {
 
     expect(report.filesScanned).toContain(backupPath);
     expect(
-      hasFinding(
-        report,
-        (entry) => entry.code === "REF_UNRESOLVED" && entry.file === backupPath,
-      ),
+      hasFinding(report, (entry) => entry.code === "REF_UNRESOLVED" && entry.file === backupPath),
     ).toBe(false);
   });
 
