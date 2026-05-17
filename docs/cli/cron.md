@@ -100,10 +100,23 @@ Note: cron job definitions live in `jobs.json`, while pending runtime state live
 
 ### Manual runs
 
-`openclaw cron run` returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use `openclaw cron runs --id <job-id>` to follow the eventual outcome.
+`openclaw cron run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
+
+```bash
+openclaw cron run <job-id>
+openclaw cron runs --id <job-id> --run-id <run-id>
+```
+
+Add `--wait` when a script should block until that exact queued run records a terminal status:
+
+```bash
+openclaw cron run <job-id> --wait --wait-timeout 10m --poll-interval 2s
+```
+
+With `--wait`, the CLI still calls `cron.run` first, then polls `cron.runs` for the returned `runId`. The command exits `0` only when the run finishes with status `ok`. It exits non-zero when the run finishes with `error` or `skipped`, when the Gateway response does not include a `runId`, or when `--wait-timeout` expires. `--poll-interval` must be greater than zero.
 
 <Note>
-`openclaw cron run <job-id>` force-runs by default. Use `--due` to keep the older "only run if due" behavior.
+Use `--due` when you want the manual command to run only if the job is currently due. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling.
 </Note>
 
 ## Models
@@ -226,7 +239,10 @@ openclaw cron get <job-id>
 openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due
+openclaw cron run <job-id> --wait --wait-timeout 10m
+openclaw cron run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 openclaw cron runs --id <job-id> --limit 50
+openclaw cron runs --id <job-id> --run-id <run-id>
 ```
 
 `openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.

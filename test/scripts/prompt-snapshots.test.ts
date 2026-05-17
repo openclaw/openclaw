@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,8 @@ import {
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -37,6 +40,78 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
+function listCommittedPromptSnapshotFiles(): string[] {
+  const externalFiles = listExternalCommittedPromptSnapshotFiles();
+  if (externalFiles) {
+    return externalFiles;
+  }
+  return fs
+    .readdirSync(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
+    .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
+    .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry))
+    .toSorted();
+}
+
+function listExternalCommittedPromptSnapshotFiles(): string[] | null {
+  return listGitCommittedPromptSnapshotFiles() ?? listFindCommittedPromptSnapshotFiles();
+}
+
+function listGitCommittedPromptSnapshotFiles(): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["ls-files", "--", CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.endsWith(".md") || line.endsWith(".json"))
+    .toSorted();
+}
+
+function listFindCommittedPromptSnapshotFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      path.join(process.cwd(), CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR),
+      "-maxdepth",
+      "1",
+      "-type",
+      "f",
+      "(",
+      "-name",
+      "*.md",
+      "-o",
+      "-name",
+      "*.json",
+      ")",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((filePath) => toRepoRelativePath(process.cwd(), filePath))
+    .toSorted();
+}
+
 describe("happy path prompt snapshots", () => {
   let generatedSnapshots: Awaited<ReturnType<typeof createFormattedPromptSnapshotFiles>>;
 
@@ -44,15 +119,21 @@ describe("happy path prompt snapshots", () => {
     generatedSnapshots = await createFormattedPromptSnapshotFiles();
   }, 300_000);
 
+  it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const committed = listCommittedPromptSnapshotFiles();
+
+      expect(committed.length).toBeGreaterThan(0);
+      expect(committed.every((file) => file.endsWith(".md") || file.endsWith(".json"))).toBe(true);
+    });
+  });
+
   it("matches the committed Codex prompt snapshot artifacts", async () => {
     const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));
     for (const file of generatedSnapshots) {
       expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
     }
-    const committed = fs
-      .readdirSync(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
-      .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-      .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
+    const committed = listCommittedPromptSnapshotFiles();
     expect(committed.toSorted()).toEqual([...expectedPaths].toSorted());
   });
 

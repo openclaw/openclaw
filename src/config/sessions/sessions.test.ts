@@ -410,6 +410,86 @@ describe("session store writer queue", () => {
     });
   });
 
+  it("strips malformed plugin extension state on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:plugins": {
+        sessionId: "s-plugins",
+        updatedAt: 100,
+        pluginExtensions: {
+          " workflow-plugin ": {
+            " approval ": { state: "waiting" },
+            scalar: true,
+            huge: "x".repeat(70 * 1024),
+            emptyNamespace: undefined,
+          },
+          "bad-shape": "not-a-namespace-record",
+          "array-shape": [{ workflow: { state: "bad" } }],
+          "": { workflow: { state: "bad" } },
+        },
+        pluginExtensionSlotKeys: {
+          " workflow-plugin ": {
+            " approval ": " approvalSnapshot ",
+            reserved: "sessionId",
+            dotted: "approval.snapshot",
+            empty: "",
+          },
+          "bad-shape": "approvalSnapshot",
+          "": { workflow: "ignoredSlot" },
+        },
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:main:plugins"]?.pluginExtensions).toEqual({
+      "workflow-plugin": {
+        approval: { state: "waiting" },
+        scalar: true,
+      },
+    });
+    expect(store["agent:main:plugins"]?.pluginExtensionSlotKeys).toEqual({
+      "workflow-plugin": {
+        approval: "approvalSnapshot",
+      },
+    });
+  });
+
+  it("normalizes malformed persisted session entry fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": {
+        sessionId: " s-good ",
+        updatedAt: "definitely-not-a-time",
+        sessionFile: { path: "bad.jsonl" },
+      },
+      "agent:main:object-id": { sessionId: { nested: "bad" }, updatedAt: Date.now() },
+      "agent:main:unsafe-id": { sessionId: "../etc/passwd", updatedAt: Date.now() },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:good"]?.updatedAt).toBe(0);
+    expect(store["agent:main:good"]?.sessionFile).toBeUndefined();
+    expect(store["agent:main:object-id"]).toBeUndefined();
+    expect(store["agent:main:unsafe-id"]).toBeUndefined();
+  });
+
+  it("keeps metadata-only canonical sessions without treating their ids as transcript ids", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:metadata": {
+        sessionId: "agent:main:metadata",
+        updatedAt: Date.now(),
+        groupActivation: "always",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:metadata"]).toMatchObject({
+      groupActivation: "always",
+    });
+    expect(store["agent:main:metadata"]?.sessionId).toBeUndefined();
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({
