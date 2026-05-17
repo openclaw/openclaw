@@ -33,6 +33,7 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  requiresRestart?: boolean;
   handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
@@ -73,6 +74,10 @@ export type RestartSentinelPayload = {
 export type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
+};
+
+export type RestartSentinelFormatOptions = {
+  state?: "pending" | "completed";
 };
 
 const RESTART_SENTINEL_KEY = "current";
@@ -321,12 +326,15 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
   }
 }
 
-export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
+export function formatRestartSentinelMessage(
+  payload: RestartSentinelPayload,
+  options?: RestartSentinelFormatOptions,
+): string {
   const message = payload.message?.trim();
   if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {
     return message;
   }
-  const lines: string[] = [summarizeRestartSentinel(payload)];
+  const lines: string[] = [summarizeRestartSentinel(payload, options)];
   if (message) {
     lines.push(message);
   }
@@ -340,9 +348,23 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
-export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
+export function summarizeRestartSentinel(
+  payload: RestartSentinelPayload,
+  options?: RestartSentinelFormatOptions,
+): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
+  }
+  if (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  ) {
+    const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
+    if (options?.state === "completed") {
+      return `Gateway restart completed${mode}`.trim();
+    }
+    return `Gateway restart required${mode}`.trim();
   }
   const kind = payload.kind;
   const status = payload.status;
