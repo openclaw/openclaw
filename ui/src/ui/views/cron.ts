@@ -390,6 +390,11 @@ export function renderCron(props: CronProps) {
   const formTitle = isEditing ? t("cron.form.editJob") : t("cron.form.newJob");
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
   const blockedByValidation = !props.busy && blockingFields.length > 0;
+  const openNewJob = props.onQuickCreate
+    ? props.onQuickCreate
+    : props.onToggleFormCollapsed
+      ? () => props.onToggleFormCollapsed?.(false)
+      : null;
   const hasActiveJobsFilters =
     props.jobsQuery.trim().length > 0 ||
     props.jobsEnabledFilter !== "all" ||
@@ -434,17 +439,10 @@ export function renderCron(props: CronProps) {
         </div>
       </div>
       <div class="cron-summary-strip__actions">
-        ${props.onQuickCreate
+        ${openNewJob
           ? html`
-              <button class="btn btn--primary" @click=${props.onQuickCreate}>
+              <button class="btn btn--primary" @click=${openNewJob}>
                 ${t("cron.form.newJob")}
-              </button>
-            `
-          : nothing}
-        ${props.onToggleFormCollapsed
-          ? html`
-              <button class="btn" @click=${() => props.onToggleFormCollapsed?.(false)}>
-                ${t("cron.form.advancedJob")}
               </button>
             `
           : nothing}
@@ -596,9 +594,9 @@ export function renderCron(props: CronProps) {
                       ? t("cron.jobs.emptyFilteredHint")
                       : t("cron.jobs.emptyHint")}
                   </div>
-                  ${props.onQuickCreate && !hasActiveJobsFilters
+                  ${openNewJob && !hasActiveJobsFilters
                     ? html`
-                        <button class="btn btn--primary" @click=${props.onQuickCreate}>
+                        <button class="btn btn--primary" @click=${openNewJob}>
                           ${t("cron.form.newJob")}
                         </button>
                       `

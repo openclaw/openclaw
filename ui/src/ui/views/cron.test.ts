@@ -2,6 +2,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import type { CronJob } from "../types.ts";
+import { createDefaultDraft, renderCronQuickCreate } from "./cron-quick-create.ts";
 import { renderCron, type CronProps } from "./cron.ts";
 
 function createJob(id: string): CronJob {
@@ -353,18 +354,42 @@ describe("cron view", () => {
     expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
   });
 
-  it("keeps the advanced job form hidden until explicitly opened", () => {
+  it("keeps the full job form behind the New Job dialog advanced action", () => {
     const container = document.createElement("div");
+    const onQuickCreate = vi.fn();
     const onToggleFormCollapsed = vi.fn();
 
-    render(renderCron(createProps({ onToggleFormCollapsed })), container);
+    render(renderCron(createProps({ onQuickCreate, onToggleFormCollapsed })), container);
 
     expect(container.querySelector(".cron-form-modal")).toBeNull();
     expect(container.querySelector(".cron-form")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
+    ).not.toContain("Advanced job");
 
-    const advancedButton = getButtonByText(container, "Advanced job");
-    advancedButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleFormCollapsed).toHaveBeenCalledWith(false);
+    const newJobButton = getButtonByText(container, "New Job");
+    newJobButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onQuickCreate).toHaveBeenCalledTimes(1);
+    expect(onToggleFormCollapsed).not.toHaveBeenCalled();
+
+    const onAdvancedCreate = vi.fn();
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "what",
+        draft: createDefaultDraft(),
+        onDraftChange: () => undefined,
+        onStepChange: () => undefined,
+        onCreate: () => undefined,
+        onCancel: () => undefined,
+        onAdvancedCreate,
+      }),
+      container,
+    );
+    getButtonByText(container, "Advanced").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    expect(onAdvancedCreate).toHaveBeenCalledTimes(1);
 
     const onCancelEdit = vi.fn();
     render(renderCron(createProps({ cronFormCollapsed: false, onCancelEdit })), container);

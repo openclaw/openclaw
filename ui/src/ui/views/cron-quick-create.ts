@@ -21,6 +21,7 @@ export type CronQuickCreateProps = {
   onStepChange: (step: CronQuickCreateStep) => void;
   onCreate: () => void;
   onCancel: () => void;
+  onAdvancedCreate?: () => void;
 };
 
 export type CronQuickCreateStep = "what" | "when" | "how";
@@ -233,6 +234,17 @@ function renderStepIndicator(current: CronQuickCreateStep) {
 
 // ── Step renderers ──
 
+function renderAdvancedButton(props: CronQuickCreateProps) {
+  if (!props.onAdvancedCreate) {
+    return nothing;
+  }
+  return html`
+    <button class="btn cqc-advanced-button" @click=${props.onAdvancedCreate}>
+      ${t("cron.form.advanced")}
+    </button>
+  `;
+}
+
 function renderWhatStep(props: CronQuickCreateProps) {
   return html`
     <div class="cqc-body">
@@ -259,7 +271,10 @@ function renderWhatStep(props: CronQuickCreateProps) {
       </div>
     </div>
     <div class="cqc-actions">
-      <button class="btn" @click=${props.onCancel}>${t("common.cancel")}</button>
+      <div class="cqc-actions__secondary">
+        <button class="btn" @click=${props.onCancel}>${t("common.cancel")}</button>
+        ${renderAdvancedButton(props)}
+      </div>
       <button
         class="btn primary"
         ?disabled=${!props.draft.prompt.trim()}
@@ -294,7 +309,10 @@ function renderWhenStep(props: CronQuickCreateProps) {
       </div>
     </div>
     <div class="cqc-actions">
-      <button class="btn" @click=${() => props.onStepChange("what")}>${t("common.back")}</button>
+      <div class="cqc-actions__secondary">
+        <button class="btn" @click=${() => props.onStepChange("what")}>${t("common.back")}</button>
+        ${renderAdvancedButton(props)}
+      </div>
       <button class="btn primary" @click=${() => props.onStepChange("how")}>
         ${t("common.next")} ${icons.chevronRight}
       </button>
@@ -329,7 +347,10 @@ function renderHowStep(props: CronQuickCreateProps) {
       </div>
     </div>
     <div class="cqc-actions">
-      <button class="btn" @click=${() => props.onStepChange("when")}>${t("common.back")}</button>
+      <div class="cqc-actions__secondary">
+        <button class="btn" @click=${() => props.onStepChange("when")}>${t("common.back")}</button>
+        ${renderAdvancedButton(props)}
+      </div>
       <button class="btn primary" @click=${props.onCreate}>
         ${t("common.create")} ${icons.check}
       </button>

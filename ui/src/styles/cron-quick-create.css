@@ -369,10 +369,23 @@
 
 .cqc-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   padding-top: 20px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.cqc-actions__secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cqc-advanced-button {
+  color: var(--muted);
 }
 
 .cqc-actions .btn.primary {
@@ -406,5 +419,13 @@
   .cqc-step__line {
     width: 32px;
     margin: 0 6px;
+  }
+
+  .cqc-actions {
+    align-items: stretch;
+  }
+
+  .cqc-actions__secondary {
+    flex: 1 1 100%;
   }
 }

@@ -835,6 +835,21 @@ function renderCronQuickCreateForTab(
         requestHostUpdate?.();
       })();
     },
+    onAdvancedCreate: () => {
+      const draft = state.cronQuickCreateDraft ?? createDefaultDraft();
+      const formPatch = draftToCronFormPatch(draft);
+      state.cronEditingJobId = null;
+      state.cronForm = normalizeCronFormState({
+        ...DEFAULT_CRON_FORM,
+        ...formPatch,
+      } as typeof state.cronForm);
+      state.cronFieldErrors = validateCronForm(state.cronForm);
+      state.cronQuickCreateOpen = false;
+      state.cronQuickCreateStep = "what";
+      state.cronQuickCreateDraft = null;
+      state.cronFormCollapsed = false;
+      requestHostUpdate?.();
+    },
     onCancel: () => {
       state.cronQuickCreateOpen = false;
       state.cronQuickCreateStep = "what";
