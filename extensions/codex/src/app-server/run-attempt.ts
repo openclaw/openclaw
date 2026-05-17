@@ -867,7 +867,6 @@ export async function runCodexAppServerAttempt(
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
     const threadConfig = mergeCodexThreadConfigs(
-      nativeHookRelayConfig,
       bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
     );
     const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
@@ -930,6 +929,7 @@ export async function runCodexAppServerAttempt(
               appServer: pluginAppServer,
               developerInstructions: promptBuild.developerInstructions,
               config: threadConfig,
+              finalConfigPatch: nativeHookRelayConfig,
               mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
               mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
               contextEngineProjection,
