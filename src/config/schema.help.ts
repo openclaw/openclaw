@@ -1372,6 +1372,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.userOverrideFallbackPolicy":
+    'Controls whether explicit user session model choices may use configured fallbacks. "strict" keeps current exact-selection behavior; "resilient" retries through configured fallbacks when the selected model fails.',
+  "agents.list.*.model.userOverrideFallbackPolicy":
+    'Overrides agents.defaults.model.userOverrideFallbackPolicy for one agent. Use "resilient" when explicit user model choices for this agent should retry through that agent model fallback chain.',
   "agents.defaults.agentRuntime":
     "Legacy whole-agent runtime policy. It is ignored by runtime selection; configure runtime policy on a provider or model instead. Run openclaw doctor --fix to remove stale values.",
   "agents.defaults.agentRuntime.id":

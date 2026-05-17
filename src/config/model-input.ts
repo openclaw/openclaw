@@ -5,7 +5,11 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
-import type { AgentModelConfig } from "./types.agents-shared.js";
+import type {
+  AgentChatModelConfig,
+  AgentModelConfig,
+  UserModelOverrideFallbackPolicy,
+} from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
@@ -52,6 +56,18 @@ export function resolveAgentModelTimeoutMsValue(model?: AgentModelConfig): numbe
     Number.isFinite(model.timeoutMs) &&
     model.timeoutMs > 0
     ? Math.floor(model.timeoutMs)
+    : undefined;
+}
+
+export function resolveUserModelOverrideFallbackPolicy(
+  model?: AgentChatModelConfig,
+): UserModelOverrideFallbackPolicy | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  return model.userOverrideFallbackPolicy === "resilient" ||
+    model.userOverrideFallbackPolicy === "strict"
+    ? model.userOverrideFallbackPolicy
     : undefined;
 }
 
