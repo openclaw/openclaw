@@ -409,6 +409,12 @@ describe("update-cli", () => {
   const packageInstallCommandCall = () =>
     commandCalls().find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
 
+  const packagePackCommandCall = () =>
+    commandCalls().find(([argv]) => argv[0] === "npm" && argv[1] === "pack");
+
+  const isNpmGitPackageSpec = (spec: string) =>
+    /^github:/i.test(spec) || /^git(?:\+|:)/i.test(spec);
+
   const doctorCommandCall = () =>
     commandCalls().find(
       ([argv]) => argv[2] === "doctor" && argv[3] === "--non-interactive" && argv[4] === "--fix",
@@ -490,12 +496,32 @@ describe("update-cli", () => {
 
   const expectPackageInstallSpec = (spec: string) => {
     expect(runGatewayUpdate).not.toHaveBeenCalled();
+    let installSpec = spec;
+    if (isNpmGitPackageSpec(spec)) {
+      const packCall = packagePackCommandCall();
+      expect(packCall?.[0]).toEqual([
+        "npm",
+        "pack",
+        spec,
+        "--pack-destination",
+        expect.any(String),
+        "--json",
+        "--loglevel=error",
+      ]);
+      const packDir = packCall?.[0][4];
+      if (!packDir) {
+        throw new Error("Expected package pack directory");
+      }
+      installSpec = path.join(packDir, "openclaw-9999.0.0.tgz");
+    } else {
+      expect(packagePackCommandCall()).toBeUndefined();
+    }
     const call = packageInstallCommandCall();
     expect(call?.[0]).toEqual([
       "npm",
       "i",
       "-g",
-      spec,
+      installSpec,
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
@@ -655,13 +681,21 @@ describe("update-cli", () => {
         latestVersion: "1.2.3",
       },
     });
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "pack") {
+        const destination = argv[argv.indexOf("--pack-destination") + 1];
+        if (destination) {
+          await fs.writeFile(path.join(destination, "openclaw-9999.0.0.tgz"), "packed\n", "utf8");
+        }
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
     vi.spyOn(updateCliShared, "readPackageName").mockImplementation(readPackageName);
     vi.spyOn(updateCliShared, "readPackageVersion").mockImplementation(readPackageVersion);
