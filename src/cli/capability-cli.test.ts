@@ -2254,6 +2254,7 @@ describe("capability cli", () => {
         commandName: "infer web search",
         targetIds,
         allowedPaths,
+        providerOverrides: { webSearch: "tavily" },
         runtime: mocks.runtime,
       }),
     );
@@ -2334,6 +2335,7 @@ describe("capability cli", () => {
         commandName: "infer web fetch",
         targetIds,
         allowedPaths,
+        providerOverrides: { webFetch: "firecrawl" },
         runtime: mocks.runtime,
       }),
     );
