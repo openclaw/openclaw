@@ -264,7 +264,11 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
         return colorize(rich, theme.warn, statusLabel);
       }
       if (statusRaw === "skipped") {
-        return colorize(rich, theme.muted, statusLabel);
+        const skipNote =
+          job.state.consecutiveSkips && job.state.consecutiveSkips >= 3
+            ? `×${job.state.consecutiveSkips}`
+            : "";
+        return colorize(rich, theme.warn, pad(`skipped${skipNote}`, CRON_STATUS_PAD));
       }
       return colorize(rich, theme.muted, statusLabel);
     })();

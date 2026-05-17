@@ -454,6 +454,27 @@ export function applyJobResult(
     job.state.lastFailureAlertAtMs = undefined;
   }
 
+  // Track consecutive skips for health monitoring (independent of consecutiveErrors).
+  // Skipped jobs don't trigger failure alerts, so this provides an alternate signal
+  // for jobs that silently degrade (e.g. invalid payload, session busy).
+  if (result.status === "skipped") {
+    job.state.consecutiveSkips = (job.state.consecutiveSkips ?? 0) + 1;
+    const skipThreshold = 3;
+    if (job.state.consecutiveSkips >= skipThreshold) {
+      state.deps.log.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          consecutiveSkips: job.state.consecutiveSkips,
+          lastError: result.error,
+        },
+        `Cron job "${job.name || job.id}" has been skipped ${job.state.consecutiveSkips} times consecutively — check job configuration or session availability`,
+      );
+    }
+  } else {
+    job.state.consecutiveSkips = 0;
+  }
+
   const shouldDelete =
     job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
 
