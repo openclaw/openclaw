@@ -532,58 +532,65 @@ export async function launchOpenClawChrome(
     try {
       const readyDeadline =
         Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
+      let launchHttpReachable = false;
+      // Full CDP WebSocket readiness is handled by the caller's
+      // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
       while (Date.now() < readyDeadline) {
         if (await isChromeReachable(profile.cdpUrl)) {
+          launchHttpReachable = true;
           break;
         }
         await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
       }
 
-      // #82904: capture the diagnostic ONCE and decide readiness from it, then
-      // reuse the same result for the thrown error text. Previously the final
-      // decision used `isChromeReachable` (a weak HTTP /json/version probe
-      // that can transiently fail on cold-start macOS) and the diagnostic was
-      // only run to format the error — leading to "Failed to start Chrome CDP
-      // … {ok:true ...}" self-contradicting messages when the diagnostic
-      // succeeded a moment after the probe failed.
-      let finalDiagnostic: ChromeCdpDiagnostic | null;
-      let diagnosticErrorText: string | null = null;
-      try {
-        finalDiagnostic = await diagnoseChromeCdp(profile.cdpUrl);
-      } catch (err) {
-        finalDiagnostic = null;
-        diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
-      }
-      if (!finalDiagnostic?.ok) {
+      if (!launchHttpReachable) {
+        let finalDiagnostic: ChromeCdpDiagnostic | null = null;
+        let diagnosticErrorText: string | null = null;
+        try {
+          finalDiagnostic = await diagnoseChromeCdp(
+            profile.cdpUrl,
+            CHROME_REACHABILITY_TIMEOUT_MS,
+            CHROME_WS_READY_TIMEOUT_MS,
+          );
+        } catch (err) {
+          diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+        }
+        if (finalDiagnostic?.ok) {
+          launchHttpReachable = true;
+        }
         const diagnosticText = finalDiagnostic
           ? formatChromeCdpDiagnostic(finalDiagnostic)
           : (diagnosticErrorText ?? "CDP diagnostic failed.");
-        const stderrOutput =
-          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
-        const redactedStderrOutput = redactToolPayloadText(stderrOutput);
-        if (
-          allowSingletonRecovery &&
-          CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
-          clearStaleChromeSingletonLocks(userDataDir)
-        ) {
-          log.warn(
-            `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+        if (launchHttpReachable) {
+          log.debug(diagnosticText);
+        } else {
+          const stderrOutput =
+            normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+          const redactedStderrOutput = redactToolPayloadText(stderrOutput);
+          if (
+            allowSingletonRecovery &&
+            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+            clearStaleChromeSingletonLocks(userDataDir)
+          ) {
+            log.warn(
+              `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+            );
+            await terminateChromeForRetry(proc, userDataDir);
+            return await launchOnceAndWait(false);
+          }
+          const stderrHint = redactedStderrOutput
+            ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+            : "";
+          const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            // ignore
+          }
+          throw new Error(
+            `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrHint}`,
           );
-          await terminateChromeForRetry(proc, userDataDir);
-          return await launchOnceAndWait(false);
         }
-        const stderrHint = redactedStderrOutput
-          ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
-          : "";
-        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-        throw new Error(
-          `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrHint}`,
-        );
       }
 
       const pid = proc.pid ?? -1;
