@@ -279,4 +279,24 @@ describe("workspace reconcile package helpers", () => {
       },
     ]);
   });
+
+  it("stores the full chunk text under the `document` payload key so mcp-server-qdrant qdrant-find can read it", async () => {
+    const tmpDir = getTmpDir();
+    fsSync.mkdirSync(path.join(tmpDir, "memory"), { recursive: true });
+    const longParagraph = "alpha ".repeat(200).trimEnd();
+    fsSync.writeFileSync(
+      path.join(tmpDir, "memory", "long.md"),
+      `# Long\n\n${longParagraph}\n`,
+      "utf8",
+    );
+
+    const { buildWorkspaceReconcilePlan } = await loadWorkspaceReconcileModule();
+    const plan = await buildWorkspaceReconcilePlan(tmpDir, "2026-05-17T00:00:00.000Z");
+    const point = plan.points[0];
+
+    expect(point).toBeDefined();
+    expect(point?.payload.document).toBe(point?.text);
+    expect(point?.payload.document).toContain(longParagraph);
+    expect(point?.payload.document.length).toBeGreaterThan(point?.payload.text_preview.length ?? 0);
+  });
 });

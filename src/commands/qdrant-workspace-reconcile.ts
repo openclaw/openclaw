@@ -157,20 +157,37 @@ async function readQdrantResponseJson<T>(response: Response): Promise<T> {
   throw new Error(body || `Qdrant request failed with status ${response.status}`);
 }
 
+const STALE_SOCKET_ERROR_CODES = new Set(["EPIPE", "ECONNRESET", "UND_ERR_SOCKET"]);
+
+function extractErrorCode(err: unknown): string | undefined {
+  const direct = (err as { code?: string })?.code;
+  if (direct) return direct;
+  const cause = (err as { cause?: unknown })?.cause;
+  return cause ? ((cause as { code?: string })?.code ?? undefined) : undefined;
+}
+
+function isStaleSocketError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  return code !== undefined && STALE_SOCKET_ERROR_CODES.has(code);
+}
+
 async function fetchQdrantJson<T>(
   baseUrl: string,
   pathname: string,
   init?: RequestInit,
 ): Promise<T> {
   const url = new URL(pathname, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  const headers = new Headers(init?.headers);
+  headers.set("content-type", "application/json");
+  const attempt = async () => fetch(url, { ...init, headers });
   let response: Response;
   try {
-    const headers = new Headers(init?.headers);
-    headers.set("content-type", "application/json");
-    response = await fetch(url, {
-      ...init,
-      headers,
-    });
+    try {
+      response = await attempt();
+    } catch (err: unknown) {
+      if (!isStaleSocketError(err)) throw err;
+      response = await attempt();
+    }
   } catch (err: unknown) {
     const cause = (err as { cause?: unknown })?.cause;
     const code = (err as { code?: string })?.code;

@@ -33,6 +33,7 @@ export type WorkspaceReconcilePayload = {
   root: WorkspaceReconcileRoot;
   chunk_index: number;
   content_hash: string;
+  document: string;
   text_preview: string;
   synced_at: string;
   title?: string;
@@ -391,6 +392,7 @@ export async function buildWorkspaceReconcilePlan(
           root: file.root,
           chunk_index: chunkIndex,
           content_hash: contentHash,
+          document: chunk.text,
           text_preview: buildTextPreview(chunk.text),
           synced_at: nowIso,
           ...(chunk.title ? { title: chunk.title } : {}),

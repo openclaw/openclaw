@@ -357,4 +357,56 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       ),
     ).toBe(false);
   });
+
+  it("retries upsert once when the first PUT fails with EPIPE on a stale keep-alive socket", async () => {
+    let upsertAttempts = 0;
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/collections/agent-memory")) {
+        return createJsonResponse({ result: { status: "green", points_count: 0 } });
+      }
+      if (url.endsWith("/collections/agent-memory/points/scroll")) {
+        return createJsonResponse({ result: { points: [], next_page_offset: null } });
+      }
+      if (url.endsWith("/collections/agent-memory/points?wait=true")) {
+        upsertAttempts += 1;
+        if (upsertAttempts === 1) {
+          const err = new TypeError("fetch failed") as Error & { cause?: unknown };
+          err.cause = Object.assign(new Error("write EPIPE"), {
+            code: "EPIPE",
+            syscall: "write",
+          });
+          throw err;
+        }
+        return createJsonResponse({ status: "ok" });
+      }
+      if (url.endsWith("/collections/agent-memory/points/delete?wait=true")) {
+        return createJsonResponse({ status: "ok" });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        vectors: [
+          [0.1, 0.2],
+          [0.3, 0.4],
+          [0.5, 0.6],
+        ],
+      }),
+      stderr: "",
+    });
+    const runtime = createRuntime();
+
+    const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
+
+    const result = await runQdrantWorkspaceReconcileCommand(
+      { apply: true, workspaceDir },
+      runtime as unknown as RuntimeEnv,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(upsertAttempts).toBe(2);
+  });
 });
