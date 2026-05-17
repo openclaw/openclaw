@@ -297,25 +297,25 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(trace.measured).toEqual([
-      "sidecars.plugin-services.acpx.acpx-runtime.config.resolve",
-      "sidecars.plugin-services.acpx.acpx-runtime.config.prepare-codex-auth",
-      "sidecars.plugin-services.acpx.acpx-runtime.filesystem.prepare",
-      "sidecars.plugin-services.acpx.acpx-runtime.gateway-instance-id",
-      "sidecars.plugin-services.acpx.acpx-runtime.process-leases.reap",
-      "sidecars.plugin-services.acpx.acpx-runtime.runtime.create",
-      "sidecars.plugin-services.acpx.acpx-runtime.backend.register",
-      "sidecars.plugin-services.acpx.acpx-runtime.probe.availability",
+      "config.resolve",
+      "config.prepare-codex-auth",
+      "filesystem.prepare",
+      "gateway-instance-id",
+      "process-leases.reap",
+      "runtime.create",
+      "backend.register",
+      "probe.availability",
     ]);
     expect(trace.details).toEqual([
       {
-        name: "sidecars.plugin-services.acpx.acpx-runtime.probe-policy",
+        name: "probe-policy",
         metrics: [
           ["startupProbeEnabledCount", 1],
           ["probeAgent", "default"],
         ],
       },
       {
-        name: "sidecars.plugin-services.acpx.acpx-runtime.probe.result",
+        name: "probe.result",
         metrics: [["healthyCount", 1]],
       },
     ]);
