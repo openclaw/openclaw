@@ -65,8 +65,11 @@ describe("browser config", () => {
     expect(user?.userDataDir).toBeUndefined();
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
-    expect(resolved.remoteCdpTimeoutMs).toBe(1500);
-    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    // 2026-05-17: defaults raised from 1500/3000 to 3000/6000 (handshake
+    // floor 5000 vs computed max(remoteCdpTimeoutMs*2, 5000) = 6000) based
+    // on real-world transcontinental remote-CDP topology.
+    expect(resolved.remoteCdpTimeoutMs).toBe(3000);
+    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(6000);
     expect(resolved.actionTimeoutMs).toBe(60_000);
     expect(resolved.tabCleanup).toEqual({
       enabled: true,

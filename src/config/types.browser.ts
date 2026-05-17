@@ -67,9 +67,9 @@ export type BrowserConfig = {
   evaluateEnabled?: boolean;
   /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
   cdpUrl?: string;
-  /** Remote CDP HTTP timeout (ms). Default: 1500. */
+  /** Remote CDP HTTP timeout (ms). Default: 3000. */
   remoteCdpTimeoutMs?: number;
-  /** Remote CDP WebSocket handshake timeout (ms). Default: max(remoteCdpTimeoutMs * 2, 2000). */
+  /** Remote CDP WebSocket handshake timeout (ms). Default: max(remoteCdpTimeoutMs * 2, 5000). */
   remoteCdpHandshakeTimeoutMs?: number;
   /** Local managed browser launch discovery timeout (ms). Default: 15000. */
   localLaunchTimeoutMs?: number;

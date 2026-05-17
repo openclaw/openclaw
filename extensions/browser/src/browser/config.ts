@@ -348,10 +348,18 @@ export function resolveBrowserConfig(
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const defaultColor = normalizeHexColor(cfg?.color);
-  const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
+  // 2026-05-17: raised defaults based on real-world transcontinental
+  // remote-CDP topology (e.g. SFO-hosted Browserbase + Linux gateway).
+  // The previous 1500/2000 defaults were too aggressive: a healthy attach
+  // would complete the HTTP discovery in ~1.2s and the WS handshake in
+  // ~3-4s under transit jitter, leaving zero margin. Bumping the HTTP
+  // budget to 3000 and the handshake floor to 5000 matches what was
+  // already working under manual operator overrides. Loopback profiles
+  // are unaffected -- isLocalManagedProfile() never reads these.
+  const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 3000);
   const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
     cfg?.remoteCdpHandshakeTimeoutMs,
-    Math.max(2000, remoteCdpTimeoutMs * 2),
+    Math.max(5000, remoteCdpTimeoutMs * 2),
   );
   const localLaunchTimeoutMs = normalizeStartupTimeoutMs(
     cfg?.localLaunchTimeoutMs,
