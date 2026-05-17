@@ -271,7 +271,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
       } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
       runtime.setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs));
     } else {
-      runtime.setGlobalDispatcher(createHttp1Agent({ ...(connect ? { connect } : {}) }, timeoutMs));
+      runtime.setGlobalDispatcher(createHttp1Agent(connect ? { connect } : undefined, timeoutMs));
     }
     lastAppliedTimeoutKey = nextKey;
   } catch {

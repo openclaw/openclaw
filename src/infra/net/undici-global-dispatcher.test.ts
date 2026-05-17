@@ -80,7 +80,7 @@ const {
   const createHttp1Agent = vi.fn(
     (options?: Record<string, unknown>, timeoutMs?: number) =>
       new Agent({
-        ...(options ?? {}),
+        ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
       }),
@@ -88,7 +88,7 @@ const {
   const createHttp1EnvHttpProxyAgent = vi.fn(
     (options?: Record<string, unknown>, timeoutMs?: number) =>
       new EnvHttpProxyAgent({
-        ...(options ?? {}),
+        ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
         clientFactory: "ip-safe-test-client-factory",

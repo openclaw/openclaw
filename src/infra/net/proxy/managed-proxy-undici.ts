@@ -134,10 +134,10 @@ export function addActiveManagedProxyTlsOptions<TOptions extends object>(
   }
   const existingProxyTls = readProxyTlsRecord(options);
   return {
-    ...(options ?? {}),
+    ...options,
     proxyTls: {
       ...proxyTls,
-      ...(existingProxyTls ?? {}),
+      ...existingProxyTls,
     },
   };
 }
