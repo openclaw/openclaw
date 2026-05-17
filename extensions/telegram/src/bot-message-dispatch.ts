@@ -26,6 +26,7 @@ import {
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
@@ -100,8 +101,6 @@ import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-de
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
-  isPotentialTruncatedFinal,
-  selectLongerFinalText,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
@@ -1283,12 +1282,10 @@ export const dispatchTelegramMessage = async ({
       return delivered ? { kind: "sent" } : { kind: "skipped" };
     };
     const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
-      isPotentialTruncatedFinal(text)
-        ? (selectLongerFinalText({
-            finalText: text,
-            candidateTexts: [await resolveCurrentTurnTranscriptFinalText()],
-          }) ?? text)
-        : text;
+      await resolveTranscriptBackedChannelFinalText({
+        finalText: text,
+        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+      });
 
     if (isDmTopic) {
       try {
