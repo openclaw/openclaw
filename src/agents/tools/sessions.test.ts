@@ -1,9 +1,11 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
+import { resolveSessionsSendHandoffLedgerPath } from "./sessions-send-handoff.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -235,6 +237,10 @@ describe("sanitizeTextContent", () => {
 });
 
 beforeEach(() => {
+  vi.stubEnv(
+    "OPENCLAW_STATE_DIR",
+    path.join(os.tmpdir(), "openclaw-sessions-tools-test", String(process.pid)),
+  );
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
@@ -830,5 +836,53 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+  });
+
+  it("returns a structured handoff acknowledgement and ledger for accepted sends", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-ack-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const tool = createMainSessionsSendTool();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-handoff-send", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-handoff-send", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-handoff-send", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const details = requireDetails(result);
+    const handoff = requireRecord(details.handoff, "handoff");
+    expect(handoff.id).toEqual(expect.any(String));
+    expect(handoff.status).toBe("accepted");
+    expect(handoff.delivery).toEqual({ status: "pending", mode: "announce" });
+    expect(handoff.ledger).toEqual({ path: "handoffs/sessions-send.jsonl" });
+
+    const rawLedger = await fs.readFile(resolveSessionsSendHandoffLedgerPath(), "utf-8");
+    const entries = rawLedger
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(entries.map((entry) => entry.type)).toContain("created");
+    expect(entries.map((entry) => entry.type)).toContain("accepted");
+    expect(entries.every((entry) => entry.handoffId === handoff.id)).toBe(true);
   });
 });

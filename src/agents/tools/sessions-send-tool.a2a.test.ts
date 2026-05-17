@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -5,6 +8,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import type { SessionListRow } from "./sessions-helpers.js";
+import { resolveSessionsSendHandoffLedgerPath } from "./sessions-send-handoff.js";
 import { runSessionsSendA2AFlow, __testing } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
@@ -172,6 +176,46 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         roundOneReply,
       });
 
+      expect(runAgentStep).not.toHaveBeenCalled();
+      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["NO_REPLY", "no_reply"],
+    ["REPLY_SKIP", "reply_skip"],
+    ["ANNOUNCE_SKIP", "announce_skip"],
+  ])(
+    "records exact control reply %s as an observable handoff outcome",
+    async (roundOneReply, controlOutcome) => {
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-a2a-handoff-"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+      await runSessionsSendA2AFlow({
+        targetSessionKey: "agent:main:discord:group:dev",
+        displayKey: "agent:main:discord:group:dev",
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 2,
+        requesterSessionKey: "agent:main:discord:group:req",
+        requesterChannel: "discord",
+        handoffId: "handoff-control-reply",
+        roundOneReply,
+      });
+
+      const rawLedger = await fs.readFile(resolveSessionsSendHandoffLedgerPath(), "utf-8");
+      const entries = rawLedger
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          handoffId: "handoff-control-reply",
+          type: "control_outcome_observed",
+          status: "delivered",
+          controlOutcome,
+        }),
+      );
       expect(runAgentStep).not.toHaveBeenCalled();
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
     },
