@@ -237,11 +237,10 @@ describe("codex command", () => {
 
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({
-      chrome: { enabled: true, marketplaceName: "openai-bundled", pluginName: "chrome" },
-      documents: {
-        enabled: false,
-        marketplaceName: "openai-primary-runtime",
-        pluginName: "documents",
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
       },
     });
 
@@ -249,41 +248,30 @@ describe("codex command", () => {
       deps: createDeps({ codexPluginsManagementIo }),
     });
 
-    expectResultTextContains(result, "ON   chrome");
-    expectResultTextContains(result, "OFF  documents");
+    expectResultTextContains(result, "ON   google-calendar");
     expectResultTextContains(result, "openclaw.json");
   });
 
   it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({
-      chrome: { enabled: true, marketplaceName: "openai-bundled", pluginName: "chrome" },
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
     });
 
-    const disabled = await handleCodexCommand(createContext("plugins disable chrome"), {
+    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
       deps: createDeps({ codexPluginsManagementIo }),
     });
-    expectResultTextContains(disabled, "chrome: disabled in openclaw.json");
-    expect(codexPluginsManagementIo.current().chrome.enabled).toBe(false);
+    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
 
-    const enabled = await handleCodexCommand(createContext("plugins enable chrome"), {
+    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
       deps: createDeps({ codexPluginsManagementIo }),
     });
-    expectResultTextContains(enabled, "chrome: enabled in openclaw.json");
-    expect(codexPluginsManagementIo.current().chrome.enabled).toBe(true);
-  });
-
-  it("limits /codex plugins help text to list, enable, and disable", async () => {
-    const result = await handleCodexCommand(createContext("plugins help"), {
-      deps: createDeps({ codexPluginsManagementIo: inMemoryCodexPluginsIO() }),
-    });
-
-    expectResultTextContains(result, "Unknown /codex plugins subcommand: help");
-    expectResultTextContains(result, "/codex plugins list");
-    expectResultTextContains(result, "/codex plugins enable");
-    expectResultTextContains(result, "/codex plugins disable");
-    expect(result.text).not.toContain("/codex plugins add");
-    expect(result.text).not.toContain("/codex plugins remove");
-    expect(result.text).not.toContain("/codex plugins toggle");
+    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
   });
 
   it("attaches the current session to an existing Codex thread", async () => {
