@@ -146,6 +146,58 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
+const PROTOCOL_MISMATCH_RATE_LIMIT = 5;
+const PROTOCOL_MISMATCH_RATE_WINDOW_MS = 60_000;
+const PROTOCOL_MISMATCH_PRUNE_INTERVAL_MS = 5 * 60_000;
+
+type ProtocolMismatchEntry = {
+  count: number;
+  windowStart: number;
+};
+
+const protocolMismatchByAddr = new Map<string, ProtocolMismatchEntry>();
+
+let protocolMismatchPruneTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleProtocolMismatchPrune(): void {
+  if (protocolMismatchPruneTimer) {
+    return;
+  }
+  protocolMismatchPruneTimer = setTimeout(() => {
+    protocolMismatchPruneTimer = null;
+    const now = Date.now();
+    for (const [addr, entry] of protocolMismatchByAddr) {
+      if (now - entry.windowStart > PROTOCOL_MISMATCH_RATE_WINDOW_MS * 2) {
+        protocolMismatchByAddr.delete(addr);
+      }
+    }
+    if (protocolMismatchByAddr.size > 0) {
+      scheduleProtocolMismatchPrune();
+    }
+  }, PROTOCOL_MISMATCH_PRUNE_INTERVAL_MS).unref();
+}
+
+function isProtocolMismatchRateLimited(remoteAddr: string | undefined): boolean {
+  if (!remoteAddr) {
+    return false;
+  }
+  const now = Date.now();
+  let entry = protocolMismatchByAddr.get(remoteAddr);
+  if (!entry) {
+    entry = { count: 0, windowStart: now };
+    protocolMismatchByAddr.set(remoteAddr, entry);
+  }
+  if (now - entry.windowStart > PROTOCOL_MISMATCH_RATE_WINDOW_MS) {
+    entry.count = 0;
+    entry.windowStart = now;
+  }
+  entry.count++;
+  if (protocolMismatchByAddr.size === 1) {
+    scheduleProtocolMismatchPrune();
+  }
+  return entry.count > PROTOCOL_MISMATCH_RATE_LIMIT;
+}
+
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
@@ -547,11 +599,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             expectedProtocol: PROTOCOL_VERSION,
             minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
+          if (isProtocolMismatchRateLimited(remoteAddr)) {
+            close(1002, "protocol mismatch");
+            return;
+          }
           logWsControl.warn(
             `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
             details: {
+              code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
               expectedProtocol: PROTOCOL_VERSION,
               minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
             },

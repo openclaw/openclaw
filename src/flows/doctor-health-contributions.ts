@@ -373,6 +373,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
   const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
     await import("../commands/doctor-gateway-services.js");
   const {
+    maybeRemoveStaleOpenClawUpdateLaunchdJobs,
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
@@ -386,6 +387,9 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
   );
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
+  await maybeRemoveStaleOpenClawUpdateLaunchdJobs({
+    shouldRemove: ctx.prompter.shouldRepair,
+  });
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
 }
 
