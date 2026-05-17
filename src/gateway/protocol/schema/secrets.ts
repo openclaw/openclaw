@@ -7,15 +7,8 @@ export const SecretsResolveParamsSchema = Type.Object(
   {
     commandName: NonEmptyString,
     targetIds: Type.Array(NonEmptyString),
-    providerOverrides: Type.Optional(
-      Type.Object(
-        {
-          webSearch: Type.Optional(NonEmptyString),
-          webFetch: Type.Optional(NonEmptyString),
-        },
-        { additionalProperties: false },
-      ),
-    ),
+    allowedPaths: Type.Optional(Type.Array(NonEmptyString)),
+    forcedActivePaths: Type.Optional(Type.Array(NonEmptyString)),
   },
   { additionalProperties: false },
 );

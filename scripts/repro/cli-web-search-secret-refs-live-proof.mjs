@@ -4,7 +4,7 @@
  * Run: TAVILY_API_KEY=resolved-live-proof pnpm exec tsx scripts/repro/cli-web-search-secret-refs-live-proof.mjs
  */
 import { resolveCommandConfigWithSecrets } from "../../src/cli/command-config-resolution.js";
-import { getWebSearchCommandSecretTargetIds } from "../../src/cli/command-secret-targets.js";
+import { getCapabilityWebSearchCommandSecretTargetIds } from "../../src/cli/command-secret-targets.js";
 
 const unresolvedConfig = {
   tools: { web: { search: { provider: "tavily", enabled: true } } },
@@ -26,7 +26,7 @@ process.env.TAVILY_API_KEY = process.env.TAVILY_API_KEY ?? "resolved-live-proof"
 const { effectiveConfig, diagnostics } = await resolveCommandConfigWithSecrets({
   config: unresolvedConfig,
   commandName: "infer web search",
-  targetIds: getWebSearchCommandSecretTargetIds(),
+  targetIds: getCapabilityWebSearchCommandSecretTargetIds(),
   autoEnable: true,
 });
 
@@ -38,5 +38,8 @@ console.log(
   "resolveCommandConfigWithSecrets apiKey is string =",
   typeof apiKey === "string" && apiKey.length > 0,
 );
-console.log("resolved apiKey remains redacted =", typeof apiKey === "string");
+console.log(
+  "resolved apiKey prefix =",
+  typeof apiKey === "string" ? `${apiKey.slice(0, 8)}…` : apiKey,
+);
 console.log("diagnostics count =", diagnostics.length);
