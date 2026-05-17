@@ -1610,7 +1610,8 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
 }
 
 function isTerminalToolProgressItem(item: CodexThreadItem): boolean {
-  return itemStatus(item) !== "running";
+  const status = readItemString(item, "status");
+  return status === "completed" || status === "failed" || status === "declined";
 }
 
 function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {

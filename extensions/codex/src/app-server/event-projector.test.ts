@@ -1514,6 +1514,63 @@ describe("CodexAppServerEventProjector", () => {
     ).toHaveLength(0);
   });
 
+  it("does not backfill terminal progress for snapshot tool items without terminal status", async () => {
+    const onAgentEvent = vi.fn();
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { trajectoryRecorder },
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          error: null,
+          items: [
+            {
+              type: "commandExecution",
+              id: "cmd-missing-status",
+              command: "echo ok",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: null,
+              commandActions: [],
+              aggregatedOutput: "ok",
+              exitCode: 0,
+              durationMs: 7,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "item",
+        itemId: "cmd-missing-status",
+      }),
+    ).toHaveLength(0);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "tool",
+        itemId: "cmd-missing-status",
+        name: "bash",
+      }),
+    ).toHaveLength(0);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(
+        ([type]) => type === "tool.call" || type === "tool.result",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("orders declined native tool diagnostics after their start event", async () => {
     const projector = await createProjector();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
