@@ -363,6 +363,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("surfaces declined Codex native command errors for aborted empty turns", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "bash",
+        error: "codex native tool blocked",
+        mutatingAction: true,
+      },
+      runAborted: true,
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "codex native tool blocked",
+    });
+  });
+
   it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
