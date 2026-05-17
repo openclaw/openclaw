@@ -8,6 +8,7 @@ import {
   resolvePackageExtensionEntries,
 } from "../plugins/manifest.js";
 import { defaultRuntime } from "../runtime.js";
+import { isRecord } from "../utils.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -116,9 +117,19 @@ export async function loadToolPlugin(params: {
 export function buildToolPluginManifest(params: {
   metadata: ToolPluginMetadata;
   packageManifest: JsonObject;
+  existingManifest?: JsonObject;
 }): JsonObject {
-  const optionalTools = params.metadata.tools.filter((tool) => tool.optional);
+  const toolMetadata = buildToolPluginToolMetadata(params.metadata, params.existingManifest);
+  const existingContracts = isRecord(params.existingManifest?.contracts)
+    ? params.existingManifest.contracts
+    : {};
+  const {
+    contracts: _existingContracts,
+    toolMetadata: _existingToolMetadata,
+    ...existingManifestFields
+  } = params.existingManifest ?? {};
   return {
+    ...existingManifestFields,
     id: params.metadata.id,
     name: params.metadata.name,
     description: params.metadata.description,
@@ -127,16 +138,33 @@ export function buildToolPluginManifest(params: {
     configSchema: params.metadata.configSchema,
     activation: params.metadata.activation,
     contracts: {
+      ...existingContracts,
       tools: params.metadata.tools.map((tool) => tool.name),
     },
-    ...(optionalTools.length > 0
-      ? {
-          toolMetadata: Object.fromEntries(
-            optionalTools.map((tool) => [tool.name, { optional: true }]),
-          ),
-        }
-      : {}),
+    ...(toolMetadata ? { toolMetadata } : {}),
   };
+}
+
+function buildToolPluginToolMetadata(
+  metadata: ToolPluginMetadata,
+  existingManifest: JsonObject | undefined,
+): Record<string, unknown> | undefined {
+  const existingToolMetadata = isRecord(existingManifest?.toolMetadata)
+    ? existingManifest.toolMetadata
+    : {};
+  const nextEntries = metadata.tools
+    .map((tool) => {
+      const existingValue = existingToolMetadata[tool.name];
+      const existing = isRecord(existingValue) ? { ...existingValue } : {};
+      if (tool.optional) {
+        existing.optional = true;
+      } else {
+        delete existing.optional;
+      }
+      return [tool.name, existing] as const;
+    })
+    .filter(([, value]) => Object.keys(value).length > 0);
+  return nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
 }
 
 export function buildToolPluginPackageManifest(params: {
@@ -168,6 +196,7 @@ export function validateToolPluginProject(params: {
   const expectedManifest = buildToolPluginManifest({
     metadata: params.metadata,
     packageManifest: params.packageManifest,
+    existingManifest: params.manifest,
   });
   if (JSON.stringify(params.manifest) !== JSON.stringify(expectedManifest)) {
     errors.push("openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.");
@@ -217,15 +246,19 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   const packagePath = path.join(rootDir, "package.json");
   const packageManifest = readPackageManifest(rootDir);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
-  const manifest = buildToolPluginManifest({ metadata, packageManifest });
+  const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
+  const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
+  const manifest = buildToolPluginManifest({
+    metadata,
+    packageManifest,
+    existingManifest: currentManifest,
+  });
   const nextPackageManifest = buildToolPluginPackageManifest({
     packageManifest,
     entry: entryRelative,
   });
-  const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 
   if (opts.check) {
-    const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
     const currentPackage = readJsonFile(packagePath);
     if (
       JSON.stringify(currentManifest) !== JSON.stringify(manifest) ||
