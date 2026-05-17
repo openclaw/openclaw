@@ -550,16 +550,18 @@ export function resolveFreshSessionTotalTokens(
   if (total === undefined) {
     return undefined;
   }
-  if (entry?.totalTokensFresh === false) {
-    return undefined;
-  }
+  // PR #82578 (6a65ea8) ensures totalTokens is preserved across stale usage updates
+  // instead of being corrupted to undefined. totalTokensFresh=false only means
+  // "possibly slightly stale" (needs transcript re-estimation for compaction),
+  // not "unavailable". Internal compaction/memoryFlush logic checks
+  // entry.totalTokensFresh directly, not through this function.
   return total;
 }
 
 export function isSessionTotalTokensFresh(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): boolean {
-  return resolveFreshSessionTotalTokens(entry) !== undefined;
+  return resolveSessionTotalTokens(entry) !== undefined && entry?.totalTokensFresh !== false;
 }
 
 export type GroupKeyResolution = {
