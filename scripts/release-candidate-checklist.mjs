@@ -26,6 +26,7 @@ Options:
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
+  --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update beta smoke.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
   --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
@@ -57,6 +58,7 @@ export function parseArgs(argv) {
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
     skipDispatch: false,
+    skipLocalGeneratedCheck: false,
     skipParallels: false,
     skipTelegram: false,
     telegramProviderMode: DEFAULT_TELEGRAM_PROVIDER_MODE,
@@ -88,6 +90,9 @@ export function parseArgs(argv) {
         break;
       case "--skip-dispatch":
         options.skipDispatch = true;
+        break;
+      case "--skip-local-generated-check":
+        options.skipLocalGeneratedCheck = true;
         break;
       case "--skip-parallels":
         options.skipParallels = true;
@@ -254,6 +259,14 @@ function runAndEcho(command, args) {
     );
   }
   return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+}
+
+function runLocalGeneratedCheckIfNeeded(options) {
+  if (options.skipLocalGeneratedCheck) {
+    return { status: "skipped", reason: "operator skipped --skip-local-generated-check" };
+  }
+  run("pnpm", ["release:generated:check"]);
+  return { status: "passed", command: "pnpm release:generated:check" };
 }
 
 export function parseRunIdFromDispatchOutput(output) {
@@ -446,6 +459,9 @@ export function buildPublishCommand(options) {
     ["release_profile", options.releaseProfile],
     ["wait_for_clawhub", "false"],
   ];
+  if (options.npmTelegramRunId) {
+    fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
+  }
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
@@ -506,7 +522,7 @@ function validateFullManifest(manifest, params) {
 
 async function runParallelsIfNeeded(options) {
   if (options.skipParallels) {
-    return { status: "skipped" };
+    return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
   const version = options.tag.replace(/^v/u, "");
   run("pnpm", [
@@ -559,6 +575,7 @@ async function main() {
   options.workflowRef ||= currentBranch();
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`);
+  const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
@@ -647,6 +664,7 @@ async function main() {
 
   const parallels = await runParallelsIfNeeded(options);
   const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
+  options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",
     options,
@@ -670,6 +688,7 @@ async function main() {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,
     },
+    localGeneratedCheck,
     tarball: {
       name: basename(tarballPath),
       sha256: actualTarballSha,
@@ -695,12 +714,15 @@ async function main() {
       `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
       `- npm preflight artifact: ${npmArtifactName}`,
       `- full release artifact: ${fullArtifactName}`,
+      `- local generated release checks: ${localGeneratedCheck.status}${
+        localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
+      }`,
       `- tarball: ${basename(tarballPath)}`,
       `- tarball sha256: ${actualTarballSha}`,
       `- npm dist-tag: ${options.npmDistTag}`,
       `- plugin npm plan: ${pluginNpmPlan.packages?.length ?? 0} packages`,
       `- ClawHub plan: ${pluginClawHubPlan.packages?.length ?? 0} packages`,
-      `- Parallels: ${parallels.status}`,
+      `- Parallels: ${parallels.status}${parallels.reason ? ` (${parallels.reason})` : ""}`,
       `- NPM Telegram E2E: ${npmTelegram.status}${
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
       }`,

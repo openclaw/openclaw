@@ -35,6 +35,26 @@ describe("release candidate checklist", () => {
     expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=all-publishable'");
   });
 
+  it("carries the Telegram proof run into the publish command when available", () => {
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.5.14-beta.3",
+        "--workflow-ref",
+        "release/2026.5.14",
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--skip-dispatch",
+      ]),
+      workflowRef: "release/2026.5.14",
+      npmTelegramRunId: "333",
+    };
+
+    expect(buildPublishCommand(options)).toContain("'npm_telegram_run_id=333'");
+  });
+
   it("requires explicit plugin names for selected plugin publish scope", () => {
     expect(() =>
       parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-publish-scope", "selected"]),
