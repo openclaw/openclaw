@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
 import { note } from "../terminal/note.js";
+import { resolveConfigDir } from "../utils.js";
 
 type BrowserDoctorDeps = {
   platform?: NodeJS.Platform;
@@ -39,6 +42,18 @@ function loadBrowserDoctorSurface(): BrowserDoctorSurface {
   });
 }
 
+function mayHaveLegacyClawdBrowserProfileResidue(deps?: BrowserDoctorRepairDeps): boolean {
+  const configDir = deps?.configDir ?? resolveConfigDir(deps?.env ?? process.env);
+  const legacyProfileDir = path.join(configDir, "browser", "clawd");
+  const legacyUserDataDir = path.join(legacyProfileDir, "user-data");
+  const pathExists = deps?.pathExists ?? fs.existsSync;
+  try {
+    return pathExists(legacyProfileDir) || pathExists(legacyUserDataDir);
+  } catch {
+    return true;
+  }
+}
+
 export async function noteChromeMcpBrowserReadiness(cfg: OpenClawConfig, deps?: BrowserDoctorDeps) {
   try {
     await loadBrowserDoctorSurface().noteChromeMcpBrowserReadiness(cfg, deps);
@@ -53,6 +68,9 @@ export async function maybeArchiveLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorRepairDeps,
 ): Promise<{ changes: string[]; warnings: string[] }> {
+  if (!mayHaveLegacyClawdBrowserProfileResidue(deps)) {
+    return { changes: [], warnings: [] };
+  }
   try {
     const repair = loadBrowserDoctorSurface().maybeArchiveLegacyClawdBrowserProfileResidue;
     if (!repair) {

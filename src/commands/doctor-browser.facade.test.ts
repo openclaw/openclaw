@@ -61,7 +61,10 @@ describe("doctor browser facade", () => {
         },
       },
     };
-    const deps = { configDir: "/tmp/openclaw-home" };
+    const deps = {
+      configDir: "/tmp/openclaw-home",
+      pathExists: (targetPath: string) => targetPath === "/tmp/openclaw-home/browser/clawd",
+    };
 
     await expect(maybeArchiveLegacyClawdBrowserProfileResidue(cfg, deps)).resolves.toEqual({
       changes: ["archived"],
@@ -79,10 +82,31 @@ describe("doctor browser facade", () => {
       throw new Error("missing browser doctor facade");
     });
 
-    await expect(maybeArchiveLegacyClawdBrowserProfileResidue({})).resolves.toEqual({
+    await expect(
+      maybeArchiveLegacyClawdBrowserProfileResidue(
+        {},
+        {
+          configDir: "/tmp/openclaw-home",
+          pathExists: (targetPath: string) => targetPath === "/tmp/openclaw-home/browser/clawd",
+        },
+      ),
+    ).resolves.toEqual({
       changes: [],
       warnings: ["Browser profile cleanup is unavailable: missing browser doctor facade"],
     });
+  });
+
+  it("skips loading the browser cleanup surface when legacy residue is absent", async () => {
+    await expect(
+      maybeArchiveLegacyClawdBrowserProfileResidue(
+        {},
+        {
+          configDir: "/tmp/openclaw-home",
+          pathExists: () => false,
+        },
+      ),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
   it("warns and no-ops when the browser doctor surface is unavailable", async () => {
