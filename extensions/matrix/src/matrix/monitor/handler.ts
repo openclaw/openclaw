@@ -2158,7 +2158,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                           : undefined,
                         onBlockReplyQueued: draftStream
                           ? (payload, context) => {
-                              if (payload.isCompactionNotice === true) {
+                              if (
+                                payload.isCompactionNotice === true ||
+                                payload.isReasoning === true
+                              ) {
                                 return;
                               }
                               queueDraftBlockBoundary(payload, context);
