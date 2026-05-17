@@ -79,6 +79,14 @@ function outputItem(payload: unknown, index = 0) {
   return requireRecord(output[index], `response output ${index}`);
 }
 
+function outputToolArgs(payload: unknown, index = 0) {
+  const item = outputItem(payload, index);
+  if (typeof item.arguments !== "string") {
+    throw new Error("Expected response output arguments");
+  }
+  return requireRecord(JSON.parse(item.arguments) as unknown, "response output arguments");
+}
+
 function outputContentItem(payload: unknown, outputIndex = 0, contentIndex = 0) {
   const content = requireArray(outputItem(payload, outputIndex).content, "response output content");
   return requireRecord(content[contentIndex], `response content ${contentIndex}`);
@@ -3017,7 +3025,7 @@ describe("qa mock openai server", () => {
       | { name: string; input: Record<string, unknown> }
       | undefined;
     expect(toolUseBlock?.name).toBe("read");
-    expect(toolUseBlock?.input).toEqual({ path: "repo/qa/scenarios/index.md" });
+    expect(toolUseBlock?.input).toEqual({ path: "repo/docs/help/testing.md" });
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
@@ -3275,7 +3283,7 @@ describe("qa mock openai server", () => {
     expect(body).toContain("event: content_block_start");
     expect(body).toContain('"type":"tool_use"');
     expect(body).toContain('"name":"read"');
-    expect(body).toContain("repo/qa/scenarios/index.md");
+    expect(body).toContain("repo/docs/help/testing.md");
     expect(body).toContain("event: message_delta");
     expect(body).toContain("event: message_stop");
   });
@@ -3739,6 +3747,77 @@ describe("resolveProviderVariant", () => {
 });
 
 describe("qa mock openai server provider variant tagging", () => {
+  it("pins provider-specific plans for parity scenarios", async () => {
+    const sourcePrompt =
+      "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.";
+    const handoffPrompt =
+      "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
+    const fanoutPrompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+
+    const openaiSourceServer = await startMockServer();
+    const openaiSource = await expectResponsesJson(openaiSourceServer, {
+      model: "openai/gpt-5.5",
+      stream: false,
+      input: [makeUserInput(sourcePrompt)],
+    });
+    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.md" });
+
+    const anthropicSourceServer = await startMockServer();
+    const anthropicSource = await expectResponsesJson(anthropicSourceServer, {
+      model: "anthropic/claude-opus-4-7",
+      stream: false,
+      input: [makeUserInput(sourcePrompt)],
+    });
+    expect(outputToolArgs(anthropicSource)).toEqual({ path: "repo/docs/help/testing.md" });
+
+    const openaiHandoffServer = await startMockServer();
+    const openaiHandoff = await expectResponsesJson(openaiHandoffServer, {
+      model: "gpt-5.5",
+      stream: false,
+      input: [makeUserInput(handoffPrompt)],
+    });
+    expect(outputToolArgs(openaiHandoff)).toMatchObject({
+      label: "qa-sidecar",
+      task: "Inspect the QA workspace and return one concise protocol note.",
+    });
+
+    const anthropicHandoffServer = await startMockServer();
+    const anthropicHandoff = await expectResponsesJson(anthropicHandoffServer, {
+      model: "claude-opus-4-7",
+      stream: false,
+      input: [makeUserInput(handoffPrompt)],
+    });
+    expect(outputToolArgs(anthropicHandoff)).toMatchObject({
+      label: "qa-sidecar",
+      task: "Inspect the QA docs fixture and return one concise protocol note.",
+    });
+
+    const openaiFanoutServer = await startMockServer();
+    const openaiFanout = await expectResponsesJson(openaiFanoutServer, {
+      model: "openai/gpt-5.5",
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(fanoutPrompt)],
+    });
+    expect(outputToolArgs(openaiFanout)).toMatchObject({
+      label: "qa-fanout-alpha",
+      task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+    });
+
+    const anthropicFanoutServer = await startMockServer();
+    const anthropicFanout = await expectResponsesJson(anthropicFanoutServer, {
+      model: "anthropic/claude-opus-4-7",
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(fanoutPrompt)],
+    });
+    expect(outputToolArgs(anthropicFanout)).toMatchObject({
+      label: "qa-fanout-alpha",
+      task: "Fanout worker alpha: inspect the QA docs fixture and finish with exactly ALPHA-OK.",
+    });
+  });
+
   it("records providerVariant on /debug/last-request for openai requests", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

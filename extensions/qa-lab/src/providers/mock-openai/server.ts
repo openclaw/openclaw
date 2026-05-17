@@ -109,8 +109,8 @@ type MockOpenAiRequestSnapshot = {
 // This is a subset of the real Anthropic Messages API — just enough so the
 // QA suite can run its parity pack against a "baseline" Anthropic provider
 // without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), so whatever
-// behavior the OpenAI mock exposes is automatically mirrored on this route.
+// the shared mock scenario logic (buildResponsesPayload), with `model`
+// preserved so provider-aware branches can intentionally diverge.
 type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -179,6 +179,28 @@ type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
 };
+
+function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
+  return providerVariant === "anthropic"
+    ? "repo/docs/help/testing.md"
+    : "repo/qa/scenarios/index.md";
+}
+
+function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
+  return providerVariant === "anthropic"
+    ? "Inspect the QA docs fixture and return one concise protocol note."
+    : "Inspect the QA workspace and return one concise protocol note.";
+}
+
+function subagentFanoutTaskForProvider(
+  providerVariant: MockOpenAiProviderVariant,
+  worker: "alpha" | "beta",
+) {
+  const marker = worker === "alpha" ? "ALPHA-OK" : "BETA-OK";
+  const scope =
+    providerVariant === "anthropic" ? "the QA docs fixture" : "the QA workspace";
+  return `Fanout worker ${worker}: inspect ${scope} and finish with exactly ${marker}.`;
+}
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
@@ -1496,6 +1518,9 @@ async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
 ) {
+  const providerVariant = resolveProviderVariant(
+    typeof body.model === "string" ? body.model : undefined,
+  );
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
@@ -2039,7 +2064,7 @@ async function buildResponsesPayload(
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+        task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
         label: "qa-fanout-alpha",
         thread: false,
       });
@@ -2047,7 +2072,7 @@ async function buildResponsesPayload(
     if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
       scenarioState.subagentFanoutPhase = 2;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: "Fanout worker beta: inspect the QA workspace and finish with exactly BETA-OK.",
+        task: subagentFanoutTaskForProvider(providerVariant, "beta"),
         label: "qa-fanout-beta",
         thread: false,
       });
@@ -2123,7 +2148,7 @@ async function buildResponsesPayload(
   ) {
     scenarioState.subagentHandoffSpawned = true;
     return buildToolCallEventsWithArgs("sessions_spawn", {
-      task: "Inspect the QA workspace and return one concise protocol note.",
+      task: subagentHandoffTaskForProvider(providerVariant),
       label: "qa-sidecar",
       thread: false,
     });
@@ -2132,7 +2157,9 @@ async function buildResponsesPayload(
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
     !toolOutput
   ) {
-    return buildToolCallEventsWithArgs("read", { path: "repo/qa/scenarios/index.md" });
+    return buildToolCallEventsWithArgs("read", {
+      path: sourceDiscoveryReadPathForProvider(providerVariant),
+    });
   }
   if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
@@ -2167,8 +2194,8 @@ async function buildResponsesPayload(
 // shapes into the shared ResponsesInputItem[] format, calls the same
 // buildResponsesPayload() dispatcher, and then re-serializes the resulting
 // events into an Anthropic response. This gives the parity harness a
-// baseline lane that exercises the same scenario logic without requiring
-// real Anthropic API keys.
+// baseline lane that exercises the same scenario logic and selected
+// provider-specific plans without requiring real Anthropic API keys.
 //
 // Scope: handles Anthropic Messages requests with text and tool_result
 // content blocks, supporting both non-streaming JSON responses and the
