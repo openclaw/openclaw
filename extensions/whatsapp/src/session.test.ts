@@ -332,6 +332,42 @@ describe("web session", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked creds before atomic credential saves",
+    async () => {
+      const authDir = createTempAuthDir("openclaw-wa-creds-symlink-save");
+      const targetPath = path.join(authDir, "target-creds.json");
+      const credsPath = path.join(authDir, "creds.json");
+      fsSync.writeFileSync(targetPath, "keep", "utf-8");
+      fsSync.symlinkSync(targetPath, credsPath);
+
+      await expect(
+        writeCredsJsonAtomically(authDir, { me: { id: "15551234567@s.whatsapp.net" } }),
+      ).rejects.toThrow("creds.json must be a regular file or missing");
+
+      expect(fsSync.lstatSync(credsPath).isSymbolicLink()).toBe(true);
+      expect(fsSync.readFileSync(targetPath, "utf-8")).toBe("keep");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked credential parents before atomic credential saves",
+    async () => {
+      const rootDir = createTempAuthDir("openclaw-wa-creds-parent-symlink-save");
+      const targetBaseDir = path.join(rootDir, "target-base");
+      const linkedBaseDir = path.join(rootDir, "linked-base");
+      const authDir = path.join(linkedBaseDir, "default");
+      fsSync.mkdirSync(targetBaseDir);
+      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, "dir");
+
+      await expect(
+        writeCredsJsonAtomically(authDir, { me: { id: "15551234567@s.whatsapp.net" } }),
+      ).rejects.toThrow("creds.json must be a regular file or missing");
+
+      expect(fsSync.existsSync(path.join(targetBaseDir, "default"))).toBe(false);
+    },
+  );
+
   it("passes explicit Baileys socket timing overrides", async () => {
     await createWaSocket(false, false, {
       keepAliveIntervalMs: 10_000,
@@ -651,6 +687,25 @@ describe("web session", () => {
       openMock.restore();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not rotate creds backup through a symlinked backup path",
+    async () => {
+      const authDir = createTempAuthDir("openclaw-wa-rotate-backup-symlink");
+      const credsPath = path.join(authDir, "creds.json");
+      const backupPath = path.join(authDir, "creds.json.bak");
+      const targetPath = path.join(authDir, "backup-target.json");
+      fsSync.writeFileSync(credsPath, "{}", "utf-8");
+      fsSync.writeFileSync(targetPath, "keep", "utf-8");
+      fsSync.symlinkSync(targetPath, backupPath);
+
+      await createWaSocket(false, false, { authDir });
+      await emitCredsUpdate(authDir);
+
+      expect(fsSync.lstatSync(backupPath).isSymbolicLink()).toBe(true);
+      expect(fsSync.readFileSync(targetPath, "utf-8")).toBe("keep");
+    },
+  );
 
   it("writes creds.json atomically via temp file and rename", async () => {
     const openMock = mockFsOpenForCredsWrites();
