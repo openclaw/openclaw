@@ -5,6 +5,7 @@ import type {
   WAPresence,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
@@ -84,7 +85,10 @@ export function createWebSendApi(params: {
         : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
         if (sendOptions?.asDocument === true && supportsForcedDocumentMediaType(mediaType)) {
-          const fileName = sendOptions?.fileName?.trim() || "file";
+          const fileName = resolveWhatsAppDocumentFileName({
+            fileName: sendOptions?.fileName,
+            mimetype: mediaType,
+          });
           payload = {
             document: mediaBuffer,
             fileName,
@@ -108,7 +112,10 @@ export function createWebSendApi(params: {
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
-          const fileName = sendOptions?.fileName?.trim() || "file";
+          const fileName = resolveWhatsAppDocumentFileName({
+            fileName: sendOptions?.fileName,
+            mimetype: mediaType,
+          });
           payload = {
             document: mediaBuffer,
             fileName,

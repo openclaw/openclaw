@@ -88,6 +88,10 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "./agent-runner-failure-copy.js";
+import {
   buildEmbeddedRunExecutionParams,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
@@ -480,8 +484,6 @@ function collapseRepeatedFailureDetail(message: string): string {
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
-const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 
 type ExternalRunFailureReply = {
   text: string;
@@ -581,15 +583,9 @@ function formatForwardedExternalRunFailureText(message: string): string {
 
 function buildExternalRunFailureReply(
   message: string,
-  options?: { includeDetails?: boolean },
+  options?: { includeDetails?: boolean; isHeartbeat?: boolean },
 ): ExternalRunFailureReply {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  if (isToolResultTurnMismatchError(normalizedMessage)) {
-    return {
-      text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
-      isGenericRunnerFailure: false,
-    };
-  }
   const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
@@ -605,6 +601,15 @@ function buildExternalRunFailureReply(
     }
     return {
       text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
+      isGenericRunnerFailure: false,
+    };
+  }
+  if (options?.isHeartbeat) {
+    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
+  }
+  if (isToolResultTurnMismatchError(normalizedMessage)) {
+    return {
+      text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
       isGenericRunnerFailure: false,
     };
   }
@@ -2590,8 +2595,12 @@ export async function runAgentTurnWithFallback(params: {
         !shouldSurfaceToControlUi
           ? buildExternalRunFailureReply(message, {
               includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+              isHeartbeat: params.isHeartbeat,
             })
           : undefined;
+      const genericFallbackText = params.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
         : isRateLimit && !isOverloadedErrorMessage(message)
@@ -2604,7 +2613,7 @@ export async function runAgentTurnWithFallback(params: {
                 ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
                 : shouldSurfaceToControlUi
                   ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                  : (externalRunFailureReply?.text ?? GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+                  : (externalRunFailureReply?.text ?? genericFallbackText);
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
