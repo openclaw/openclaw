@@ -828,6 +828,36 @@ status=done`,
     );
   });
 
+  it("fails live runtime parity reports when assistant-message usage is missing", () => {
+    const summary = makeRuntimeParitySummary();
+    summary.run = {
+      ...summary.run,
+      providerMode: "live-frontier",
+    };
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.pi.usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    scenario.runtimeParity.cells.codex.usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    };
+
+    const report = buildQaRuntimeParityReport({
+      summary,
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failedScenarios).toBe(1);
+    expect(report.failures).toContain(
+      "Approval turn tool followthrough missing live assistant-message usage (pi=0, codex=0).",
+    );
+    expect(report.scenarios[0]?.status).toBe("fail");
+  });
+
   it("renders a readable runtime parity markdown report", () => {
     const report = renderQaRuntimeParityMarkdownReport(
       buildQaRuntimeParityReport({

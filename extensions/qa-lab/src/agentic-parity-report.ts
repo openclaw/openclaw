@@ -2,11 +2,7 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
-import type {
-  RuntimeId,
-  RuntimeParityDrift,
-  RuntimeParityResult,
-} from "./runtime-parity.js";
+import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
 import { isRuntimeParityResultPass, runtimeParityCellStatus } from "./runtime-parity.js";
 
 type QaParityReportStep = {
@@ -249,6 +245,23 @@ function buildRuntimeParityDriftCounts(): Record<RuntimeParityDrift, number> {
     structural: 0,
     "failure-mode": 0,
   };
+}
+
+function isLiveProviderMode(providerMode: string | undefined) {
+  return providerMode?.startsWith("live-") === true;
+}
+
+function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
+  const missing = [
+    scenario.piTokens > 0 ? undefined : `${scenario.piStatus === "pass" ? "pi" : "pi failed"}=0`,
+    scenario.codexTokens > 0
+      ? undefined
+      : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
+  ].filter((entry): entry is string => !!entry);
+  if (missing.length === 0) {
+    return undefined;
+  }
+  return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
 }
 
 function normalizeRuntimePair(
@@ -608,9 +621,11 @@ export function buildQaRuntimeParityReport(params: {
   comparedAt?: string;
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
+  const providerMode = params.summary.run?.providerMode;
+  const requiresLiveUsage = isLiveProviderMode(providerMode);
   const driftCounts = buildRuntimeParityDriftCounts();
   const failures: string[] = [];
-  const scenarios = params.summary.scenarios.map((scenario) => {
+  const scenarios: QaRuntimeParityScenarioReport[] = params.summary.scenarios.map((scenario) => {
     const parity = scenario.runtimeParity;
     if (!parity) {
       failures.push(`Missing runtime parity capture for ${scenario.name}.`);
@@ -632,15 +647,10 @@ export function buildQaRuntimeParityReport(params: {
     const codexCell = parity.cells.codex;
     const piStatus = runtimeParityCellStatus(piCell);
     const codexStatus = runtimeParityCellStatus(codexCell);
-    const status = isRuntimeParityResultPass(parity) ? "pass" : "fail";
-    if (status === "fail") {
-      failures.push(
-        `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
-      );
-    }
-    return {
+    const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
+    const reportScenario = {
       name: scenario.name,
-      status,
+      status: parityStatus,
       drift: parity.drift,
       driftDetails: parity.driftDetails,
       piStatus,
@@ -650,6 +660,19 @@ export function buildQaRuntimeParityReport(params: {
       piToolCalls: piCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
     } satisfies QaRuntimeParityScenarioReport;
+    if (parityStatus === "fail") {
+      failures.push(
+        `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
+      );
+    }
+    const usageFailure = requiresLiveUsage
+      ? describeLiveUsageFailure(scenario.name, reportScenario)
+      : undefined;
+    if (usageFailure) {
+      failures.push(usageFailure);
+      return { ...reportScenario, status: "fail" };
+    }
+    return reportScenario;
   });
 
   const totalScenarios = params.summary.counts?.total ?? scenarios.length;
@@ -659,7 +682,7 @@ export function buildQaRuntimeParityReport(params: {
   return {
     runtimePair,
     comparedAt: params.comparedAt ?? new Date().toISOString(),
-    providerMode: params.summary.run?.providerMode,
+    providerMode,
     primaryModel: params.summary.run?.primaryModel,
     totalScenarios,
     passedScenarios,
