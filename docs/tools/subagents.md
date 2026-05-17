@@ -86,7 +86,9 @@ requester chat when the run finishes.
   <Accordion title="Manual-spawn delivery resilience">
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
+    - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
     - If the requester-agent completion handoff fails or produces no visible output, OpenClaw treats delivery as failed and falls back to queue routing/retry. It does not raw-send the child result directly to the external chat.
+    - Group and channel completion handoffs follow the same message-tool-only visible reply policy as normal group/channel turns, so the requester agent must use the message tool when required.
     - If direct handoff cannot be used, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
