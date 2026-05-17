@@ -744,6 +744,14 @@
     "target": "插件钩子"
   },
   {
+    "source": "Host-hook examples and recipes",
+    "target": "宿主钩子示例与配方"
+  },
+  {
+    "source": "Host-hook examples",
+    "target": "宿主钩子示例"
+  },
+  {
     "source": "Internal hooks",
     "target": "内部钩子"
   },
@@ -998,5 +1006,89 @@
   {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Ambient room events",
+    "target": "环境房间事件"
+  },
+  {
+    "source": "Groups",
+    "target": "群组"
+  },
+  {
+    "source": "Channel troubleshooting",
+    "target": "频道故障排除"
+  },
+  {
+    "source": "Channel configuration reference",
+    "target": "频道配置参考"
+  },
+  {
+    "source": "Bot loop protection",
+    "target": "机器人循环保护"
+  },
+  {
+    "source": "TaskFlow",
+    "target": "TaskFlow"
+  },
+  {
+    "source": "Onboarding (CLI)",
+    "target": "Onboarding (CLI)"
+  },
+  {
+    "source": "Gmail Pub/Sub",
+    "target": "Gmail Pub/Sub"
+  },
+  {
+    "source": "Personal agent benchmark pack",
+    "target": "个人 Agent 基准包"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "Camera nodes",
+    "target": "摄像头节点"
+  },
+  {
+    "source": "Location command",
+    "target": "位置命令"
+  },
+  {
+    "source": "Gateway pairing",
+    "target": "Gateway 配对"
+  },
+  {
+    "source": "Admin HTTP RPC plugin",
+    "target": "Admin HTTP RPC 插件"
+  },
+  {
+    "source": "Operator scopes",
+    "target": "操作员作用域"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
+  },
+  {
+    "source": "Remote access",
+    "target": "远程访问"
+  },
+  {
+    "source": "SDK subpaths",
+    "target": "SDK 子路径"
+  },
+  {
+    "source": "Admin Http Rpc plugin",
+    "target": "Admin Http Rpc 插件"
+  },
+  {
+    "source": "admin-http-rpc",
+    "target": "admin-http-rpc"
+  },
+  {
+    "source": "ds4",
+    "target": "ds4"
   }
 ]

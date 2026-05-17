@@ -342,17 +342,19 @@ with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
 ### Session extensions and next-turn injections
 
 Workflow plugins can persist small JSON-compatible session state with
-`api.registerSessionExtension(...)` and update it through the Gateway
-`sessions.pluginPatch` method. Session rows project registered extension state
-through `pluginExtensions`, letting Control UI and other clients render
-plugin-owned status without learning plugin internals.
+`api.session.state.registerSessionExtension(...)` and update it through the
+Gateway `sessions.pluginPatch` method. Session rows project registered
+extension state through `pluginExtensions`, letting Control UI and other clients
+render plugin-owned status without learning plugin internals.
 
-Use `api.enqueueNextTurnInjection(...)` when a plugin needs durable context to
-reach the next model turn exactly once. OpenClaw drains queued injections before
-prompt hooks, drops expired injections, and deduplicates by `idempotencyKey`
-per plugin. This is the right seam for approval resumes, policy summaries,
-background monitor deltas, and command continuations that should be visible to
-the model on the next turn but should not become permanent system prompt text.
+Use `api.session.workflow.enqueueNextTurnInjection(...)` when a plugin needs
+durable context to reach the next model turn exactly once. OpenClaw drains
+queued injections before prompt hooks, drops expired injections, and deduplicates
+by `idempotencyKey` per plugin. This is the right seam for approval resumes,
+policy summaries, background monitor deltas, and command continuations that
+should be visible to the model on the next turn but should not become permanent
+system prompt text. See [Host-hook examples](/plugins/host-hooks-examples) for
+worked workflow recipes.
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
@@ -454,6 +456,7 @@ accessors, and the `command-auth` → `command-status` rename - see
 - [Plugin SDK migration](/plugins/sdk-migration) - active deprecations and removal timeline
 - [Building plugins](/plugins/building-plugins)
 - [Plugin SDK overview](/plugins/sdk-overview)
+- [Host-hook examples](/plugins/host-hooks-examples)
 - [Plugin entry points](/plugins/sdk-entrypoints)
 - [Internal hooks](/automation/hooks)
 - [Plugin architecture internals](/plugins/architecture-internals)

@@ -20,7 +20,7 @@ reference for **what to import** and **what you can register**.
 </Note>
 
 <Tip>
-Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins, and [Host-hook examples](/plugins/host-hooks-examples) for workflow-style recipes.
 </Tip>
 
 ## Import convention
@@ -465,6 +465,9 @@ subpath yet. Bundled examples:
   </Card>
   <Card title="Runtime helpers" icon="gears" href="/plugins/sdk-runtime">
     Full `api.runtime` namespace reference.
+  </Card>
+  <Card title="Host-hook examples" icon="puzzle-piece" href="/plugins/host-hooks-examples">
+    Worked recipes for approval flows, policy gates, monitors, wizards, and review assistants.
   </Card>
   <Card title="Setup and config" icon="sliders" href="/plugins/sdk-setup">
     Packaging, manifests, and config schemas.
