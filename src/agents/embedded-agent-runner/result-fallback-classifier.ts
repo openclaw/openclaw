@@ -1,4 +1,5 @@
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
 import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
@@ -99,6 +100,15 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
       reason: "format",
       code: "incomplete_result",
+    };
+  }
+  const failoverReason = classifyFailoverReason(errorText, { provider: params.provider });
+  if (failoverReason) {
+    return {
+      message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
+      reason: failoverReason,
+      code: "embedded_error_payload",
+      rawError: errorText,
     };
   }
 
