@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
@@ -157,7 +158,7 @@ import {
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
@@ -220,6 +221,7 @@ import {
   collectPromptCacheToolNames,
   beginPromptCacheObservation,
   completePromptCacheObservation,
+  type PromptCacheBreak,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
@@ -319,6 +321,12 @@ import {
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
+import {
+  createEmbeddedAttemptSessionLockController,
+  installPromptSubmissionLockRelease,
+  installSessionExternalHookWriteLock,
+  installSessionEventWriteLock,
+} from "./attempt.session-lock.js";
 import {
   createYieldAbortedResponse,
   persistSessionsYieldContextMessage,
@@ -2010,18 +2018,20 @@ export async function runEmbeddedAttempt(
     let systemPromptText = systemPromptOverride();
     prepStages.mark("system-prompt");
 
-    // Keep the session lock scoped to transcript/session mutations. Cold plugin
-    // and tool setup can be slow, and holding the lock there blocks CLI fallback
-    // from taking over the same session when a gateway run stalls before model I/O.
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+    const sessionWriteLockOptions = resolveSessionWriteLockOptions(params.config, {
+      maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
           runTimeoutMs: params.timeoutMs,
           compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
         }),
       }),
+    });
+    const sessionLockController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: {
+        sessionFile: params.sessionFile,
+        ...sessionWriteLockOptions,
+      },
     });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
@@ -2327,6 +2337,14 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      installSessionEventWriteLock({
+        session: activeSession,
+        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
+      });
+      installSessionExternalHookWriteLock({
+        session: activeSession,
+        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
+      });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
@@ -3224,11 +3242,13 @@ export async function runEmbeddedAttempt(
         },
         abort: abortRun,
       };
-      let lastAssistant: AgentMessage | undefined;
+      let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
-      let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
+      let cacheBreak: PromptCacheBreak | null = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
+      let lastCallUsage: NormalizedUsage | undefined;
+      let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
@@ -3724,7 +3744,14 @@ export async function runEmbeddedAttempt(
               model: params.model,
               modelId: params.modelId,
               provider: params.provider,
-              sessionManager,
+              sessionManager: {
+                appendCustomEntry: async (customType, data) => {
+                  await sessionLockController.withSessionWriteLock(() => {
+                    activeSessionManager.appendCustomEntry(customType, data);
+                  });
+                },
+                getEntries: () => activeSessionManager.getEntries(),
+              },
               signal: runAbortController.signal,
               streamFn: activeSession.agent.streamFn,
               systemPrompt: systemPromptText,
@@ -3732,6 +3759,12 @@ export async function runEmbeddedAttempt(
             if (googlePromptCacheStreamFn) {
               activeSession.agent.streamFn = googlePromptCacheStreamFn;
             }
+            installPromptSubmissionLockRelease({
+              session: activeSession,
+              waitForSessionEvents: (sessionToDrain) =>
+                sessionLockController.waitForSessionEvents(sessionToDrain),
+              releaseForPrompt: () => sessionLockController.releaseForPrompt(),
+            });
           }
 
           // Detect and load images referenced in the visible prompt for vision-capable models.
@@ -4027,12 +4060,18 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               sessionId: params.sessionId,
             });
-            stripSessionsYieldArtifacts(activeSession);
-            if (yieldMessage) {
-              await persistSessionsYieldContextMessage(activeSession, yieldMessage);
-            }
+            await sessionLockController.waitForSessionEvents(activeSession);
+            await sessionLockController.withSessionWriteLock(async () => {
+              stripSessionsYieldArtifacts(activeSession);
+              if (yieldMessage) {
+                await persistSessionsYieldContextMessage(activeSession, yieldMessage);
+              }
+            });
           } else if (isMidTurnPrecheckSignal(err)) {
-            handleMidTurnPrecheckRequest(err.request);
+            await sessionLockController.waitForSessionEvents(activeSession);
+            await sessionLockController.withSessionWriteLock(() => {
+              handleMidTurnPrecheckRequest(err.request);
+            });
           } else {
             promptError = err;
             promptErrorSource = "prompt";
@@ -4046,16 +4085,22 @@ export async function runEmbeddedAttempt(
         if (pendingMidTurnPrecheckRequest) {
           const request = pendingMidTurnPrecheckRequest;
           pendingMidTurnPrecheckRequest = null;
-          removeTrailingMidTurnPrecheckAssistantError({
-            activeSession,
-            sessionManager,
+          await sessionLockController.waitForSessionEvents(activeSession);
+          await sessionLockController.withSessionWriteLock(() => {
+            removeTrailingMidTurnPrecheckAssistantError({
+              activeSession,
+              sessionManager: activeSessionManager,
+            });
+            if (!preflightRecovery && promptErrorSource !== "precheck") {
+              promptError = null;
+              promptErrorSource = null;
+              handleMidTurnPrecheckRequest(request);
+            }
           });
-          if (!preflightRecovery && promptErrorSource !== "precheck") {
-            promptError = null;
-            promptErrorSource = null;
-            handleMidTurnPrecheckRequest(request);
-          }
         }
+
+        await sessionLockController.waitForSessionEvents(activeSession);
+        await sessionLockController.releaseForPrompt();
 
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs
         // Check compaction state before and after to avoid race condition where compaction starts during capture
@@ -4112,117 +4157,122 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        // Check if ANY compaction occurred during the entire attempt (prompt + retry).
-        // Using a cumulative count (> 0) instead of a delta check avoids missing
-        // compactions that complete during activeSession.prompt() before the delta
-        // baseline is sampled.
-        const compactionOccurredThisAttempt = getCompactionCount() > 0;
-        // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
-        // Previously this was before the prompt, which caused a custom entry to be
-        // inserted between compaction and the next prompt — breaking the
-        // prepareCompaction() guard that checks the last entry type, leading to
-        // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
-        // Skip when timed out during compaction — session state may be inconsistent.
-        // Also skip when compaction ran this attempt — appending a custom entry
-        // after compaction would break the guard again. See: #28491
-        appendAttemptCacheTtlIfNeeded({
-          sessionManager,
-          timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-          config: params.config,
-          provider: params.provider,
-          modelId: params.modelId,
-          modelApi: params.model.api,
-          isCacheTtlEligibleProvider,
-        });
+        await sessionLockController.waitForSessionEvents(activeSession);
+        await sessionLockController.withSessionWriteLock(async () => {
+          // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+          // Using a cumulative count (> 0) instead of a delta check avoids missing
+          // compactions that complete during activeSession.prompt() before the delta
+          // baseline is sampled.
+          compactionOccurredThisAttempt = getCompactionCount() > 0;
+          // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
+          // Previously this was before the prompt, which caused a custom entry to be
+          // inserted between compaction and the next prompt — breaking the
+          // prepareCompaction() guard that checks the last entry type, leading to
+          // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
+          // Skip when timed out during compaction — session state may be inconsistent.
+          // Also skip when compaction ran this attempt — appending a custom entry
+          // after compaction would break the guard again. See: #28491
+          appendAttemptCacheTtlIfNeeded({
+            sessionManager: activeSessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: params.config,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            isCacheTtlEligibleProvider,
+          });
 
-        // If timeout occurred during compaction, use pre-compaction snapshot when available
-        // (compaction restructures messages but does not add user/assistant turns).
-        const snapshotSelection = selectCompactionTimeoutSnapshot({
-          timedOutDuringCompaction,
-          preCompactionSnapshot,
-          preCompactionSessionId,
-          currentSnapshot: activeSession.messages.slice(),
-          currentSessionId: activeSession.sessionId,
-        });
-        if (timedOutDuringCompaction) {
-          if (!isProbeSession) {
-            log.warn(
-              `using ${snapshotSelection.source} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
-            );
+          // If timeout occurred during compaction, use pre-compaction snapshot when available
+          // (compaction restructures messages but does not add user/assistant turns).
+          const snapshotSelection = selectCompactionTimeoutSnapshot({
+            timedOutDuringCompaction,
+            preCompactionSnapshot,
+            preCompactionSessionId,
+            currentSnapshot: activeSession.messages.slice(),
+            currentSessionId: activeSession.sessionId,
+          });
+          if (timedOutDuringCompaction) {
+            if (!isProbeSession) {
+              log.warn(
+                `using ${snapshotSelection.source} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
           }
-        }
-        messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-          snapshotSelection.messagesSnapshot,
-          toolSearchTargetTranscriptProjections,
-        );
-        sessionIdUsed = snapshotSelection.sessionIdUsed;
+          messagesSnapshot = projectToolSearchTargetTranscriptMessages(
+            snapshotSelection.messagesSnapshot,
+            toolSearchTargetTranscriptProjections,
+          );
+          sessionIdUsed = snapshotSelection.sessionIdUsed;
 
-        lastAssistant = messagesSnapshot
-          .slice()
-          .toReversed()
-          .find((m) => m.role === "assistant");
-        currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-          messagesSnapshot,
-          prePromptMessageCount,
-        });
-        attemptUsage = getUsageTotals();
-        cacheBreak = cacheObservabilityEnabled
-          ? completePromptCacheObservation({
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              usage: attemptUsage,
-            })
-          : null;
-        const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
-        const promptCacheObservation =
-          cacheObservabilityEnabled &&
-          (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
-            ? {
-                broke: Boolean(cacheBreak),
-                ...(typeof cacheBreak?.previousCacheRead === "number"
-                  ? { previousCacheRead: cacheBreak.previousCacheRead }
-                  : {}),
-                ...(typeof cacheBreak?.cacheRead === "number"
-                  ? { cacheRead: cacheBreak.cacheRead }
-                  : typeof attemptUsage?.cacheRead === "number"
-                    ? { cacheRead: attemptUsage.cacheRead }
+          lastAssistant = messagesSnapshot
+            .slice()
+            .toReversed()
+            .find((message): message is AssistantMessage => message.role === "assistant");
+          currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+            messagesSnapshot,
+            prePromptMessageCount,
+          });
+          attemptUsage = getUsageTotals();
+          cacheBreak = cacheObservabilityEnabled
+            ? completePromptCacheObservation({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                usage: attemptUsage,
+              })
+            : null;
+          lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+          const promptCacheObservation =
+            cacheObservabilityEnabled &&
+            (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
+              ? {
+                  broke: Boolean(cacheBreak),
+                  ...(typeof cacheBreak?.previousCacheRead === "number"
+                    ? { previousCacheRead: cacheBreak.previousCacheRead }
                     : {}),
-                changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
-              }
-            : undefined;
-        const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-          provider: params.provider,
-          modelId: params.modelId,
-        });
-        promptCache = buildContextEnginePromptCacheInfo({
-          retention: effectivePromptCacheRetention,
-          lastCallUsage,
-          observation: promptCacheObservation,
-          lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
+                  ...(typeof cacheBreak?.cacheRead === "number"
+                    ? { cacheRead: cacheBreak.cacheRead }
+                    : typeof attemptUsage?.cacheRead === "number"
+                      ? { cacheRead: attemptUsage.cacheRead }
+                      : {}),
+                  changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
+                }
+              : undefined;
+          const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(activeSessionManager, {
+            provider: params.provider,
+            modelId: params.modelId,
+          });
+          promptCache = buildContextEnginePromptCacheInfo({
+            retention: effectivePromptCacheRetention,
             lastCallUsage,
-            assistantTimestamp: currentAttemptAssistant?.timestamp,
-            fallbackLastCacheTouchAt,
-          }),
+            observation: promptCacheObservation,
+            lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
+              lastCallUsage,
+              assistantTimestamp: currentAttemptAssistant?.timestamp,
+              fallbackLastCacheTouchAt,
+            }),
+          });
+
+          if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
+            try {
+              activeSessionManager.appendCustomEntry("openclaw:prompt-error", {
+                timestamp: Date.now(),
+                runId: params.runId,
+                sessionId: params.sessionId,
+                provider: params.provider,
+                model: params.modelId,
+                api: params.model.api,
+                error: formatErrorMessage(promptError),
+              });
+            } catch (entryErr) {
+              log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+            }
+          }
         });
 
-        if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
-          try {
-            sessionManager.appendCustomEntry("openclaw:prompt-error", {
-              timestamp: Date.now(),
-              runId: params.runId,
-              sessionId: params.sessionId,
-              provider: params.provider,
-              model: params.modelId,
-              api: params.model.api,
-              error: formatErrorMessage(promptError),
-            });
-          } catch (entryErr) {
-            log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
-          }
-        }
-
-        // Let the active context engine run its post-turn lifecycle.
+        // Let the active context engine run its post-turn lifecycle. These hooks
+        // may call runtime LLM capabilities, so only their transcript rewrite
+        // helper reacquires the session write lock.
         if (activeContextEngine) {
           const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
             attempt: params,
@@ -4254,64 +4304,69 @@ export async function runEmbeddedAttempt(
                 sessionFile: contextParams.sessionFile,
                 reason: contextParams.reason,
                 sessionManager: contextParams.sessionManager as never,
+                withSessionManagerRewriteLock: async (operation) =>
+                  await sessionLockController.withSessionWriteLock(operation),
                 runtimeContext: contextParams.runtimeContext,
                 config: params.config,
                 agentId: sessionAgentId,
               }),
-            sessionManager,
+            sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
           });
         }
 
-        if (
-          shouldPersistCompletedBootstrapTurn({
-            shouldRecordCompletedBootstrapTurn,
-            promptError,
-            aborted,
-            timedOutDuringCompaction,
-            compactionOccurredThisAttempt,
-          })
-        ) {
-          try {
-            sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
-              timestamp: Date.now(),
-              runId: params.runId,
-              sessionId: params.sessionId,
-            });
-          } catch (entryErr) {
-            log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
-          }
-        }
-
-        if (
-          compactionOccurredThisAttempt &&
-          !promptError &&
-          !aborted &&
-          !timedOut &&
-          !idleTimedOut &&
-          !timedOutDuringCompaction &&
-          shouldRotateCompactionTranscript(params.config)
-        ) {
-          try {
-            const rotation = await rotateTranscriptAfterCompaction({
-              sessionManager,
-              sessionFile: params.sessionFile,
-            });
-            if (rotation.rotated) {
-              sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
-              sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
-              log.info(
-                `[compaction] rotated active transcript after automatic compaction ` +
-                  `(sessionKey=${params.sessionKey ?? params.sessionId})`,
-              );
+        await sessionLockController.waitForSessionEvents(activeSession);
+        await sessionLockController.withSessionWriteLock(async () => {
+          if (
+            shouldPersistCompletedBootstrapTurn({
+              shouldRecordCompletedBootstrapTurn,
+              promptError,
+              aborted,
+              timedOutDuringCompaction,
+              compactionOccurredThisAttempt,
+            })
+          ) {
+            try {
+              activeSessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+                timestamp: Date.now(),
+                runId: params.runId,
+                sessionId: params.sessionId,
+              });
+            } catch (entryErr) {
+              log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
             }
-          } catch (err) {
-            log.warn("[compaction] automatic transcript rotation failed", {
-              errorMessage: formatErrorMessage(err),
-            });
           }
-        }
+
+          if (
+            compactionOccurredThisAttempt &&
+            !promptError &&
+            !aborted &&
+            !timedOut &&
+            !idleTimedOut &&
+            !timedOutDuringCompaction &&
+            shouldRotateCompactionTranscript(params.config)
+          ) {
+            try {
+              const rotation = await rotateTranscriptAfterCompaction({
+                sessionManager: activeSessionManager,
+                sessionFile: params.sessionFile,
+              });
+              if (rotation.rotated) {
+                sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
+                sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
+                log.info(
+                  `[compaction] rotated active transcript after automatic compaction ` +
+                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+                );
+              }
+            } catch (err) {
+              log.warn("[compaction] automatic transcript rotation failed", {
+                errorMessage: formatErrorMessage(err),
+              });
+            }
+          }
+        });
 
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
@@ -4384,20 +4439,22 @@ export async function runEmbeddedAttempt(
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
       if (cacheObservabilityEnabled) {
-        if (cacheBreak) {
+        const cacheBreakForLog = cacheBreak as PromptCacheBreak | null;
+        if (cacheBreakForLog) {
           const changeSummary =
-            cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-            "no tracked cache input change";
+            cacheBreakForLog.changes
+              ?.map((change) => `${change.code}(${change.detail})`)
+              .join(", ") ?? "no tracked cache input change";
           log.warn(
-            `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
+            `[prompt-cache] cache read dropped ${cacheBreakForLog.previousCacheRead} -> ${cacheBreakForLog.cacheRead} ` +
               `for ${params.provider}/${params.modelId} via ${streamStrategy}; ${changeSummary}`,
           );
           cacheTrace?.recordStage("cache:result", {
             options: {
-              previousCacheRead: cacheBreak.previousCacheRead,
-              cacheRead: cacheBreak.cacheRead,
+              previousCacheRead: cacheBreakForLog.previousCacheRead,
+              cacheRead: cacheBreakForLog.cacheRead,
               changes:
-                cacheBreak.changes?.map((change) => ({
+                cacheBreakForLog.changes?.map((change) => ({
                   code: change.code,
                   detail: change.detail,
                 })) ?? undefined,
@@ -4727,6 +4784,7 @@ export async function runEmbeddedAttempt(
           timedOut ||
           idleTimedOut ||
           timedOutDuringCompaction;
+        const cleanupSessionLock = await sessionLockController.acquireForCleanup({ session });
         await cleanupEmbeddedAttemptResources({
           removeToolResultContextGuard,
           flushPendingToolResultsAfterIdle,
@@ -4734,11 +4792,12 @@ export async function runEmbeddedAttempt(
           sessionManager,
           bundleMcpRuntime,
           bundleLspRuntime,
-          sessionLock,
+          sessionLock: cleanupSessionLock,
           // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
           // and flush pending results synchronously so we can release the session lock ASAP.
           aborted: cleanupAborted,
           abortSettlePromise: cleanupAborted ? buildAbortSettlePromise() : null,
+          skipSessionFlush: sessionLockController.hasSessionTakeover(),
           runId: params.runId,
           sessionId: params.sessionId,
         });
