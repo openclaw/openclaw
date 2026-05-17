@@ -131,11 +131,7 @@ function telegramCommandTargetSharesMessageTimeline(params: {
   }
   const parsed = parseAgentSessionKey(targetSessionKey);
   const rest = parsed?.rest ?? "";
-  return (
-    rest.startsWith("telegram:group:") ||
-    rest.startsWith("telegram:direct:") ||
-    /^telegram:[^:]+:direct:/.test(rest)
-  );
+  return rest.startsWith("telegram:group:") || /^telegram:[^:]+:direct:/.test(rest);
 }
 
 type TelegramCommandAuthResult = {

@@ -63,6 +63,7 @@ const silentReplyLogger = createSubsystemLogger("telegram/silent-reply");
 type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
 };
+type ShouldContinueDelivery = () => boolean;
 
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
@@ -77,6 +78,23 @@ type TelegramReplyQuoteForSend = {
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+
+class TelegramDeliveryCancelledError extends Error {
+  constructor() {
+    super("telegram delivery cancelled");
+    this.name = "TelegramDeliveryCancelledError";
+  }
+}
+
+function assertTelegramDeliveryActive(shouldContinue?: ShouldContinueDelivery): void {
+  if (shouldContinue && !shouldContinue()) {
+    throw new TelegramDeliveryCancelledError();
+  }
+}
+
+function isTelegramDeliveryCancelledError(err: unknown): err is TelegramDeliveryCancelledError {
+  return err instanceof TelegramDeliveryCancelledError;
+}
 
 function buildChunkTextResolver(params: {
   textLimit: number;
@@ -176,6 +194,7 @@ async function deliverTextReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  shouldContinue?: ShouldContinueDelivery;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.replyText));
@@ -188,6 +207,7 @@ async function deliverTextReply(params: {
     replyQuoteText: params.replyQuoteText,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
+      assertTelegramDeliveryActive(params.shouldContinue);
       const messageId = await sendTelegramText(
         params.bot,
         params.chatId,
@@ -228,6 +248,7 @@ async function sendPendingFollowUpText(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  shouldContinue?: ShouldContinueDelivery;
 }): Promise<void> {
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
   await sendChunkedTelegramReplyText({
@@ -238,6 +259,7 @@ async function sendPendingFollowUpText(params: {
     replyMarkup: params.replyMarkup,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
+      assertTelegramDeliveryActive(params.shouldContinue);
       await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
         replyToMessageId,
         thread: params.thread,
@@ -290,11 +312,13 @@ async function sendTelegramVoiceFallbackText(opts: {
   silent?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
+  shouldContinue?: ShouldContinueDelivery;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
   let appliedReplyTo = false;
   for (let i = 0; i < chunks.length; i += 1) {
+    assertTelegramDeliveryActive(opts.shouldContinue);
     const chunk = chunks[i];
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
@@ -344,12 +368,14 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  shouldContinue?: ShouldContinueDelivery;
 }): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
   let visibleFallbackText: string | undefined;
   let first = true;
   let pendingFollowUpText: string | undefined;
   for (const mediaUrl of params.mediaList) {
+    assertTelegramDeliveryActive(params.shouldContinue);
     const isFirstMedia = first;
     const media = await params.mediaLoader(
       mediaUrl,
@@ -491,6 +517,7 @@ async function deliverMediaReply(params: {
               silent: params.silent,
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
+              shouldContinue: params.shouldContinue,
             });
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
@@ -521,6 +548,7 @@ async function deliverMediaReply(params: {
                 linkPreview: params.linkPreview,
                 silent: params.silent,
                 replyMarkup: params.replyMarkup,
+                shouldContinue: params.shouldContinue,
               });
               visibleFallbackText = fallbackText;
             }
@@ -572,6 +600,7 @@ async function deliverMediaReply(params: {
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
+        shouldContinue: params.shouldContinue,
       });
       pendingFollowUpText = undefined;
     }
@@ -716,6 +745,8 @@ export async function deliverReplies(params: {
   replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
+  /** Return false when a newer turn or stop command has superseded this delivery. */
+  shouldContinue?: ShouldContinueDelivery;
   transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
@@ -762,6 +793,9 @@ export async function deliverReplies(params: {
     });
   }
   for (const originalReply of normalizedReplies) {
+    if (params.shouldContinue && !params.shouldContinue()) {
+      return { delivered: progress.hasDelivered };
+    }
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
@@ -835,6 +869,9 @@ export async function deliverReplies(params: {
           : { ...reply, text: hookResult.content };
       }
     }
+    if (params.shouldContinue && !params.shouldContinue()) {
+      return { delivered: progress.hasDelivered };
+    }
 
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
@@ -868,6 +905,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          shouldContinue: params.shouldContinue,
         });
       } else {
         const mediaDelivery = await deliverMediaReply({
@@ -892,6 +930,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          shouldContinue: params.shouldContinue,
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
         if (mediaDelivery.visibleFallbackText) {
@@ -923,6 +962,9 @@ export async function deliverReplies(params: {
         groupId: params.mirrorGroupId,
       });
     } catch (error) {
+      if (isTelegramDeliveryCancelledError(error)) {
+        return { delivered: progress.hasDelivered };
+      }
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,

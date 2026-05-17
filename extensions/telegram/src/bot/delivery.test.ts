@@ -1384,6 +1384,53 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
+  it("stops chunked text delivery when the continuation predicate flips false", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    const result = await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 12,
+      shouldContinue: () => sendMessage.mock.calls.length === 0,
+    });
+
+    expect(result.delivered).toBe(true);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstSendText(sendMessage)).toContain("chunk-one");
+  });
+
+  it("does not send text when the continuation predicate is already false", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    const result = await deliverReplies({
+      replies: [{ text: "should not send" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      shouldContinue: () => false,
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

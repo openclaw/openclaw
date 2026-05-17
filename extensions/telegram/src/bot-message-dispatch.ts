@@ -1049,6 +1049,7 @@ export const dispatchTelegramMessage = async ({
           });
         }
       : undefined,
+    shouldContinue: () => !isDispatchSuperseded(),
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;

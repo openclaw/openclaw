@@ -226,6 +226,7 @@ type TelegramPluginCommandSpecs = ReturnType<
 
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   storeAllowFrom?: string[];
@@ -237,6 +238,7 @@ function registerAndResolveStatusHandler(params: {
 } {
   const {
     cfg,
+    accountId,
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
@@ -246,6 +248,7 @@ function registerAndResolveStatusHandler(params: {
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
+    accountId,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
     storeAllowFrom,
@@ -258,6 +261,7 @@ function registerAndResolveStatusHandler(params: {
 function registerAndResolveCommandHandlerBase(params: {
   commandName: string;
   cfg: OpenClawConfig;
+  accountId?: string;
   allowFrom: string[];
   groupAllowFrom: string[];
   storeAllowFrom?: string[];
@@ -272,6 +276,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const {
     commandName,
     cfg,
+    accountId,
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
@@ -302,6 +307,7 @@ function registerAndResolveCommandHandlerBase(params: {
         }),
       } as unknown as NativeCommandTestParams["bot"],
       cfg,
+      accountId,
       allowFrom,
       groupAllowFrom,
       useAccessGroups,
@@ -321,6 +327,7 @@ function registerAndResolveCommandHandlerBase(params: {
 function registerAndResolveCommandHandler(params: {
   commandName: string;
   cfg: OpenClawConfig;
+  accountId?: string;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   storeAllowFrom?: string[];
@@ -335,6 +342,7 @@ function registerAndResolveCommandHandler(params: {
   const {
     commandName,
     cfg,
+    accountId,
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
@@ -346,6 +354,7 @@ function registerAndResolveCommandHandler(params: {
   return registerAndResolveCommandHandlerBase({
     commandName,
     cfg,
+    accountId,
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
     storeAllowFrom,
@@ -627,7 +636,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBeUndefined();
   });
 
-  it("marks isolated Telegram DM peer targets as target-timeline sharing", async () => {
+  it("does not mark account-shared Telegram DM peer targets as target-timeline sharing", async () => {
     const { handler } = registerAndResolveStatusHandler({
       cfg: { session: { dmScope: "per-channel-peer" } },
     });
@@ -646,6 +655,31 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:telegram:direct:200");
+    expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBeUndefined();
+  });
+
+  it("marks account-scoped Telegram DM peer targets as target-timeline sharing", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      accountId: "personal",
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              CommandTargetSharesMessageTimeline?: boolean;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
+      "agent:main:telegram:personal:direct:200",
+    );
     expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBe(true);
   });
 
