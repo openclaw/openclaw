@@ -679,7 +679,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
     params.codexHome,
   );
   if (maxBytes !== undefined) {
-    const oversizedFiles = rolloutFiles.filter((file) => file.bytes > maxBytes);
+    const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
     if (oversizedFiles.length > 0) {
       embeddedAgentLog.warn(
         "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
