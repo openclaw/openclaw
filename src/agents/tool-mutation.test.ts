@@ -63,6 +63,13 @@ describe("tool mutation helpers", () => {
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
   });
 
+  it("treats peekaboo capture actions as read-only and input actions as mutating", () => {
+    expect(isMutatingToolCall("peekaboo", { action: "see", app: "Safari" })).toBe(false);
+    expect(isMutatingToolCall("peekaboo", { action: "image", app: "Safari" })).toBe(false);
+    expect(isMutatingToolCall("peekaboo", { action: "click", on: "B1" })).toBe(true);
+    expect(isMutatingToolCall("peekaboo", { action: "type", text: "hello" })).toBe(true);
+  });
+
   it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {
     expect(
       isSameToolMutationAction(
