@@ -58,6 +58,29 @@ describe("boolean config validation", () => {
   });
 });
 
+describe("hooks tokenFile config", () => {
+  it("accepts file-backed hook token config", () => {
+    const result = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        tokenFile: "/run/secrets/openclaw-hooks-token",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects ambiguous inline and file-backed hook tokens", () => {
+    const result = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        token: "inline-token",
+        tokenFile: "/run/secrets/openclaw-hooks-token",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("model provider localService config", () => {
   it("accepts on-demand local provider service settings", () => {
     const result = OpenClawSchema.safeParse({

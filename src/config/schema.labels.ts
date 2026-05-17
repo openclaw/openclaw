@@ -819,6 +819,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.enabled": "Hooks Enabled",
   "hooks.path": "Hooks Endpoint Path",
   "hooks.token": "Hooks Auth Token",
+  "hooks.tokenFile": "Hooks Auth Token File",
   "hooks.defaultSessionKey": "Hooks Default Session Key",
   "hooks.allowRequestSessionKey": "Hooks Allow Request Session Key",
   "hooks.allowedSessionKeyPrefixes": "Hooks Allowed Session Key Prefixes",

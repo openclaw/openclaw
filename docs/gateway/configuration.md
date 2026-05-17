@@ -441,7 +441,8 @@ candidate contains redacted secret placeholders such as `***`.
     {
       hooks: {
         enabled: true,
-        token: "shared-secret",
+        // Use either token or tokenFile. Prefer tokenFile for mounted secrets.
+        tokenFile: "/run/secrets/openclaw-hooks-token",
         path: "/hooks",
         defaultSessionKey: "hook:ingress",
         allowRequestSessionKey: false,
@@ -460,8 +461,8 @@ candidate contains redacted secret placeholders such as `***`.
 
     Security note:
     - Treat all hook/webhook payload content as untrusted input.
-    - Use a dedicated `hooks.token`; do not reuse the shared Gateway token.
-    - Hook auth is header-only (`Authorization: Bearer ...` or `x-openclaw-token`); query-string tokens are rejected.
+    - Use a dedicated hook token; do not reuse the shared Gateway token. Configure exactly one of `hooks.token` or `hooks.tokenFile`; prefer `hooks.tokenFile` for mounted secrets.
+    - Hook auth is header-only (`Authorization: Bearer <token>` or `x-openclaw-token`); query-string tokens are rejected.
     - `hooks.path` cannot be `/`; keep webhook ingress on a dedicated subpath such as `/hooks`.
     - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
     - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to bound caller-selected session keys.

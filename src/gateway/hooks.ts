@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHookTokenFromConfig } from "../hooks/token.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
@@ -50,9 +51,9 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (cfg.hooks?.enabled !== true) {
     return null;
   }
-  const token = normalizeOptionalString(cfg.hooks?.token);
+  const token = normalizeOptionalString(resolveHookTokenFromConfig(cfg.hooks));
   if (!token) {
-    throw new Error("hooks.enabled requires hooks.token");
+    throw new Error("hooks.enabled requires hooks.token or hooks.tokenFile");
   }
   const rawPath = normalizeOptionalString(cfg.hooks?.path) || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;

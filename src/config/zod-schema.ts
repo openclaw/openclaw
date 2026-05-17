@@ -777,6 +777,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         path: z.string().optional(),
         token: z.string().optional().register(sensitive),
+        tokenFile: z.string().optional().register(sensitive),
         defaultSessionKey: z.string().optional(),
         allowRequestSessionKey: z.boolean().optional(),
         allowedSessionKeyPrefixes: z.array(z.string()).optional(),
@@ -789,6 +790,15 @@ export const OpenClawSchema = z
         internal: InternalHooksSchema,
       })
       .strict()
+      .superRefine((hooks, ctx) => {
+        if (hooks.token && hooks.tokenFile) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["tokenFile"],
+            message: "hooks.tokenFile cannot be used with hooks.token",
+          });
+        }
+      })
       .optional(),
     web: z
       .object({

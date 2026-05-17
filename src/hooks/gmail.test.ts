@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
@@ -6,6 +9,7 @@ import {
   buildTopicPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
+  resolveGmailSetupHookToken,
 } from "./gmail.js";
 
 const baseConfig = {
@@ -125,6 +129,65 @@ describe("gmail hook config", () => {
       {},
     );
     expect(result.ok).toBe(false);
+  });
+
+  it("resolves hook token from tokenFile", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gmail-token-"));
+    const tokenFile = path.join(dir, "hooks.token");
+    fs.writeFileSync(tokenFile, "file-hook-token\n", { mode: 0o600 });
+    try {
+      const result = resolveGmailHookRuntimeConfig(
+        {
+          hooks: {
+            tokenFile,
+            gmail: {
+              account: "openclaw@gmail.com",
+              topic: "projects/demo/topics/gog-gmail-watch",
+              pushToken: "push-token",
+            },
+          },
+        },
+        {},
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.hookToken).toBe("file-hook-token");
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves tokenFile when setup resolves an existing file-backed token", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gmail-setup-token-"));
+    const tokenFile = path.join(dir, "hooks.token");
+    fs.writeFileSync(tokenFile, "file-hook-token\n", { mode: 0o600 });
+    try {
+      const result = resolveGmailSetupHookToken({ tokenFile });
+      expect(result.hookToken).toBe("file-hook-token");
+      expect(result.hooksAuth).toEqual({ token: undefined, tokenFile });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses inline setup hook token overrides instead of tokenFile", () => {
+    const result = resolveGmailSetupHookToken(
+      { tokenFile: "/run/secrets/openclaw-hooks-token" },
+      "override-token",
+    );
+    expect(result).toEqual({
+      hookToken: "override-token",
+      hooksAuth: { token: "override-token", tokenFile: undefined },
+    });
+  });
+
+  it("keeps an existing inline token when setup has no override", () => {
+    const result = resolveGmailSetupHookToken({ token: "existing-token" });
+    expect(result).toEqual({
+      hookToken: "existing-token",
+      hooksAuth: { token: "existing-token", tokenFile: undefined },
+    });
   });
 
   it("defaults serve path to / when tailscale is enabled", () => {
