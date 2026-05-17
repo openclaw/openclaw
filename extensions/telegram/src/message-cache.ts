@@ -348,6 +348,7 @@ function mergeTelegramSourceMessage(existing: Message, incoming: Message): Messa
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
     return {
       ...merged,
+      // @ts-expect-error resolveEmbeddedReplyMessage returns Message (runtime-compatible with nested message shape)
       reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
     };
   }
@@ -360,6 +361,7 @@ function mergeAuthoritativeTelegramSourceMessage(existing: Message, incoming: Me
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
     return {
       ...incoming,
+      // @ts-expect-error resolveEmbeddedReplyMessage returns Message (runtime-compatible with nested message shape)
       reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
     };
   }
@@ -377,7 +379,7 @@ function mergeCachedMessageNode(
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
   return normalizeRequiredMessageNode(sourceMessage, {
-    ...(Number.isFinite(threadId) ? { threadId } : {}),
+    threadId: Number.isFinite(threadId) ? threadId : undefined,
   });
 }
 
@@ -559,7 +561,7 @@ export function createTelegramMessageCache(params?: {
       }
       let recordedEntry: TelegramCachedMessageNode | null = null;
       for (const { node, mode } of observations) {
-        const key = telegramMessageCacheKey({ accountId, chatId, messageId: node.messageId });
+        const key = telegramMessageCacheKey({ accountId, chatId, messageId: node.messageId! });
         const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
         if (node.messageId === currentObservation.node.messageId) {
           recordedEntry = cachedNode;
