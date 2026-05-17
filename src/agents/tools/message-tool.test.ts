@@ -798,6 +798,28 @@ describe("message tool schema scoping", () => {
     },
   );
 
+  it("describes channel as a provider enum instead of a provider-specific target id", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const channel = getToolProperties(tool).channel as
+      | { type?: string; description?: string; enum?: string[] }
+      | undefined;
+
+    expect(channel?.type).toBe("string");
+    expect(channel?.description).toContain("provider id");
+    expect(channel?.description).toContain("put channel/user/chat ids in target or targets");
+    expect(channel?.enum).toEqual(expect.arrayContaining(["discord", "telegram"]));
+    expect(channel?.enum).not.toContain("C07ABC1234X");
+  });
+
   it("includes poll in the action enum when the current channel supports poll actions", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),

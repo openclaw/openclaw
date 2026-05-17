@@ -118,9 +118,20 @@ function sanitizePresentationTextFields(value: unknown): unknown {
   return presentation;
 }
 
+const MESSAGE_TOOL_CHANNEL_DESCRIPTION =
+  "Optional destination channel provider id, such as telegram, slack, discord, or webchat. Use this only to choose the provider; put channel/user/chat ids in target or targets.";
+
+function listMessageChannelSchemaValues(): string[] {
+  return Array.from(new Set(listChannelPlugins().map((plugin) => plugin.id))).sort();
+}
+
 function buildRoutingSchema() {
   return {
-    channel: Type.Optional(Type.String()),
+    channel: Type.Optional(
+      stringEnum(listMessageChannelSchemaValues(), {
+        description: MESSAGE_TOOL_CHANNEL_DESCRIPTION,
+      }),
+    ),
     target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
