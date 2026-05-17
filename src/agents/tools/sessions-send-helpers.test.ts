@@ -84,6 +84,23 @@ describe("resolveAnnounceTargetFromKey", () => {
     });
   });
 
+  it("supports account-scoped direct session keys", () => {
+    expect(
+      resolveAnnounceTargetFromKey("agent:main:feishu:acct_main:direct:ou_direct_user"),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_direct_user",
+      accountId: "acct_main",
+      threadId: undefined,
+    });
+    expect(resolveAnnounceTargetFromKey("agent:main:feishu:acct_main:dm:ou_direct_user")).toEqual({
+      channel: "feishu",
+      to: "user:ou_direct_user",
+      accountId: "acct_main",
+      threadId: undefined,
+    });
+  });
+
   it("does not crash when resolveDeliveryTarget returns null", () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -116,6 +133,14 @@ describe("resolveAnnounceTargetFromKey", () => {
     expect(resolveAnnounceTargetFromKey("agent:main:feishu:direct:ou_direct_user")).toEqual({
       channel: "feishu",
       to: "ou_direct_user",
+      threadId: undefined,
+    });
+    expect(
+      resolveAnnounceTargetFromKey("agent:main:feishu:acct_main:direct:ou_direct_user"),
+    ).toEqual({
+      channel: "feishu",
+      to: "ou_direct_user",
+      accountId: "acct_main",
       threadId: undefined,
     });
   });

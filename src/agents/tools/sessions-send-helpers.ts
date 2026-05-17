@@ -41,11 +41,14 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
       return null;
     }
     const channel = normalizeAnyChannelId(raw[0]) ?? normalizeChatChannelId(raw[0]) ?? raw[0];
-    const kind = raw[1]?.toLowerCase();
+    const hasAccountScopedDirectKind = raw.length >= 4 && (raw[2] === "direct" || raw[2] === "dm");
+    const accountId = hasAccountScopedDirectKind ? raw[1] : undefined;
+    const kind = (hasAccountScopedDirectKind ? raw[2] : raw[1])?.toLowerCase();
     if (kind !== "direct" && kind !== "dm") {
       return null;
     }
-    const parsedThread = parseThreadSessionSuffix(raw.slice(2).join(":"));
+    const idStartIndex = hasAccountScopedDirectKind ? 3 : 2;
+    const parsedThread = parseThreadSessionSuffix(raw.slice(idStartIndex).join(":"));
     const id = parsedThread.baseSessionKey?.trim();
     if (!id) {
       return null;
@@ -58,6 +61,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return {
       channel,
       to: routed,
+      accountId,
       threadId: parsedThread.threadId,
     };
   }
