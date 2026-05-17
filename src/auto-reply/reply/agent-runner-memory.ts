@@ -329,6 +329,8 @@ export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
   trailingBytesTokens?: number;
+  postCompactionTrailingBytesTokens?: number;
+  hasPostUsageCompactionMarker?: boolean;
 };
 
 // Keep a generous near-threshold window so large assistant outputs still trigger
@@ -356,6 +358,74 @@ function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalize
     // ignore bad lines
   }
   return undefined;
+}
+
+function collectTranscriptText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return "";
+      }
+      const text = (item as { text?: unknown }).text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function transcriptLineHasPostUsageCompactionMarker(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      type?: unknown;
+      message?: { content?: unknown };
+      payload?: { type?: unknown; text?: unknown };
+    };
+    if (parsed.type === "compaction" || parsed.type === "session.compacted") {
+      return true;
+    }
+    const payloadType = parsed.payload?.type;
+    if (payloadType === "compaction" || payloadType === "session.compacted") {
+      return true;
+    }
+    const text = [
+      collectTranscriptText(parsed.message?.content),
+      collectTranscriptText(parsed.payload?.text),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return (
+      text.includes("[Post-compaction context refresh]") ||
+      text.includes("Session was just compacted.")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function estimateTranscriptLinesBytes(lines: string[]): number {
+  if (lines.length === 0) {
+    return 0;
+  }
+  return Buffer.byteLength(lines.join("\n"), "utf8") + lines.length;
+}
+
+function findLastPostUsageCompactionMarkerIndex(lines: string[]): number {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (transcriptLineHasPostUsageCompactionMarker(lines[index] ?? "")) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function resolveSessionLogPath(
@@ -395,6 +465,8 @@ function deriveTranscriptUsageSnapshot(
     | {
         usage?: ReturnType<typeof normalizeUsage>;
         trailingBytes?: number;
+        postCompactionTrailingBytes?: number;
+        hasPostUsageCompactionMarker?: boolean;
       }
     | undefined,
 ): SessionTranscriptUsageSnapshot | undefined {
@@ -414,11 +486,18 @@ function deriveTranscriptUsageSnapshot(
   return {
     promptTokens,
     outputTokens,
+    hasPostUsageCompactionMarker: snapshot.hasPostUsageCompactionMarker === true ? true : undefined,
     trailingBytesTokens:
       typeof snapshot.trailingBytes === "number" &&
       Number.isFinite(snapshot.trailingBytes) &&
       snapshot.trailingBytes >= 0
         ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
+        : undefined,
+    postCompactionTrailingBytesTokens:
+      typeof snapshot.postCompactionTrailingBytes === "number" &&
+      Number.isFinite(snapshot.postCompactionTrailingBytes) &&
+      snapshot.postCompactionTrailingBytes > 0
+        ? Math.ceil(snapshot.postCompactionTrailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined,
   };
 }
@@ -496,6 +575,10 @@ type SessionLogUsageScan = {
   usage?: ReturnType<typeof normalizeUsage>;
   trailingBytes?: number;
   byteSize: number;
+  // Set when a compaction marker follows the last usage line, so the estimator can
+  // treat that usage as stale pre-compaction state instead of current active context.
+  hasPostUsageCompactionMarker?: boolean;
+  postCompactionTrailingBytes?: number;
 };
 
 async function readSessionLogByteSize(logPath: string): Promise<number | undefined> {
@@ -518,6 +601,8 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<Sess
     const stat = await handle.stat();
     let position = stat.size;
     let leadingPartial = "";
+    let postUsageCompactionMarkerSeen = false;
+    let postCompactionTrailingBytes: number | undefined;
     while (position > 0) {
       const chunkSize = Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, position);
       const start = position - chunkSize;
@@ -544,11 +629,29 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<Sess
         if (usage) {
           const trailingLines = lines.slice(i + 1);
           const trailingBytesInChunk = estimatePostUsageTrailingBytes(trailingLines);
+          const markerIndex = findLastPostUsageCompactionMarkerIndex(trailingLines);
+          const hasMarkerInTrailingLines = markerIndex >= 0;
+          const postCompactionTrailingBytesInChunk = hasMarkerInTrailingLines
+            ? suffixBytesOutsideCombined +
+              estimateTranscriptLinesBytes(trailingLines.slice(markerIndex + 1))
+            : undefined;
           return {
             usage,
             trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
             byteSize: stat.size,
+            hasPostUsageCompactionMarker: postUsageCompactionMarkerSeen || hasMarkerInTrailingLines,
+            postCompactionTrailingBytes: postUsageCompactionMarkerSeen
+              ? postCompactionTrailingBytes
+              : postCompactionTrailingBytesInChunk,
           };
+        }
+      }
+      if (!postUsageCompactionMarkerSeen) {
+        const markerIndex = findLastPostUsageCompactionMarkerIndex(lines);
+        if (markerIndex >= 0) {
+          postUsageCompactionMarkerSeen = true;
+          postCompactionTrailingBytes =
+            suffixBytesOutsideCombined + estimateTranscriptLinesBytes(lines.slice(markerIndex + 1));
         }
       }
       position = start;
@@ -559,6 +662,8 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<Sess
           usage,
           trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
           byteSize: stat.size,
+          hasPostUsageCompactionMarker: postUsageCompactionMarkerSeen,
+          postCompactionTrailingBytes,
         }
       : { byteSize: stat.size };
   } finally {
@@ -614,6 +719,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const promptTokens = snapshot.usage?.promptTokens;
     const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
     const outputTokens = snapshot.usage?.outputTokens;
+    const postCompactionTrailingBytesTokens = snapshot.usage?.postCompactionTrailingBytesTokens;
     if (
       typeof promptTokens === "number" &&
       Number.isFinite(promptTokens) &&
@@ -648,11 +754,30 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
     })();
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
-      const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
+      const rawUsagePromptTokens = Math.ceil(promptTokens);
+      // After a compaction marker, the last persisted usage line still records the
+      // pre-compaction prompt size. Treat it as stale when it dwarfs the live replayed
+      // message estimate, and bound the estimate to post-compaction context so preflight
+      // does not repeatedly compact a session that is already well under the model limit.
+      const hasStaleUsageSnapshot =
+        snapshot.usage?.hasPostUsageCompactionMarker === true &&
+        typeof estimatedMessageTokens === "number" &&
+        rawUsagePromptTokens > estimatedMessageTokens * 2 + 10_000;
+      const boundedUsagePromptTokens =
+        hasStaleUsageSnapshot && typeof estimatedMessageTokens === "number"
+          ? estimatedMessageTokens
+          : rawUsagePromptTokens;
+      const tailTokens = hasStaleUsageSnapshot
+        ? (postCompactionTrailingBytesTokens ?? 0)
+        : (trailingBytesTokens ?? 0);
+      const usagePromptTokens = boundedUsagePromptTokens + tailTokens;
       return {
         promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
         outputTokens:
-          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+          !hasStaleUsageSnapshot &&
+          typeof outputTokens === "number" &&
+          Number.isFinite(outputTokens) &&
+          outputTokens > 0
             ? Math.ceil(outputTokens)
             : undefined,
         transcriptByteSize: snapshot.byteSize,

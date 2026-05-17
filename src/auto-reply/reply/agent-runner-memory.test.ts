@@ -1524,6 +1524,75 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
+  it("drops stale transcript usage and pre-compaction tail before preflight compaction", async () => {
+    const sessionFile = path.join(rootDir, "stale-usage-after-compaction.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "pre-compaction giant turn" }],
+            usage: { input: 240_000, output: 120_000 },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "tool",
+            content: `pre-compaction stale tool result ${"x".repeat(450_000)}`,
+          },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          timestamp: new Date(1_700_000_000_000).toISOString(),
+          result: { summary: "compacted" },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "post-compaction summary with a small active replay" }],
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("skips OpenClaw preflight compaction for persisted Codex runtime sessions", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
