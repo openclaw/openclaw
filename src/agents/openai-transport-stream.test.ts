@@ -140,6 +140,143 @@ describe("openai transport stream", () => {
     ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
   });
 
+  it("observes detail-less Responses failures without leaking request ids", async () => {
+    const model = createAzureResponsesModel();
+    const event = {
+      type: "response.failed",
+      response: {
+        id: "resp_failed_123",
+        status: "failed",
+        model: "gpt-5.4-pro",
+        metadata: {
+          litellm_request_id: "litellm_req_plaintext_123",
+          api_key: "sk-observation-secret",
+        },
+        provider_request_id: "provider_req_plaintext_456",
+        status_details: {
+          provider_request_id: "provider_req_nested_789",
+        },
+        provider_error: {
+          request_id: "provider_error_req_nested_012",
+          headers: {
+            "x-request-id": ["header_req_plaintext_345", "header_req_plaintext_678"],
+          },
+        },
+      },
+    };
+
+    const observation = __testing.buildResponsesFailedNoDetailsObservation(event, model);
+    const summary = __testing.summarizeResponsesFailedNoDetailsObservation(observation);
+
+    expect(observation.providerRuntimeFailureKind).toBe("no_error_details");
+    expect(observation.responseId).toBe("resp_failed_123");
+    expect(observation.responseStatus).toBe("failed");
+    expect(observation.responseModel).toBe("gpt-5.4-pro");
+    expect(observation.metadataKeys).toEqual(["api_key", "litellm_request_id"]);
+    expect(observation.requestIdHashes).toHaveLength(6);
+    expect(observation.requestIdHashes.join(",")).toContain("sha256:");
+    expect(summary).toContain("responseId=resp_failed_123");
+    expect(summary).toContain("requestIds=");
+    expect(JSON.stringify(observation)).not.toContain("litellm_req_plaintext_123");
+    expect(JSON.stringify(observation)).not.toContain("provider_req_plaintext_456");
+    expect(JSON.stringify(observation)).not.toContain("provider_req_nested_789");
+    expect(JSON.stringify(observation)).not.toContain("provider_error_req_nested_012");
+    expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_345");
+    expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_678");
+    expect(JSON.stringify(observation)).not.toContain("sk-observation-secret");
+  });
+
+  it("normalizes Responses failed events before transport errors are thrown", () => {
+    const model = createAzureResponsesModel();
+
+    expect(
+      __testing.normalizeResponsesFailedEvent(
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed_rate_limit",
+            error: {
+              code: "rate_limit_exceeded",
+              message: "Too many requests",
+            },
+          },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      message: "rate_limit_exceeded: Too many requests",
+      responseId: "resp_failed_rate_limit",
+    });
+
+    expect(
+      __testing.normalizeResponsesFailedEvent(
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed_incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      message: "incomplete: max_output_tokens",
+      responseId: "resp_failed_incomplete",
+    });
+  });
+
+  it("preserves the failed response id before throwing detail-less Responses failures", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      __testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_runtime",
+              status: "failed",
+              model: "gpt-5.4-pro",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Unknown error (no error details in response)");
+
+    expect(output.responseId).toBe("resp_failed_runtime");
+  });
+
+  it("treats empty Responses error objects as detail-less failures", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      __testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_empty_error",
+              status: "failed",
+              model: "gpt-5.4-pro",
+              error: { code: null, message: null },
+              provider_request_id: "provider_req_empty_error",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Unknown error (no error details in response)");
+
+    expect(output.responseId).toBe("resp_failed_empty_error");
+  });
+
   it("clamps Responses cached prompt usage at zero", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -1606,6 +1743,97 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]?.role).toBe("system");
+  });
+
+  it("omits Responses reasoning params when model compat disables reasoning effort", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 2_000_000,
+        maxTokens: 30_000,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("passes explicit xAI Grok 4.3 reasoning effort through", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("keeps developer role for native OpenAI reasoning responses models", () => {
@@ -5702,6 +5930,18 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 8192,
   } satisfies Model<"openai-completions">;
 
+  const openRouterAnthropicModel = {
+    ...openRouterModel,
+    id: "anthropic/claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+  } satisfies Model<"openai-completions">;
+
+  const openRouterXaiModel = {
+    ...openRouterModel,
+    id: "x-ai/grok-4.3",
+    name: "Grok 4.3",
+  } satisfies Model<"openai-completions">;
+
   const openAIModel = {
     id: "gpt-5.4-mini",
     name: "GPT-5.4 Mini",
@@ -5837,6 +6077,25 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(assistant).not.toHaveProperty("reasoning_details");
     expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["Anthropic", openRouterAnthropicModel],
+    ["xAI", openRouterXaiModel],
+  ] as const)("strips OpenRouter %s non-replayable reasoning fields", (_label, model) => {
+    for (const thinkingSignature of [
+      "reasoning_details",
+      "reasoning_content",
+      "reasoning",
+      "reasoning_text",
+    ]) {
+      const assistant = getAssistantMessage(buildReplayParams(model, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    }
   });
 
   it.each(["reasoning", "reasoning_content"])(

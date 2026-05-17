@@ -373,7 +373,7 @@ export async function buildReplyPayloads(params: {
     return unsent;
   };
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError) {
+    if (payload.isError || payload.isFallbackNotice) {
       return payload;
     }
     const reply = resolveSendableOutboundReplyParts(payload);

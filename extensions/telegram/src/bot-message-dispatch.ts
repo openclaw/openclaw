@@ -92,7 +92,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
-import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
+import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -189,7 +189,7 @@ function normalizeTelegramFenceKey(value: unknown): string | undefined {
 }
 
 function resolveTelegramReplyFenceKey(params: {
-  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string; InboundTurnKind?: string };
+  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string; InboundEventKind?: string };
   chatId: number | string;
   threadSpec: { id?: number | string | null; scope?: string };
 }): TelegramReplyFenceKey {
@@ -199,7 +199,7 @@ function resolveTelegramReplyFenceKey(params: {
     `telegram:${String(params.chatId)}:${params.threadSpec.scope ?? "default"}:${params.threadSpec.id ?? "root"}`;
   const roomEventKey = `${baseKey}:room_event`;
   return {
-    activeKey: params.ctxPayload.InboundTurnKind === "room_event" ? roomEventKey : baseKey,
+    activeKey: params.ctxPayload.InboundEventKind === "room_event" ? roomEventKey : baseKey,
     roomEventKey,
   };
 }
@@ -468,7 +468,7 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
   } = context;
-  const isRoomEvent = ctxPayload.InboundTurnKind === "room_event";
+  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
@@ -950,21 +950,21 @@ export const dispatchTelegramMessage = async ({
     }
   };
   const beginDeliveryCorrelation = () =>
-    beginTelegramInboundTurnDeliveryCorrelation(
+    beginTelegramInboundEventDeliveryCorrelation(
       ctxPayload.SessionKey,
       {
         outboundTo: historyKey || String(chatId),
         outboundAccountId: route.accountId,
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           deliveryState.markDelivered();
           if (isRoomEvent) {
             clearGroupHistory();
           }
         },
       },
-      { inboundTurnKind: ctxPayload.InboundTurnKind },
+      { inboundEventKind: ctxPayload.InboundEventKind },
     );
-  const endTelegramInboundTurnDeliveryCorrelation = beginDeliveryCorrelation();
+  const endTelegramInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
     if (!sessionKey) {
@@ -1775,7 +1775,7 @@ export const dispatchTelegramMessage = async ({
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
     releaseReplyFence();
-    endTelegramInboundTurnDeliveryCorrelation();
+    endTelegramInboundEventDeliveryCorrelation();
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {

@@ -3,6 +3,7 @@ import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   addDurableCommandApproval,
+  analyzeShellCommand,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
@@ -98,6 +99,111 @@ function hasGatewayAllowlistMiss(params: {
     (!params.analysisOk || !params.allowlistSatisfied) &&
     !params.durableApprovalSatisfied
   );
+}
+
+function normalizeCommandName(value: string | undefined): string {
+  return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function textMentionsSecurityAuditSuppressions(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("security.audit.suppressions") ||
+    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
+      normalized,
+    )
+  );
+}
+
+function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
+  const command = normalizeCommandName(argv[0]);
+  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
+  if (normalizeCommandName(argv[offset]) !== "openclaw") {
+    return false;
+  }
+  offset += 1;
+  while (offset < argv.length) {
+    const arg = argv[offset];
+    if (["--dev", "--no-color"].includes(arg ?? "")) {
+      offset += 1;
+      continue;
+    }
+    if (["--profile", "--container", "--log-level"].includes(arg ?? "")) {
+      offset += 2;
+      continue;
+    }
+    if (
+      arg?.startsWith("--profile=") ||
+      arg?.startsWith("--container=") ||
+      arg?.startsWith("--log-level=")
+    ) {
+      offset += 1;
+      continue;
+    }
+    break;
+  }
+  return (
+    argv[offset] === "config" && ["get", "schema", "validate"].includes(argv[offset + 1] ?? "")
+  );
+}
+
+function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
+  let remaining = command;
+  for (const segment of segments) {
+    const raw = segment.raw?.trim();
+    if (!raw) {
+      continue;
+    }
+    remaining = remaining.replace(raw, " ");
+  }
+  return remaining;
+}
+
+function commandRequiresSecurityAuditSuppressionApproval(params: {
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  segments: Array<{ argv: string[]; raw?: string }>;
+}): boolean {
+  let sawSegmentMention = false;
+  for (const segment of params.segments) {
+    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
+    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
+      continue;
+    }
+    sawSegmentMention = true;
+    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
+      return true;
+    }
+  }
+  if (sawSegmentMention) {
+    const rawAnalysis = analyzeShellCommand({
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+    });
+    if (!rawAnalysis.ok) {
+      return textMentionsSecurityAuditSuppressions(params.command);
+    }
+    for (const segment of rawAnalysis.segments) {
+      if (
+        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
+        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
+      ) {
+        return true;
+      }
+    }
+    if (
+      textMentionsSecurityAuditSuppressions(
+        removeParsedSegmentText(params.command, rawAnalysis.segments),
+      )
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return textMentionsSecurityAuditSuppressions(params.command);
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -335,6 +441,13 @@ export async function processGatewayAllowlist(
     allowlistSatisfied &&
     !enforcedCommand &&
     allowlistPlanUnavailableReason !== null;
+  const requiresSecurityAuditSuppressionApproval =
+    commandRequiresSecurityAuditSuppressionApproval({
+      command: params.command,
+      cwd: params.workdir,
+      env: params.env,
+      segments: allowlistEval.segments,
+    }) && !(hostSecurity === "full" && hostAsk === "off");
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -345,7 +458,8 @@ export async function processGatewayAllowlist(
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
-    requiresInlineEvalApproval;
+    requiresInlineEvalApproval ||
+    requiresSecurityAuditSuppressionApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -354,6 +468,11 @@ export async function processGatewayAllowlist(
   if (requiresAllowlistPlanApproval) {
     params.warnings.push(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
+    );
+  }
+  if (requiresSecurityAuditSuppressionApproval) {
+    params.warnings.push(
+      "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
   }
 

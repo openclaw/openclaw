@@ -85,6 +85,7 @@ export async function persistSessionUsageUpdate(params: {
   contextTokensUsed?: number;
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
+  isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
@@ -134,8 +135,11 @@ export async function persistSessionUsageUpdate(params: {
             modelUsed: params.modelUsed ?? entry.model,
           });
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider:
+              params.isHeartbeat === true
+                ? entry.modelProvider
+                : (params.providerUsed ?? entry.modelProvider),
+            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
@@ -180,8 +184,11 @@ export async function persistSessionUsageUpdate(params: {
         sessionKey,
         update: async (entry) => {
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider:
+              params.isHeartbeat === true
+                ? entry.modelProvider
+                : (params.providerUsed ?? entry.modelProvider),
+            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
