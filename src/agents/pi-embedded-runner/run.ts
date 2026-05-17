@@ -1688,7 +1688,7 @@ export async function runEmbeddedPiAgent(
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
+          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution && !externalAbort) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
@@ -2639,7 +2639,7 @@ export async function runEmbeddedPiAgent(
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           });
           const timedOutDuringPrompt =
-            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution && !externalAbort;
           const hasPartialAssistantTextAfterPromptTimeout =
             timedOutDuringPrompt &&
             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&

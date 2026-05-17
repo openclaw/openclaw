@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/compaction: skip timeout-triggered compaction when the run was aborted by the user (Stop button). Previously, user-initiated aborts would still fire timeout compaction if context usage exceeded 65%, causing unnecessary compaction at an inappropriate time. Uses `externalAbort` (set only for user-initiated stops) rather than `aborted` (also set for internal timeouts) to correctly distinguish user aborts from provider timeouts.
 - Feishu: return bound subagent delivery origins from session thread setup so Feishu subagent completions route back to the same DM or topic. (#83190) Thanks @100menotu001.
 - CLI/update: tailor post-update Gateway recovery hints by platform, showing systemd, LaunchAgent, Scheduled Task, or generic service-manager guidance instead of macOS-only recovery text. (#83096) Thanks @rubencu.
 - Plugins: apply a default 15-second timeout to legacy `before_agent_start` hooks so hung plugin handlers no longer block agent startup. Fixes #48534. (#83136) Thanks @therahul-yo.
