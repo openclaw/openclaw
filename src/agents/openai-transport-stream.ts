@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
@@ -721,11 +721,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash).toString(36);
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
@@ -767,14 +763,21 @@ function convertResponsesMessages(
   const messages: ResponseInput = [];
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
+  const sanitizeIdPart = (part: string) => part.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+$/, "");
   const normalizeIdPart = (part: string) => {
-    const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sanitized = sanitizeIdPart(part);
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
     return normalized.replace(/_+$/, "");
   };
   const buildForeignResponsesItemId = (itemId: string) => {
     const normalized = `fc_${shortHash(itemId)}`;
     return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
+  };
+  const buildSameProviderCopilotResponsesItemId = (itemId: string) => {
+    const sanitized = sanitizeIdPart(itemId);
+    const candidate = sanitized.startsWith("fc_") ? sanitized : `fc_${sanitized}`;
+    return candidate.length > 64 ? buildForeignResponsesItemId(itemId) : candidate;
   };
   const normalizeToolCallId = (
     id: string,
@@ -792,7 +795,9 @@ function convertResponsesMessages(
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
       ? buildForeignResponsesItemId(itemId)
-      : normalizeIdPart(itemId);
+      : model.provider === "github-copilot"
+        ? buildSameProviderCopilotResponsesItemId(itemId)
+        : normalizeIdPart(itemId);
     if (!normalizedItemId.startsWith("fc_")) {
       normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
     }
@@ -802,6 +807,7 @@ function convertResponsesMessages(
     context.messages,
     model,
     normalizeToolCallId,
+    { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -1692,7 +1698,7 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
+    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,

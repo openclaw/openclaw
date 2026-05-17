@@ -2,6 +2,7 @@ import {
   buildChannelInboundEventContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
+  toHistoryMediaEntries,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
@@ -151,6 +152,7 @@ export async function buildDiscordMessageProcessContext(params: {
     sessionKey: route.sessionKey,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
+  const isRoomEvent = ctx.inboundEventKind === "room_event";
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -162,7 +164,8 @@ export async function buildDiscordMessageProcessContext(params: {
     envelope: envelopeOptions,
   });
   const shouldIncludeChannelHistory =
-    !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+    !isDirectMessage &&
+    (isRoomEvent || !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
     combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
@@ -277,7 +280,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     messageChannelId,
     isGuildMessage,
-    channelConfig,
+    channelConfig: isRoomEvent ? null : channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
     channelName: channelInfo?.name,
@@ -424,6 +427,20 @@ export async function buildDiscordMessageProcessContext(params: {
     },
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  if (isRoomEvent && shouldIncludeChannelHistory) {
+    await channelHistory.recordWithMedia({
+      historyKey: messageChannelId,
+      limit: historyLimit,
+      entry: {
+        sender: senderName,
+        body: text,
+        timestamp: resolveTimestampMs(message.timestamp),
+        messageId: message.id,
+      },
+      media: toHistoryMediaEntries(mediaList, { messageId: message.id }),
+      messageId: message.id,
+    });
+  }
 
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
