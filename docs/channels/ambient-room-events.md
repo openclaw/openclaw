@@ -10,11 +10,11 @@ sidebarTitle: "Ambient room events"
 
 Ambient room events let OpenClaw process unmentioned group or channel chatter as quiet context. The agent can update memory and session state, but the room stays silent unless the agent explicitly calls the `message` tool.
 
-Use this for always-on rooms where the agent should listen, decide when a reply is useful, and avoid the old prompt pattern of answering `NO_REPLY`.
+For always-on group chats, this is the recommended mode: combine `messages.groupChat.unmentionedInbound: "room_event"` with `messages.groupChat.visibleReplies: "message_tool"`. Use it when the agent should listen, decide when a reply is useful, and avoid the old prompt pattern of answering `NO_REPLY`.
 
 Supported today: Discord guild channels, Slack channels and private channels, Slack multi-person DMs, and Telegram groups or supergroups. Other group channels keep their existing group behavior unless their channel page says they support ambient room events.
 
-## Quick setup
+## Recommended setup
 
 Set the global group-chat behavior:
 
