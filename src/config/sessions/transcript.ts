@@ -80,8 +80,10 @@ function parseAssistantTranscriptText(line: string): AssistantTranscriptText | u
     id?: unknown;
     message?: unknown;
   };
-  const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
-  if (!message || message.role !== "assistant") {
+  const message = parsed.message as
+    | { role?: unknown; timestamp?: unknown; provider?: unknown; model?: unknown }
+    | undefined;
+  if (!message || message.role !== "assistant" || isTranscriptOnlyOpenClawAssistant(message)) {
     return undefined;
   }
   const text = extractAssistantVisibleText(message)?.trim();
@@ -95,6 +97,16 @@ function parseAssistantTranscriptText(line: string): AssistantTranscriptText | u
       ? { timestamp: message.timestamp }
       : {}),
   };
+}
+
+function isTranscriptOnlyOpenClawAssistant(message: {
+  provider?: unknown;
+  model?: unknown;
+}): boolean {
+  return (
+    message.provider === "openclaw" &&
+    (message.model === "delivery-mirror" || message.model === "gateway-injected")
+  );
 }
 
 export async function resolveSessionTranscriptFile(params: {

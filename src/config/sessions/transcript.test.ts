@@ -77,6 +77,78 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     return event;
   }
 
+  it("skips transcript-only OpenClaw assistant messages when reading latest assistant text", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "latest-assistant-text",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "latest-assistant-text" }),
+        JSON.stringify({
+          type: "message",
+          id: "real-assistant",
+          message: createExactAssistantMessage({ text: "Real Telegram reply" }),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "delivery-mirror",
+          message: createExactAssistantMessage({
+            text: "Earlier mirrored text",
+            provider: "openclaw",
+            model: "delivery-mirror",
+          }),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "gateway-injected",
+          message: createExactAssistantMessage({
+            text: "Gateway injected transcript note",
+            provider: "openclaw",
+            model: "gateway-injected",
+          }),
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    await expect(readLatestAssistantTextFromSessionTranscript(sessionFile)).resolves.toEqual({
+      id: "real-assistant",
+      text: "Real Telegram reply",
+      timestamp: expect.any(Number),
+    });
+  });
+
+  it("keeps non-OpenClaw assistant messages with delivery-like model names visible", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "latest-assistant-provider-boundary",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "latest-assistant-provider-boundary" }),
+        JSON.stringify({
+          type: "message",
+          id: "external-assistant",
+          message: createExactAssistantMessage({
+            text: "External model reply",
+            provider: "not-openclaw",
+            model: "delivery-mirror",
+          }),
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    await expect(readLatestAssistantTextFromSessionTranscript(sessionFile)).resolves.toEqual({
+      id: "external-assistant",
+      text: "External model reply",
+      timestamp: expect.any(Number),
+    });
+  });
+
   it("creates transcript file and appends message for valid session", async () => {
     writeTranscriptStore();
 
