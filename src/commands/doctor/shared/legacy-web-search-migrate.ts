@@ -7,8 +7,6 @@ import {
   type JsonRecord,
 } from "./legacy-config-record-shared.js";
 
-const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
-
 const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["brave", "brave"],
   ["duckduckgo", "duckduckgo"],
@@ -207,9 +205,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (getLegacyWebSearchProviderIdSet(owners).has(key) && isRecord(value)) {
       continue;
     }
-    if (MODERN_SCOPED_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
-      nextSearch[key] = value;
-    }
+    nextSearch[key] = value;
   }
   web.search = nextSearch;
 
