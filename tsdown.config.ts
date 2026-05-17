@@ -121,7 +121,6 @@ function buildCoreDistEntries(): Record<string, string> {
   if (minimalCore) {
     return {
       index: "src/index.ts",
-      entry: "src/entry.ts",
     };
   }
   return {
