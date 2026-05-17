@@ -1,4 +1,5 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { sanitizeFileToolParams } from "./tools/sanitize-tool-args.js";
 
 export type RequiredParamGroup = {
   keys: readonly string[];
@@ -111,7 +112,11 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
-  return normalized;
+  // Strip leaked LLM sentinel tokens from path-like args before they reach the
+  // filesystem layer. Single chokepoint for read/write/edit (and the
+  // workspace-root / memory-flush wrappers, which all call normalizeToolParams).
+  // Content args are intentionally left untouched (see sanitizeFileToolParams).
+  return sanitizeFileToolParams(normalized);
 }
 
 export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAgentTool {

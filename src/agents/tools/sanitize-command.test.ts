@@ -68,4 +68,37 @@ describe("sanitizeCommandInput", () => {
   it("preserves Korean text and emoji", () => {
     expect(sanitizeCommandInput('echo "안녕 🌙 황선아"')).toBe('echo "안녕 🌙 황선아"');
   });
+
+  // 더블 less-than 변형 — 2026-05-17 11:13 재발 (8건)
+  it('strips leading <<|"| variant (double less-than, no closing |>)', () => {
+    expect(sanitizeCommandInput('<<|"|x')).toBe("x");
+  });
+
+  it("strips leading <<| with no closing", () => {
+    expect(sanitizeCommandInput("<<|x")).toBe("x");
+  });
+
+  it("strips a leading double less-than run", () => {
+    expect(sanitizeCommandInput("<<x")).toBe("x");
+  });
+
+  it("strips a leading triple less-than run", () => {
+    expect(sanitizeCommandInput("<<<x")).toBe("x");
+  });
+
+  it('strips mid-command <<|"| variant', () => {
+    expect(sanitizeCommandInput('x<<|"|y')).toBe("xy");
+  });
+
+  it("preserves a lone leading unmatched quote (false-positive guard)", () => {
+    expect(sanitizeCommandInput('"unmatched')).toBe('"unmatched');
+  });
+
+  it('strips trailing <<|"| remnant', () => {
+    expect(sanitizeCommandInput('x<<|"|')).toBe("x");
+  });
+
+  it("preserves html-like <x> text (false-positive guard)", () => {
+    expect(sanitizeCommandInput("<x>")).toBe("<x>");
+  });
 });
