@@ -376,7 +376,17 @@ const ModelProviderLocalServiceSchema = z
 
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1),
+    // #83201: `baseUrl` and `models` were required at the schema level even
+    // though built-in providers (openai, anthropic, openai-codex, …) ship
+    // their own baseUrl + catalog and the docs/help describe
+    // `models.providers.<id>.timeoutSeconds` as a standalone per-provider
+    // request-timeout knob. The runtime resolver already handles a partial
+    // provider entry that only sets `timeoutSeconds`, but the strict schema
+    // rejected it at startup. Make both optional so the documented
+    // request-timeout override actually works on built-in providers; custom
+    // providers that add a new entry still need their own baseUrl + models
+    // because the runtime resolver has nothing to merge against.
+    baseUrl: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -393,7 +403,7 @@ const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
-    models: z.array(ModelDefinitionSchema),
+    models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
 
