@@ -1060,6 +1060,7 @@ export async function runCodexAppServerAttempt(
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
   let turnCompletionIdleWatchPinnedByTerminalError = false;
+  let turnCompletionIdleTimeoutOverrideMs: number | undefined;
   let turnAssistantCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnAssistantCompletionIdleWatchArmed = false;
   let turnAssistantCompletionLastActivityAt = Date.now();
@@ -1195,8 +1196,9 @@ export async function runCodexAppServerAttempt(
     ) {
       return;
     }
+    const timeoutMs = turnCompletionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
     const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    if (idleMs < turnCompletionIdleTimeoutMs) {
+    if (idleMs < timeoutMs) {
       scheduleTurnCompletionIdleWatch();
       return;
     }
@@ -1209,7 +1211,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       idleMs,
-      timeoutMs: turnCompletionIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
       ...turnCompletionLastActivityDetails,
     });
@@ -1217,7 +1219,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       idleMs,
-      timeoutMs: turnCompletionIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
       ...turnCompletionLastActivityDetails,
     });
@@ -1273,7 +1275,8 @@ export async function runCodexAppServerAttempt(
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    const delayMs = Math.max(1, turnCompletionIdleTimeoutMs - elapsedMs);
+    const timeoutMs = turnCompletionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
+    const delayMs = Math.max(1, timeoutMs - elapsedMs);
     turnCompletionIdleTimer = setTimeout(fireTurnCompletionIdleTimeout, delayMs);
     turnCompletionIdleTimer.unref?.();
   }
@@ -1351,6 +1354,7 @@ export async function runCodexAppServerAttempt(
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
     turnCompletionLastActivityDetails = options?.details;
+    turnCompletionIdleTimeoutOverrideMs = undefined;
     if (options?.attemptProgress) {
       turnAttemptLastProgressAt = turnCompletionLastActivityAt;
       turnAttemptLastProgressReason = reason;
@@ -1380,6 +1384,7 @@ export async function runCodexAppServerAttempt(
   const disarmTurnCompletionIdleWatch = () => {
     turnCompletionIdleWatchArmed = false;
     turnCompletionIdleWatchPinnedByTerminalError = false;
+    turnCompletionIdleTimeoutOverrideMs = undefined;
     clearTurnCompletionIdleTimer();
   };
 
@@ -1396,9 +1401,14 @@ export async function runCodexAppServerAttempt(
     scheduleTurnAssistantCompletionIdleWatch();
   };
 
-  const armTurnCompletionIdleWatch = (options?: { pinnedByTerminalError?: boolean }) => {
+  const armTurnCompletionIdleWatch = (options?: {
+    pinnedByTerminalError?: boolean;
+    timeoutMs?: number;
+  }) => {
     turnCompletionIdleWatchArmed = true;
     turnCompletionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
+    turnCompletionIdleTimeoutOverrideMs =
+      options?.timeoutMs !== undefined ? Math.max(1, Math.floor(options.timeoutMs)) : undefined;
     scheduleTurnCompletionIdleWatch();
   };
 
@@ -1520,6 +1530,11 @@ export async function runCodexAppServerAttempt(
       notification,
       turnCrossedToolHandoff,
     );
+    const postToolRawAssistantCompletionNeedsTerminalGuard =
+      isCurrentTurnNotification &&
+      turnCrossedToolHandoff &&
+      isRawAssistantCompletionNotification(notification) &&
+      activeTurnItemIds.size === 0;
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
@@ -1537,6 +1552,8 @@ export async function runCodexAppServerAttempt(
       disarmTurnAssistantCompletionIdleWatch();
     } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
+    } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
+      armTurnCompletionIdleWatch({ timeoutMs: turnAssistantCompletionIdleTimeoutMs });
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem) {
@@ -1561,6 +1578,7 @@ export async function runCodexAppServerAttempt(
       isCurrentTurnNotification &&
       !trackedDynamicToolCompletion &&
       !rawToolOutputCompletion &&
+      !postToolRawAssistantCompletionNeedsTerminalGuard &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
