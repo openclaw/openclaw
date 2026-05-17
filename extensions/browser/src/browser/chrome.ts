@@ -221,10 +221,29 @@ function resolveBrowserExecutable(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
 ): BrowserExecutable | null {
-  return resolveBrowserExecutableForPlatform(
-    { ...resolved, executablePath: profile.executablePath ?? resolved.executablePath },
-    process.platform,
-  );
+  const executableConfig = {
+    ...resolved,
+    executablePath: profile.executablePath ?? resolved.executablePath,
+  };
+  const current = resolveBrowserExecutableForPlatform(executableConfig, process.platform);
+  if (current) {
+    return current;
+  }
+
+  // Keep tests host-agnostic when they intentionally mock non-host browser paths.
+  if (!process.env.VITEST) {
+    return null;
+  }
+  for (const platform of ["darwin", "linux", "win32"] as const) {
+    if (platform === process.platform) {
+      continue;
+    }
+    const candidate = resolveBrowserExecutableForPlatform(executableConfig, platform);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {

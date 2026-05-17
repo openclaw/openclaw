@@ -1,4 +1,3 @@
-import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
@@ -43,7 +42,14 @@ import {
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  jsonError,
+  normalizeResponseFilePath,
+  toBoolean,
+  toNumber,
+  toStringOrEmpty,
+} from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
@@ -239,7 +245,7 @@ async function saveBrowserMediaResponse(params: {
   );
   params.res.json({
     ok: true,
-    path: path.resolve(saved.path),
+    path: normalizeResponseFilePath(saved.path),
     targetId: params.targetId,
     url: params.url,
     ...(params.labels ? { labels: true } : {}),
@@ -608,7 +614,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 labels: true,
                 labelsCount: labelResult.labels,
                 labelsSkipped: labelResult.skipped,
-                imagePath: path.resolve(saved.path),
+                imagePath: normalizeResponseFilePath(saved.path),
                 imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
                 ...builtWithUrls,
               });
@@ -718,7 +724,7 @@ export function registerBrowserAgentSnapshotRoutes(
               labels: true,
               labelsCount: labeled.labels,
               labelsSkipped: labeled.skipped,
-              imagePath: path.resolve(saved.path),
+              imagePath: normalizeResponseFilePath(saved.path),
               imageType,
               ...snap,
             });

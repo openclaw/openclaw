@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
 
@@ -85,4 +86,18 @@ export function toStringArray(value: unknown): string[] | undefined {
   }
   const strings = value.map((v) => toStringOrEmpty(v)).filter(Boolean);
   return strings.length ? strings : undefined;
+}
+
+export function normalizeResponseFilePath(rawPath: string): string {
+  const value = normalizeOptionalString(rawPath) ?? "";
+  if (!value) {
+    return "";
+  }
+  if (value.startsWith("/") && !value.startsWith("//")) {
+    return value;
+  }
+  if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\")) {
+    return value;
+  }
+  return path.resolve(value);
 }

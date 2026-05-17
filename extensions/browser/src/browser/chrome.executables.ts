@@ -198,13 +198,13 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
   const appPath = appPathRaw.replace(/\/$/, "");
   const exeName = execText("/usr/bin/defaults", [
     "read",
-    path.join(appPath, "Contents", "Info"),
+    path.posix.join(appPath, "Contents", "Info"),
     "CFBundleExecutable",
   ]);
   if (!exeName) {
     return null;
   }
-  const exePath = path.join(appPath, "Contents", "MacOS", exeName);
+  const exePath = path.posix.join(appPath, "Contents", "MacOS", exeName);
   if (!exists(exePath)) {
     return null;
   }

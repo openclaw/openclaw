@@ -177,6 +177,17 @@ function normalizeExecutablePath(raw: string | undefined): string | undefined {
   return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
 }
 
+function normalizeExistingSessionUserDataDir(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  if (/^~(?=$|[\\/])/.test(value)) {
+    return resolveUserPath(value) || undefined;
+  }
+  return value;
+}
+
 function normalizeExistingSessionCdpUrl(
   raw: string | undefined,
   profileName: string,
@@ -477,7 +488,7 @@ export function resolveProfile(
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
       cdpIsLoopback: existingSessionCdp?.cdpIsLoopback ?? true,
-      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      userDataDir: normalizeExistingSessionUserDataDir(profile.userDataDir),
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
       color: profile.color,
