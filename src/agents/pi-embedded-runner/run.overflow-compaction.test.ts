@@ -273,6 +273,57 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(authStoreOptions).toEqual({ allowKeychainPrompt: false });
   });
 
+  it("keeps non-Codex plugin harnesses on the lightweight auth profile store", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "anthropic",
+        modelId: "test-model",
+        harnessId: "anthropic-plugin",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "anthropic-plugin",
+      label: "Anthropic plugin",
+      supports: (ctx) =>
+        ctx.provider === "anthropic" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "anthropic",
+        model: "test-model",
+        agentHarnessId: "anthropic-plugin",
+        runId: "non-codex-plugin-harness-lightweight-auth-store",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
+    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(mockedEnsureAuthProfileStoreWithoutExternalProfiles, 0, 1), {
+      allowKeychainPrompt: false,
+    });
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "anthropic",
+      authProfileId: undefined,
+    });
+    expect(pluginParams.runtimePlan).toBe(runtimePlan);
+    const authProfileStore = expectRecordFields(pluginParams.authProfileStore, {});
+    expect(authProfileStore.profiles).toEqual({});
+  });
+
   it("forwards optional attempt params and the runtime plan into one attempt call", async () => {
     const internalEvents: AgentInternalEvent[] = [];
     const forwardingCase = makeForwardingCase(internalEvents);
@@ -676,18 +727,15 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       version: 1,
       profiles: {},
     });
-    mockedResolveAuthProfileOrder.mockImplementation(
-      ({
-        provider,
-        store,
-      }: {
+    mockedResolveAuthProfileOrder.mockImplementation((params?: unknown) => {
+      const { provider, store } = (params ?? {}) as {
         provider?: string;
         store?: { profiles?: Record<string, unknown> };
-      }) =>
-        provider === "openai-codex" && store?.profiles?.["openai-codex:default"]
-          ? ["openai-codex:default"]
-          : [],
-    );
+      };
+      return provider === "openai-codex" && store?.profiles?.["openai-codex:default"]
+        ? ["openai-codex:default"]
+        : [];
+    });
     mockedResolveModelAsync
       .mockResolvedValueOnce({
         model: {

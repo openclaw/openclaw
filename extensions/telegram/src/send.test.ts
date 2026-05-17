@@ -2094,6 +2094,36 @@ describe("sendMessageTelegram", () => {
     expect(logs).not.toContain(fileName);
   });
 
+  it("does not log outbound success when a chunked text delivery fails mid-send", async () => {
+    const logFile = captureInfoLogs();
+    const chatId = "123";
+    const body = "private chunked body ".repeat(260);
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 700,
+        chat: { id: chatId },
+      })
+      .mockRejectedValueOnce(new Error("telegram send failed"));
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(chatId, body, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        accountId: "ops",
+        api,
+      }),
+    ).rejects.toThrow(/telegram send failed/);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const logs = capturedLogText(logFile);
+    expect(logs).not.toContain("outbound send ok");
+    expect(logs).not.toContain(body);
+  });
+
   it("retries media sends without message_thread_id when thread is missing", async () => {
     const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
