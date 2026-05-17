@@ -930,6 +930,7 @@ async function runNativeHookRelayPreToolUse(params: {
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
+  const originalToolInputFingerprint = stableStringify(toolInput);
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
@@ -951,7 +952,7 @@ async function runNativeHookRelayPreToolUse(params: {
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
   }
-  if (nativeHookRelayParamsWereRewritten(toolInput, outcome.params)) {
+  if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
     // @openai/codex@0.130.0 treats PreToolUse updatedInput as unsupported and
     // continues with the original params, so rewrites must fail closed here.
     return params.adapter.renderPreToolUseBlockResponse(
@@ -976,6 +977,7 @@ async function runNativeHookRelayPostToolUse(params: {
     ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
     sessionId: params.registration.sessionId,
     ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+    ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
     startArgs: params.adapter.readToolInput(params.invocation.rawPayload),
     result: params.adapter.readToolResponse(params.invocation.rawPayload),
   });
@@ -1462,13 +1464,13 @@ function normalizeCodexCommand(value: JsonValue | undefined): string | undefined
 }
 
 function nativeHookRelayParamsWereRewritten(
-  original: Record<string, JsonValue>,
+  originalFingerprint: string,
   candidate: unknown,
 ): boolean {
-  if (candidate === undefined || candidate === original) {
+  if (candidate === undefined) {
     return false;
   }
-  return stableStringify(candidate) !== stableStringify(original);
+  return stableStringify(candidate) !== originalFingerprint;
 }
 
 function readCodexToolResponse(rawPayload: JsonValue): unknown {

@@ -854,6 +854,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -1049,6 +1050,50 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "exec_command",
         tool_use_id: "native-rewrite-1",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks Codex native pre-tool calls when policy mutates params in place", async () => {
+    const beforeToolCall = vi.fn(async (event: unknown) => {
+      const params = requireRecord(
+        requireRecord(event, "before tool call event").params,
+        "before tool call params",
+      );
+      params.command = "echo rewritten";
+      return { params };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-in-place-rewrite-1",
         tool_input: { cmd: "cat /tmp/private_key" },
       },
     });
@@ -1289,6 +1334,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -1319,6 +1365,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
       toolName: "exec",
       toolCallId: "native-call-1",
     });
