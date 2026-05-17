@@ -4,7 +4,6 @@ import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
   bundledPluginFile("memory-core", "src/cli.runtime.ts"),
-  "src/cli/capability-cli.ts",
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
   "src/commands/agent.ts",
@@ -22,6 +21,7 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
     source.includes("collectStatusScanOverview({")
   );
