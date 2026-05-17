@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
@@ -281,6 +282,57 @@ describe("gateway session utils", () => {
     ]);
     expect(defaults.thinkingDefault).toBe("medium");
     expect(row.thinkingDefault).toBe("medium");
+  });
+
+  test("session rows ignore malformed compaction checkpoints", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-older",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 10,
+            reason: "manual",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+          null,
+          {
+            checkpointId: "",
+            createdAt: 30,
+            reason: "manual",
+          },
+          {
+            checkpointId: "checkpoint-bad-reason",
+            createdAt: 40,
+            reason: "bogus",
+          },
+          {
+            checkpointId: "checkpoint-newer",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 50,
+            reason: "overflow-retry",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+        ],
+      } as unknown as SessionEntry,
+    });
+
+    expect(row.compactionCheckpointCount).toBe(2);
+    expect(row.latestCompactionCheckpoint).toEqual({
+      checkpointId: "checkpoint-newer",
+      createdAt: 50,
+      reason: "overflow-retry",
+    });
   });
 
   test("async session list reuses thinking metadata for lightweight rows", async () => {
@@ -597,6 +649,34 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:MySession" })).toBe(
       "agent:alpha:mysession",
     );
+  });
+
+  test("resolveSessionStoreKey preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    expect(resolveSessionStoreKey({ cfg, sessionKey: `Signal:Group:${mixedGroupId}` })).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: `Agent:Alpha:Signal:Group:${mixedGroupId}` }),
+    ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
+  });
+
+  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+
+    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
+    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
   });
 
   test("resolveSessionStoreKey honors global scope", () => {

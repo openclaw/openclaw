@@ -572,7 +572,7 @@ releases.
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
   | `plugin-sdk/reply-runtime` | Shared reply runtime | Inbound dispatch, heartbeat, reply planner, chunking |
   | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize, provider dispatch, and conversation-label helpers |
-  | `plugin-sdk/reply-history` | Reply-history helpers | `buildHistoryContext`, `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, `clearHistoryEntriesIfEnabled` |
+  | `plugin-sdk/reply-history` | Reply-history helpers | `createChannelHistoryWindow`; deprecated map-helper compatibility exports such as `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
@@ -754,6 +754,29 @@ canonical replacement.
 
     Affected areas: `inbound_claim`, `message_received`, and any custom
     channel plugin that post-processed `channelEnvelope` text.
+
+  </Accordion>
+
+  <Accordion title="deactivate hook → gateway_stop">
+    **Old**: `api.on("deactivate", handler)`.
+
+    **New**: `api.on("gateway_stop", handler)`. The event and context are the
+    same shutdown cleanup contract; only the hook name changes.
+
+    ```typescript
+    // Before
+    api.on("deactivate", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+
+    // After
+    api.on("gateway_stop", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+    ```
+
+    `deactivate` remains wired as a deprecated compatibility alias until after
+    2026-08-16.
 
   </Accordion>
 

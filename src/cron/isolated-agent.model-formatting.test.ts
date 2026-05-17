@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { AgentConfig } from "../config/types.agents.js";
 
 const {
   loadModelCatalogMock,
@@ -8,7 +9,6 @@ const {
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveHooksGmailModelMock,
-  resolveSubagentConfiguredModelSelectionMock,
 } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
@@ -29,7 +29,6 @@ const {
   resolveAllowedModelRefMock: vi.fn(),
   resolveConfiguredModelRefMock: vi.fn(),
   resolveHooksGmailModelMock: vi.fn(),
-  resolveSubagentConfiguredModelSelectionMock: vi.fn(),
 }));
 
 vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
@@ -41,7 +40,24 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
-  resolveSubagentConfiguredModelSelection: resolveSubagentConfiguredModelSelectionMock,
+  resolveSubagentModelConfigSelectionResult: ({
+    cfg,
+    agentConfigOverride,
+  }: {
+    cfg?: { agents?: { defaults?: { subagents?: { model?: unknown } } } };
+    agentConfigOverride?: { model?: unknown; subagents?: { model?: unknown } };
+  }) => {
+    for (const candidate of [
+      { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
+      { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+    ]) {
+      if (normalizeModelSelectionMock(candidate.raw)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  },
 }));
 
 import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
@@ -56,6 +72,7 @@ type AgentTurnPayload = {
 
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   payload?: AgentTurnPayload;
   sessionEntry?: {
     modelOverride?: string;
@@ -120,10 +137,11 @@ async function selectModel(options: SelectModelOptions = {}) {
   return resolveCronModelSelection({
     cfg: cfg as never,
     cfgWithAgentDefaults: cfg as never,
+    agentConfigOverride: options.agentConfigOverride,
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
     isGmailHook: options.isGmailHook ?? false,
-    agentId: options.agentId ?? "main",
+    agentId: options.agentId,
   });
 }
 
@@ -132,7 +150,7 @@ async function expectSelectedModel(
   expected: { provider: string; model: string },
 ) {
   const result = await selectModel(options);
-  expect(result).toEqual({ ok: true, ...expected });
+  expect(result).toMatchObject({ ok: true, ...expected });
 }
 
 async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {
@@ -147,24 +165,6 @@ describe("cron model formatting and precedence edge cases", () => {
     resolveHooksGmailModelMock.mockReturnValue(null);
     resolveConfiguredModelRefMock.mockImplementation(({ cfg }: { cfg?: Record<string, unknown> }) =>
       resolveConfiguredModelForTest(cfg ?? {}),
-    );
-    resolveSubagentConfiguredModelSelectionMock.mockImplementation(
-      ({ cfg, agentId }: { cfg?: Record<string, unknown>; agentId: string }) => {
-        const agents = cfg?.agents as
-          | {
-              defaults?: { subagents?: { model?: unknown } };
-              list?: Array<{ id?: string; model?: unknown; subagents?: { model?: unknown } }>;
-            }
-          | undefined;
-        const agentEntry = agents?.list?.find(
-          (entry) => typeof entry.id === "string" && entry.id.trim() === agentId,
-        );
-        return (
-          normalizeModelSelectionMock(agentEntry?.subagents?.model) ??
-          normalizeModelSelectionMock(agents?.defaults?.subagents?.model) ??
-          normalizeModelSelectionMock(agentEntry?.model)
-        );
-      },
     );
     resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
       const parsed = parseModelRef(raw);
@@ -629,6 +629,26 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
+    it("falls through metadata-only subagents.model to the agent model", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-sonnet-4-6",
+                subagents: { model: "ollama/llama3.2:3b" },
+              },
+            },
+          },
+          agentConfigOverride: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            subagents: { model: { timeoutMs: 1_000 } },
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-6" },
+      );
+    });
+
     it("job payload model override takes precedence over subagents.model", async () => {
       await expectSelectedModel(
         {
@@ -650,7 +670,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("prefers agents.defaults.subagents.model over the agent model", async () => {
+    it("prefers the agent model over agents.defaults.subagents.model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -659,61 +679,11 @@ describe("cron model formatting and precedence edge cases", () => {
                 model: "anthropic/claude-sonnet-4-6",
                 subagents: { model: "ollama/llama3.2:3b" },
               },
-              list: [
-                {
-                  id: "research",
-                  model: { primary: "anthropic/claude-opus-4-6" },
-                },
-              ],
             },
           },
-          agentId: "research",
-        },
-        { provider: "ollama", model: "llama3.2:3b" },
-      );
-    });
-
-    it("prefers agent subagents.model over agents.defaults.subagents.model", async () => {
-      await expectSelectedModel(
-        {
-          cfg: {
-            agents: {
-              defaults: {
-                model: "anthropic/claude-sonnet-4-6",
-                subagents: { model: "ollama/llama3.2:3b" },
-              },
-              list: [
-                {
-                  id: "research",
-                  model: { primary: "anthropic/claude-opus-4-6" },
-                  subagents: { model: "google/gemini-2.5-flash" },
-                },
-              ],
-            },
+          agentConfigOverride: {
+            model: { primary: "anthropic/claude-opus-4-6" },
           },
-          agentId: "research",
-        },
-        { provider: "google", model: "gemini-2.5-flash" },
-      );
-    });
-
-    it("falls back to the agent model when no subagent default is configured", async () => {
-      await expectSelectedModel(
-        {
-          cfg: {
-            agents: {
-              defaults: {
-                model: "anthropic/claude-sonnet-4-6",
-              },
-              list: [
-                {
-                  id: "research",
-                  model: { primary: "anthropic/claude-opus-4-6" },
-                },
-              ],
-            },
-          },
-          agentId: "research",
         },
         { provider: "anthropic", model: "claude-opus-4-6" },
       );

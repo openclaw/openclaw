@@ -20,12 +20,7 @@ import {
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -846,8 +841,7 @@ export async function resolveIMessageInboundDecision(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     params.logVerbose?.(`imessage: skipping group message (no mention)`);
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: params.groupHistories,
+    createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
       historyKey: historyKey ?? "",
       limit: params.historyLimit,
       entry: historyKey
@@ -969,8 +963,8 @@ export function buildIMessageInboundContext(params: {
 
   let combinedBody = body;
   if (decision.isGroup && decision.historyKey) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: params.groupHistories,
+    const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
+    combinedBody = channelHistory.buildPendingContext({
       historyKey: decision.historyKey,
       limit: params.historyLimit,
       currentMessage: combinedBody,
@@ -990,8 +984,7 @@ export function buildIMessageInboundContext(params: {
   const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
     decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? buildInboundHistoryFromMap({
-          historyMap: params.groupHistories,
+      ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
           historyKey: decision.historyKey,
           limit: params.historyLimit,
         })

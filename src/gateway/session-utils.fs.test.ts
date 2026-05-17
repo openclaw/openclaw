@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
 import {
@@ -886,6 +887,72 @@ describe("readSessionMessages", () => {
     }
   });
 
+  test("keeps async active branch rows when imported parent links are incomplete", async () => {
+    const sessionId = "test-session-tree-async-incomplete-parent";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "legacy-user",
+        message: { role: "user", content: "legacy prompt" },
+      },
+      {
+        type: "message",
+        id: "tree-assistant",
+        parentId: "legacy-user",
+        message: { role: "assistant", content: "tree reply" },
+      },
+      {
+        type: "message",
+        id: "orphan-tail",
+        parentId: "missing-imported-parent",
+        message: { role: "assistant", content: "reachable orphan tail" },
+      },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test imported partial tree selection",
+    });
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "reachable orphan tail",
+    ]);
+    expectMessageFields(messages[0], { openclaw: { id: "orphan-tail", seq: 1 } });
+  });
+
+  test("keeps legacy async parents when tree transcripts reference pre-v3 rows", async () => {
+    const sessionId = "test-session-tree-async-legacy-parent";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        type: "message",
+        id: "legacy-user",
+        message: { role: "user", content: "legacy hello" },
+      },
+      {
+        type: "message",
+        id: "tree-assistant",
+        parentId: "legacy-user",
+        message: { role: "assistant", content: "tree hello" },
+      },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test legacy parent active tree selection",
+    });
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "legacy hello",
+      "tree hello",
+    ]);
+    expectMessageFields(messages[0], { openclaw: { id: "legacy-user", seq: 1 } });
+    expectMessageFields(messages[1], { openclaw: { id: "tree-assistant", seq: 2 } });
+  });
+
   test("caches async transcript indexes by file stats", async () => {
     const sessionId = "test-session-index-cache";
     writeTranscript(tmpDir, sessionId, [
@@ -1744,6 +1811,44 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test("estimates transcript context when local model usage telemetry is missing", () => {
+    const sessionId = "usage-local-missing-telemetry";
+    const userText = "local prompt ".repeat(200);
+    const assistantText = "local response ".repeat(120);
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: userText } },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai-completions",
+          model: "local-llama",
+          content: [{ type: "text", text: assistantText }],
+        },
+      },
+    ]);
+
+    const expectedTotalTokens = estimateTokensFromChars(
+      estimateStringChars(userText) + estimateStringChars(assistantText),
+    );
+
+    expectUsageFields(readLatestSessionUsageFromTranscript(sessionId, storePath), {
+      modelProvider: "openai-completions",
+      model: "local-llama",
+      totalTokens: expectedTotalTokens,
+      totalTokensFresh: true,
+    });
+    expectUsageFields(
+      readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
+      {
+        modelProvider: "openai-completions",
+        model: "local-llama",
+        totalTokens: expectedTotalTokens,
+        totalTokensFresh: true,
+      },
+    );
   });
 
   test("returns null when the transcript has no assistant usage snapshot", () => {

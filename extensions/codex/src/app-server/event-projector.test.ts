@@ -307,6 +307,125 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      model: {
+        ...createCodexTestModel("openai"),
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        api: "openai-responses",
+      } as EmbeddedRunAttemptParams["model"],
+      runtimePlan: {
+        auth: {},
+        observability: {
+          resolvedRef: "openai/gpt-5.5",
+          provider: "openai",
+          modelId: "gpt-5.5",
+          harnessId: "codex",
+        },
+        prompt: {
+          resolveSystemPromptContribution: () => undefined,
+        },
+        tools: {
+          normalize: (tools: unknown[]) => tools,
+          logDiagnostics: () => undefined,
+        },
+      } as unknown as EmbeddedRunAttemptParams["runtimePlan"],
+    });
+
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.lastAssistant?.provider).toBe("openai-codex");
+    expect(result.lastAssistant?.api).toBe("openai-codex-responses");
+    expect(result.lastAssistant?.model).toBe("gpt-5.5");
+  });
+
+  it("preserves OpenAI attribution for Codex app-server OpenAI API-key fallback profiles", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      provider: "openai",
+      authProfileId: "openai:work",
+      modelId: "gpt-5.5",
+      model: {
+        ...createCodexTestModel("openai"),
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        api: "openai-responses",
+      } as EmbeddedRunAttemptParams["model"],
+      runtimePlan: {
+        auth: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          harnessAuthProvider: "openai-codex",
+          forwardedAuthProfileId: "openai:work",
+        },
+        observability: {
+          resolvedRef: "openai/gpt-5.5",
+          provider: "openai",
+          modelId: "gpt-5.5",
+          harnessId: "codex",
+        },
+        prompt: {
+          resolveSystemPromptContribution: () => undefined,
+        },
+        tools: {
+          normalize: (tools: unknown[]) => tools,
+          logDiagnostics: () => undefined,
+        },
+      } as unknown as EmbeddedRunAttemptParams["runtimePlan"],
+    });
+
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.lastAssistant?.provider).toBe("openai");
+    expect(result.lastAssistant?.api).toBe("openai-responses");
+    expect(result.lastAssistant?.model).toBe("gpt-5.5");
+  });
+
+  it("preserves inbound sender metadata on the mirrored user prompt", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
+      senderId: "user-123",
+      senderName: "Test User",
+      senderUsername: "testuser",
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "discord",
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toBe("hello");
+    expect(userMessage.sourceChannel).toBe("discord");
+    expect(userMessage.senderId).toBe("user-123");
+    expect(userMessage.senderName).toBe("Test User");
+    expect(userMessage.senderUsername).toBe("testuser");
+    expect(userMessage.senderLabel).toBe("Test User (user-123)");
+    expect(userMessage.provenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "discord",
+    });
+  });
+
   it("does not treat cumulative-only token usage as fresh context usage", async () => {
     const projector = await createProjector();
 
@@ -976,6 +1095,12 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
+    );
+    expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "end" }).data).toMatchObject(
+      {
+        itemId: "compact-1",
+        completed: true,
+      },
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([

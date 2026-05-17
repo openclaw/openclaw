@@ -168,6 +168,7 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     const config = program.command("config");
+    config.option("--section <section>");
     setCommandJsonMode(config.command("set"), "parse-only")
       .argument("<path>")
       .argument("<value>")
@@ -313,10 +314,54 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("only allows invalid config for explicit Discord reinstall requests", async () => {
+  it("lets bare config own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["config"],
+      processArgv: ["node", "openclaw", "config"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets guided config sections own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["config"],
+      processArgv: ["node", "openclaw", "config", "--section", "models"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows invalid config for explicit official recovery reinstall requests", async () => {
     await runPreAction({
       parseArgv: ["plugins", "install", "@openclaw/discord"],
       processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/discord"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/brave-plugin"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/brave-plugin"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/slack"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/slack"],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({

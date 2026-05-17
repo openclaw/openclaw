@@ -500,6 +500,7 @@ export function buildInboundUserContextPrefix(
     group_space: normalizePromptMetadataString(ctx.GroupSpace),
     group_members: sanitizePromptBody(ctx.GroupMembers),
     thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
+    inbound_event_kind: ctx.InboundEventKind,
     topic_id:
       ctx.MessageThreadId != null
         ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)

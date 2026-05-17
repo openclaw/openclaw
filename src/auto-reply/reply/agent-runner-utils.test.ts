@@ -73,6 +73,7 @@ describe("agent-runner-utils", () => {
       agentId: run.agentId,
       hasSessionModelOverride: true,
       modelOverrideSource: "user",
+      hasAutoFallbackProvenance: false,
     });
     expect(resolved).toEqual({
       cfg: run.config,
@@ -81,6 +82,47 @@ describe("agent-runner-utils", () => {
       agentDir: run.agentDir,
       fallbacksOverride: ["fallback-model"],
     });
+  });
+
+  it("passes through recovered auto fallback provenance for model fallback options", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun({
+      hasSessionModelOverride: true,
+      hasAutoFallbackProvenance: true,
+    });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      hasSessionModelOverride: true,
+      modelOverrideSource: undefined,
+      hasAutoFallbackProvenance: true,
+    });
+    expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("uses image model fallback overrides for model fallback options", () => {
+    const run = makeRun({
+      imageModelFallbacksOverride: ["openai/gpt-4o-mini"],
+    });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual(["openai/gpt-4o-mini"]);
+  });
+
+  it("preserves empty image model fallback overrides for model fallback options", () => {
+    const run = makeRun({
+      imageModelFallbacksOverride: [],
+    });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual([]);
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
@@ -94,6 +136,7 @@ describe("agent-runner-utils", () => {
       agentId: undefined,
       hasSessionModelOverride: false,
       modelOverrideSource: undefined,
+      hasAutoFallbackProvenance: false,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
@@ -133,6 +176,77 @@ describe("agent-runner-utils", () => {
     expect(resolved.bashElevated).toBe(run.bashElevated);
     expect(resolved.timeoutMs).toBe(run.timeoutMs);
     expect(resolved.runId).toBe("run-1");
+  });
+
+  it("passes through recovered auto fallback provenance for embedded run params", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun({
+      hasSessionModelOverride: true,
+      hasAutoFallbackProvenance: true,
+    });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      hasSessionModelOverride: true,
+      modelOverrideSource: undefined,
+      hasAutoFallbackProvenance: true,
+    });
+    expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("uses image model fallback overrides for embedded run params", () => {
+    const run = makeRun({
+      imageModelFallbacksOverride: ["openai/gpt-4o-mini"],
+    });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4o",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.modelFallbacksOverride).toEqual(["openai/gpt-4o-mini"]);
+  });
+
+  it("preserves empty image model fallback overrides for embedded run params", () => {
+    const run = makeRun({
+      imageModelFallbacksOverride: [],
+    });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4o",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.modelFallbacksOverride).toEqual([]);
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {

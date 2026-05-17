@@ -1,11 +1,14 @@
 import {
-  type BuildChannelTurnContextParams,
-  type BuiltChannelTurnContext,
+  type BuildChannelInboundEventContextParams,
+  type BuiltChannelInboundEventContext,
+  classifyChannelInboundEvent,
   formatInboundEnvelope,
+  resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -14,11 +17,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -45,7 +44,7 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
-export type TelegramInboundContextPayload = BuiltChannelTurnContext & {
+export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
   To: string;
   ChatType: string;
@@ -61,7 +60,7 @@ type TelegramMessageContextSessionRuntime =
   typeof import("./bot-message-context.session.runtime.js");
 
 const sessionRuntimeMethods = [
-  "buildChannelTurnContext",
+  "buildChannelInboundEventContext",
   "readSessionUpdatedAt",
   "recordInboundSession",
   "resolveInboundLastRouteSessionKey",
@@ -179,6 +178,7 @@ export async function buildTelegramInboundContextPayload(params: {
   topicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
+  hasControlCommand: boolean;
   audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
@@ -227,6 +227,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
     stickerCacheHit,
     effectiveWasMentioned,
+    hasControlCommand,
     audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
@@ -372,10 +373,10 @@ export async function buildTelegramInboundContextPayload(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
+  const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
   let combinedBody = body;
   if (isGroup && historyKey && historyLimit > 0) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: groupHistories,
+    combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -401,8 +402,7 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? buildInboundHistoryFromMap({
-          historyMap: groupHistories,
+      ? channelHistory.buildInboundHistory({
           historyKey,
           limit: historyLimit,
         })
@@ -416,7 +416,23 @@ export async function buildTelegramInboundContextPayload(params: {
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
-  const ctxPayload = sessionRuntime.buildChannelTurnContext({
+  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
+    cfg,
+    agentId: route.agentId,
+  });
+  const hasAbortRequest = isAbortRequestText(rawBody, {
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+  });
+  const conversationKind = isGroup ? "group" : "direct";
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: conversationKind },
+    unmentionedGroupPolicy,
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand,
+    hasAbortRequest,
+    commandSource,
+  });
+  const ctxPayload = sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
     accountId: route.accountId,
     provider: "telegram",
@@ -430,12 +446,12 @@ export async function buildTelegramInboundContextPayload(params: {
       username: senderUsername || undefined,
     },
     conversation: {
-      kind: isGroup ? "group" : "direct",
+      kind: conversationKind,
       id: String(chatId),
       label: conversationLabel,
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
       routePeer: {
-        kind: isGroup ? "group" : "direct",
+        kind: conversationKind,
         id: String(chatId),
       },
     },
@@ -452,6 +468,7 @@ export async function buildTelegramInboundContextPayload(params: {
       messageThreadId: threadSpec.id,
     },
     message: {
+      inboundEventKind,
       body: combinedBody,
       rawBody,
       bodyForAgent: bodyText,
@@ -542,7 +559,19 @@ export async function buildTelegramInboundContextPayload(params: {
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },
-  } satisfies BuildChannelTurnContextParams);
+  } satisfies BuildChannelInboundEventContextParams);
+  if (inboundEventKind === "room_event" && historyKey) {
+    channelHistory.record({
+      historyKey,
+      limit: historyLimit,
+      entry: {
+        sender: buildSenderLabel(msg, senderId || chatId),
+        body: rawBody,
+        timestamp: msg.date ? msg.date * 1000 : undefined,
+        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+      },
+    });
+  }
 
   const pinnedMainDmOwner = !isGroup
     ? sessionRuntime.resolvePinnedMainDmOwnerFromAllowlist({

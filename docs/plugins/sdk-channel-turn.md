@@ -1,9 +1,9 @@
 ---
-summary: "runtime.channel.turn -- the shared inbound turn kernel that bundled and third-party channel plugins use to record, dispatch, and finalize agent turns"
+summary: "runtime.channel.turn -- the shared inbound event kernel that bundled and third-party channel plugins use to record, dispatch, and finalize agent turns"
 title: "Channel turn kernel"
 sidebarTitle: "Channel turn"
 read_when:
-  - You are building a channel plugin and want the shared inbound turn lifecycle
+  - You are building a channel plugin and want the shared inbound event lifecycle
   - You are migrating a channel monitor off hand-rolled record/dispatch glue
   - You need to understand admission, ingest, classify, preflight, resolve, record, dispatch, and finalize stages
 ---
@@ -360,10 +360,12 @@ plugin before they become model-visible media.
 ## History windows
 
 Message-turn code should use `createChannelHistoryWindow(...)` instead of
-calling low-level `reply-history` map helpers directly. The window facade keeps
-text context, structured `InboundHistory`, history-media normalization, and
-clearing behind one core-owned API while still letting the channel choose how a
-history line is rendered.
+calling low-level `reply-history` map helpers directly. The old map helpers
+remain importable as deprecated compatibility exports, but new plugin runtime
+code should not call them. The window facade keeps text context, structured
+`InboundHistory`, history-media normalization, and clearing behind one
+core-owned API while still letting the channel choose how a history line is
+rendered.
 
 ```typescript
 const history = createChannelHistoryWindow({ historyMap: groupHistories });
@@ -389,7 +391,7 @@ const combinedBody = history.buildPendingContext({
 
 The older `buildPendingHistoryContextFromMap`,
 `buildInboundHistoryFromMap`, `recordPendingHistoryEntry*`, and
-`clearHistoryEntriesIfEnabled` exports remain for compatibility with plugins
+`clearHistoryEntries*` exports remain as deprecated compatibility for plugins
 that have not migrated yet. New channel work should use the window or the turn
 kernel record/finalize options.
 
@@ -484,10 +486,10 @@ type ChannelTurnAdapter<TRaw> = {
 
 ## Delivery adapter
 
-The kernel does not call the platform directly. The channel hands the kernel a `ChannelTurnDeliveryAdapter`:
+The kernel does not call the platform directly. The channel hands the kernel a `ChannelEventDeliveryAdapter`:
 
 ```typescript
-type ChannelTurnDeliveryAdapter = {
+type ChannelEventDeliveryAdapter = {
   deliver(payload: ReplyPayload, info: ChannelDeliveryInfo): Promise<ChannelDeliveryResult | void>;
   onError?(err: unknown, info: { kind: string }): void;
   durable?: false | DurableInboundReplyDeliveryOptions;
@@ -502,9 +504,9 @@ type ChannelDeliveryResult = {
 };
 ```
 
-`deliver` is called once per buffered reply chunk. During the message-lifecycle migration, assembled channel-turn delivery is channel-owned by default: an omitted `durable` field means the kernel must call `deliver` directly and must not route through generic outbound delivery. Set `durable` only after the channel has been audited to prove the generic send path preserves the old delivery behavior, including reply/thread targets, media handling, sent-message/self-echo caches, status cleanup, and returned message ids. `durable: false` remains a compatibility spelling for "use the channel-owned callback", but unmigrated channels should not need to add it. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks; newer delivery paths should also return `receipt` so recovery, preview finalization, and duplicate suppression can move off `messageIds`. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelTurnDeliveryAdapter()`.
+`deliver` is called once per buffered reply chunk. During the message-lifecycle migration, assembled channel-event delivery is channel-owned by default: an omitted `durable` field means the kernel must call `deliver` directly and must not route through generic outbound delivery. Set `durable` only after the channel has been audited to prove the generic send path preserves the old delivery behavior, including reply/thread targets, media handling, sent-message/self-echo caches, status cleanup, and returned message ids. `durable: false` remains a compatibility spelling for "use the channel-owned callback", but unmigrated channels should not need to add it. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks; newer delivery paths should also return `receipt` so recovery, preview finalization, and duplicate suppression can move off `messageIds`. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelEventDeliveryAdapter()`.
 
-Channels using `runPrepared` with a fully channel-owned dispatcher do not have a `ChannelTurnDeliveryAdapter`. Those dispatchers are not durable by default. They should keep their direct delivery path until they explicitly opt in to the new send context with a complete target, replay-safe adapter, receipt contract, and channel side-effect hooks.
+Channels using `runPrepared` with a fully channel-owned dispatcher do not have a `ChannelEventDeliveryAdapter`. Those dispatchers are not durable by default. They should keep their direct delivery path until they explicitly opt in to the new send context with a complete target, replay-safe adapter, receipt contract, and channel side-effect hooks.
 
 Public compatibility helpers such as `recordInboundSessionAndDispatchReply`, `dispatchInboundReplyWithBase`, and direct-DM helpers must stay behavior-preserving during migration. They should not call generic durable delivery before caller-owned `deliver` or `reply` callbacks.
 
