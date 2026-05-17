@@ -8,6 +8,7 @@ import {
   installCompletion,
   resolveCompletionCachePath,
   resolveCompletionProfilePath,
+  resolveShellFromEnv,
 } from "./completion-runtime.js";
 
 describe("completion-runtime", () => {
@@ -33,6 +34,54 @@ describe("completion-runtime", () => {
     ).toBe(". 'C:\\Users\\Ada\\open''claw.ps1'");
     expect(formatCompletionReloadCommand("powershell", "C:\\Users\\Ada\\profile.ps1")).toBe(
       ". 'C:\\Users\\Ada\\profile.ps1'",
+    );
+  });
+
+  it("detects PowerShell shell names from Windows paths", () => {
+    expect(resolveShellFromEnv({ SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" })).toBe(
+      "powershell",
+    );
+    expect(
+      resolveShellFromEnv({
+        SHELL: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      }),
+    ).toBe("powershell");
+  });
+
+  it("resolves Windows PowerShell and pwsh profile directories", () => {
+    expect(
+      resolveCompletionProfilePath("powershell", {
+        env: {
+          SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          USERPROFILE: "C:\\Users\\Ada",
+        },
+        homeDir: () => "C:\\Users\\Ada",
+        platform: "win32",
+      }),
+    ).toBe(
+      path.win32.join(
+        "C:\\Users\\Ada",
+        "Documents",
+        "PowerShell",
+        "Microsoft.PowerShell_profile.ps1",
+      ),
+    );
+    expect(
+      resolveCompletionProfilePath("powershell", {
+        env: {
+          SHELL: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          USERPROFILE: "C:\\Users\\Ada",
+        },
+        homeDir: () => "C:\\Users\\Ada",
+        platform: "win32",
+      }),
+    ).toBe(
+      path.win32.join(
+        "C:\\Users\\Ada",
+        "Documents",
+        "WindowsPowerShell",
+        "Microsoft.PowerShell_profile.ps1",
+      ),
     );
   });
 

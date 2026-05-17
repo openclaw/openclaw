@@ -16,9 +16,20 @@ export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
 
+function resolveShellBasename(
+  shellPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const platformBasename =
+    platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
+  const winBasename = path.win32.basename(shellPath);
+  const basename = winBasename.length < platformBasename.length ? winBasename : platformBasename;
+  return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
+}
+
 export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
   const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-  const shellName = shellPath ? normalizeLowercaseStringOrEmpty(path.basename(shellPath)) : "";
+  const shellName = shellPath ? resolveShellBasename(shellPath) : "";
   if (shellName === "zsh") {
     return "zsh";
   }
@@ -162,10 +173,13 @@ export function resolveCompletionProfilePath(
     return path.join(home, ".config", "fish", "config.fish");
   }
   if (platform === "win32") {
+    const shellPath = normalizeOptionalString(env.SHELL) ?? "";
+    const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+    const profileDirectory = shellName === "powershell" ? "WindowsPowerShell" : "PowerShell";
     return path.win32.join(
       env.USERPROFILE || home,
       "Documents",
-      "PowerShell",
+      profileDirectory,
       "Microsoft.PowerShell_profile.ps1",
     );
   }
@@ -217,9 +231,6 @@ export async function usesSlowDynamicCompletion(
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
-  let profilePath = "";
-  let sourceLine = "";
-
   const isShellSupported = isCompletionShell(shell);
   if (!isShellSupported) {
     console.error(`Automated installation not supported for ${shell} yet.`);
@@ -235,27 +246,31 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     return;
   }
 
-  if (shell === "zsh") {
-    profilePath = resolveCompletionProfilePath("zsh");
-    sourceLine = formatCompletionSourceLine("zsh", binName, cachePath);
-  } else if (shell === "bash") {
-    profilePath = resolveCompletionProfilePath("bash");
-    try {
-      await fs.access(profilePath);
-    } catch {
-      const home = process.env.HOME || os.homedir();
-      profilePath = path.join(home, ".bash_profile");
-    }
-    sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
-  } else if (shell === "fish") {
-    profilePath = resolveCompletionProfilePath("fish");
-    sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
-  } else if (shell === "powershell") {
-    profilePath = resolveCompletionProfilePath("powershell");
-    sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
-  } else {
-    console.error(`Automated installation not supported for ${shell} yet.`);
-    return;
+  let profilePath: string;
+  let sourceLine: string;
+  switch (shell) {
+    case "zsh":
+      profilePath = resolveCompletionProfilePath("zsh");
+      sourceLine = formatCompletionSourceLine("zsh", binName, cachePath);
+      break;
+    case "bash":
+      profilePath = resolveCompletionProfilePath("bash");
+      try {
+        await fs.access(profilePath);
+      } catch {
+        const home = process.env.HOME || os.homedir();
+        profilePath = path.join(home, ".bash_profile");
+      }
+      sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
+      break;
+    case "fish":
+      profilePath = resolveCompletionProfilePath("fish");
+      sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+      break;
+    case "powershell":
+      profilePath = resolveCompletionProfilePath("powershell");
+      sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
+      break;
   }
 
   try {
