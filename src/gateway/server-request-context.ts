@@ -63,6 +63,7 @@ type GatewayRequestContextParams = {
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
   unavailableGatewayMethods: ReadonlySet<string>;
+  startupGateBarrier?: GatewayRequestContext["startupGateBarrier"];
 };
 
 export function createGatewayRequestContext(
@@ -183,5 +184,6 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeChanged: params.broadcastVoiceWakeChanged,
     broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
+    startupGateBarrier: params.startupGateBarrier,
   };
 }
