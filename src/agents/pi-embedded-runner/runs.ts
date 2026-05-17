@@ -549,9 +549,15 @@ export function clearActiveEmbeddedRun(
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
     notifyEmbeddedRunEnded(sessionId);
-  } else {
+  } else if (ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    // Some other handle now owns this session — keep the diagnostic because
+    // it usually indicates a stale handle that did not observe a takeover.
     diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
+  // Otherwise the entry has already been removed (e.g. terminal lifecycle
+  // cleanup cleared the run before the attempt `finally` path got here).
+  // That is a benign idempotent duplicate clear and should not surface as
+  // handle_mismatch noise — see issue #82959.
 }
 
 export function forceClearEmbeddedPiRun(
