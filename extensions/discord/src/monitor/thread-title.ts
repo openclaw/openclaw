@@ -27,6 +27,26 @@ const MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS = 320;
 // Non-reasoning providers still stop early at end-of-sequence and do not
 // actually consume the full budget.
 const DISCORD_THREAD_TITLE_MAX_TOKENS = 4096;
+
+// Clamp the generous title budget to the selected model's output cap.
+// Anthropic/OpenAI transports prefer a runtime `maxTokens` over the model's
+// configured limit, so forwarding a fixed 4096 unchanged can exceed a
+// smaller model's output cap, make the provider reject the request, and
+// silently skip the fire-and-forget rename. Mirror the established image-tool
+// idiom (resolveImageToolMaxTokens): use the positive minimum of the
+// requested budget and the model cap, falling back to the requested budget
+// when the model exposes no usable limit.
+function resolveThreadTitleMaxTokens(modelMaxTokens: number | undefined): number {
+  if (
+    typeof modelMaxTokens !== "number" ||
+    !Number.isFinite(modelMaxTokens) ||
+    modelMaxTokens <= 0
+  ) {
+    return DISCORD_THREAD_TITLE_MAX_TOKENS;
+  }
+  return Math.min(DISCORD_THREAD_TITLE_MAX_TOKENS, modelMaxTokens);
+}
+
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
   "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
 
@@ -104,7 +124,7 @@ async function completeThreadTitle(params: {
           ],
         },
         options: {
-          maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
+          maxTokens: resolveThreadTitleMaxTokens(params.model.maxTokens),
           signal,
         },
       }),
