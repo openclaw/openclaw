@@ -355,7 +355,9 @@ describe("requireApiKey", () => {
         },
         "openai",
       ),
-    ).toThrow('No API key resolved for provider "openai"');
+    ).toThrow(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
   });
 });
 

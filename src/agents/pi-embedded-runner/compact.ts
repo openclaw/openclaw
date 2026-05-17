@@ -59,8 +59,9 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
+  formatMissingAuthError,
   getApiKeyForModel,
-  resolveModelAuthMode,
+  type ProviderRuntimeModel,
 } from "../model-auth.js";
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
@@ -507,9 +508,7 @@ async function compactEmbeddedPiSessionDirectOnce(
 
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new Error(
-          `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-        );
+        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
       }
     } else {
       const preparedAuth = await prepareProviderRuntimeAuth({
