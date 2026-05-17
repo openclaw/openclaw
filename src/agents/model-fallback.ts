@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -35,7 +34,11 @@ import {
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
+import {
+  type ModelManifestNormalizationContext,
+  modelKey,
+  normalizeModelRef,
+} from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -93,10 +96,6 @@ type ModelFallbackRunFn<T> = (
   model: string,
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
-
-type ManifestNormalizationContext = {
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-};
 
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
@@ -485,7 +484,7 @@ function resolveImageFallbackCandidates(
     cfg: OpenClawConfig | undefined;
     defaultProvider: string;
     modelOverride?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): ModelCandidate[] {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
@@ -570,7 +569,7 @@ function resolveFallbackCandidates(
     model: string;
     /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
     fallbacksOverride?: string[];
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
@@ -851,7 +850,7 @@ export async function runWithModelFallback<T>(
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,

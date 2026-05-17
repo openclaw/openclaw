@@ -4,7 +4,6 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -23,6 +22,7 @@ export {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "./model-thinking-default.js";
 import {
+  type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
@@ -53,11 +53,7 @@ import {
   type ModelRefStatus,
 } from "./model-selection-shared.js";
 
-export type { ModelAliasIndex, ModelRef, ModelRefStatus };
-
-type ManifestNormalizationContext = {
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-};
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
 
 export type ThinkLevel =
   | "off"
@@ -210,7 +206,7 @@ export function resolveAllowlistModelKey(
   raw: string,
   defaultProvider: string,
   cfg?: OpenClawConfig,
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[],
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
 ): string | null {
   return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
@@ -220,7 +216,7 @@ export function resolveDefaultModelForAgent(
     cfg: OpenClawConfig;
     agentId?: string;
     allowPluginNormalization?: boolean;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): ModelRef {
   const agentModelOverride = params.agentId
     ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
@@ -387,7 +383,7 @@ export function buildAllowedModelSet(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
@@ -413,7 +409,7 @@ export function getModelRefStatus(
     ref: ModelRef;
     defaultProvider: string;
     defaultModel?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
     cfg: params.cfg,
@@ -434,7 +430,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
   ref: ModelRef,
 ): ModelRefStatus {
   return getModelRefStatus({
@@ -454,7 +450,7 @@ export function resolveAllowedModelRef(
     raw: string;
     defaultProvider: string;
     defaultModel?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
   | {

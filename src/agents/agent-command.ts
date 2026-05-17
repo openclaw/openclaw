@@ -73,6 +73,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
   modelKey,
@@ -402,17 +403,19 @@ async function prepareAgentCommandExecution(
     workspaceDir,
     env: process.env,
   });
-  const manifestPlugins = manifestMetadataSnapshot.plugins;
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot.plugins,
+  } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
-    manifestPlugins,
+    ...modelManifestContext,
   });
   const configuredThinkingCatalog = buildConfiguredModelCatalog({
     cfg,
     workspaceDir,
-    manifestPlugins,
+    ...modelManifestContext,
   });
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
@@ -472,7 +475,7 @@ async function prepareAgentCommandExecution(
     outboundSession,
     workspaceDir,
     agentDir,
-    manifestPlugins,
+    modelManifestContext,
     runId,
     acpManager,
     acpResolution,
@@ -512,7 +515,7 @@ async function agentCommandInternal(
     runId,
     acpManager,
     acpResolution,
-    manifestPlugins,
+    modelManifestContext,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
 
@@ -764,12 +767,12 @@ async function agentCommandInternal(
     const configuredDefaultRef = resolveDefaultModelForAgent({
       cfg,
       agentId: sessionAgentId,
-      manifestPlugins,
+      ...modelManifestContext,
     });
     const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
       configuredDefaultRef.provider,
       configuredDefaultRef.model,
-      { manifestPlugins },
+      modelManifestContext,
     );
     let provider = defaultProvider;
     let model = defaultModel;
@@ -802,7 +805,7 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
-      manifestPlugins,
+      ...modelManifestContext,
     });
 
     if (needsModelCatalog) {
@@ -813,7 +816,7 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
-        manifestPlugins,
+        ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
     }
@@ -836,9 +839,11 @@ async function agentCommandInternal(
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel, {
-          manifestPlugins,
-        });
+        const normalizedOverride = normalizeModelRef(
+          overrideProvider,
+          overrideModel,
+          modelManifestContext,
+        );
         const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
         if (!visibilityPolicy.allowsKey(key)) {
           const { updated } = applyModelOverrideToSessionEntry({
@@ -861,9 +866,11 @@ async function agentCommandInternal(
     let storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride, {
-        manifestPlugins,
-      });
+      const normalizedStored = normalizeModelRef(
+        candidateProvider,
+        storedModelOverride,
+        modelManifestContext,
+      );
       const key = modelKey(normalizedStored.provider, normalizedStored.model);
       if (visibilityPolicy.allowsKey(key)) {
         provider = normalizedStored.provider;
@@ -889,10 +896,10 @@ async function agentCommandInternal(
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
         ? explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride, { manifestPlugins })
-          : parseModelRef(explicitModelOverride, provider, { manifestPlugins })
+          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride, modelManifestContext)
+          : parseModelRef(explicitModelOverride, provider, modelManifestContext)
         : explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, model, { manifestPlugins })
+          ? normalizeModelRef(explicitProviderOverride, model, modelManifestContext)
           : null;
       if (!explicitRef) {
         throw new Error("Invalid model override.");
@@ -1107,7 +1114,7 @@ async function agentCommandInternal(
           cfg,
           provider,
           model,
-          manifestPlugins,
+          ...modelManifestContext,
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
@@ -1299,7 +1306,7 @@ async function agentCommandInternal(
               { cause: err },
             );
           }
-          const switchRef = normalizeModelRef(err.provider, err.model, { manifestPlugins });
+          const switchRef = normalizeModelRef(err.provider, err.model, modelManifestContext);
           const switchKey = modelKey(switchRef.provider, switchRef.model);
           if (!visibilityPolicy.allowsKey(switchKey)) {
             log.info(

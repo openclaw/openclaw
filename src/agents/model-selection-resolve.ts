@@ -1,8 +1,7 @@
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelRef } from "./model-selection-normalize.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-selection-normalize.js";
 import {
   buildModelAliasIndex,
   getModelRefStatusWithFallbackModels,
@@ -20,10 +19,6 @@ export {
 } from "./model-selection-shared.js";
 export type { ModelRefStatus } from "./model-selection-shared.js";
 
-type ManifestNormalizationContext = {
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-};
-
 function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
 }
@@ -35,7 +30,7 @@ export function getModelRefStatus(
     ref: ModelRef;
     defaultProvider: string;
     defaultModel?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   const { cfg, catalog, ref, defaultProvider, defaultModel, manifestPlugins } = params;
   return getModelRefStatusWithFallbackModels({
@@ -56,7 +51,7 @@ export function resolveAllowedModelRef(
     raw: string;
     defaultProvider: string;
     defaultModel?: string;
-  } & ManifestNormalizationContext,
+  } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
   | {
