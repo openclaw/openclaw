@@ -1,4 +1,25 @@
 #!/bin/bash
+# Pipe guard: when invoked via "curl ... | bash", bash reads this script
+# incrementally from stdin. Any child process that also reads stdin steals
+# bytes from the script stream, causing truncated function names and hangs
+# (see #73814). Detect piped execution via empty BASH_SOURCE (piped scripts
+# have no source file), buffer the remaining stdin to a temp file, and
+# re-execute so stdin is free for interactive prompts and child processes.
+if [ -z "${BASH_SOURCE[0]:-}" ] && [ -z "${_OPENCLAW_PIPE_BUFFERED:-}" ]; then
+    _pipe_tmp=$(mktemp)
+    cat > "$_pipe_tmp"
+    _OPENCLAW_PIPE_BUFFERED="$_pipe_tmp" exec bash "$_pipe_tmp" "$@"
+fi
+if [ -n "${_OPENCLAW_PIPE_BUFFERED:-}" ]; then
+    # Only clean up the temp file when the marker matches the script we are
+    # executing, confirming this is our pipe guard's buffered copy rather than
+    # a caller-controlled path inherited via the environment.
+    if [ "${_OPENCLAW_PIPE_BUFFERED}" = "${BASH_SOURCE[0]:-}" ]; then
+        rm -f "$_OPENCLAW_PIPE_BUFFERED" 2>/dev/null || true
+    fi
+    unset _OPENCLAW_PIPE_BUFFERED
+fi
+
 set -euo pipefail
 
 # OpenClaw Installer for macOS and Linux
