@@ -123,6 +123,37 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("sends visual media as document when sendOptions.asDocument is true", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+      fileName: "promo.png",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "promo.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("does not force audio media onto the document branch", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice", payload, "audio/ogg", {
+      asDocument: true,
+      fileName: "voice.ogg",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      audio: payload,
+      ptt: true,
+      mimetype: "audio/ogg",
+    });
+  });
+
   it("sends plain text messages", async () => {
     const res = await api.sendMessage("+1555", "hello");
     expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
@@ -196,6 +227,39 @@ describe("createWebSendApi", () => {
       caption: "cap @15551234567",
       mimetype: "image/jpeg",
       mentions: ["15551234567@s.whatsapp.net"],
+    });
+  });
+
+  it("uses resolved mention caption text for forced-document media", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [
+            {
+              id: "277038292303944:4@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+    });
+    const payload = Buffer.from("img");
+
+    await api.sendMessage("120363000000000000@g.us", "cap @+5511976136970", payload, "image/jpeg", {
+      asDocument: true,
+      fileName: "promo.jpg",
+    });
+
+    expectFirstSendJid("120363000000000000@g.us");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "promo.jpg",
+      caption: "cap @277038292303944",
+      mimetype: "image/jpeg",
+      mentions: ["277038292303944@lid"],
     });
   });
 
