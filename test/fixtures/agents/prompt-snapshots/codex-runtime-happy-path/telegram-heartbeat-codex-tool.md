@@ -218,8 +218,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 45220,
-    "roughTokens": 11305
+    "chars": 41161,
+    "roughTokens": 10291
   },
   "openClawDeveloperInstructions": {
     "chars": 4412,
@@ -230,8 +230,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7155
   },
   "totalWithDynamicToolsJson": {
-    "chars": 73841,
-    "roughTokens": 18461
+    "chars": 69782,
+    "roughTokens": 17446
   },
   "userInputText": {
     "chars": 608,
@@ -585,7 +585,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 ```json
 [
   {
-    "description": "Send, delete, and manage messages via channel plugins. Supports actions: send.",
+    "description": "Send/delete/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -596,14 +596,14 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "asDocument": {
-          "description": "Send image/GIF/video as document to avoid channel compression. Alias for forceDocument.",
+          "description": "Alias for forceDocument.",
           "type": "boolean"
         },
         "asVoice": {
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
           "items": {
             "properties": {
               "filePath": {
@@ -643,7 +643,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "buffer": {
-          "description": "Base64 payload for attachments (optionally a data: URL).",
+          "description": "Base64 attachment payload; data URL ok.",
           "type": "string"
         },
         "caption": {
@@ -659,11 +659,11 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "effect": {
-          "description": "Alias for effectId (e.g., invisible-ink, balloons).",
+          "description": "Alias for effectId.",
           "type": "string"
         },
         "effectId": {
-          "description": "Message effect name/id for sendWithEffect (e.g., invisible ink).",
+          "description": "Effect id/name for sendWithEffect.",
           "type": "string"
         },
         "filename": {
@@ -673,7 +673,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document to avoid channel compression.",
+          "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
         },
         "gatewayToken": {
@@ -686,7 +686,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "media": {
-          "description": "Media URL or local path. data: URLs are not supported here, use buffer.",
+          "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
@@ -699,7 +699,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "quoteText": {
-          "description": "Quote text for Telegram reply_parameters",
+          "description": "Telegram reply quote text.",
           "type": "string"
         },
         "replyTo": {
@@ -733,7 +733,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   },
   {
     "deferLoading": true,
-    "description": "Record the result of a heartbeat run. Use notify=false when nothing should be sent visibly. Use notify=true with notificationText when the user should receive a concise heartbeat alert.",
+    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

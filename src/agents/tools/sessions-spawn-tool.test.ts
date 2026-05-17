@@ -117,7 +117,7 @@ describe("sessions_spawn tool", () => {
       };
     };
 
-    expect(tool.displaySummary).toBe("Spawn sub-agent sessions.");
+    expect(tool.displaySummary).toBe("Spawn subagent session.");
     expect(tool.description).not.toContain("ACP");
     expect(tool.description).not.toContain('runtime="acp"');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
@@ -137,7 +137,7 @@ describe("sessions_spawn tool", () => {
       };
     };
 
-    expect(tool.displaySummary).toBe("Spawn sub-agent or ACP sessions.");
+    expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
     expect(tool.description).toContain('runtime="acp"');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
@@ -350,7 +350,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(requireSchemaProperty(schema.properties, "taskName").description).toContain(
-      "Stable optional alias",
+      "Stable alias",
     );
 
     const result = await tool.execute("call-task-name", {

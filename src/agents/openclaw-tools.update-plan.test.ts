@@ -151,7 +151,7 @@ describe("openclaw-tools update_plan gating", () => {
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled({ config }, true);
-    expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
+    expect(createUpdatePlanTool().displaySummary).toBe("Track short work plan.");
   });
 
   it("registers update_plan when the runtime allowlist explicitly requests it", () => {
