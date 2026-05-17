@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - CLI/update: tailor post-update Gateway recovery hints by platform, showing systemd, LaunchAgent, Scheduled Task, or generic service-manager guidance instead of macOS-only recovery text. (#83096) Thanks @rubencu.
 - Plugins: apply a default 15-second timeout to legacy `before_agent_start` hooks so hung plugin handlers no longer block agent startup. Fixes #48534. (#83136) Thanks @therahul-yo.
 - Feishu: refresh inbound session delivery context for DM, group, and broadcast turns so later replies do not inherit stale WebChat routing. Fixes #78274.
+- Agents/subagents: require the initial subagent registry save before reporting spawn accepted, returning a spawn error instead of losing an untracked run when the registry write fails. (#83146) Thanks @yetval.
 - QA-Lab/qa-channel: attach redacted agent tool-start traces to outbound `QaBusMessage` records so scenarios can assert actual tool use instead of relying only on reply text. Fixes #67637. Thanks @100yenadmin.
 - QA-Lab: fail live runtime parity reports when assistant-message usage is missing, preventing `0 vs 0` live token rows from being reported as passing proof. Fixes #80411. Thanks @100yenadmin.
 - QA-Lab: fail Codex-backed OpenAI live runtime-pair runs before launching isolated workers when no portable Codex auth is available, while staging API-key fallbacks and configured Codex keys for isolated QA agents. Fixes #80412. Thanks @100yenadmin.
