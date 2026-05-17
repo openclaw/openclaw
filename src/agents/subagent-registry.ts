@@ -335,6 +335,12 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
     if (entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok") {
       return;
     }
+    // #83114: completeSubagentRun is fire-and-forget here. If it rejects, the
+    // parent never sees the subagent completion signal and the rejection
+    // becomes an unhandled rejection. Attach an explicit catch so the
+    // failure is logged (matching the manager's own retry-warn pattern at
+    // subagent-registry-run-manager.ts:290) instead of being silently
+    // dropped into Node's unhandled-rejection handler.
     void completeSubagentRun({
       runId: params.runId,
       endedAt: pending.endedAt,
@@ -346,6 +352,12 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
+    }).catch((err) => {
+      log.warn("deferred subagent error completion failed", {
+        runId: params.runId,
+        childSessionKey: entry.childSessionKey,
+        error: err,
+      });
     });
   }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
   timer.unref?.();
@@ -372,6 +384,9 @@ function schedulePendingLifecycleTimeout(params: { runId: string; endedAt: numbe
     if (entry.outcome?.status === "ok") {
       return;
     }
+    // #83114: same fire-and-forget rejection class as the error path above.
+    // Surface the failure so an unhandled rejection cannot mask a stuck
+    // timed-out subagent that never sends its farewell.
     void completeSubagentRun({
       runId: params.runId,
       endedAt: pending.endedAt,
@@ -382,6 +397,12 @@ function schedulePendingLifecycleTimeout(params: { runId: string; endedAt: numbe
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
+    }).catch((err) => {
+      log.warn("deferred subagent timeout completion failed", {
+        runId: params.runId,
+        childSessionKey: entry.childSessionKey,
+        error: err,
+      });
     });
   }, LIFECYCLE_TIMEOUT_RETRY_GRACE_MS);
   timer.unref?.();
