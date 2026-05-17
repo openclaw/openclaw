@@ -13,9 +13,16 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
+  prepareSecretsRuntimeFastPathSnapshot,
+  resolveRefreshAgentDirs,
+} from "../secrets/runtime-fast-path.js";
+import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+} from "../secrets/runtime-state.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
@@ -222,17 +229,64 @@ export function createRuntimeSecretsActivator(params: {
   const activateRuntimeSecrets = (async (config, activationParams) =>
     await runWithSecretsActivationLock(async () => {
       try {
+        const startupPreflight =
+          activationParams.reason === "startup" || activationParams.reason === "restart-check";
+        if (
+          activationParams.reason === "startup" &&
+          activationParams.activate &&
+          !params.prepareRuntimeSecretsSnapshot &&
+          !params.activateRuntimeSecretsSnapshot
+        ) {
+          const fastPath = prepareSecretsRuntimeFastPathSnapshot({
+            config: pruneSkippedStartupSecretSurfaces(config),
+          });
+          if (fastPath) {
+            const prepared = fastPath.snapshot;
+            assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
+            activateSecretsRuntimeSnapshotState({
+              snapshot: prepared,
+              refreshContext: fastPath.refreshContext,
+              refreshHandler: {
+                refresh: async ({ sourceConfig }) => {
+                  const secretsRuntime = await loadSecretsRuntime();
+                  const refreshed = await secretsRuntime.prepareSecretsRuntimeSnapshot({
+                    config: sourceConfig,
+                    env: fastPath.refreshContext.env,
+                    agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
+                    loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
+                    ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
+                      ? {}
+                      : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
+                  });
+                  secretsRuntime.activateSecretsRuntimeSnapshot(refreshed);
+                  return true;
+                },
+              },
+            });
+            logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
+            if (secretsDegraded) {
+              const recoveredMessage =
+                "Secret resolution recovered; runtime remained on last-known-good during the outage.";
+              params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
+              params.emitStateEvent(
+                "SECRETS_RELOADER_RECOVERED",
+                recoveredMessage,
+                prepared.config,
+              );
+            }
+            secretsDegraded = false;
+            return prepared;
+          }
+        }
+        const loadAuthStore = startupPreflight
+          ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
+          : undefined;
         const secretsRuntime =
           params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot
             ? null
             : await loadSecretsRuntime();
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
-        const startupPreflight =
-          activationParams.reason === "startup" || activationParams.reason === "restart-check";
-        const loadAuthStore = startupPreflight
-          ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
-          : undefined;
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
           ...(loadAuthStore ? { loadAuthStore } : {}),

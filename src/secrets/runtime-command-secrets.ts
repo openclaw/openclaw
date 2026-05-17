@@ -9,9 +9,12 @@ import {
   type CommandSecretAssignment,
 } from "./command-config.js";
 import { getPath, setPathExistingStrict } from "./path-utils.js";
+import {
+  getActiveSecretsRuntimeEnv,
+  getActiveSecretsRuntimeSnapshot,
+} from "./runtime-state.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
-import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
 export type { CommandSecretAssignment } from "./command-config.js";

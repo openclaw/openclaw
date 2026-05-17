@@ -21,10 +21,10 @@ import {
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
-  activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+  type PreparedSecretsRuntimeSnapshot,
+} from "../secrets/runtime-state.js";
 import {
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
@@ -58,6 +58,13 @@ type GatewayHotReloadState = {
   cronState: GatewayCronState;
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
+
+async function activateSecretsRuntimeSnapshot(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): Promise<void> {
+  const runtime = await import("../secrets/runtime.js");
+  runtime.activateSecretsRuntimeSnapshot(snapshot);
+}
 
 type GatewayReloadLog = {
   info: (msg: string) => void;
@@ -605,7 +612,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         await applyHotReload(plan, prepared.config);
       } catch (err) {
         if (previousSnapshot) {
-          activateSecretsRuntimeSnapshot(previousSnapshot);
+          await activateSecretsRuntimeSnapshot(previousSnapshot);
         } else {
           clearSecretsRuntimeSnapshot();
         }
@@ -638,7 +645,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         const restartQueued = requestGatewayRestart(plan, nextConfig);
         if (!restartQueued) {
           if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-            activateSecretsRuntimeSnapshot(prepared);
+            await activateSecretsRuntimeSnapshot(prepared);
             setCurrentSharedGatewaySessionGeneration(
               params.sharedGatewaySessionGenerationState,
               nextSharedGatewaySessionGeneration,
