@@ -1161,7 +1161,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
-  it("keeps progress updates in a draft and sends the final answer normally", async () => {
+  it("deletes progress updates before sending the final answer normally", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -1186,8 +1186,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Cracking...\n`🛠️ Exec`\n`🛠️ git rev-parse --abbrev-ref HEAD`",
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });

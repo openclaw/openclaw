@@ -1125,12 +1125,10 @@ export const dispatchTelegramMessage = async ({
       payload: ReplyPayload,
       text: string,
     ): Promise<LaneDeliveryResult> => {
-      if (activeAnswerDraftIsToolProgressOnly) {
-        await rotateAnswerLaneAfterToolProgress();
-      } else {
-        await answerLane.stream?.clear();
-        resetDraftLaneState(answerLane);
-      }
+      await answerLane.stream?.clear();
+      resetDraftLaneState(answerLane);
+      streamToolProgressSuppressed = true;
+      streamToolProgressLines = [];
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
       answerLane.finalized = true;
       return delivered ? { kind: "sent" } : { kind: "skipped" };
