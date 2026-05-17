@@ -22,7 +22,7 @@ import { getToolResult, runMessageAction } from "../../infra/outbound/message-ac
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeAccountId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -787,7 +787,78 @@ function appendMessageToolReadHint(
   return description;
 }
 
+const SESSION_KEY_NON_CHANNEL_HEADS = new Set(["main", "cron", "subagent", "acp"]);
+const SESSION_KEY_PEER_MARKERS = new Set(["direct", "dm", "group", "channel", "thread", "topic"]);
+
+// Per #82911: when `options.currentChannelProvider` has drifted to `webchat`
+// but the session key clearly encodes a different transport (e.g.
+// `agent:main:signal:direct:+13093634600`), the session key is the source of
+// truth for delivery. Without this fallback, `message` tool invocations from
+// a Signal/Telegram/Feishu session can silently land in the internal webchat
+// sink instead of the user's real channel. Returns `null` for non-overridable
+// shapes (currentChannelProvider already non-webchat, no session key, session
+// key has no channel/peer, or peer cannot be resolved) so the existing
+// behaviour is preserved everywhere else.
+function inferDeliveryFromSessionKey(
+  sessionKey?: string,
+): { channel: string; to: string } | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const restRaw = parsed?.rest;
+  if (!restRaw) {
+    return null;
+  }
+  const parts = restRaw.split(":").filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+  const head = parts[0]?.toLowerCase();
+  if (!head || SESSION_KEY_NON_CHANNEL_HEADS.has(head)) {
+    return null;
+  }
+  const channel = normalizeMessageChannel(head);
+  if (!channel) {
+    return null;
+  }
+  // Look for the first non-marker token after the channel — that is the peer
+  // id (e.g. `+13093634600`, `@user`, `chat-42`). We accept either
+  // `<channel>:direct:<peer>` (typical) or `<channel>:<peer>` (legacy) shapes.
+  for (let index = 1; index < parts.length; index += 1) {
+    const segment = parts[index]?.trim();
+    if (!segment) continue;
+    if (SESSION_KEY_PEER_MARKERS.has(segment.toLowerCase())) continue;
+    return { channel, to: segment };
+  }
+  return null;
+}
+
+function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
+  currentChannelProvider: string | undefined;
+  currentChannelId: string | undefined;
+} {
+  const rawProvider = options?.currentChannelProvider;
+  const rawChannelId = options?.currentChannelId;
+  // Guard: only kick in when the runtime context is the contaminated
+  // `webchat` shape AND the session key encodes a real different transport.
+  // Sessions that already advertise a non-webchat provider, or webchat
+  // sessions whose session key is also webchat, must keep their existing
+  // behaviour so this is not a stealth re-route.
+  if (normalizeMessageChannel(rawProvider) !== "webchat") {
+    return { currentChannelProvider: rawProvider, currentChannelId: rawChannelId };
+  }
+  const sessionDelivery = inferDeliveryFromSessionKey(options?.agentSessionKey);
+  if (!sessionDelivery || sessionDelivery.channel === "webchat") {
+    return { currentChannelProvider: rawProvider, currentChannelId: rawChannelId };
+  }
+  return {
+    currentChannelProvider: sessionDelivery.channel,
+    currentChannelId: sessionDelivery.to,
+  };
+}
+
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
+  const effectiveContext = resolveEffectiveCurrentChannelContext(options);
+  const effectiveCurrentChannelProvider = effectiveContext.currentChannelProvider;
+  const effectiveCurrentChannelId = effectiveContext.currentChannelId;
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
     options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
@@ -810,8 +881,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const schema = options?.config
     ? buildMessageToolSchema({
         cfg: options.config,
-        currentChannelProvider: options.currentChannelProvider,
-        currentChannelId: options.currentChannelId,
+        currentChannelProvider: effectiveCurrentChannelProvider,
+        currentChannelId: effectiveCurrentChannelId,
         currentThreadTs,
         currentMessageId: options.currentMessageId,
         currentAccountId: agentAccountId,
@@ -824,8 +895,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     : MessageToolSchema;
   const description = buildMessageToolDescription({
     config: options?.config,
-    currentChannel: options?.currentChannelProvider,
-    currentChannelId: options?.currentChannelId,
+    currentChannel: effectiveCurrentChannelProvider,
+    currentChannelId: effectiveCurrentChannelId,
     currentThreadTs,
     currentMessageId: options?.currentMessageId,
     currentAccountId: agentAccountId,
@@ -886,7 +957,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         channel: params.channel,
         target: params.target,
         targets: params.targets,
-        fallbackChannel: options?.currentChannelProvider,
+        fallbackChannel: effectiveCurrentChannelProvider,
         accountId: params.accountId,
         fallbackAccountId: agentAccountId,
       });
@@ -929,15 +1000,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           options.currentMessageId.trim().length > 0);
 
       const toolContext =
-        options?.currentChannelId ||
-        options?.currentChannelProvider ||
+        effectiveCurrentChannelId ||
+        effectiveCurrentChannelProvider ||
         currentThreadTs ||
         hasCurrentMessageId ||
         replyToMode ||
         options?.hasRepliedRef
           ? {
-              currentChannelId: options?.currentChannelId,
-              currentChannelProvider: options?.currentChannelProvider,
+              currentChannelId: effectiveCurrentChannelId,
+              currentChannelProvider: effectiveCurrentChannelProvider,
               currentThreadTs,
               currentMessageId: options?.currentMessageId,
               replyToMode,
