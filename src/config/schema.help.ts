@@ -813,7 +813,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.media.image.scope":
     "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
   "tools.browser.enabled":
-    "Enable automatic vision understanding for browser screenshot results so text-only main models can read what the browser sees. When disabled or unset, browser screenshots return image content blocks as before, letting multimodal main models read them directly. Configure `tools.browser.models` to specify the vision provider/model to use.",
+    "Controls whether browser screenshot vision understanding is active. When `tools.browser.models` contains at least one valid provider/model entry, vision is enabled by default; set `enabled: false` to force-disable it without removing the model list. When no models are configured, this field has no effect and screenshots return image content blocks as before.",
   "tools.browser.maxBytes":
     "Maximum accepted screenshot byte size sent to the configured vision model. Keep the limit aligned with your provider caps so screenshots are not silently truncated; lower it on slow uplinks to keep request latency predictable.",
   "tools.browser.maxChars":
