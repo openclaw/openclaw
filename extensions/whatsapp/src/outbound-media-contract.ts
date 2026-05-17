@@ -124,7 +124,7 @@ function normalizeWhatsAppLoadedMedia(
   const fileName =
     kind === "document"
       ? (media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "file")
-      : undefined;
+      : media.fileName;
   return {
     buffer: media.buffer,
     kind,
