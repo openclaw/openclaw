@@ -145,28 +145,38 @@ const coreDistEntries = buildCoreDistEntries();
 function buildUnifiedDistEntries(): Record<string, string> {
   const includeBundledPluginEntries = process.env.OPENCLAW_BUILD_BUNDLED_PLUGINS !== "0";
   const includeDockerE2eHarnessEntries = process.env.OPENCLAW_BUILD_DOCKER_E2E !== "0";
+  const coreOnlyMode = process.env.OPENCLAW_BUILD_CORE_ONLY === "1";
 
   return {
     ...coreDistEntries,
     ...(includeDockerE2eHarnessEntries ? dockerE2eHarnessEntries : {}),
-    // Internal compat artifact for the root-alias.cjs lazy loader.
-    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
-    ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
-        `plugin-sdk/${entry}`,
-        source,
-      ]),
-    ),
-    ...(shouldBuildPrivateQaEntries
-      ? {
-          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
-          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
-        }
-      : {}),
-    ...(includeBundledPluginEntries
-      ? listBundledPluginEntrySources(rootBundledPluginBuildEntries)
-      : {}),
-    ...bundledHookEntries,
+    ...(coreOnlyMode
+      ? {}
+      : {
+          // Internal compat artifact for the root-alias.cjs lazy loader.
+          "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
+          // Private bundled Codex helper for app-server native subagent task mirroring.
+          "plugin-sdk/codex-native-task-runtime": "src/plugin-sdk/codex-native-task-runtime.ts",
+          // Private bundled Codex helper for app-server user MCP config projection.
+          "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
+          ...Object.fromEntries(
+            Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
+              `plugin-sdk/${entry}`,
+              source,
+            ]),
+          ),
+          ...(shouldBuildPrivateQaEntries
+            ? {
+                "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+                "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+              }
+            : {}),
+          ...(includeBundledPluginEntries
+            ? listBundledPluginEntrySources(rootBundledPluginBuildEntries)
+            : {}),
+          ...bundledHookEntries,
+        }),
+>>>>>>> af3b1ddd43 (chore(build): add OPENCLAW_BUILD_CORE_ONLY mode (skip plugin-sdk + bundled plugins + hooks))
   };
 }
 
