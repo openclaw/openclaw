@@ -48,6 +48,7 @@ const STATIC_TTS_TARGET_IDS = [
   "messages.tts.providers.*.apiKey",
 ] as const;
 const STATIC_WEB_SEARCH_TARGET_IDS = ["tools.web.search.apiKey"] as const;
+const STATIC_WEB_FETCH_TARGET_IDS = ["tools.web.fetch.firecrawl.apiKey"] as const;
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
@@ -303,7 +304,10 @@ export function getWebSearchCommandSecretTargetIds(): Set<string> {
 }
 
 export function getWebFetchCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(getPluginWebCredentialTargetIds("webFetch.apiKey"));
+  return toTargetIdSet([
+    ...STATIC_WEB_FETCH_TARGET_IDS,
+    ...getPluginWebCredentialTargetIds("webFetch.apiKey"),
+  ]);
 }
 
 function getConfiguredWebProviderId(
@@ -461,6 +465,12 @@ export function getWebFetchCommandSecretTargets(params: {
         pluginsWithFetchCredential.add(pluginId);
       }
     }
+  }
+  if (
+    webFetchPaths.has("tools.web.fetch.firecrawl.apiKey") &&
+    (!selectedPluginId || selectedPluginId === "firecrawl" || providerId === "firecrawl")
+  ) {
+    allowedPaths.add("tools.web.fetch.firecrawl.apiKey");
   }
   for (const path of webSearchPaths) {
     const pluginId = pluginIdFromWebCredentialPath(path, "webSearch.apiKey");
