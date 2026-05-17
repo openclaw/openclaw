@@ -1081,6 +1081,21 @@ function buildAssistantText(
       "Status: blocked",
     ].join("\n");
   }
+  if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
+    const taskEvidenceText = scenarioToolOutput;
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+      return [
+        "Pending: maintainer feedback before publishing",
+        "Blocked: publishing needs explicit user approval",
+        "Done: local evidence captured in personal-task-status.txt",
+      ].join("\n");
+    }
+    return [
+      "Pending: maintainer feedback before publishing",
+      "Blocked: publishing needs explicit user approval",
+      "Done: blocked until personal-task-status.txt exists",
+    ].join("\n");
+  }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
@@ -2136,6 +2151,47 @@ async function buildResponsesPayload(
     }
     if (repoEvidenceText.includes("# Repo contract")) {
       return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
+    }
+  }
+  if (/personal task followthrough check/i.test(allInputText)) {
+    const taskEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Pending: maintainer feedback before publishing",
+          "Blocked: publishing needs explicit user approval",
+          "Done: local evidence captured in personal-task-status.txt",
+        ].join("\n"),
+      );
+    }
+    if (
+      !taskEvidenceText ||
+      (!taskEvidenceText.includes("# Personal task ledger") &&
+        !taskEvidenceText.includes("Task: prepare a local OpenClaw PR readiness note."))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_TASK_LEDGER.md" });
+    }
+    if (
+      taskEvidenceText.includes("Task: prepare a local OpenClaw PR readiness note.") &&
+      taskEvidenceText.includes("Done: local evidence captured in personal-task-status.txt.")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-task-status.txt",
+        content: [
+          "Personal task followthrough",
+          "Pending: maintainer feedback before publishing",
+          "Blocked: publishing needs explicit user approval",
+          "Done: local evidence captured in personal-task-status.txt",
+        ].join("\n"),
+      });
+    }
+    if (taskEvidenceText.includes("# Personal task ledger")) {
+      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
     }
   }
   if (
