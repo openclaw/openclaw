@@ -47,11 +47,15 @@ function coerceApiHost(params: {
     return url.origin;
   } catch {}
 
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
+    return defaultHost;
+  }
+
   try {
     const url = new URL(`https://${raw}`);
     return url.origin;
   } catch {
-    return "https://api.minimax.io";
+    return defaultHost;
   }
 }
 

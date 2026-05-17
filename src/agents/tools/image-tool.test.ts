@@ -788,6 +788,7 @@ describe("image tool implicit imageModel config", () => {
         version: 1,
         profiles: {
           mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" },
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
         },
       } as const;
 
@@ -836,6 +837,7 @@ describe("image tool implicit imageModel config", () => {
         version: 1,
         profiles: {
           mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" },
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
         },
       } as const;
 
