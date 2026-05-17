@@ -186,7 +186,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(2);
     expectFields(replyPayloads[0], {
-      text: "keep text",
+      text: "keep text\n⚠️ Media failed.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -713,6 +713,26 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("surfaces a warning when non-silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async () => {
+      throw new Error("file not found");
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "MEDIA: ./missing.png" }],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ Media failed.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
   });
 
   it("extracts markdown image replies into final payload media urls", async () => {
