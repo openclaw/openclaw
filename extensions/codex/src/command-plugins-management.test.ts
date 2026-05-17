@@ -1,3 +1,4 @@
+import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import {
   handleCodexPluginsSubcommand,
@@ -27,14 +28,17 @@ function inMemoryIO(
   };
 }
 
-const fakeCtx = {
+const fakeCtx: PluginCommandContext = {
   args: "",
   config: {},
   channel: "test",
   isAuthorizedSender: true,
   senderIsOwner: true,
   commandBody: "/codex plugins",
-} as const;
+  requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+  detachConversationBinding: async () => ({ removed: false }),
+  getCurrentConversationBinding: async () => null,
+};
 
 describe("Codex /codex plugins subcommand", () => {
   it("lists a configured plugin with its enabled marker and explains the underlying file", async () => {
