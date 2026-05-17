@@ -70,7 +70,13 @@ async function runQaParityReport(opts: {
   await runtime.runQaParityReportCommand(opts);
 }
 
-async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
+async function runQaCoverageReport(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+  tools?: boolean;
+  summary?: string;
+}) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCoverageReportCommand(opts);
 }
@@ -163,7 +169,6 @@ async function runQaUi(opts: {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
@@ -363,13 +368,23 @@ export function registerQaLabCli(program: Command) {
     );
 
   qa.command("coverage")
-    .description("Print the markdown scenario coverage inventory")
+    .description("Print the markdown QA coverage inventory")
     .option("--repo-root <path>", "Repository root to target when writing --output")
     .option("--output <path>", "Write the coverage inventory to this path")
     .option("--json", "Print JSON instead of Markdown", false)
-    .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
-      await runQaCoverageReport(opts);
-    });
+    .option("--tools", "Print runtime tool fixture coverage instead of scenario coverage", false)
+    .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        output?: string;
+        json?: boolean;
+        tools?: boolean;
+        summary?: string;
+      }) => {
+        await runQaCoverageReport(opts);
+      },
+    );
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
@@ -569,7 +584,6 @@ export function registerQaLabCli(program: Command) {
       Number(value),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
-    .option("--control-ui-token <token>", "Optional Control UI token for embedded links")
     .option(
       "--control-ui-proxy-target <url>",
       "Optional upstream Control UI target for /control-ui proxying",
@@ -590,7 +604,6 @@ export function registerQaLabCli(program: Command) {
         advertiseHost?: string;
         advertisePort?: number;
         controlUiUrl?: string;
-        controlUiToken?: string;
         controlUiProxyTarget?: string;
         uiDistDir?: string;
         autoKickoffTarget?: string;

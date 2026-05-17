@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { buildExplicitSessionIdSessionKey } from "../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -93,11 +95,11 @@ import {
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import {
+  getCapabilityWebFetchCommandSecretTargets,
+  getCapabilityWebSearchCommandSecretTargets,
   getMemoryEmbeddingCommandSecretTargetIds,
   getModelsCommandSecretTargetIds,
   getTtsCommandSecretTargetIds,
-  getWebFetchCommandSecretTargets,
-  getWebSearchCommandSecretTargets,
 } from "./command-secret-targets.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
@@ -679,54 +681,6 @@ function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
   return normalized;
 }
 
-async function resolveLocalCapabilityRuntimeConfig(params: {
-  commandName: string;
-  targetIds: Set<string>;
-  allowedPaths?: Set<string>;
-  providerOverrides?: { webSearch?: string; webFetch?: string };
-  config?: OpenClawConfig;
-}): Promise<OpenClawConfig> {
-  const cfg = params.config ?? getRuntimeConfig();
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  const { resolvedConfig } = await resolveCommandConfigWithSecrets({
-    config: cfg,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-    ...(params.providerOverrides ? { providerOverrides: params.providerOverrides } : {}),
-    runtime: defaultRuntime,
-  });
-  if (sourceConfig) {
-    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(resolvedConfig);
-  }
-  return resolvedConfig;
-}
-
-function withWebProviderOverride(
-  config: OpenClawConfig,
-  kind: "search" | "fetch",
-  provider?: string,
-): OpenClawConfig {
-  const normalizedProvider = normalizeOptionalString(provider);
-  if (!normalizedProvider) {
-    return config;
-  }
-  const next = structuredClone(config);
-  const tools = (next.tools ??= {});
-  const web = (tools.web ??= {});
-  const existing = web[kind];
-  web[kind] =
-    existing && typeof existing === "object"
-      ? {
-          ...existing,
-          provider: normalizedProvider,
-        }
-      : { provider: normalizedProvider };
-  return next;
-}
-
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
@@ -846,6 +800,8 @@ async function runModelRun(params: {
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
+  const sessionId = `model-run-${randomUUID()}`;
+  const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
@@ -861,6 +817,8 @@ async function runModelRun(params: {
     method: "agent",
     params: {
       agentId,
+      sessionId,
+      sessionKey,
       message: params.prompt,
       attachments:
         imageFiles.length > 0
@@ -1097,8 +1055,8 @@ async function runImageDescribe(params: {
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const isRemoteUrl = /^https?:\/\//i.test(filePath.trim());
-      const resolvedPath = isRemoteUrl ? filePath.trim() : path.resolve(filePath);
+      const resolvedPath = resolveImageDescribeInput(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
@@ -1260,7 +1218,7 @@ async function runVideoGenerate(params: {
   timeoutMs?: number;
 }) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer video generate",
+    commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
@@ -1338,7 +1296,7 @@ async function runVideoGenerate(params: {
 
 async function runVideoDescribe(params: { file: string; model?: string }) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer video describe",
+    commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const activeModel = requireProviderModelOverride(params.model);
@@ -1513,6 +1471,11 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+function resolveImageDescribeInput(filePath: string): string {
+  const trimmed = filePath.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+}
+
 async function runTtsPersonas(transport: CapabilityTransport) {
   if (transport === "gateway") {
     return await callGateway({
@@ -1616,24 +1579,53 @@ async function runTtsStateMutation(params: {
   return { provider };
 }
 
+async function resolveLocalCapabilityRuntimeConfig(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
+  config?: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  const cfg = params.config ?? getRuntimeConfig();
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
+    runtime: defaultRuntime,
+    autoEnable: true,
+  });
+  if (sourceConfig) {
+    setRuntimeConfigSnapshot(effectiveConfig, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(effectiveConfig);
+  }
+  return effectiveConfig;
+}
+
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
   const rawConfig = getRuntimeConfig();
-  const config = withWebProviderOverride(rawConfig, "search", params.provider);
-  const provider = normalizeOptionalString(params.provider);
-  const secretTargets = getWebSearchCommandSecretTargets({
-    config,
-    provider,
+  const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web search",
-    targetIds: secretTargets.targetIds,
-    ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
-    ...(provider ? { providerOverrides: { webSearch: provider } } : {}),
-    config,
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
   });
   const result = await runWebSearch({
     config: cfg,
-    preferInputConfig: true,
     providerId: params.provider,
     args: {
       query: params.query,
@@ -1653,18 +1645,20 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
   const rawConfig = getRuntimeConfig();
-  const config = withWebProviderOverride(rawConfig, "fetch", params.provider);
-  const provider = normalizeOptionalString(params.provider);
-  const secretTargets = getWebFetchCommandSecretTargets({
-    config,
-    provider,
+  const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
   });
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer web fetch",
-    targetIds: secretTargets.targetIds,
-    ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
-    ...(provider ? { providerOverrides: { webFetch: provider } } : {}),
-    config,
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
   });
   const resolved = resolveWebFetchDefinition({
     config: cfg,

@@ -43,8 +43,10 @@ Skills own workflows; root owns hard policy and routing.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
 - Inline code comments: brief notes for tricky, bug-prone, or previously buggy logic.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
+- Protocol version bumps: explicit owner confirmation only; never automatic/generated.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor only.
 - Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
+- Agent tool schema cleanup: remove stale args cleanly; no hidden compat for model-facing params just to avoid churn.
 
 ## Commands
 
@@ -71,7 +73,7 @@ Skills own workflows; root owns hard policy and routing.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
 - One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
-- Pre-land/pre-commit code changes: use `$codex-review` until no accepted/actionable findings remain, unless equivalent manual review already done, trivial/docs-only, or user opts out.
+- Pre-land/pre-commit code changes: use `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already done, trivial/docs-only, or user opts out.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.

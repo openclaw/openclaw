@@ -66,7 +66,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
       },
       {
         name: "Compaction retry after mutating tool",
-        status: "fail",
+        status: "pass",
         steps: [],
         runtimeParity: {
           scenarioId: "compaction-retry-after-mutating-tool",
@@ -97,8 +97,8 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
     ],
     counts: {
       total: 2,
-      passed: 1,
-      failed: 1,
+      passed: 2,
+      failed: 0,
     },
     run: {
       providerMode: "mock-openai",
@@ -801,12 +801,61 @@ status=done`,
     });
 
     expect(report.runtimePair).toEqual(["pi", "codex"]);
-    expect(report.pass).toBe(false);
+    expect(report.pass).toBe(true);
     expect(report.driftCounts.none).toBe(1);
     expect(report.driftCounts["tool-call-shape"]).toBe(1);
+    expect(report.failures).toEqual([]);
+  });
+
+  it("fails runtime parity reports when a runtime cell fails", () => {
+    const summary = makeRuntimeParitySummary();
+    const scenario = summary.scenarios[1];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.status = "fail";
+    scenario.runtimeParity.cells.codex.runtimeErrorClass = "tool-error";
+
+    const report = buildQaRuntimeParityReport({
+      summary,
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failedScenarios).toBe(1);
     expect(report.failures).toContain(
       "Compaction retry after mutating tool drift=tool-call-shape (tool call 1 differs).",
     );
+  });
+
+  it("fails live runtime parity reports when assistant-message usage is missing", () => {
+    const summary = makeRuntimeParitySummary();
+    summary.run = {
+      ...summary.run,
+      providerMode: "live-frontier",
+    };
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.pi.usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    scenario.runtimeParity.cells.codex.usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    };
+
+    const report = buildQaRuntimeParityReport({
+      summary,
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failedScenarios).toBe(1);
+    expect(report.failures).toContain(
+      "Approval turn tool followthrough missing live assistant-message usage (pi=0, codex=0).",
+    );
+    expect(report.scenarios[0]?.status).toBe("fail");
   });
 
   it("renders a readable runtime parity markdown report", () => {

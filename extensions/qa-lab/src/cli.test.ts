@@ -159,6 +159,16 @@ describe("qa cli registration", () => {
     expect(commandNames).toContain("coverage");
   });
 
+  it("does not expose a control-ui token flag on qa ui", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const ui = qa?.commands.find((command) => command.name() === "ui");
+    if (!ui) {
+      throw new Error("expected qa ui command");
+    }
+
+    expect(ui.options.map((option) => option.long)).not.toContain("--control-ui-token");
+  });
+
   it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
     await program.parseAsync([
       "node",
@@ -445,6 +455,28 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       output: ".artifacts/qa-coverage.md",
       json: true,
+      tools: false,
+    });
+  });
+
+  it("routes tool coverage report flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--tools",
+      "--summary",
+      ".artifacts/runtime-summary.json",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      tools: true,
+      json: false,
+      summary: ".artifacts/runtime-summary.json",
     });
   });
 

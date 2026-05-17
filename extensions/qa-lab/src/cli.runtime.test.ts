@@ -868,6 +868,7 @@ describe("qa cli runtime", () => {
                     finalText: "done",
                     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
                     wallClockMs: 10,
+                    runtimeErrorClass: "tool-error",
                     bootStateLines: [],
                   },
                 },
@@ -908,6 +909,13 @@ describe("qa cli runtime", () => {
 
     expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
     expectWriteContains(stdoutWrite, "memory.recall");
+  });
+
+  it("prints a markdown tool coverage report from runtime tool fixtures", async () => {
+    await runQaCoverageReportCommand({ repoRoot: process.cwd(), tools: true });
+
+    expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
+    expectWriteContains(stdoutWrite, "codex-native-workspace");
   });
 
   it("resolves character eval paths and passes model refs through", async () => {
