@@ -3015,6 +3015,45 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.strict).toBe(false);
   });
 
+  it("deduplicates repeated OpenAI strict schema downgrade diagnostics", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const diagnostic = {
+      toolIndex: 0,
+      toolName: "read",
+      violations: ["read.parameters.required.path"],
+    };
+    const diagnostics = [diagnostic];
+    const context = { transport: "responses" as const, model };
+
+    __testing.resetOpenAIStrictToolDowngradeDiagnosticLogCache();
+    expect(__testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(true);
+    expect(__testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(
+      false,
+    );
+    expect(
+      __testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(
+        [
+          {
+            ...diagnostic,
+            violations: ["read.parameters.additionalProperties"],
+          },
+        ],
+        context,
+      ),
+    ).toBe(true);
+  });
+
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
     const params = buildOpenAIResponsesParams(
       {
