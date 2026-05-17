@@ -1097,10 +1097,12 @@ async function runImageDescribe(params: {
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const resolvedPath = path.resolve(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(filePath.trim());
+      const resolvedPath = isRemoteUrl ? filePath.trim() : path.resolve(filePath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             provider: activeModel.provider,
@@ -1110,6 +1112,7 @@ async function runImageDescribe(params: {
           })
         : await describeImageFile({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             prompt,

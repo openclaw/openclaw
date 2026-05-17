@@ -478,6 +478,7 @@ describe("capability cli", () => {
   };
   type ImageDescribeParams = {
     filePath?: string;
+    mediaUrl?: string;
     model?: unknown;
     prompt?: unknown;
     provider?: unknown;
@@ -1147,6 +1148,26 @@ describe("capability cli", () => {
     expect(describeCall?.timeoutMs).toBe(90000);
   });
 
+  it("keeps image describe URL files as remote media references", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "https://example.com/photo.png",
+        "--json",
+      ],
+    });
+
+    const describeCall = imageDescribeCall();
+    expect(describeCall?.filePath).toBe("https://example.com/photo.png");
+    expect(describeCall?.mediaUrl).toBe("https://example.com/photo.png");
+    const outputs = firstJsonOutput()?.outputs as Array<Record<string, unknown>>;
+    expect(outputs[0]?.path).toBe("https://example.com/photo.png");
+  });
+
   it("uses the explicit media-understanding provider for image describe model overrides", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -1175,6 +1196,29 @@ describe("capability cli", () => {
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.provider).toBe("ollama");
     expect(firstJsonOutput()?.model).toBe("gpt-4.1-mini");
+  });
+
+  it("keeps explicit-model image describe URL files as remote media references", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "https://example.com/photo.png",
+        "--model",
+        "ollama/qwen2.5vl:7b",
+        "--json",
+      ],
+    });
+
+    const describeCall = firstImageDescribeWithModelCall();
+    expect(describeCall?.filePath).toBe("https://example.com/photo.png");
+    expect(describeCall?.mediaUrl).toBe("https://example.com/photo.png");
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    const outputs = firstJsonOutput()?.outputs as Array<Record<string, unknown>>;
+    expect(outputs[0]?.path).toBe("https://example.com/photo.png");
   });
 
   it("passes describe-many prompts to each image", async () => {
