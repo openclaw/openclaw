@@ -58,9 +58,9 @@ describe("plugin registry runtime config scope", () => {
       loadConfig,
       writeConfigFile,
     } satisfies PluginRuntime["config"];
-    const runtime = createPluginRuntime();
-    runtime.config = configRuntime;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createTestRegistry({
+      config: configRuntime,
+    } as unknown as PluginRuntime);
     const record = createPluginRecord({
       id: "legacy-plugin",
       name: "Legacy Plugin",

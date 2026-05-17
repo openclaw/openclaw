@@ -121,6 +121,9 @@ import {
   appendInjectedAssistantMessageToTranscript,
   appendInjectedUserMessageToTranscript,
 } from "./chat-transcript-inject.js";
+import type { GatewayInjectedTranscriptAppendResult } from "./chat-transcript-inject.js";
+
+type TranscriptAppendResult = GatewayInjectedTranscriptAppendResult;
 import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
@@ -130,15 +133,6 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
-
-type TranscriptAppendResult = {
-  ok: boolean;
-  messageId?: string;
-  message?: Record<string, unknown>;
-  /** True when an existing entry with matching idempotencyKey was returned. */
-  deduped?: boolean;
-  error?: string;
-};
 
 type AbortOrigin = "rpc" | "stop-command";
 
@@ -1520,6 +1514,8 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     chatDeltaSentAt: context.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
+    agentDeltaSentAt: context.agentDeltaSentAt,
+    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
