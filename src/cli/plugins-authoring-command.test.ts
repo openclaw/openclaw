@@ -95,6 +95,86 @@ describe("plugin authoring commands", () => {
     });
   });
 
+  it("preserves manifest-owned metadata while updating generated fields", () => {
+    const metadata = createOptionalDemoMetadata();
+    const existingManifest = {
+      id: "old-id",
+      name: "Old name",
+      uiHints: { apiKey: { secret: true } },
+      contracts: {
+        tools: ["stale_tool"],
+        agentToolResultMiddleware: ["existing-middleware"],
+      },
+      toolMetadata: {
+        demo_optional_echo: {
+          authSignals: [{ provider: "demo", envVars: ["DEMO_API_KEY"] }],
+          configSignals: [{ rootPath: "plugins.entries.optional-demo-tools.config.apiKey" }],
+        },
+        stale_tool: {
+          optional: true,
+        },
+      },
+    };
+
+    const manifest = buildToolPluginManifest({
+      metadata,
+      packageManifest: { version: "1.2.3" },
+      existingManifest,
+    });
+
+    expect(manifest).toMatchObject({
+      id: "optional-demo-tools",
+      name: "Optional Demo Tools",
+      uiHints: { apiKey: { secret: true } },
+      contracts: {
+        tools: ["demo_optional_echo"],
+        agentToolResultMiddleware: ["existing-middleware"],
+      },
+      toolMetadata: {
+        demo_optional_echo: {
+          optional: true,
+          authSignals: [{ provider: "demo", envVars: ["DEMO_API_KEY"] }],
+          configSignals: [{ rootPath: "plugins.entries.optional-demo-tools.config.apiKey" }],
+        },
+      },
+    });
+    expect((manifest.toolMetadata as Record<string, unknown>).stale_tool).toBeUndefined();
+    expect(
+      validateToolPluginProject({
+        metadata,
+        entry: "./src/index.ts",
+        manifest,
+        packageManifest: { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } },
+      }),
+    ).toEqual([]);
+  });
+
+  it("drops stale manifest-owned tool metadata when no generated metadata remains", () => {
+    const metadata = createDemoMetadata();
+    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
+    const manifest = buildToolPluginManifest({
+      metadata,
+      packageManifest,
+      existingManifest: {
+        id: "demo-tools",
+        name: "Demo Tools",
+        toolMetadata: {
+          stale_tool: { optional: true },
+        },
+      },
+    });
+
+    expect(manifest.toolMetadata).toBeUndefined();
+    expect(
+      validateToolPluginProject({
+        metadata,
+        entry: "./src/index.ts",
+        manifest,
+        packageManifest,
+      }),
+    ).toEqual([]);
+  });
+
   it("aligns package metadata with the selected runtime extension entry", () => {
     expect(
       buildToolPluginPackageManifest({
