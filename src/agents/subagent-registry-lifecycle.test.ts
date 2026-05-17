@@ -717,7 +717,7 @@ describe("subagent registry lifecycle hardening", () => {
     {
       name: "killed",
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "killed" as const },
+      outcome: undefined,
     },
   ])(
     "keeps $name completion cleanup terminal on retry exhaustion",
