@@ -50,7 +50,8 @@ function resolveMemoryFlushGateState<
   }
 
   const totalTokens =
-    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+    resolvePositiveTokenCount(params.tokenCount) ??
+    (params.entry?.totalTokensFresh === false ? undefined : resolveFreshSessionTotalTokens(params.entry));
   if (!totalTokens || totalTokens <= 0) {
     return null;
   }
