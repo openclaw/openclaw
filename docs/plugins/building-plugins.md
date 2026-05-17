@@ -97,10 +97,12 @@ and provider plugins have dedicated guides linked above.
 
     Every plugin needs a manifest, even with no config. Runtime-registered tools
     must be listed in `contracts.tools` so OpenClaw can discover the owning
-    plugin without loading every plugin runtime. Plugins should also declare
-    `activation.onStartup` intentionally. This example sets it to `true`. See
-    [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
-    publish snippets live in `docs/snippets/plugin-publish/`.
+    plugin without loading every plugin runtime. For simple tool-only plugins,
+    prefer `defineToolPlugin` plus `openclaw plugins build` so tool names and
+    the empty config schema are generated from one source of truth. Plugins
+    should also declare `activation.onStartup` intentionally. This example sets
+    it to `true`. See [Manifest](/plugins/manifest) for the full schema. The
+    canonical ClawHub publish snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 
@@ -108,29 +110,49 @@ and provider plugins have dedicated guides linked above.
 
     ```typescript
     // index.ts
-    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import { Type } from "@sinclair/typebox";
+    import { Type } from "typebox";
+    import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
-    export default definePluginEntry({
+    export default defineToolPlugin({
       id: "my-plugin",
       name: "My Plugin",
       description: "Adds a custom tool to OpenClaw",
-      register(api) {
-        api.registerTool({
+      tools: (tool) => [
+        tool({
           name: "my_tool",
           description: "Do a thing",
           parameters: Type.Object({ input: Type.String() }),
-          async execute(_id, params) {
-            return { content: [{ type: "text", text: `Got: ${params.input}` }] };
+          async execute({ input }) {
+            return { message: `Got: ${input}` };
           },
-        });
-      },
+        }),
+      ],
     });
     ```
 
-    `definePluginEntry` is for non-channel plugins. For channels, use
-    `defineChannelPluginEntry` - see [Channel Plugins](/plugins/sdk-channel-plugins).
-    For full entry point options, see [Entry Points](/plugins/sdk-entrypoints).
+    `defineToolPlugin` is for simple agent-tool plugins. For providers, hooks,
+    services, and other advanced non-channel plugins, use `definePluginEntry`.
+    For channels, use `defineChannelPluginEntry` - see
+    [Channel Plugins](/plugins/sdk-channel-plugins). For full entry point
+    options, see [Entry Points](/plugins/sdk-entrypoints).
+
+  </Step>
+
+  <Step title="Generate and validate metadata">
+
+    ```bash
+    npm run build
+    openclaw plugins build --entry ./dist/index.js
+    openclaw plugins validate --entry ./dist/index.js
+    ```
+
+    `openclaw plugins build` writes `openclaw.plugin.json` and keeps
+    `package.json` `openclaw.extensions` pointed at the entry module. For
+    published packages, point it at built JavaScript such as `./dist/index.js`.
+    The generated manifest is the cold-load contract that OpenClaw reads before
+    runtime import. `openclaw plugins validate` imports the entry only during
+    author validation and checks that the manifest and package metadata match
+    the static `defineToolPlugin` metadata.
 
   </Step>
 
@@ -374,7 +396,7 @@ reserved surfaces, not as the default pattern for new third-party plugins.
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
 <Check>**openclaw.plugin.json** manifest is present and valid</Check>
-<Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
+<Check>Entry point uses `defineToolPlugin`, `defineChannelPluginEntry`, or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
 <Check>Tests pass (`pnpm test -- <bundled-plugin-root>/my-plugin/`)</Check>

@@ -300,6 +300,7 @@
   "telegram-command-config",
   "text-autolink-runtime",
   "text-utility-runtime",
+  "tool-plugin",
   "tool-payload",
   "tool-send",
   "webhook-ingress",
