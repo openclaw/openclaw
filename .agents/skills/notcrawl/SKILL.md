@@ -9,7 +9,7 @@ metadata:
         - notcrawl
     install:
       - kind: go
-        module: github.com/openclaw/notcrawl/cmd/notcrawl@latest
+        module: github.com/vincentkoc/notcrawl/cmd/notcrawl@latest
         bins:
           - notcrawl
 ---
