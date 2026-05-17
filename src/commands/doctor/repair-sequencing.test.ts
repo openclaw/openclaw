@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getInstalledPluginRecord: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
+  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
@@ -28,6 +29,10 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairManagedNpmOpenClawPeerLinks: mocks.maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
+}));
+
+vi.mock("../doctor-browser.js", () => ({
+  maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
 }));
 
 vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
@@ -227,6 +232,10 @@ describe("doctor repair sequencing", () => {
       warnings: [],
     });
     mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
+    mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockResolvedValue({
       changes: [],
       warnings: [],
     });
@@ -790,5 +799,38 @@ describe("doctor repair sequencing", () => {
     expect(result.warningNotes).toStrictEqual([
       'Failed to install missing configured channel plugin "whatsapp" from @openclaw/whatsapp: package install failed',
     ]);
+  });
+
+  it("archives legacy clawd browser profile residue during repair", async () => {
+    mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockResolvedValueOnce({
+      changes: ["Archived legacy clawd managed browser profile residue."],
+      warnings: ["legacy browser cleanup warning"],
+    });
+
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" };
+    const candidate = {
+      browser: {
+        profiles: {
+          openclaw: { color: "#FF4500" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: candidate,
+        candidate,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(mocks.maybeArchiveLegacyClawdBrowserProfileResidue).toHaveBeenCalledWith(candidate, {
+      env,
+    });
+    expect(result.changeNotes).toContain("Archived legacy clawd managed browser profile residue.");
+    expect(result.warningNotes).toContain("legacy browser cleanup warning");
   });
 });
