@@ -1817,7 +1817,7 @@
     "@types/markdown-it": "14.1.2",
     "@types/node": "25.8.0",
     "@types/ws": "8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260514.1",
+    "@typescript/native-preview": "7.0.0-dev.20260517.1",
     "@vitest/coverage-v8": "4.1.6",
     "jscpd": "4.2.0",
     "jsdom": "29.1.1",
