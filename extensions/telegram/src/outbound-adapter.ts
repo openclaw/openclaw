@@ -181,6 +181,23 @@ export function createTelegramOutboundAdapter(
       selects: true,
       context: true,
       divider: false,
+      limits: {
+        actions: {
+          maxActions: 100,
+          maxActionsPerRow: 3,
+          maxLabelLength: 64,
+          supportsStyles: false,
+        },
+        selects: {
+          maxOptions: 100,
+          maxLabelLength: 64,
+        },
+        text: {
+          maxLength: TELEGRAM_TEXT_CHUNK_LIMIT,
+          encoding: "characters",
+          markdownDialect: "html",
+        },
+      },
     },
     deliveryCapabilities: {
       pin: true,
