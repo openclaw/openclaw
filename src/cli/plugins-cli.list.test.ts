@@ -206,6 +206,57 @@ describe("plugins cli list", () => {
     expect(output).not.toContain("No plugin issues detected.");
   });
 
+  it("reports blocked configured ACPX runtime with ACP-specific guidance", async () => {
+    const sourceConfig = {
+      acp: {
+        backend: "acpx",
+      },
+      plugins: {
+        entries: {
+          acpx: { enabled: false },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
+    expect(output).toContain("Set plugins.entries.acpx.enabled=true");
+    expect(output).toContain("disable ACP/acpx in acp config");
+    expect(output).not.toContain('runtime policy to "pi"');
+    expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports disabled configured ACPX runtime with ACP-specific guidance", async () => {
+    const sourceConfig = {
+      acp: {
+        backend: "acpx",
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "acpx", enabled: false, status: "disabled" })],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
+    expect(output).toContain('Enable the "acpx" plugin');
+    expect(output).toContain("disable ACP/acpx in acp config");
+    expect(output).not.toContain('runtime policy to "pi"');
+    expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
   it("does not report implicit OpenAI Codex preference as configured runtime", async () => {
     const sourceConfig = {
       agents: {

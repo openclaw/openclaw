@@ -94,14 +94,16 @@ function formatBlockedRuntimePluginGuidance(params: {
   pluginId: string;
 }): string | undefined {
   const pluginId = params.pluginId;
+  const alternative =
+    pluginId === "acpx" ? "disable ACP/acpx in acp config" : 'change the runtime policy to "pi"';
   if (params.cfg.plugins?.enabled === false) {
-    return `Enable plugin loading and the "${pluginId}" plugin, or change the runtime policy to "pi".`;
+    return `Enable plugin loading and the "${pluginId}" plugin, or ${alternative}.`;
   }
   if (pluginIdListIncludes(params.cfg.plugins?.deny, pluginId)) {
-    return `Remove "${pluginId}" from plugins.deny and enable the "${pluginId}" plugin, or change the runtime policy to "pi".`;
+    return `Remove "${pluginId}" from plugins.deny and enable the "${pluginId}" plugin, or ${alternative}.`;
   }
   if (params.cfg.plugins?.entries?.[pluginId]?.enabled === false) {
-    return `Set plugins.entries.${pluginId}.enabled=true or remove that disabled entry, or change the runtime policy to "pi".`;
+    return `Set plugins.entries.${pluginId}.enabled=true or remove that disabled entry, or ${alternative}.`;
   }
   return undefined;
 }
@@ -111,10 +113,14 @@ function formatDisabledRuntimePluginGuidance(params: {
   pluginId: string;
 }): string {
   const allow = params.cfg.plugins?.allow;
+  const alternative =
+    params.pluginId === "acpx"
+      ? "disable ACP/acpx in acp config"
+      : 'change the runtime policy to "pi"';
   if (Array.isArray(allow) && allow.length > 0 && !allow.includes(params.pluginId)) {
-    return `Add "${params.pluginId}" to plugins.allow and enable the plugin, or change the runtime policy to "pi".`;
+    return `Add "${params.pluginId}" to plugins.allow and enable the plugin, or ${alternative}.`;
   }
-  return `Enable the "${params.pluginId}" plugin, or change the runtime policy to "pi".`;
+  return `Enable the "${params.pluginId}" plugin, or ${alternative}.`;
 }
 
 function collectConfiguredRuntimePluginWarnings(params: {
