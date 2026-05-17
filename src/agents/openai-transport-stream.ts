@@ -2624,9 +2624,40 @@ function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
   return format === "qwen" || format === "qwen-chat-template";
 }
 
-function isOpenAICompletionsThinkingEnabled(effort: OpenAIReasoningEffort): boolean {
+const VOLCENGINE_THINKING_BUDGET_TOKENS: Record<string, number> = {
+  minimal: 1_024,
+  low: 2_048,
+  medium: 8_192,
+  high: 16_384,
+  xhigh: 32_768,
+};
+
+function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   const normalized = effort.trim().toLowerCase();
   return normalized !== "off" && normalized !== "none";
+}
+
+function resolveVolcengineThinkingBudgetTokens(params: {
+  model: OpenAIModeModel;
+  requestedEffort: string | undefined;
+  resolvedEffort: string | undefined;
+}): number | undefined {
+  const requested = params.requestedEffort?.trim().toLowerCase() ?? "";
+  if (!requested || !isOpenAICompletionsThinkingEnabled(requested)) {
+    return undefined;
+  }
+  const resolved = params.resolvedEffort?.trim().toLowerCase() ?? "";
+  const budget =
+    VOLCENGINE_THINKING_BUDGET_TOKENS[requested] ??
+    VOLCENGINE_THINKING_BUDGET_TOKENS[resolved] ??
+    VOLCENGINE_THINKING_BUDGET_TOKENS.high;
+  const maxTokens =
+    typeof params.model.maxTokens === "number" &&
+    Number.isFinite(params.model.maxTokens) &&
+    params.model.maxTokens > 0
+      ? Math.floor(params.model.maxTokens)
+      : undefined;
+  return maxTokens ? Math.min(budget, maxTokens) : budget;
 }
 
 function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
@@ -2670,6 +2701,27 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
   params.payload.reasoning = {
     enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
   };
+  return true;
+}
+
+function applyVolcengineOpenAICompletionsThinkingParams(params: {
+  compatThinkingFormat: string;
+  model: OpenAIModeModel;
+  payload: Record<string, unknown>;
+  requestedEffort: string | undefined;
+  resolvedEffort: string | undefined;
+}): boolean {
+  if (params.compatThinkingFormat !== "volcengine" || !params.model.reasoning) {
+    return false;
+  }
+  const budgetTokens = resolveVolcengineThinkingBudgetTokens({
+    model: params.model,
+    requestedEffort: params.requestedEffort,
+    resolvedEffort: params.resolvedEffort,
+  });
+  if (budgetTokens !== undefined) {
+    params.payload.thinking = { type: "enabled", budget_tokens: budgetTokens };
+  }
   return true;
 }
 
@@ -3078,6 +3130,13 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
+  const handledVolcengineThinkingFormat = applyVolcengineOpenAICompletionsThinkingParams({
+    compatThinkingFormat: compat.thinkingFormat,
+    model,
+    payload: params,
+    requestedEffort: completionsReasoningEffort,
+    resolvedEffort: resolvedCompletionsReasoningEffort,
+  });
   if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
@@ -3091,6 +3150,7 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
+    !handledVolcengineThinkingFormat &&
     !omitGpt54MiniToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;

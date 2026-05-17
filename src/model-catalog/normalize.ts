@@ -227,7 +227,8 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     thinkingFormat === "together" ||
     thinkingFormat === "qwen" ||
     thinkingFormat === "qwen-chat-template" ||
-    thinkingFormat === "zai"
+    thinkingFormat === "zai" ||
+    thinkingFormat === "volcengine"
   ) {
     compat.thinkingFormat = thinkingFormat;
   }
