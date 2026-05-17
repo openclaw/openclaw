@@ -2831,7 +2831,7 @@ describe("registerSlackInteractionEvents", () => {
     const options = requireRecord(
       mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
       "enqueueSystemEvent options",
-    ) as { sessionKey?: string };
+    ) as { forceSenderIsOwnerFalse?: boolean; sessionKey?: string; trusted?: boolean };
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       actionId: string;
@@ -2866,6 +2866,8 @@ describe("registerSlackInteractionEvents", () => {
         .selectedValues,
     ).toEqual(["canary"]);
     expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(options.forceSenderIsOwnerFalse).toBe(true);
+    expect(options.trusted).toBe(false);
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
   });
 

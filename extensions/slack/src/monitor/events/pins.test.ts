@@ -144,4 +144,14 @@ describe("registerSlackPinEvents", () => {
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
+
+  it("downgrades Slack pin system events from owner authority", async () => {
+    await runPinCase({ overrides: { dmPolicy: "open" } });
+
+    expect(pinEnqueueMock).toHaveBeenCalledTimes(1);
+    expect(pinEnqueueMock.mock.calls[0]?.[1]).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
+  });
 });
