@@ -4490,6 +4490,20 @@ export async function runEmbeddedAttempt(
         cleanup: async () => {
           await trajectoryRecorder?.flush();
         },
+        getCleanupDiagnostic: () => {
+          // Bounded, non-secret snapshot of what the flush is waiting on.
+          // Trajectory recorder is constructed lazily; if it was never
+          // initialized for this attempt, the flush hung on the
+          // `trajectoryRecorder?.flush()` Promise chain itself, not on writer IO.
+          if (!trajectoryRecorder) {
+            return "writer=none";
+          }
+          // The TrajectoryRuntimeRecorder interface does not yet surface
+          // queued-write / queued-byte counters; once it does (follow-up to
+          // this PR), expose them here. For now, signal at least that the
+          // writer existed and the flush was actually entered.
+          return "writer=present recorderType=runtime";
+        },
       });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
