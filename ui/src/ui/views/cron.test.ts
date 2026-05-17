@@ -306,6 +306,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn" },
         }),
       ),
@@ -327,6 +328,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: {
             ...DEFAULT_CRON_FORM,
             sessionTarget: "main",
@@ -351,50 +353,32 @@ describe("cron view", () => {
     expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
   });
 
-  it("collapses the new job sidebar without rendering the full form", () => {
+  it("keeps the advanced job form hidden until explicitly opened", () => {
     const container = document.createElement("div");
     const onToggleFormCollapsed = vi.fn();
-    const expandedProps = createProps() as CronProps & {
-      cronFormCollapsed: boolean;
-      onToggleFormCollapsed: (collapsed: boolean) => void;
-    };
-    expandedProps.cronFormCollapsed = false;
-    expandedProps.onToggleFormCollapsed = onToggleFormCollapsed;
 
-    render(renderCron(expandedProps), container);
+    render(renderCron(createProps({ onToggleFormCollapsed })), container);
 
-    const collapseButton = getElement(
+    expect(container.querySelector(".cron-form-modal")).toBeNull();
+    expect(container.querySelector(".cron-form")).toBeNull();
+
+    const advancedButton = getButtonByText(container, "Advanced job");
+    advancedButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleFormCollapsed).toHaveBeenCalledWith(false);
+
+    const onCancelEdit = vi.fn();
+    render(renderCron(createProps({ cronFormCollapsed: false, onCancelEdit })), container);
+
+    const closeButton = getElement(
       container,
-      '[data-test-id="cron-form-collapse-toggle"]',
+      '[data-test-id="cron-form-close"]',
       HTMLButtonElement,
     );
-    expect(collapseButton.getAttribute("aria-expanded")).toBe("true");
-    collapseButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleFormCollapsed).toHaveBeenCalledWith(true);
-    getElement(container, ".cron-form", HTMLElement);
+    expect(container.querySelectorAll(".cron-form-modal")).toHaveLength(1);
+    expect(container.querySelectorAll(".cron-form")).toHaveLength(1);
 
-    const collapsedProps = createProps() as CronProps & {
-      cronFormCollapsed: boolean;
-      onToggleFormCollapsed: (collapsed: boolean) => void;
-    };
-    collapsedProps.cronFormCollapsed = true;
-    collapsedProps.onToggleFormCollapsed = onToggleFormCollapsed;
-
-    render(renderCron(collapsedProps), container);
-
-    const collapsedButton = getElement(
-      container,
-      '[data-test-id="cron-form-collapse-toggle"]',
-      HTMLButtonElement,
-    );
-    expect(container.querySelectorAll(".cron-workspace--form-collapsed")).toHaveLength(1);
-    expect(container.querySelectorAll(".cron-workspace-form--collapsed")).toHaveLength(1);
-    expect(collapsedButton.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector(".cron-form")?.hasAttribute("hidden")).toBe(true);
-    expect(container.querySelector(".cron-form-actions")?.hasAttribute("hidden")).toBe(true);
-
-    collapsedButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleFormCollapsed).toHaveBeenLastCalledWith(false);
+    closeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onCancelEdit).toHaveBeenCalledTimes(1);
   });
 
   it("shows webhook delivery details for jobs", () => {
@@ -583,6 +567,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: {
             ...DEFAULT_CRON_FORM,
             scheduleKind: "cron",
@@ -655,6 +640,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: {
             ...DEFAULT_CRON_FORM,
             clearAgent: true,
@@ -671,6 +657,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: {
             ...DEFAULT_CRON_FORM,
             scheduleKind: "every",
@@ -697,6 +684,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: {
             ...DEFAULT_CRON_FORM,
             name: "",
@@ -751,6 +739,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: {
             ...DEFAULT_CRON_FORM,
             scheduleKind: "every",
@@ -843,6 +832,7 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
+          cronFormCollapsed: false,
           form: { ...DEFAULT_CRON_FORM, scheduleKind: "cron", payloadKind: "agentTurn" },
           agentSuggestions: ["main"],
           modelSuggestions: ["openai/gpt-5.2"],

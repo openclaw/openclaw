@@ -824,8 +824,8 @@ function renderCronQuickCreateForTab(
       state.cronForm = { ...DEFAULT_CRON_FORM, ...formPatch } as typeof state.cronForm;
       requestHostUpdate?.();
       void (async () => {
-        await addCronJob(state);
-        if (state.cronError || hasCronFormErrors(state.cronFieldErrors)) {
+        const saved = await addCronJob(state);
+        if (!saved) {
           requestHostUpdate?.();
           return;
         }
@@ -2105,7 +2105,15 @@ export function renderApp(state: AppViewState) {
                   state.cronFieldErrors = validateCronForm(state.cronForm);
                 },
                 onRefresh: () => state.loadCron(),
-                onAdd: () => addCronJob(state),
+                onAdd: () => {
+                  void (async () => {
+                    const saved = await addCronJob(state);
+                    if (saved) {
+                      state.cronFormCollapsed = true;
+                    }
+                    requestHostUpdate?.();
+                  })();
+                },
                 onEdit: (job) => {
                   state.cronFormCollapsed = false;
                   startCronEdit(state, job);
@@ -2114,9 +2122,14 @@ export function renderApp(state: AppViewState) {
                   state.cronFormCollapsed = false;
                   startCronClone(state, job);
                 },
-                onCancelEdit: () => cancelCronEdit(state),
+                onCancelEdit: () => {
+                  cancelCronEdit(state);
+                  state.cronFormCollapsed = true;
+                  requestHostUpdate?.();
+                },
                 onToggleFormCollapsed: (collapsed) => {
                   state.cronFormCollapsed = collapsed;
+                  requestHostUpdate?.();
                 },
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),

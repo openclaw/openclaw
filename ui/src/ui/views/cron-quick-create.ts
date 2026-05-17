@@ -345,18 +345,35 @@ export function renderCronQuickCreate(props: CronQuickCreateProps) {
   }
 
   return html`
-    <div class="cqc-container">
-      <div class="cqc-header">
-        <h2 class="cqc-header__title">${icons.zap} ${t("cron.quickCreate.title")}</h2>
-        <button class="cqc-header__close" @click=${props.onCancel}>${icons.x}</button>
-      </div>
+    <div class="cqc-backdrop" @click=${props.onCancel}>
+      <section
+        class="cqc-container"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cron-quick-create-title"
+        @click=${(event: Event) => event.stopPropagation()}
+      >
+        <div class="cqc-header">
+          <h2 id="cron-quick-create-title" class="cqc-header__title">
+            ${icons.zap} ${t("cron.quickCreate.title")}
+          </h2>
+          <button
+            type="button"
+            class="cqc-header__close"
+            aria-label=${t("common.dismiss")}
+            @click=${props.onCancel}
+          >
+            ${icons.x}
+          </button>
+        </div>
 
-      ${renderStepIndicator(props.step)}
-      ${props.step === "what"
-        ? renderWhatStep(props)
-        : props.step === "when"
-          ? renderWhenStep(props)
-          : renderHowStep(props)}
+        ${renderStepIndicator(props.step)}
+        ${props.step === "what"
+          ? renderWhatStep(props)
+          : props.step === "when"
+            ? renderWhenStep(props)
+            : renderHowStep(props)}
+      </section>
     </div>
   `;
 }
