@@ -116,6 +116,9 @@ src/plugins/builtin/
 
 Nothing in `src/agents/pi-embedded-runner/`, `src/agents/pi-hooks/`, `src/agents/pi-embedded-helpers/`, or `src/types/pi-*.d.ts` is touched.
 
+- Phase 0 spike workspace: `apps/copilot-sdk-spike/` (in repo at `qa/copilot-sdk-spike/`; see implementation note).
+  - Implementation note: spike lives at `qa/copilot-sdk-spike/` because `apps/**` triggers an unrelated CI lane. Deliverable intent unchanged: excluded from build/dist, standalone workspace.
+
 ### 3.4 Tool-policy duplication is intentional
 
 We do **not** extract a shared `before-tool-call.ts`. Per answered open
@@ -218,7 +221,7 @@ There is **no Phase 4 retiring PI**. PI stays.
 Each item is sized for one PR. IDs match the SQL todo table.
 
 1. `sdk-capability-doc` — `qa/copilot-sdk-capabilities.md` from `.d.ts` + Cookbook.
-2. `spike-app` — `apps/copilot-sdk-spike/`, excluded from build.
+2. `spike-app` — `qa/copilot-sdk-spike/`, excluded from build.
 3. `add-sdk-dep` — add `@github/copilot-sdk` to root `package.json`; `pnpm install`; confirm bundled CLI.
 4. `runtime-pool` — `src/agents/copilot-sdk-runtime/runtime.ts` pooled `CopilotClient` per `copilotHome`.
 5. `attempt-bridge` — `attempt.ts` implementing `runCopilotSdkAttempt`.
