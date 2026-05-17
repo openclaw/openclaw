@@ -979,6 +979,24 @@ describe("agentCommand", () => {
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
 
+      mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+          "xai/grok-4.3": { alias: "groktop" },
+        },
+      });
+      await agentCommand(
+        {
+          message: "use an alias override",
+          sessionKey: "agent:main:subagent:alias-run-override",
+          model: "groktop",
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("xai", "grok-4.3");
+
       const saved = readSessionStore<{
         providerOverride?: string;
         modelOverride?: string;
