@@ -10,6 +10,7 @@ type SynologyChatConfigFields = {
   webhookPath?: string;
   dangerouslyAllowNameMatching?: boolean;
   dangerouslyAllowInheritedWebhookPath?: boolean;
+  triggerWord?: string;
   dmPolicy?: "open" | "allowlist" | "disabled";
   allowedUserIds?: string | string[];
   rateLimitPerMinute?: number;
@@ -38,6 +39,7 @@ export interface ResolvedSynologyChatAccount {
   webhookPathSource: SynologyWebhookPathSource;
   dangerouslyAllowNameMatching: boolean;
   dangerouslyAllowInheritedWebhookPath: boolean;
+  triggerWord?: string;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
   rateLimitPerMinute: number;
