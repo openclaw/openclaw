@@ -545,10 +545,13 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           if (!block.text.trim()) {
             continue;
           }
+          const sanitizedTextSignature = isSameRoute
+            ? sanitizeGeminiToolCallThoughtSignature(block.textSignature)
+            : undefined;
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(isSameRoute && block.textSignature
-              ? { thoughtSignature: block.textSignature }
+            ...(sanitizedTextSignature
+              ? { thoughtSignature: sanitizedTextSignature }
               : {}),
           });
           continue;
@@ -558,10 +561,15 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             continue;
           }
           if (isSameRoute) {
+            const sanitizedThinkingSignature = sanitizeGeminiToolCallThoughtSignature(
+              block.thinkingSignature,
+            );
             parts.push({
               thought: true,
               text: sanitizeTransportPayloadText(block.thinking),
-              ...(block.thinkingSignature ? { thoughtSignature: block.thinkingSignature } : {}),
+              ...(sanitizedThinkingSignature
+                ? { thoughtSignature: sanitizedThinkingSignature }
+                : {}),
             });
           } else {
             parts.push({ text: sanitizeTransportPayloadText(block.thinking) });
