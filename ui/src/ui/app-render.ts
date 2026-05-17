@@ -193,7 +193,7 @@ function renderSettingsSectionNav(state: AppViewState) {
     return nothing;
   }
   return html`
-    <nav class="settings-section-nav" aria-label="Settings sections">
+    <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
       ${SETTINGS_TABS.map((tab) => {
         const active = state.tab === tab;
         const href = pathForTab(tab, state.basePath);
@@ -280,7 +280,7 @@ function renderSidebarSessions(state: AppViewState) {
         type="button"
         class="sidebar-new-session"
         title=${newSessionTitle}
-        aria-label="New session"
+        aria-label=${t("chat.runControls.newSession")}
         ?disabled=${newSessionDisabled}
         @click=${async () => {
           if (newSessionDisabled) {
@@ -292,13 +292,17 @@ function renderSidebarSessions(state: AppViewState) {
         }}
       >
         <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
-        ${collapsed ? nothing : html`<span class="sidebar-new-session__label">New session</span>`}
+        ${collapsed
+          ? nothing
+          : html`<span class="sidebar-new-session__label"
+              >${t("chat.runControls.newSession")}</span
+            >`}
       </button>
       ${collapsed || recent.length === 0
         ? nothing
         : html`
-            <div class="sidebar-recent-sessions" aria-label="Recent sessions">
-              <div class="sidebar-recent-sessions__label">Recent</div>
+            <div class="sidebar-recent-sessions" aria-label=${t("overview.cards.recentSessions")}>
+              <div class="sidebar-recent-sessions__label">${t("usage.sessions.recentShort")}</div>
               <div class="sidebar-recent-sessions__list">
                 ${recent.map((row) => renderSidebarRecentSession(state, row))}
               </div>
@@ -342,7 +346,10 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
         <span class="sidebar-recent-session__meta">${meta}</span>
       </span>
       ${row.hasActiveRun
-        ? html`<span class="sidebar-recent-session__live" aria-label="Active run"></span>`
+        ? html`<span
+            class="sidebar-recent-session__live"
+            aria-label=${t("sessions.sessionDetails.activeRun")}
+          ></span>`
         : nothing}
     </a>
   `;
