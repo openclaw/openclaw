@@ -100,6 +100,9 @@ function buildLegacyOAuthSecretAad(params: {
 }
 
 function buildLegacyOAuthSecretKey(seed: string): Buffer {
+  // Legacy #79006 compatibility: existing sidecars were encrypted with this
+  // SHA-256 key derivation, so changing it would strand affected users.
+  // codeql[js/insufficient-password-hash]
   return createHash("sha256").update(`openclaw:auth-profile-oauth:${seed}`).digest();
 }
 
