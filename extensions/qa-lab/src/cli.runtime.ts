@@ -43,6 +43,7 @@ import {
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
 
@@ -496,6 +497,7 @@ export async function runQaSuiteCommand(opts: {
   thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
+  pack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
@@ -510,9 +512,12 @@ export async function runQaSuiteCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
-  const scenarioIds = resolveQaParityPackScenarioIds({
-    parityPack: opts.parityPack,
-    scenarioIds: opts.scenarioIds,
+  const scenarioIds = resolveQaScenarioPackScenarioIds({
+    pack: opts.pack,
+    scenarioIds: resolveQaParityPackScenarioIds({
+      parityPack: opts.parityPack,
+      scenarioIds: opts.scenarioIds,
+    }),
   });
   const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {

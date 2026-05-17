@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withMockedPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
 const EXPECTED_MIN_FRESHNESS_ENV = {
@@ -15,38 +16,35 @@ const EXPECTED_MIN_FRESHNESS_ENV = {
 
 describe("npm project install env", () => {
   it("uses an absolute POSIX script shell for npm lifecycle scripts", () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const existsSyncSpy = vi
-      .spyOn(fsSync, "existsSync")
-      .mockImplementation((candidate) => candidate === "/bin/sh");
-    try {
-      expect(
-        createNpmProjectInstallEnv({
+    withMockedPlatform("linux", () => {
+      const existsSyncSpy = vi
+        .spyOn(fsSync, "existsSync")
+        .mockImplementation((candidate) => candidate === "/bin/sh");
+      withRestoredMocks([existsSyncSpy], () => {
+        expect(
+          createNpmProjectInstallEnv({
+            PATH: "/tmp/openclaw-npm-global/bin",
+          }),
+        ).toEqual({
+          ...EXPECTED_MIN_FRESHNESS_ENV,
+          NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
           PATH: "/tmp/openclaw-npm-global/bin",
-        }),
-      ).toEqual({
-        ...EXPECTED_MIN_FRESHNESS_ENV,
-        NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
-        PATH: "/tmp/openclaw-npm-global/bin",
-        npm_config_dry_run: "false",
-        npm_config_fetch_retries: "5",
-        npm_config_fetch_retry_maxtimeout: "120000",
-        npm_config_fetch_retry_mintimeout: "10000",
-        npm_config_fetch_timeout: "300000",
-        npm_config_global: "false",
-        npm_config_location: "project",
-        npm_config_package_lock: "false",
-        npm_config_save: "false",
+          npm_config_dry_run: "false",
+          npm_config_fetch_retries: "5",
+          npm_config_fetch_retry_maxtimeout: "120000",
+          npm_config_fetch_retry_mintimeout: "10000",
+          npm_config_fetch_timeout: "300000",
+          npm_config_global: "false",
+          npm_config_location: "project",
+          npm_config_package_lock: "false",
+          npm_config_save: "false",
+        });
       });
-    } finally {
-      existsSyncSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("preserves explicit npm script shell config", () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    try {
+    withMockedPlatform("linux", () => {
       expect(
         createNpmProjectInstallEnv({
           NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
@@ -81,9 +79,7 @@ describe("npm project install env", () => {
         npm_config_save: "false",
         npm_config_script_shell: "/custom/lower-sh",
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("bypasses npm release-age filters for OpenClaw-managed installs", () => {

@@ -3,11 +3,15 @@ import Foundation
 import WebKit
 
 private final class DashboardWindowContentView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
+    override var mouseDownCanMoveWindow: Bool {
+        true
+    }
 }
 
 private final class DashboardWindowDragRegionView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
+    override var mouseDownCanMoveWindow: Bool {
+        true
+    }
 
     override func mouseDown(with event: NSEvent) {
         self.window?.performDrag(with: event)
@@ -275,7 +279,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     private func showLoadFailure(_ error: Error) {
         let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
         dashboardWindowLogger.error(
             "dashboard load failed url=\(self.currentURL.absoluteString, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         let html = Self.failureHTML(url: self.currentURL, message: error.localizedDescription)
@@ -324,8 +328,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         <body>
           <main>
             <h1>Dashboard unavailable</h1>
-            <p>\(Self.htmlEscape(message))</p>
-            <code>\(Self.htmlEscape(url.absoluteString))</code>
+            <p>\(self.htmlEscape(message))</p>
+            <code>\(self.htmlEscape(url.absoluteString))</code>
           </main>
         </body>
         </html>
