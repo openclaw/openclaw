@@ -41,7 +41,6 @@ type AcpRuntimeTurnResult = Awaited<AcpRuntimeTurn["result"]>;
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
-const ACPX_STARTUP_TRACE_PREFIX = "sidecars.plugin-services.acpx.acpx-runtime";
 
 type AcpxRuntimeModule = typeof import("./runtime.js");
 let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
@@ -380,9 +379,7 @@ async function measureAcpxStartup<T>(
   name: string,
   run: () => T | Promise<T>,
 ): Promise<T> {
-  return ctx.startupTrace
-    ? await ctx.startupTrace.measure(`${ACPX_STARTUP_TRACE_PREFIX}.${name}`, run)
-    : await run();
+  return ctx.startupTrace ? await ctx.startupTrace.measure(name, run) : await run();
 }
 
 function detailAcpxStartup(
@@ -390,7 +387,7 @@ function detailAcpxStartup(
   name: string,
   metrics: ReadonlyArray<readonly [string, number | string]>,
 ): void {
-  ctx.startupTrace?.detail?.(`${ACPX_STARTUP_TRACE_PREFIX}.${name}`, metrics);
+  ctx.startupTrace?.detail?.(name, metrics);
 }
 
 function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
