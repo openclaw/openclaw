@@ -10,7 +10,14 @@ Options:
                               Target selection. Default: auto.
   --base REF                 Base ref for branch review. Default: PR base or origin/main.
   --commit REF               Commit ref for commit review. Default: HEAD.
+  --reviewer codex|claude|pi|opencode|auto
+                              Review engine. Default: auto (Codex, fallback reviewer on error).
+  --fallback-reviewer claude|pi|opencode|none
+                              Fallback when Codex is unavailable or exits nonzero. Default: claude.
   --codex-bin PATH           Codex binary. Default: codex.
+  --claude-bin PATH          Claude binary. Default: claude.
+  --pi-bin PATH              Pi binary. Default: pi.
+  --opencode-bin PATH        OpenCode binary. Default: opencode.
   --full-access              Keep yolo/full-access mode enabled. Default.
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
@@ -29,7 +36,12 @@ EOF
 mode=auto
 base_ref=
 commit_ref=HEAD
+reviewer=${CODEX_REVIEW_REVIEWER:-auto}
+fallback_reviewer=${CODEX_REVIEW_FALLBACK_REVIEWER:-claude}
 codex_bin=${CODEX_BIN:-codex}
+claude_bin=${CLAUDE_BIN:-claude}
+pi_bin=${PI_BIN:-pi}
+opencode_bin=${OPENCODE_BIN:-opencode}
 codex_args=()
 yolo=${CODEX_REVIEW_YOLO:-1}
 output=${CODEX_REVIEW_OUTPUT:-}
@@ -50,8 +62,28 @@ while [[ $# -gt 0 ]]; do
       commit_ref=${2:-}
       shift 2
       ;;
+    --reviewer)
+      reviewer=${2:-}
+      shift 2
+      ;;
+    --fallback-reviewer)
+      fallback_reviewer=${2:-}
+      shift 2
+      ;;
     --codex-bin)
       codex_bin=${2:-}
+      shift 2
+      ;;
+    --claude-bin)
+      claude_bin=${2:-}
+      shift 2
+      ;;
+    --pi-bin)
+      pi_bin=${2:-}
+      shift 2
+      ;;
+    --opencode-bin)
+      opencode_bin=${2:-}
       shift 2
       ;;
     --full-access)
@@ -98,7 +130,23 @@ case "$mode" in
     ;;
 esac
 
-git rev-parse --show-toplevel >/dev/null
+case "$reviewer" in
+  auto|codex|claude|pi|opencode) ;;
+  *)
+    echo "invalid --reviewer: $reviewer" >&2
+    exit 2
+    ;;
+esac
+
+case "$fallback_reviewer" in
+  claude|pi|opencode|none) ;;
+  *)
+    echo "invalid --fallback-reviewer: $fallback_reviewer" >&2
+    exit 2
+    ;;
+esac
+
+repo_root=$(git rev-parse --show-toplevel)
 
 current_branch=$(git branch --show-current 2>/dev/null || true)
 dirty=false
@@ -146,9 +194,17 @@ printf 'branch: %s\n' "${current_branch:-detached}"
 if [[ -n "$pr_url" ]]; then
   printf 'pr: %s\n' "$pr_url"
 fi
-printf 'review:'
-printf ' %q' "${review_cmd[@]}"
-printf '\n'
+printf 'reviewer: %s\n' "$reviewer"
+if [[ "$reviewer" == auto ]]; then
+  printf 'fallback-reviewer: %s\n' "$fallback_reviewer"
+fi
+if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
+  printf 'review:'
+  printf ' %q' "${review_cmd[@]}"
+  printf '\n'
+else
+  printf 'review: %s prompt review\n' "$reviewer"
+fi
 if [[ -n "$parallel_tests" ]]; then
   printf 'tests: %s\n' "$parallel_tests"
 fi
@@ -175,10 +231,15 @@ if [[ -z "$review_output" ]]; then
   review_output=$(mktemp)
   review_output_is_temp=true
 fi
+mkdir -p "$(dirname "$review_output")"
+: > "$review_output"
 
 cleanup() {
   if [[ "${review_output_is_temp:-false}" == true && -n "${review_output:-}" ]]; then
     rm -f "$review_output"
+  fi
+  if [[ -n "${prompt_file:-}" ]]; then
+    rm -f "$prompt_file"
   fi
 }
 trap cleanup EXIT
@@ -186,6 +247,166 @@ trap cleanup EXIT
 run_review() {
   mkdir -p "$(dirname "$review_output")"
   "${review_cmd[@]}" 2>&1 | tee "$review_output"
+}
+
+diff_for_review() {
+  case "$review_kind" in
+    local)
+      git -C "$repo_root" diff --stat
+      git -C "$repo_root" diff --cached --stat
+      git -C "$repo_root" diff --find-renames
+      git -C "$repo_root" diff --cached --find-renames
+      while IFS= read -r untracked_file; do
+        [[ -n "$untracked_file" ]] || continue
+        git -C "$repo_root" diff --no-index -- /dev/null "$untracked_file" || true
+      done < <(git -C "$repo_root" ls-files --others --exclude-standard)
+      ;;
+    commit)
+      git -C "$repo_root" show --find-renames --stat --format=fuller "$commit_ref"
+      git -C "$repo_root" show --find-renames --format=medium "$commit_ref"
+      ;;
+    branch)
+      git -C "$repo_root" diff --find-renames --stat "$base_ref"...HEAD
+      git -C "$repo_root" diff --find-renames "$base_ref"...HEAD
+      ;;
+  esac
+}
+
+build_prompt_file() {
+  prompt_file=$(mktemp)
+  {
+    cat <<EOF
+You are performing a closeout code review for the current repository.
+
+Review target: $review_kind
+Branch: ${current_branch:-detached}
+Base: ${base_ref:-}
+Commit: ${commit_ref:-}
+
+Rules:
+- Review only the diff below.
+- Do not modify files.
+- Prioritize correctness bugs, regressions, security issues, and missing tests.
+- Ignore speculative edge cases and broad rewrites.
+- For each accepted/actionable finding, use exactly this format:
+  [P<0-3>] Short title
+  File: path:line
+  Why: one sentence
+  Fix: one sentence
+- If no accepted/actionable findings, output exactly:
+  codex-review clean: no accepted/actionable findings reported
+
+Diff:
+EOF
+    diff_for_review
+  } > "$prompt_file" || return
+}
+
+run_prompt_reviewer() {
+  local selected=$1
+  local reviewer_output
+  local status=0
+
+  if ! build_prompt_file; then
+    rm -f "${prompt_file:-}"
+    prompt_file=
+    return 1
+  fi
+  reviewer_output=$(mktemp)
+  mkdir -p "$(dirname "$review_output")"
+
+  case "$selected" in
+    claude)
+      if ! command -v "$claude_bin" >/dev/null 2>&1; then
+        echo "fallback reviewer unavailable: $claude_bin" >&2
+        status=127
+      elif printf 'fallback: claude -p\n' | tee -a "$review_output"; then
+        "$claude_bin" --tools "" --no-session-persistence -p < "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
+        status=$?
+      else
+        status=$?
+      fi
+      ;;
+    pi)
+      if ! command -v "$pi_bin" >/dev/null 2>&1; then
+        echo "fallback reviewer unavailable: $pi_bin" >&2
+        status=127
+      elif printf 'fallback: pi -p\n' | tee -a "$review_output"; then
+        "$pi_bin" --no-tools --no-session -p < "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
+        status=$?
+      else
+        status=$?
+      fi
+      ;;
+    opencode)
+      if ! command -v "$opencode_bin" >/dev/null 2>&1; then
+        echo "fallback reviewer unavailable: $opencode_bin" >&2
+        status=127
+      elif printf 'fallback: opencode run\n' | tee -a "$review_output"; then
+        "$opencode_bin" run --pure --dir "$(dirname "$prompt_file")" --file "$prompt_file" \
+          "Review the attached prompt file. Do not modify files." 2>&1 | tee -a "$review_output" "$reviewer_output"
+        status=$?
+      else
+        status=$?
+      fi
+      ;;
+    *)
+      echo "unsupported prompt reviewer: $selected" >&2
+      status=2
+      ;;
+  esac
+  if [[ "$status" == 0 ]]; then
+    if grep -Eq '\[P[0-3]\]' "$reviewer_output"; then
+      status=1
+    elif ! grep -q '[^[:space:]]' "$reviewer_output"; then
+      status=1
+    elif ! grep -Fxq 'codex-review clean: no accepted/actionable findings reported' "$reviewer_output"; then
+      status=1
+    fi
+  fi
+  rm -f "$reviewer_output"
+  rm -f "$prompt_file"
+  prompt_file=
+  return "$status"
+}
+
+run_selected_review() {
+  local selected=$1
+  case "$selected" in
+    codex)
+      if ! command -v "$codex_bin" >/dev/null 2>&1; then
+        echo "codex reviewer unavailable: $codex_bin" >&2
+        return 127
+      fi
+      run_review
+      ;;
+    claude|pi|opencode)
+      run_prompt_reviewer "$selected"
+      ;;
+    *)
+      echo "unsupported reviewer: $selected" >&2
+      return 2
+      ;;
+  esac
+}
+
+run_auto_review() {
+  run_selected_review codex
+  local status=$?
+  if [[ "$status" == 0 ]]; then
+    return 0
+  fi
+  if (( status > 128 && status < 192 )); then
+    return "$status"
+  fi
+  if review_output_has_findings; then
+    return "$status"
+  fi
+  if [[ "$fallback_reviewer" == none ]]; then
+    return "$status"
+  fi
+  printf 'codex-review warning: codex exited %s; falling back to %s\n' "$status" "$fallback_reviewer" >&2
+  run_selected_review "$fallback_reviewer"
 }
 
 elapsed_since() {
@@ -208,8 +429,28 @@ review_output_empty() {
   [[ ! -s "$review_output" ]] || ! grep -q '[^[:space:]]' "$review_output"
 }
 
+review_findings_text() {
+  if grep -Fxq 'codex' "$review_output"; then
+    awk '
+      $0 == "codex" {
+        capture = 1
+        output = $0 ORS
+        next
+      }
+      capture {
+        output = output $0 ORS
+      }
+      END {
+        printf "%s", output
+      }
+    ' "$review_output"
+    return
+  fi
+  cat "$review_output"
+}
+
 review_output_has_findings() {
-  grep -Eq '\[P[0-3]\]' "$review_output"
+  review_findings_text | grep -Eq '\[P[0-3]\]'
 }
 
 report_clean_review_or_fail() {
@@ -232,7 +473,11 @@ report_clean_review_or_fail() {
 if [[ -z "$parallel_tests" ]]; then
   review_started_at=$(date +%s)
   set +e
-  run_review
+  if [[ "$reviewer" == auto ]]; then
+    run_auto_review
+  else
+    run_selected_review "$reviewer"
+  fi
   review_status=$?
   review_elapsed_seconds=$(elapsed_since "$review_started_at")
   set -e
@@ -250,7 +495,11 @@ tests_status_file=$(mktemp)
 (
   set +e
   review_started_at=$(date +%s)
-  run_review
+  if [[ "$reviewer" == auto ]]; then
+    run_auto_review
+  else
+    run_selected_review "$reviewer"
+  fi
   status=$?
   elapsed=$(elapsed_since "$review_started_at")
   printf '%s\n' "$status" > "$review_status_file"

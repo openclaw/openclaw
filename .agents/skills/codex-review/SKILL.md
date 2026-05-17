@@ -19,9 +19,9 @@ Use when:
 - Read dependency docs/source/types when the finding depends on external behavior.
 - Reject unrealistic edge cases, speculative risks, broad rewrites, and fixes that over-complicate the codebase.
 - Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
-- Keep going until Codex review returns no accepted/actionable findings.
-- If a review-triggered fix changes code, rerun focused tests and rerun Codex review.
-- Never switch or override the review model. If the review hits model capacity, retry the same command a few times with the same model. The helper runs nested review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
+- Keep going until the selected review path returns no accepted/actionable findings.
+- If a review-triggered fix changes code, rerun focused tests and rerun the review helper.
+- Default to Codex review. If Codex is unavailable or exits with an error, the helper may fall back to `claude -p`; `pi -p` and `opencode run` are explicit reviewer/fallback options. The helper runs nested Codex review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
 - Stop as soon as the review command/helper exits 0 with no accepted/actionable findings. Do not run an extra direct `codex review` just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
@@ -66,7 +66,7 @@ codex review --commit HEAD
 or with the helper:
 
 ```bash
-/Users/steipete/Projects/agent-scripts/skills/codex-review/scripts/codex-review --mode commit --commit HEAD
+.agents/skills/codex-review/scripts/codex-review --mode commit --commit HEAD
 ```
 
 Use commit review for already-landed or already-pushed work on `main`. Reviewing
@@ -79,7 +79,7 @@ with `--base`.
 Format first if formatting can change line locations. Then it is OK to run tests and review in parallel:
 
 ```bash
-scripts/codex-review --parallel-tests "<focused test command>"
+.agents/skills/codex-review/scripts/codex-review --parallel-tests "<focused test command>"
 ```
 
 Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain. Once that rerun exits cleanly, stop; do not spend another long review cycle on redundant confirmation.
@@ -98,13 +98,7 @@ Run inline only for tiny changes or when subagents are unavailable.
 Bundled helper:
 
 ```bash
-~/.codex/skills/codex-review/scripts/codex-review --help
-```
-
-If installed from `agent-scripts`, path is:
-
-```bash
-/Users/steipete/Projects/agent-scripts/skills/codex-review/scripts/codex-review --help
+.agents/skills/codex-review/scripts/codex-review --help
 ```
 
 The helper:
@@ -113,6 +107,9 @@ The helper:
 - otherwise uses `origin/main` for non-main branches
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
+- supports `--reviewer codex|claude|pi|opencode|auto`; `auto` runs Codex first
+- supports `--fallback-reviewer claude|pi|opencode|none`; default is `claude`
+- falls back only when Codex is unavailable or exits nonzero, not when Codex reports findings
 - writes only to stdout unless `--output` or `CODEX_REVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox` by default
