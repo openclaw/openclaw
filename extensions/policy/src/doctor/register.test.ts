@@ -1,18 +1,14 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { runDoctorLintChecks } from "../../../../src/flows/doctor-lint-flow.js";
-import { runDoctorHealthRepairs } from "../../../../src/flows/doctor-repair-flow.js";
 import {
-  clearHealthChecksForTest,
-  listHealthChecks,
-} from "../../../../src/flows/health-check-registry.js";
-import type {
-  HealthCheckContext,
-  HealthRepairContext,
-} from "../../../../src/flows/health-checks.js";
+  type HealthCheck,
+  type HealthCheckContext,
+  type HealthFinding,
+  type HealthRepairContext,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/health";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPolicyAttestation, policyDocumentHash } from "../policy-state.js";
 import { registerPolicyDoctorChecks, resetPolicyDoctorChecksForTest } from "./register.js";
 
@@ -52,6 +48,39 @@ function repairCtx(configPath: string, cfg: OpenClawConfig = {}): HealthRepairCo
   };
 }
 
+function registerChecks(): readonly HealthCheck[] {
+  const checks: HealthCheck[] = [];
+  registerPolicyDoctorChecks({
+    registerHealthCheck(check) {
+      checks.push(check);
+    },
+  });
+  return checks;
+}
+
+async function runPolicyChecks(checkCtx: HealthCheckContext): Promise<{
+  readonly findings: readonly HealthFinding[];
+}> {
+  const checks = registerChecks();
+  const findings: HealthFinding[] = [];
+  for (const check of checks) {
+    findings.push(...(check.detect === undefined ? [] : await check.detect(checkCtx)));
+  }
+  return { findings };
+}
+
+async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
+  const check = registerChecks().find((entry) => entry.id === "policy/channels-denied-provider");
+  if (check?.detect === undefined || check.repair === undefined) {
+    throw new Error("policy channel repair check was not registered");
+  }
+  const findings = await check.detect(repairCheckCtx);
+  const result = await check.repair(repairCheckCtx, findings);
+  const config = result.config ?? repairCheckCtx.cfg;
+  const remainingFindings = await check.detect({ ...repairCheckCtx, cfg: config });
+  return { ...result, config, remainingFindings };
+}
+
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
@@ -59,29 +88,33 @@ describe("registerPolicyDoctorChecks", () => {
 
   afterEach(async () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
-    clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
   });
 
   it("registers policy health checks once", () => {
-    registerPolicyDoctorChecks();
-    registerPolicyDoctorChecks();
+    const checks = registerChecks();
+    const duplicateChecks: HealthCheck[] = [];
+    registerPolicyDoctorChecks({
+      registerHealthCheck(check) {
+        duplicateChecks.push(check);
+      },
+    });
 
-    expect(listHealthChecks().map((check) => check.id)).toEqual([
+    expect(checks.map((check) => check.id)).toEqual([
       "policy/policy-jsonc-missing",
       "policy/policy-jsonc-invalid",
       "policy/policy-hash-mismatch",
       "policy/attestation-hash-mismatch",
       "policy/channels-denied-provider",
     ]);
+    expect(duplicateChecks).toEqual([]);
   });
 
   it("reports a missing policy file when the policy extension is enabled", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -96,8 +129,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy({ enabled: false })));
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy({ enabled: false })));
 
     expect(result.findings).toEqual([]);
   });
@@ -107,8 +139,7 @@ describe("registerPolicyDoctorChecks", () => {
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{ channels: ", "utf-8");
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -128,8 +159,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -150,8 +180,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ path: "workspace.policy.jsonc" })),
     );
 
@@ -173,8 +202,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedHash: "sha256:not-the-policy" })),
     );
 
@@ -204,8 +232,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runPolicyChecks(ctx(configPath, cfg));
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual([
       "policy/policy-hash-mismatch",
@@ -218,8 +245,7 @@ describe("registerPolicyDoctorChecks", () => {
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedHash: policyDocumentHash(policy) })),
     );
 
@@ -235,8 +261,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: "sha256:not-current" })),
     );
 
@@ -245,6 +270,27 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/attestation-hash-mismatch",
         severity: "error",
         path: "policy attestation",
+      }),
+    ]);
+  });
+
+  it("reports policy validation errors before attestation drift", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ channels: { denyRules: [{ when: {} }] } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(
+      ctx(configPath, cfgWithPolicy({ expectedAttestationHash: "sha256:not-current" })),
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        target: "oc://policy.jsonc/channels/denyRules/#0",
       }),
     ]);
   });
@@ -266,8 +312,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runPolicyChecks(ctx(configPath, cfg));
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual([
       "policy/attestation-hash-mismatch",
@@ -289,8 +334,7 @@ describe("registerPolicyDoctorChecks", () => {
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash })),
     );
 
@@ -324,8 +368,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runPolicyChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -361,10 +404,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorHealthRepairs(repairCtx(configPath, cfg), {
-      checks: listHealthChecks().filter((entry) => entry.id === "policy/channels-denied-provider"),
-    });
+    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual(["Disabled channels.telegram.enabled for policy conformance."]);
     expect(result.remainingFindings).toEqual([]);
@@ -392,15 +432,11 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorHealthRepairs(repairCtx(configPath, cfg), {
-      checks: listHealthChecks().filter((entry) => entry.id === "policy/channels-denied-provider"),
-    });
+    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
       "Skipped channel config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.",
-      "policy/channels-denied-provider repair skipped: workspace repairs are disabled",
     ]);
     expect(result.config.channels?.telegram).toEqual({ enabled: true });
   });
@@ -427,14 +463,11 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorHealthRepairs(repairCtx(configPath, cfg), {
-      checks: listHealthChecks().filter((entry) => entry.id === "policy/channels-denied-provider"),
-    });
+    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toContain(
-      "policy/channels-denied-provider repair skipped: workspace repairs are disabled",
+      "Skipped channel config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.",
     );
     expect(result.config.channels?.telegram).toEqual({ enabled: true });
   });
@@ -466,8 +499,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    await expect(runDoctorLintChecks(ctx(configPath, cfg))).resolves.toMatchObject({
+    await expect(runPolicyChecks(ctx(configPath, cfg))).resolves.toMatchObject({
       findings: [],
     });
   });
@@ -485,8 +517,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runPolicyChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
   });

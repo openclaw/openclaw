@@ -1,9 +1,8 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache } from "../../../src/config/config.js";
-import { clearHealthChecksForTest } from "../../../src/flows/health-check-registry.js";
 import { policyCheckCommand } from "./cli.js";
 import { resetPolicyDoctorChecksForTest } from "./doctor/register.js";
 import {
@@ -40,7 +39,6 @@ describe("policy commands", () => {
     vi.unstubAllEnvs();
     clearConfigCache();
     await fs.rm(workspaceDir, { recursive: true, force: true });
-    clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
   });
 

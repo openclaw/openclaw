@@ -156,7 +156,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
   const findings: HealthFinding[] = [];
 
-  if (settings.enabled === false) {
+  if (!policyChecksEnabled(ctx, settings)) {
     return {
       policyPath,
       evidence,
@@ -238,7 +238,9 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     policyFindings,
     settings,
   );
-  if (attestationFindings.length > 0) {
+  if (hasPolicyValidationFinding(policyFindings)) {
+    findings.push(...policyFindings);
+  } else if (attestationFindings.length > 0) {
     findings.push(...attestationFindings);
   } else {
     findings.push(...policyFindings);
@@ -275,6 +277,10 @@ function findingsForCheck(
   checkId: (typeof POLICY_CHECK_IDS)[number],
 ): readonly HealthFinding[] {
   return evaluation.findings.filter((finding) => finding.checkId === checkId);
+}
+
+function hasPolicyValidationFinding(findings: readonly HealthFinding[]): boolean {
+  return findings.some((finding) => finding.checkId === CHECK_IDS.policyInvalidFile);
 }
 
 function channelFindings(
@@ -587,6 +593,14 @@ function policySettings(ctx: HealthCheckContext): PolicySettings {
     return {};
   }
   return pluginConfig;
+}
+
+function policyChecksEnabled(ctx: HealthCheckContext, settings: PolicySettings): boolean {
+  const entry = ctx.cfg.plugins?.entries?.["policy"];
+  if (!isRecord(entry) || entry.enabled === false) {
+    return false;
+  }
+  return settings.enabled !== false;
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

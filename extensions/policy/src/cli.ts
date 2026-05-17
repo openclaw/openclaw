@@ -100,7 +100,7 @@ async function buildPolicyCheckReport(
       exitCode: visibleFindings.length === 0 ? 0 : 1,
     };
   }
-  const cfg = snapshot.valid ? snapshot.config : {};
+  const cfg = snapshot.valid ? policyCommandConfig(snapshot.config) : {};
   const cwd = options.cwd ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const ctx: HealthCheckContext = {
     mode: "lint",
@@ -146,6 +146,29 @@ async function buildPolicyCheckReport(
   };
 }
 
+function policyCommandConfig(cfg: HealthCheckContext["cfg"]): HealthCheckContext["cfg"] {
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        policy: {
+          ...cfg.plugins?.entries?.["policy"],
+          enabled: true,
+          config: {
+            enabled: true,
+            ...(typeof cfg.plugins?.entries?.["policy"]?.config === "object" &&
+            cfg.plugins.entries["policy"].config !== null
+              ? cfg.plugins.entries["policy"].config
+              : {}),
+          },
+        },
+      },
+    },
+  };
+}
+
 function writePolicyCheckReport(
   report: PolicyCheckReport,
   options: PolicyCheckOptions,
@@ -173,9 +196,10 @@ function writePolicyCheckReport(
     for (const finding of report.findings) {
       const where = typeof finding.path === "string" ? ` ${finding.path}` : "";
       const line = typeof finding.line === "number" ? `:${finding.line}` : "";
-      runtime.writeStdout(
-        `  [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}\n`,
-      );
+      const severity = typeof finding.severity === "string" ? finding.severity : "unknown";
+      const checkId = typeof finding.checkId === "string" ? finding.checkId : "unknown";
+      const message = typeof finding.message === "string" ? finding.message : "";
+      runtime.writeStdout(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
     }
   }
 }

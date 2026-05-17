@@ -1236,13 +1236,14 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/policy:
+    dependencies:
+      json5:
+        specifier: 2.2.3
+        version: 2.2.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      json5:
-        specifier: 2.2.3
-        version: 2.2.3
       openclaw:
         specifier: workspace:*
         version: link:../..
