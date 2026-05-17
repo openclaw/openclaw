@@ -173,16 +173,20 @@ export const slackOutbound: ChannelOutboundAdapter = {
   renderPresentation: ({ payload, presentation }) => {
     const slackData = payload.channelData?.slack as Record<string, unknown> | undefined;
     const nativeBlocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
+    const presentationBlocks = buildSlackPresentationBlocks(
+      presentation,
+      resolveSlackInteractiveBlockOffsets(nativeBlocks),
+    );
+    if (presentationBlocks.length === 0) {
+      return null;
+    }
     return {
       ...payload,
       channelData: {
         ...payload.channelData,
         slack: {
           ...slackData,
-          presentationBlocks: buildSlackPresentationBlocks(
-            presentation,
-            resolveSlackInteractiveBlockOffsets(nativeBlocks),
-          ),
+          presentationBlocks,
         },
       },
     };
