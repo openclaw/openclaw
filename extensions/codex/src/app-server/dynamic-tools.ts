@@ -153,6 +153,7 @@ export function createCodexDynamicToolBridge(params: {
           agentId: toolResultHookContext.agentId,
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
+          channelId: toolResultHookContext.channelId,
           startArgs: args,
           result,
           startedAt,
@@ -176,6 +177,7 @@ export function createCodexDynamicToolBridge(params: {
           agentId: toolResultHookContext.agentId,
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
+          channelId: toolResultHookContext.channelId,
           startArgs: args,
           error: error instanceof Error ? error.message : String(error),
           startedAt,
@@ -217,12 +219,13 @@ function createCodexDynamicToolSpec(params: {
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {
-  const { agentId, sessionId, sessionKey, runId } = ctx ?? {};
+  const { agentId, sessionId, sessionKey, runId, channelId } = ctx ?? {};
   return {
     ...(agentId && { agentId }),
     ...(sessionId && { sessionId }),
     ...(sessionKey && { sessionKey }),
     ...(runId && { runId }),
+    ...(channelId && { channelId }),
   };
 }
 
