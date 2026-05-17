@@ -5,7 +5,7 @@
 **Related plan:** `docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md`
 **Trigger:** OpenClaw agent reported `Error calling tool 'qdrant-find': 'document'` after the workspace-reconciler rollout
 
-This document captures every issue uncovered during the post-rollout verification session. Two of the listed bugs (`qdrant-find document key` and `reconciler EPIPE`) were fixed in the same session and are included here for cross-reference; the rest are open and need owners.
+This document tracks the **8 open issues** uncovered during the post-rollout verification session. Two additional P1 bugs (`qdrant-find` missing `document` key and reconciler EPIPE on first upsert) were found and fixed in the same session via commits `be224c265c` and `e27ac4cab7` — see the related plan's *Post-Rollout Corrections* section for that record.
 
 Severity legend:
 - **P1** — blocks user-visible feature, must fix
@@ -16,94 +16,20 @@ Severity legend:
 
 ## Status Index
 
-| # | Title | Status | Severity |
-|---|---|---|---|
-| 1 | `qdrant-find` returns `KeyError: 'document'` | **Fixed** in this session | P1 |
-| 2 | Reconcile `--apply` fails with `write EPIPE` on first PUT after embed | **Fixed** in this session | P1 |
-| 3 | `pnpm build` orphans the Docker bind-mount (`dist//deleted`) | **Open** | P2 |
-| 4 | `pnpm build` dts step fails on missing `web-tree-sitter` types | **Open** | P2 |
-| 5 | qdrant-client v1.18 vs server v1.12.4 minor version mismatch warning | **Open** | P3 |
-| 6 | Reconciler vs MCP `agent-memory` ownership invariant is implicit | **Open** | P2 |
-| 7 | `classifyWorkspacePoints` ignores payload-schema changes, so schema migrations need manual delete | **Open** | P2 |
-| 8 | FastEmbed Python bridge re-loads the ONNX model on every spawn | **Open** | P2 |
-| 9 | `indexed_vectors_count` is 0 because HNSW indexing threshold is 20000 | **Informational** | P3 |
-| 10 | Stale `agents/main/sessions/sessions.json` and large session history may bloat search corpora | **Informational** | P3 |
+| # | Title | Severity |
+|---|---|---|
+| 1 | `pnpm build` orphans the Docker bind-mount (`dist//deleted`) | P2 |
+| 2 | `pnpm build` dts step fails on missing `web-tree-sitter` types | P2 |
+| 3 | qdrant-client v1.18 vs server v1.12.4 minor version mismatch warning | P3 |
+| 4 | Reconciler vs MCP `agent-memory` ownership invariant is implicit | P2 |
+| 5 | `classifyWorkspacePoints` ignores payload-schema changes, so schema migrations need manual delete | P2 |
+| 6 | FastEmbed Python bridge re-loads the ONNX model on every spawn | P2 |
+| 7 | `indexed_vectors_count` is 0 because HNSW indexing threshold is 20000 | Informational / P3 |
+| 8 | Stale `agents/main/sessions/sessions.json` and large session history may bloat search corpora | Informational / P3 |
 
 ---
 
-## 1. `qdrant-find` returns `KeyError: 'document'` (FIXED)
-
-### Symptom
-Every `qdrant__qdrant-find` call from the OpenClaw agent returned:
-```
-Error calling tool 'qdrant-find': 'document'
-```
-`qdrant__qdrant-store` worked fine. The error message lacked the `qdrant__` prefix because it originates from `FastMCP._mcp_call_tool` (the gateway's name-routing layer adds the prefix; the inner exception sees only the bare tool name).
-
-### Root cause
-Two writers share the `agent-memory` Qdrant collection with **incompatible payload schemas**:
-
-- **`mcp-server-qdrant`** (vendored at `/home/node/.openclaw/vendor/uv-tools/data/uv/tools/mcp-server-qdrant/lib/python3.11/site-packages/mcp_server_qdrant/qdrant.py:79,117`) writes `{"document": text, "metadata": ...}` and reads `result.payload["document"]` with no fallback. Missing key → `KeyError('document')`.
-- **`workspace-reconciler`** (this project) wrote payloads with `{managed_by, path, root, chunk_index, content_hash, text_preview, synced_at, title, workspace_id}` and **no** `document` key.
-
-Snapshot taken at the time of the bug:
-```
-total_points: 901
-with    document key: 2   (MCP-stored)
-without document key: 899 (managed_by=workspace-reconciler)
-```
-Because both writers use the same vector name (`fast-all-minilm-l6-v2`) and the same embedding model (`sentence-transformers/all-MiniLM-L6-v2`), reconciler points outranked the 2 MCP points for almost every query, so the first hit returned to `qdrant-find` crashed reliably.
-
-### Fix
-Added `document: chunk.text` to `WorkspaceReconcilePayload` and to the payload builder. TDD test pins the contract.
-
-- `packages/memory-host-sdk/src/host/workspace-reconcile.ts:30,395`
-- `packages/memory-host-sdk/src/host/workspace-reconcile.test.ts` — new test `stores the full chunk text under the 'document' payload key so mcp-server-qdrant qdrant-find can read it`
-
-### Live proof
-- All 901/901 reconciler points now carry `document`
-- `QdrantConnector.search()` (same call path the MCP server uses) returned non-empty hits for unrelated queries with no `KeyError`
-
----
-
-## 2. Reconcile `--apply` fails with `write EPIPE` on first PUT after embed (FIXED)
-
-### Symptom
-```
-Embedding 899 chunks...
-Upserting 899 points...
-Error: Qdrant fetch failed: http://qdrant:6333/collections/agent-memory/points?wait=true cause=write EPIPE
-```
-EXIT=1. The systemd timer at 20:51:50 UTC failed identically.
-
-### Root cause
-Undici trace (`NODE_DEBUG=undici`):
-```
-UNDICI 2022: connected to qdrant:6333:6333 using http:h1
-UNDICI 2022: sending request to GET ...
-UNDICI 2022: trailers received from GET ...
-UNDICI 2022: sending request to POST .../points/scroll
-UNDICI 2022: trailers received from POST .../points/scroll
-Embedding 899 chunks...      <-- spawnSync python × 18, ~2 min wall time
-Upserting 899 points...
-UNDICI 2022: sending request to PUT .../points?wait=true
-UNDICI 2022: request to PUT ... errored - write EPIPE
-```
-Sequence: undici keeps the HTTP/1.1 connection to Qdrant alive between the initial GET/scroll and the upsert. The embed step takes ~2 minutes (FastEmbed re-loads the ONNX model on every spawn — see issue #8). During that pause Qdrant closes the idle socket (Actix default keep-alive is ~5 s). Undici writes the next PUT into the dead socket → `EPIPE`. Undici does **not** validate the socket nor retry.
-
-This is a classic Node-fetch stale-keep-alive race. It was latent before the `document`-key fix; the workload that originally seeded 899 points likely completed inside the keep-alive window because of cache effects, but became reproducible once the data set was at full size.
-
-### Fix
-`src/commands/qdrant-workspace-reconcile.ts:160` — `fetchQdrantJson` now retries once when the thrown error (or its `cause`) has `code ∈ {EPIPE, ECONNRESET, UND_ERR_SOCKET}`. These errors mean nothing was written server-side, so a retry is safe and idempotent.
-
-TDD test in `src/commands/qdrant-workspace-reconcile.test.ts` throws an `EPIPE`-shaped error on the first PUT and asserts the reconcile finishes successfully.
-
-### Live proof
-After the fix, the manual `--apply` returned `{"ok":true,"newPoints":899}` and exited 0.
-
----
-
-## 3. `pnpm build` orphans the Docker bind-mount (`dist//deleted`)
+## 1. `pnpm build` orphans the Docker bind-mount (`dist//deleted`)
 
 ### Symptom
 After running `pnpm build` on the host, the container could not see the updated `dist/`:
@@ -147,7 +73,7 @@ docker exec openclaw-openclaw-gateway-1 stat -c '%i' /app/dist
 
 ---
 
-## 4. `pnpm build` dts step fails on missing `web-tree-sitter` types
+## 2. `pnpm build` dts step fails on missing `web-tree-sitter` types
 
 ### Symptom
 `pnpm build` exits non-zero with:
@@ -171,7 +97,7 @@ Yes — this error pre-dates the qdrant rollout. Verified by checking out the ch
 
 ---
 
-## 5. qdrant-client v1.18 vs server v1.12.4 minor version mismatch warning
+## 3. qdrant-client v1.18 vs server v1.12.4 minor version mismatch warning
 
 ### Symptom
 When invoking `QdrantConnector.search()` via the vendored `mcp-server-qdrant` Python:
@@ -195,7 +121,7 @@ Option 1 is the longer-term direction; option 2 is the immediate compatibility p
 
 ---
 
-## 6. Reconciler vs MCP `agent-memory` ownership invariant is implicit
+## 4. Reconciler vs MCP `agent-memory` ownership invariant is implicit
 
 ### Symptom
 The `agent-memory` collection is written by two independent producers:
@@ -216,7 +142,7 @@ The `agent-memory` collection is written by two independent producers:
 
 ---
 
-## 7. `classifyWorkspacePoints` ignores payload-schema changes
+## 5. `classifyWorkspacePoints` ignores payload-schema changes
 
 ### Symptom
 When the `document` key was added to the payload schema, running `openclaw qdrant workspace reconcile --apply --json` reported:
@@ -248,7 +174,7 @@ if (sameHash && sameSchema) { unchanged.push(point); continue; }
 
 ---
 
-## 8. FastEmbed Python bridge re-loads the ONNX model on every spawn
+## 6. FastEmbed Python bridge re-loads the ONNX model on every spawn
 
 ### Symptom
 Per-spawn embedding latency is dominated by model load. For 899 chunks at `EMBED_BATCH_SIZE=50`, the reconciler invokes Python 18 times, and each invocation does:
@@ -256,14 +182,14 @@ Per-spawn embedding latency is dominated by model load. For 899 chunks at `EMBED
 model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")  # ~3-5s load
 vectors = [list(v) for v in model.embed(texts)]                  # ~0.05s for 50 chunks
 ```
-Wall time: ~60-90 s of model loading vs ~1 s of actual embedding. This is what stretched the idle gap that triggered bug #2.
+Wall time: ~60-90 s of model loading vs ~1 s of actual embedding. This is what stretched the idle gap that triggered the now-fixed reconciler EPIPE bug (see Appendix B).
 
 ### Source
 `src/commands/qdrant-workspace-reconcile.ts:81-89` defines `FASTEMBED_BRIDGE_SCRIPT` and `embedWorkspaceTexts` at `:365`.
 
 ### Impact
 - Reconcile wall time scales with model-load overhead, not actual work
-- Idle keep-alive time grows with chunk count, increasing exposure to stale-socket races (bug #2 reappears at extreme scale even after retry)
+- Idle keep-alive time grows with chunk count, increasing exposure to stale-socket races (the EPIPE class of bug from Appendix B can re-emerge at extreme scale even with the one-shot retry already in place)
 - CPU/RSS spikes from repeated ONNX initialization
 
 ### Suggested fix
@@ -283,7 +209,7 @@ For workspaces that grow beyond a few thousand chunks, switch to a persistent em
 
 ---
 
-## 9. `indexed_vectors_count: 0` because HNSW threshold is 20000
+## 7. `indexed_vectors_count: 0` because HNSW threshold is 20000
 
 ### Observation
 ```
@@ -306,7 +232,7 @@ optimizer_config:
 
 ---
 
-## 10. Stale `agents/main/sessions/sessions.json` and large session corpora
+## 8. Stale `agents/main/sessions/sessions.json` and large session corpora
 
 ### Observation
 `/home/node/.openclaw/agents/main/sessions/sessions.json` is multiple megabytes and includes tool-call records from the user's exploratory testing earlier today. Conversation transcripts (`*.jsonl`) include `qdrant__qdrant-find` calls with their results.
@@ -319,30 +245,49 @@ If/when a future memory feature ingests session corpora into Qdrant, these files
 
 ---
 
-## Appendix A — How the bugs were diagnosed
+## Appendix A — Diagnosis recipes useful for the open items
 
-1. **Live state inspection:**
+1. **Bind-mount inode check (issue #1):**
+   ```bash
+   docker exec openclaw-openclaw-gateway-1 findmnt /app/dist
+   # if SOURCE column ends in "//deleted", the bind-mount is orphaned and
+   # `docker compose restart openclaw-gateway` is required after every build
+   stat -c '%i' /home/ubuntu/godwind-team-docker/openclaw/dist
+   docker exec openclaw-openclaw-gateway-1 stat -c '%i' /app/dist
+   # different inodes ⇒ mount is stale
+   ```
+
+2. **Live state inspection of the `agent-memory` collection:**
    ```bash
    curl -s http://127.0.0.1:6333/collections/agent-memory | jq .result
-   curl -s -X POST .../points/scroll -d '{"limit":1000,"with_payload":true}' | jq
+   curl -s -X POST http://127.0.0.1:6333/collections/agent-memory/points/scroll \
+     -H 'Content-Type: application/json' \
+     -d '{"limit":1000,"with_payload":true,"with_vector":false}' | jq
    ```
-   Confirmed 899/901 points missing the `document` key (issue #1).
+   Use this to audit the writers issue #4 talks about — the `managed_by` distribution tells you who owns each point.
 
-2. **Source archaeology:**
-   - `mcp_server_qdrant/qdrant.py:117` showed the unguarded `payload["document"]` access.
-   - `packages/memory-host-sdk/src/host/workspace-reconcile.ts:30,395` showed the missing key in the writer.
+3. **Undici tracing for reconciler HTTP behavior:**
+   ```bash
+   docker exec -u node openclaw-openclaw-gateway-1 sh -c \
+     'NODE_DEBUG=undici openclaw qdrant workspace reconcile --apply --json > /tmp/recon.out 2>/tmp/recon.err'
+   ```
+   Useful for catching socket-lifecycle issues like the EPIPE class of bugs.
 
-3. **Undici tracing (`NODE_DEBUG=undici`):**
-   Captured the exact sequence: keep-alive socket established → ~2 min idle for embed → first PUT → `EPIPE` (issue #2).
+4. **Source archaeology pointers for ownership/schema work (issues #4, #5):**
+   - Deletion filter: `packages/memory-host-sdk/src/host/workspace-reconcile.ts:411`
+   - Classification logic: `packages/memory-host-sdk/src/host/workspace-reconcile.ts` (`classifyWorkspacePoints`)
+   - Embed bridge: `src/commands/qdrant-workspace-reconcile.ts:81-89` and `:365` (`embedWorkspaceTexts`)
+   - MCP-side payload contract: `/home/node/.openclaw/vendor/uv-tools/data/uv/tools/mcp-server-qdrant/lib/python3.11/site-packages/mcp_server_qdrant/qdrant.py:79,117`
 
-4. **Bind-mount inode check:**
-   `findmnt /app/dist` returned `dist//deleted`; host vs container inodes differed (issue #3).
+## Appendix B — Already-fixed bugs from the same session (for cross-reference)
 
-5. **TDD reproductions:**
-   - `payload.document` test failed with `expected undefined to be '# Long\n\n...'` — RED for issue #1
-   - PUT-throws-EPIPE-on-first-call test failed with the original error — RED for issue #2
+The two P1 bugs that triggered this audit were resolved before this document was published. They are recorded in:
 
-## Appendix B — Files touched in the post-rollout fix
+- `docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md` § *Post-Rollout Corrections*
+- Commit `be224c265c` — `fix(memory): add document payload key and retry EPIPE in qdrant reconciler`
+- Commit `e27ac4cab7` — `docs: qdrant post-implementation bug report and plan corrections`
+
+Files touched by those fixes:
 
 ```
 packages/memory-host-sdk/src/host/workspace-reconcile.ts
