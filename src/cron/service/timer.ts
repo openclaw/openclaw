@@ -390,7 +390,7 @@ function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): s
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
   return Math.max(
     CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS,
-    Math.min(CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+    Math.min(CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS, jobTimeoutMs),
   );
 }
 
