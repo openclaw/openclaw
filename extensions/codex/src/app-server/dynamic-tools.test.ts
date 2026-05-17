@@ -307,6 +307,54 @@ describe("createCodexDynamicToolBridge", () => {
     expect(firstItem.text).toBe("...(OpenClaw truncated dynamic tool".slice(0, 32));
   });
 
+  it("budgets configured truncation across all text result blocks", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "large_lookup",
+          execute: vi.fn(async () => ({
+            content: [
+              { type: "text", text: "a".repeat(200) },
+              { type: "text", text: "b".repeat(200) },
+            ],
+            details: {},
+          })),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "main",
+        config: {
+          agents: {
+            defaults: {
+              contextLimits: {
+                toolResultMaxChars: 180,
+              },
+            },
+          },
+        } as never,
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "large_lookup",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text.length).toBeLessThanOrEqual(180);
+    expect(text).toContain("OpenClaw truncated dynamic tool result");
+    expect(text).toContain("original 400 chars");
+    expect(text).not.toContain("b".repeat(100));
+  });
+
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
     { toolName: "image_generate", mediaUrl: "/tmp/generated.png" },

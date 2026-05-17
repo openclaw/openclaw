@@ -159,9 +159,7 @@ export function createCodexDynamicToolBridge(params: {
           startedAt,
         });
         return {
-          contentItems: result.content.flatMap((content) =>
-            convertToolContent(content, toolResultMaxChars),
-          ),
+          contentItems: convertToolContents(result.content, toolResultMaxChars),
           success: !resultIsError,
         };
       } catch (error) {
@@ -260,23 +258,6 @@ function resolveAgentContextLimitValue(params: {
     readRecord(readRecord(agent)?.contextLimits)?.[params.key],
   );
   return agentValue ?? defaultValue;
-}
-
-function truncateCodexDynamicToolText(text: string, maxChars: number): string {
-  const limit =
-    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
-      ? Math.floor(maxChars)
-      : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
-  if (text.length <= limit) {
-    return text;
-  }
-  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${text.length} chars, showing ${limit}; rerun with narrower args.)`;
-  const notice = `\n${noticeText}`;
-  if (notice.length >= limit) {
-    return noticeText.slice(0, limit);
-  }
-  const sliceLength = Math.max(0, limit - notice.length);
-  return `${text.slice(0, sliceLength).trimEnd()}${notice}`.slice(0, limit);
 }
 
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
@@ -435,14 +416,68 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
   );
 }
 
-function convertToolContent(
-  content: TextContent | ImageContent,
+function normalizeToolResultMaxChars(maxChars: number): number {
+  return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
+    ? Math.floor(maxChars)
+    : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+}
+
+function convertToolContents(
+  content: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
+  const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
+  const totalTextChars = content.reduce(
+    (total, item) => total + (item.type === "text" ? item.text.length : 0),
+    0,
+  );
+  if (totalTextChars <= maxChars) {
+    return content.flatMap(convertToolContent);
+  }
+
+  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+  const notice = `\n${noticeText}`;
+  const textBudget = Math.max(0, maxChars - notice.length);
+  let remainingTextBudget = textBudget;
+  let appendedNotice = false;
+  const output: CodexDynamicToolCallOutputContentItem[] = [];
+
+  for (const item of content) {
+    if (item.type !== "text") {
+      output.push(...convertToolContent(item));
+      continue;
+    }
+    if (appendedNotice) {
+      continue;
+    }
+    if (notice.length >= maxChars) {
+      output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+      appendedNotice = true;
+      continue;
+    }
+    const sliceLength = Math.min(item.text.length, remainingTextBudget);
+    remainingTextBudget -= sliceLength;
+    const shouldAppendNotice = remainingTextBudget <= 0;
+    const text = item.text.slice(0, sliceLength);
+    if (shouldAppendNotice) {
+      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}`.slice(0, maxChars) });
+      appendedNotice = true;
+    } else if (text.length > 0) {
+      output.push({ type: "inputText", text });
+    }
+  }
+
+  if (!appendedNotice) {
+    output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+  }
+  return output;
+}
+
+function convertToolContent(
+  content: TextContent | ImageContent,
+): CodexDynamicToolCallOutputContentItem[] {
   if (content.type === "text") {
-    return [
-      { type: "inputText", text: truncateCodexDynamicToolText(content.text, toolResultMaxChars) },
-    ];
+    return [{ type: "inputText", text: content.text }];
   }
   const imageUrl = sanitizeInlineImageDataUrl(`data:${content.mimeType};base64,${content.data}`);
   if (!imageUrl) {
