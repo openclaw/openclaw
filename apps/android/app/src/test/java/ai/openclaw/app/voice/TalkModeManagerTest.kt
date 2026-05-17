@@ -7,9 +7,11 @@ import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,6 +21,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(RobolectricTestRunner::class)
@@ -92,6 +95,59 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeToolFinalDoesNotUseAllResponseTts() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    realtimeToolRuns(manager)["run-tool"] =
+      RealtimeToolRun(callId = "call-1", relaySessionId = "relay-1")
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "tool result"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+    assertTrue(realtimeToolRuns(manager).isEmpty())
+  }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun realtimeStartWithoutGatewayTurnsTalkOff() =
+    runTest {
+      val stoppedByRelay = AtomicBoolean(false)
+      val manager =
+        createManager(
+          scope = this,
+          isConnected = { false },
+          onStoppedByRelay = { stoppedByRelay.set(true) },
+        )
+
+      setPrivateField(manager, "executionMode", TalkModeExecutionMode.RealtimeRelay)
+      setPrivateField(manager, "configLoaded", true)
+      manager.setEnabled(true)
+      advanceUntilIdle()
+
+      assertFalse(manager.isEnabled.value)
+      assertFalse(manager.isListening.value)
+      assertEquals("Gateway not connected", manager.statusText.value)
+      assertTrue(stoppedByRelay.get())
+    }
+
+  @Test
+  fun staleRealtimeToolFinalDoesNotUseAllResponseTts() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "realtimeSessionId", "relay-2")
+    realtimeToolRuns(manager)["run-tool"] =
+      RealtimeToolRun(callId = "call-1", relaySessionId = "relay-1")
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "stale result"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+    assertTrue(realtimeToolRuns(manager).isEmpty())
+  }
+
+  @Test
   fun textReadyDoesNotEnterSpeakingUntilAudioPlaybackStarts() =
     runTest {
       val talkSpeakClient = FakeTalkSpeechSynthesizer()
@@ -128,6 +184,9 @@ class TalkModeManagerTest {
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    isConnected: () -> Boolean = { true },
+    onStoppedByRelay: () -> Unit = {},
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -142,10 +201,11 @@ class TalkModeManagerTest {
       )
     return TalkModeManager(
       context = app,
-      scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+      scope = scope,
       session = session,
       supportsChatSubscribe = false,
-      isConnected = { true },
+      isConnected = isConnected,
+      onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
     )
@@ -153,6 +213,10 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun playbackGeneration(manager: TalkModeManager): AtomicLong = readPrivateField(manager, "playbackGeneration") as AtomicLong
+
+  @Suppress("UNCHECKED_CAST")
+  private fun realtimeToolRuns(manager: TalkModeManager): MutableMap<String, RealtimeToolRun> =
+    readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
 
   private fun setPrivateField(
     target: Any,
