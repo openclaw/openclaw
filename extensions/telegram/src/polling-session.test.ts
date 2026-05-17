@@ -714,6 +714,46 @@ describe("TelegramPollingSession", () => {
     await runPromise;
   });
 
+  it("logs isolated ingress timeout diagnostics on startup", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    const worker = createIdleIngressWorker();
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      isolatedIngress: {
+        enabled: true,
+        timeoutSeconds: 90,
+        createWorker: worker.createWorker,
+        drainIntervalMs: 10,
+      },
+    });
+
+    const runPromise = session.runUntilAbort();
+    await vi.waitFor(() =>
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "configuredTimeoutSeconds=90 pollTimeoutSeconds=30 requestTimeoutMs=45000",
+        ),
+      ),
+    );
+
+    abort.abort();
+    worker.stop();
+    await runPromise;
+  });
+
   it("keeps failed lanes blocked for the rest of the drain pass", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();

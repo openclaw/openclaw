@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveTelegramGetUpdatesLongPollTimeoutSeconds,
   resolveTelegramRequestTimeoutMs,
   resolveTelegramStartupProbeTimeoutMs,
 } from "./request-timeouts.js";
@@ -54,5 +55,16 @@ describe("resolveTelegramStartupProbeTimeoutMs", () => {
 
   it("honors higher configured timeoutSeconds", () => {
     expect(resolveTelegramStartupProbeTimeoutMs(60)).toBe(60_000);
+  });
+});
+
+describe("resolveTelegramGetUpdatesLongPollTimeoutSeconds", () => {
+  it("matches the regular polling runner default", () => {
+    expect(resolveTelegramGetUpdatesLongPollTimeoutSeconds()).toBe(30);
+  });
+
+  it("does not let configured timeoutSeconds stretch isolated ingress beyond the hard request guard", () => {
+    expect(resolveTelegramGetUpdatesLongPollTimeoutSeconds(90)).toBe(30);
+    expect(resolveTelegramGetUpdatesLongPollTimeoutSeconds(10)).toBe(30);
   });
 });
