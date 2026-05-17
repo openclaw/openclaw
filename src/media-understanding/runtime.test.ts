@@ -230,6 +230,36 @@ describe("media-understanding runtime", () => {
     });
   });
 
+  it("does not force typed remote URLs into the requested capability", async () => {
+    const media = [{ index: 0, url: "https://example.com/clip.mp4", mime: "video/mp4" }];
+    mocks.normalizeMediaAttachments.mockReturnValue(media);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "image", outcome: "skipped", attachments: [] },
+    });
+
+    await expect(
+      describeImageFile({
+        filePath: "https://example.com/clip.mp4",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toMatchObject({
+      text: undefined,
+      output: undefined,
+    });
+
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaUrl: "https://example.com/clip.mp4",
+      MediaType: "video/mp4",
+    });
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability: "image",
+      ctx: { MediaUrl: "https://example.com/clip.mp4", MediaType: "video/mp4" },
+      media,
+    });
+  });
+
   it("passes workspaceDir through file media understanding requests", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",

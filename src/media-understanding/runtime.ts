@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { mimeTypeFromFilePath } from "../media/mime.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
@@ -59,7 +60,9 @@ function buildFileContext(params: {
     params.mediaUrl ??
     (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
   const mediaType =
-    params.mime ?? (remoteRef && params.capability ? `${params.capability}/*` : undefined);
+    params.mime ??
+    (remoteRef ? mimeTypeFromFilePath(remoteRef) : undefined) ??
+    (remoteRef && params.capability ? `${params.capability}/*` : undefined);
   if (remoteRef) {
     return {
       MediaUrl: remoteRef,
