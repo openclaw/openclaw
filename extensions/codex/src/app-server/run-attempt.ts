@@ -705,7 +705,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
     Number.isFinite(sessionRecord.totalTokens)
       ? sessionRecord.totalTokens
       : undefined;
-  const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
+  const tokenCount = nativeTokens ?? sessionTokens;
   if (tokenCount !== undefined && tokenCount >= CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS) {
     embeddedAgentLog.warn(
       "codex app-server native transcript exceeded active token limit; starting a fresh thread",
