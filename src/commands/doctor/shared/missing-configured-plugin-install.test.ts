@@ -1192,7 +1192,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
         channels: {
-          whatsapp: { enabled: true, authDir: "/tmp/wa" },
+          whatsapp: { enabled: true, allowFrom: ["+15555550123"] },
         },
       },
       env: {
