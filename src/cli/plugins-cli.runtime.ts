@@ -1,4 +1,5 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import { resolveConfiguredRuntimePluginInstallCandidate } from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
@@ -6,7 +7,6 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConfiguredRuntimePluginInstallCandidate } from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
