@@ -720,7 +720,7 @@ describe("matrix live qa scenarios", () => {
       const channelApproval = buildApprovalEvent("$approval-both-channel", "!main:matrix-qa.test");
       const dmApproval = buildApprovalEvent(
         "$approval-both-dm",
-        "!driver-shared-dm:matrix-qa.test",
+        "!driver-runtime-dm:matrix-qa.test",
       );
       context.observedEvents.push(channelApproval, dmApproval, {
         eventId: "$approval-both-option",
@@ -757,7 +757,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.approvals?.[0]?.eventId).toBe("$approval-both-channel");
     expect(artifacts.approvals?.[0]?.roomId).toBe("!main:matrix-qa.test");
     expect(artifacts.approvals?.[1]?.eventId).toBe("$approval-both-dm");
-    expect(artifacts.approvals?.[1]?.roomId).toBe("!driver-shared-dm:matrix-qa.test");
+    expect(artifacts.approvals?.[1]?.roomId).toBe("!driver-runtime-dm:matrix-qa.test");
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
     const finalGatewayCall = mockCall(gatewayCall, "gatewayCall", -1);
