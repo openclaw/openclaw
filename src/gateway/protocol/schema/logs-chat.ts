@@ -66,6 +66,8 @@ export const ChatInjectParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     message: NonEmptyString,
     label: Type.Optional(Type.String({ maxLength: 100 })),
+    role: Type.Optional(Type.Union([Type.Literal("assistant"), Type.Literal("user")])),
+    idempotencyKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
