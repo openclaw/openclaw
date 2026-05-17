@@ -224,7 +224,11 @@ struct ConfigSnapshot: Codable {
 final class ChannelsStore {
     static let shared = ChannelsStore()
 
-    var snapshot: ChannelsStatusSnapshot?
+    var snapshot: ChannelsStatusSnapshot? {
+        didSet {
+            self.decodedChannelCache.removeAll(keepingCapacity: true)
+        }
+    }
     var lastError: String?
     var lastSuccess: Date?
     var isRefreshing = false
@@ -255,6 +259,7 @@ final class ChannelsStore {
     var configRoot: [String: Any] = [:]
     var configLoaded = false
     var configSourceKey: String?
+    @ObservationIgnored private var decodedChannelCache: [String: Any] = [:]
 
     func channelMetaEntry(_ id: String) -> ChannelsStatusSnapshot.ChannelUiMetaEntry? {
         self.snapshot?.channelMeta?.first(where: { $0.id == id })
@@ -295,6 +300,18 @@ final class ChannelsStore {
             return meta.map(\.id)
         }
         return self.snapshot?.channelOrder ?? []
+    }
+
+    func decodedChannel<T: Decodable>(_ id: String, as type: T.Type) -> T? {
+        let key = "\(id)#\(ObjectIdentifier(type))"
+        if let cached = self.decodedChannelCache[key] as? T {
+            return cached
+        }
+        guard let decoded = self.snapshot?.decodeChannel(id, as: type) else {
+            return nil
+        }
+        self.decodedChannelCache[key] = decoded
+        return decoded
     }
 
     func applyWhatsAppLoginWaitResult(_ result: WhatsAppLoginWaitResult) {
