@@ -27,6 +27,16 @@ export {
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
 
+function isMinimaxVlmProvider(provider: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  return (
+    normalized === "minimax" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal" ||
+    normalized === "minimax-portal-cn"
+  );
+}
+
 export interface DescribeStickerParams {
   imagePath: string;
   cfg: OpenClawConfig;
@@ -49,7 +59,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     catalog = await loadModelCatalog({ config: cfg });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     const supportsVision = modelSupportsVision(entry);
-    if (supportsVision) {
+    if (supportsVision && !isMinimaxVlmProvider(defaultModel.provider)) {
       activeModel = { provider: defaultModel.provider, model: defaultModel.model };
     }
   } catch {
@@ -83,8 +93,12 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
       cfg,
       providerId: provider,
       capability: "image",
+      includeConfiguredImageModels: !isMinimaxVlmProvider(provider),
     });
     const preferred = entries.find((entry) => entry.id === defaultId);
+    if (isMinimaxVlmProvider(provider)) {
+      return preferred;
+    }
     return preferred ?? entries[0];
   };
 
