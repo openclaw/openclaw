@@ -139,5 +139,12 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
     );
     expect(repaired?.config?.skills?.entries?.["missing-tool"]).toEqual({ enabled: false });
     expect(repaired?.changes).toContain("Disabled unavailable skill missing-tool.");
+    expect(repaired?.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "config",
+        action: "disable-skill",
+        target: "skills.entries.missing-tool.enabled",
+      }),
+    );
   });
 });

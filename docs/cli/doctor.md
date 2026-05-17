@@ -137,6 +137,13 @@ repair?(ctx, findings) -> HealthRepairResult
 by `doctor --fix` / `doctor --repair`. Checks that have not migrated to this
 shape continue to use the legacy doctor contribution flow.
 
+The split is intentional: `detect()` owns diagnosis, while `repair()` owns
+reporting what it changed or would change. Repair contexts can carry
+`dryRun`/`diff` requests, and repair results can return structured `diffs` for
+config/file edits plus `effects` for service, process, package, state, or other
+side effects. That lets converted checks grow toward `doctor --fix --dry-run`
+and diff reporting without moving mutation planning into `detect()`.
+
 `repair()` reports whether it attempted the requested repair with `status:
 "repaired" | "skipped" | "failed"`. Omitted status means `repaired`, so simple
 repair checks only need to return changes. When repair returns `skipped` or

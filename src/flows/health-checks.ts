@@ -51,6 +51,23 @@ export interface HealthCheckContext {
 
 export interface HealthRepairContext extends Omit<HealthCheckContext, "mode"> {
   readonly mode: "fix";
+  readonly dryRun?: boolean;
+  readonly diff?: boolean;
+}
+
+export interface HealthRepairDiff {
+  readonly kind: "config" | "file";
+  readonly path: string;
+  readonly before?: string;
+  readonly after?: string;
+  readonly unifiedDiff?: string;
+}
+
+export interface HealthRepairEffect {
+  readonly kind: "config" | "file" | "service" | "process" | "package" | "state" | "other";
+  readonly action: string;
+  readonly target?: string;
+  readonly dryRunSafe?: boolean;
 }
 
 export interface HealthRepairResult {
@@ -59,6 +76,8 @@ export interface HealthRepairResult {
   readonly config?: OpenClawConfig;
   readonly changes: readonly string[];
   readonly warnings?: readonly string[];
+  readonly diffs?: readonly HealthRepairDiff[];
+  readonly effects?: readonly HealthRepairEffect[];
 }
 
 export interface HealthCheckScope {

@@ -7,8 +7,8 @@ import {
 } from "../commands/doctor-skills.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
 import { registerHealthCheck } from "./health-check-registry.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 
@@ -127,9 +127,16 @@ const skillsReadinessCheck: HealthCheck = {
     if (unavailable.length === 0) {
       return { changes: [] };
     }
+    const nextConfig = disableUnavailableSkillsInConfig(ctx.cfg, unavailable);
     return {
-      config: disableUnavailableSkillsInConfig(ctx.cfg, unavailable),
+      config: nextConfig,
       changes: unavailable.map((skill) => `Disabled unavailable skill ${skill.name}.`),
+      effects: unavailable.map((skill) => ({
+        kind: "config" as const,
+        action: ctx.dryRun === true ? "would-disable-skill" : "disable-skill",
+        target: skillReadinessPath(skill),
+        dryRunSafe: true,
+      })),
     };
   },
 };

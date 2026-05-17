@@ -1,10 +1,18 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding, HealthRepairContext } from "./health-checks.js";
+import type {
+  HealthCheck,
+  HealthFinding,
+  HealthRepairContext,
+  HealthRepairDiff,
+  HealthRepairEffect,
+} from "./health-checks.js";
 
 export interface DoctorRepairRunOptions {
   readonly checks?: readonly HealthCheck[];
+  readonly dryRun?: boolean;
+  readonly diff?: boolean;
 }
 
 export interface DoctorRepairRunResult {
@@ -13,6 +21,8 @@ export interface DoctorRepairRunResult {
   readonly remainingFindings: readonly HealthFinding[];
   readonly changes: readonly string[];
   readonly warnings: readonly string[];
+  readonly diffs: readonly HealthRepairDiff[];
+  readonly effects: readonly HealthRepairEffect[];
   readonly checksRun: number;
   readonly checksRepaired: number;
   readonly checksValidated: number;
@@ -27,6 +37,8 @@ export async function runDoctorHealthRepairs(
   const remainingFindings: HealthFinding[] = [];
   const changes: string[] = [];
   const warnings: string[] = [];
+  const diffs: HealthRepairDiff[] = [];
+  const effects: HealthRepairEffect[] = [];
   let cfg = ctx.cfg;
   let checksRepaired = 0;
   let checksValidated = 0;
@@ -46,18 +58,26 @@ export async function runDoctorHealthRepairs(
     }
 
     try {
-      const result = await check.repair({ ...ctx, cfg }, checkFindings);
+      const result = await check.repair(
+        { ...ctx, cfg, dryRun: opts.dryRun === true, diff: opts.diff === true },
+        checkFindings,
+      );
       warnings.push(...(result.warnings ?? []));
+      diffs.push(...(result.diffs ?? []));
+      effects.push(...(result.effects ?? []));
       const status = result.status ?? "repaired";
       if (status !== "repaired") {
         warnings.push(`${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`);
         continue;
       }
-      if (result.config !== undefined) {
+      if (result.config !== undefined && opts.dryRun !== true) {
         cfg = result.config;
       }
       changes.push(...result.changes);
       checksRepaired++;
+      if (opts.dryRun === true) {
+        continue;
+      }
       try {
         const validationFindings = await check.detect(
           { ...ctx, cfg },
@@ -82,6 +102,8 @@ export async function runDoctorHealthRepairs(
     remainingFindings,
     changes,
     warnings,
+    diffs,
+    effects,
     checksRun: checks.length,
     checksRepaired,
     checksValidated,

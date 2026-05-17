@@ -92,6 +92,11 @@ different:
 Modernized health checks may provide an optional `repair()` implementation.
 `doctor --fix` applies those repairs when they exist and continues to use the
 existing doctor repair flow for checks that have not migrated yet.
+The structured repair contract also separates repair reporting from detection:
+`detect()` reports current findings, while `repair()` can report changes,
+config/file diffs, and non-file side effects. That keeps the migration path open
+for future `doctor --fix --dry-run` and diff output without making lint checks
+plan mutations.
 
 Examples:
 

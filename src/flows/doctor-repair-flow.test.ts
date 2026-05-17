@@ -157,4 +157,67 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.remainingFindings).toEqual([]);
     expect(result.warnings).toEqual(["test/skipped repair skipped: manual confirmation required"]);
   });
+
+  it("supports dry-run repairs without applying returned config or validating", async () => {
+    const repairContexts: HealthRepairContext[] = [];
+    let detectCalls = 0;
+    const checks: HealthCheck[] = [
+      {
+        id: "test/dry-run",
+        kind: "core",
+        description: "dry run",
+        async detect(ctx) {
+          detectCalls++;
+          return ctx.cfg.gateway?.mode === "local"
+            ? []
+            : [
+                {
+                  checkId: "test/dry-run",
+                  severity: "warning",
+                  message: "gateway mode missing",
+                  path: "gateway.mode",
+                },
+              ];
+        },
+        async repair(ctx) {
+          repairContexts.push(ctx);
+          return {
+            config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+            changes: ["Would set gateway.mode to local."],
+            diffs: [
+              {
+                kind: "config",
+                path: "gateway.mode",
+                before: undefined,
+                after: "local",
+              },
+            ],
+            effects: [
+              {
+                kind: "config",
+                action: "would-set",
+                target: "gateway.mode",
+                dryRunSafe: true,
+              },
+            ],
+          };
+        },
+      },
+    ];
+
+    const result = await runDoctorHealthRepairs(ctx({}), {
+      checks,
+      dryRun: true,
+      diff: true,
+    });
+
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual(["Would set gateway.mode to local."]);
+    expect(result.diffs).toMatchObject([{ kind: "config", path: "gateway.mode" }]);
+    expect(result.effects).toMatchObject([{ kind: "config", action: "would-set" }]);
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(0);
+    expect(detectCalls).toBe(1);
+    expect(repairContexts[0]).toMatchObject({ dryRun: true, diff: true });
+  });
 });
