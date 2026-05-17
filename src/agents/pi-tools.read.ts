@@ -683,10 +683,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
       const record = getToolParamsRecord(args);
       let normalizedRecord: Record<string, unknown> | undefined;
       for (const key of pathParamKeys) {
-        let filePath = record?.[key];
-        if (typeof filePath !== "string" || !filePath.trim()) {
+        const rawFilePath = record?.[key];
+        if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
+        let filePath: string = rawFilePath;
         // #83065: Signal/Telegram/etc. inbound media surfaces as `media://`
         // prompt notes (see `src/media/media-reference.ts`). Without this
         // resolver hop the structured `read` path would feed `media://inbound/...`
