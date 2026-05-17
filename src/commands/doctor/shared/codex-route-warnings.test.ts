@@ -134,6 +134,33 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("warns when Codex runtime routes are configured while the Codex plugin is disabled", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex runtime is selected, but the Codex plugin is disabled.",
+        "- agents.defaults.model.primary: gpt-5.5 resolves to openai/gpt-5.5 with Codex runtime while the Codex plugin is disabled by config.",
+        "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to a PI runtime policy.",
+      ].join("\n"),
+    ]);
+  });
+
   it("warns when Codex runtime has OpenClaw compaction summarizer overrides", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {
@@ -1968,6 +1995,904 @@ describe("collectCodexRouteWarnings", () => {
       id: "codex",
     });
     expect(result.changes.join("\n")).toContain("agentRuntime.id");
+  });
+
+  it("re-enables the Codex plugin when default OpenAI routes use Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+      "Added codex to plugins.allow because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["openai", "codex"]);
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config: result.cfg,
+      }).runtime,
+    ).toBe("codex");
+  });
+
+  it("re-enables the Codex plugin when a default heartbeat model uses Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            heartbeat: {
+              model: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("re-enables the Codex plugin when a default subagent model uses Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            subagents: {
+              model: {
+                primary: "gpt-5.5",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("re-enables the Codex plugin when an agent inherits a default heartbeat model that uses Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            heartbeat: {
+              model: "gpt-5.5",
+            },
+          },
+          list: [
+            {
+              id: "research",
+              model: "anthropic/claude-sonnet-4-6",
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("re-enables the Codex plugin when an agent model alias resolves to OpenAI", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "xiaomi/mimo-v2-pro-mit",
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("keeps the Codex plugin disabled when a bare alias resolves through a non-OpenAI default provider", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            models: {
+              "claude-opus-4-6": {
+                alias: "opus",
+              },
+            },
+            subagents: {
+              model: "opus",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps the Codex plugin disabled when a bare alias inherits a default provider from the primary alias", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "sonnet",
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                alias: "sonnet",
+              },
+              "claude-opus-4-6": {
+                alias: "opus",
+              },
+            },
+            subagents: {
+              model: "opus",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps the Codex plugin disabled when an auth-profiled bare alias resolves outside OpenAI", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "fast@work",
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                alias: "fast",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("re-enables the Codex plugin when a per-agent-only bare alias falls back to OpenAI", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "worker",
+              model: "fast",
+              models: {
+                "anthropic/claude-sonnet-4-6": {
+                  alias: "fast",
+                },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("re-enables the Codex plugin when a listed-agent bare primary ignores per-agent provider metadata", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "worker",
+              model: "claude-sonnet-4-6",
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("re-enables the Codex plugin when defaults inherit the implicit OpenAI model", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                alias: "sonnet",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("keeps Codex disabled when no agent routes are configured", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: { enabled: true },
+            codex: { enabled: false },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.cfg.plugins?.allow).toEqual(["brave"]);
+  });
+
+  it("re-enables the Codex plugin when defaults configure only non-Codex fallbacks", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("keeps Codex disabled when implicit defaults resolve to a configured provider", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "claude-sonnet-4-6" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {},
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps Codex disabled for unused OpenAI model-map metadata", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            models: {
+              "openai/gpt-5.5": {
+                alias: "gpt",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("re-enables Codex for model-map runtime policies even when the primary is non-Codex", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("re-enables Codex for default model-map runtime policies inherited by listed agents", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              model: "anthropic/claude-sonnet-4-6",
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("keeps Codex disabled when openrouter:auto resolves outside OpenAI", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "openrouter:auto",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps Codex disabled when a bare alias inherits an OpenRouter compat primary provider", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "openrouter:auto",
+            models: {
+              "claude-sonnet-4-6": {
+                alias: "sonnet",
+              },
+            },
+            subagents: {
+              model: "sonnet",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps Codex disabled when an alias resolves to an OpenRouter compat model", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "router-auto",
+            models: {
+              "openrouter:auto": {
+                alias: "router-auto",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("re-enables the Codex plugin when a channel model override uses Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+        channels: {
+          modelByChannel: {
+            telegram: {
+              default: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("uses normalized runtime agent ids when checking model runtime policy", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "",
+              model: "gpt-5.5",
+              models: {
+                "openai/gpt-5.5": {
+                  agentRuntime: { id: "pi" },
+                },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("does not make an empty plugin allowlist restrictive when re-enabling Codex", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: [],
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "gpt-5.5",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual([]);
+  });
+
+  it("adds Codex to a non-empty plugin allowlist when OpenAI routes require Codex runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "gpt-5.5",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+      "Added codex to plugins.allow because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["openai", "codex"]);
+  });
+
+  it("treats bundled discovery compat allowlists as restrictive for the Codex harness", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["openai"],
+          bundledDiscovery: "compat",
+          entries: {
+            openai: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "gpt-5.5",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+      "Added codex to plugins.allow because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["openai", "codex"]);
+  });
+
+  it("adds Codex to bundled discovery compat allowlists when re-enabling Codex", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["openai"],
+          bundledDiscovery: "compat",
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "gpt-5.5",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+      "Added codex to plugins.allow because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["openai", "codex"]);
+  });
+
+  it("keeps the Codex plugin disabled when OpenAI routes explicitly use the PI runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "pi" },
+              models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "gpt-5.5",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config: result.cfg,
+      }).runtime,
+    ).toBe("pi");
+  });
+
+  it("keeps the Codex plugin disabled when an auth-profiled OpenAI route explicitly uses the PI runtime", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5@work",
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps the Codex plugin disabled when a bare model resolves to a configured provider", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "qwen-max" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "qwen-max",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("keeps the Codex plugin disabled when a bare model case-insensitively resolves to a configured provider", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "Qwen-Max" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "qwen-max",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+  });
+
+  it("re-enables the Codex plugin when a provider-prefixed catalog model does not claim a bare model", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "qwen-dashscope/qwen-max" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "qwen-max",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    ]);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
   it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise PI/API-key routed", () => {
