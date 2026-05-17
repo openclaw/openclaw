@@ -176,22 +176,50 @@ function buildUnifiedDistEntries(): Record<string, string> {
             : {}),
           ...bundledHookEntries,
         }),
->>>>>>> af3b1ddd43 (chore(build): add OPENCLAW_BUILD_CORE_ONLY mode (skip plugin-sdk + bundled plugins + hooks))
   };
 }
 
-export default defineConfig([
-  nodeBuildConfig({
-    // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
-    // and bundled hooks in one graph so runtime singletons are emitted once.
-    entry: buildUnifiedDistEntries(),
-    deps: {
-      neverBundle: [
-        "@lancedb/lancedb",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk",
-        ...bundledPluginRuntimeDependencies,
-      ],
-    },
-  }),
-]);
+const splitCoreOnly = process.env.OPENCLAW_BUILD_CORE_ONLY === "1" && process.env.OPENCLAW_BUILD_CORE_SPLIT === "1";
+const unifiedEntries = buildUnifiedDistEntries();
+function splitEntries(entries: Record<string, string>) {
+  const keys = Object.keys(entries).sort((a, b) => a.localeCompare(b));
+  const mid = Math.ceil(keys.length / 2);
+  const pick = (ks: string[]) => Object.fromEntries(ks.map((k) => [k, entries[k]!]));
+  return [pick(keys.slice(0, mid)), pick(keys.slice(mid))] as const;
+}
+const configs = splitCoreOnly
+  ? (() => {
+      const [entriesA, entriesB] = splitEntries(unifiedEntries);
+      return [
+        nodeBuildConfig({
+          clean: true,
+          entry: entriesA,
+          deps: {
+            alwaysBundle: shouldAlwaysBundleDependency,
+            neverBundle: shouldNeverBundleDependency,
+          },
+        }),
+        nodeBuildConfig({
+          clean: false,
+          entry: entriesB,
+          deps: {
+            alwaysBundle: shouldAlwaysBundleDependency,
+            neverBundle: shouldNeverBundleDependency,
+          },
+        }),
+      ];
+    })()
+  : [
+      nodeBuildConfig({
+        // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
+        // and bundled hooks in one graph so runtime singletons are emitted once.
+        clean: true,
+        entry: unifiedEntries,
+        deps: {
+          alwaysBundle: shouldAlwaysBundleDependency,
+          neverBundle: shouldNeverBundleDependency,
+        },
+      }),
+    ];
+
+export default defineConfig(configs);
