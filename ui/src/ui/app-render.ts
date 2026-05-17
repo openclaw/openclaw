@@ -488,12 +488,12 @@ function dismissUpdateBanner(updateAvailable: unknown) {
 }
 
 const COMMUNICATION_SECTION_KEYS = [
-  "channels",
   "messages",
   "broadcast",
   "__notifications__",
   "talk",
   "audio",
+  "channels",
 ] as const;
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 const AUTOMATION_SECTION_KEYS = [
@@ -544,6 +544,7 @@ type ConfigTabOverrides = Pick<
       ConfigProps,
       | "showModeToggle"
       | "navRootLabel"
+      | "showRootTab"
       | "includeSections"
       | "excludeSections"
       | "includeVirtualSections"
@@ -585,14 +586,29 @@ function normalizeScopedConfigSelection(
   return { activeSection, activeSubsection };
 }
 
-function countTopLevelSchemaProperties(schema: unknown): number {
+function countScopedTopLevelSchemaProperties(
+  schema: unknown,
+  includeSections?: readonly string[],
+  excludeSections?: readonly string[],
+): number {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return 0;
   }
   const properties = (schema as { properties?: unknown }).properties;
-  return properties && typeof properties === "object" && !Array.isArray(properties)
-    ? Object.keys(properties).length
-    : 0;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return 0;
+  }
+  const include = includeSections?.length ? new Set(includeSections) : null;
+  const exclude = excludeSections?.length ? new Set(excludeSections) : null;
+  return Object.keys(properties).filter((key) => {
+    if (include && !include.has(key)) {
+      return false;
+    }
+    if (exclude?.has(key)) {
+      return false;
+    }
+    return true;
+  }).length;
 }
 
 function renderMeasured<T>(
@@ -1191,16 +1207,23 @@ export function renderApp(state: AppViewState) {
     | "excludeSections"
     | "includeVirtualSections"
   >;
-  const renderConfigTab = (overrides: ConfigTabOverrides) =>
-    renderMeasured(
+  const renderConfigTab = (overrides: ConfigTabOverrides) => {
+    const scopedDefaultSection = overrides.includeSections?.[0] ?? null;
+    const activeSection = overrides.activeSection ?? scopedDefaultSection;
+    const showRootTab = overrides.showRootTab ?? !overrides.includeSections?.length;
+    return renderMeasured(
       state,
       "config",
       {
         tab: state.tab,
         formMode: overrides.formMode,
-        activeSection: overrides.activeSection,
+        activeSection,
         activeSubsection: overrides.activeSubsection,
-        schemaSectionCount: countTopLevelSchemaProperties(commonConfigProps.schema),
+        schemaSectionCount: countScopedTopLevelSchemaProperties(
+          commonConfigProps.schema,
+          overrides.includeSections,
+          overrides.excludeSections,
+        ),
         hasSearch: Boolean(overrides.searchQuery?.trim()),
       },
       () =>
@@ -1208,8 +1231,11 @@ export function renderApp(state: AppViewState) {
           ...commonConfigProps,
           includeVirtualSections: false,
           ...overrides,
+          activeSection,
+          showRootTab,
         }),
     );
+  };
   const configSelection = normalizeMainConfigSelection(
     state.configActiveSection,
     state.configActiveSubsection,
