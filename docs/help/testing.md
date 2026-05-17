@@ -335,9 +335,9 @@ start it from the Actions UI through `Mantis Scenario` (`scenario_id:
 telegram-live`) or directly from a pull request comment:
 
 ```text
-@Mantis telegram
-@Mantis telegram scenario=telegram-status-command
-@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram
+@openclaw-mantis telegram scenario=telegram-status-command
+@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
@@ -346,7 +346,7 @@ freeform `instructions`, through `Mantis Scenario` (`scenario_id:
 telegram-desktop-proof`), or from a PR comment:
 
 ```text
-@Mantis telegram desktop proof
+@openclaw-mantis telegram desktop proof
 ```
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves the
