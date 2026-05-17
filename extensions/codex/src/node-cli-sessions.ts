@@ -100,6 +100,7 @@ export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInv
             : "Run a new prompt in a local Codex CLI session.",
           severity: "critical",
           toolName: CODEX_CLI_SESSION_RESUME_COMMAND,
+          allowedDecisions: ["allow-once", "deny"],
           agentId: typeof params.agentId === "string" ? params.agentId : undefined,
           sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
           timeoutMs:
@@ -107,7 +108,7 @@ export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInv
               ? ctx.timeoutMs
               : undefined,
         });
-        if (approval?.decision !== "allow-once" && approval?.decision !== "allow-always") {
+        if (approval?.decision !== "allow-once") {
           return {
             ok: false,
             code: "PLUGIN_APPROVAL_REQUIRED",

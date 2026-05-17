@@ -213,6 +213,7 @@ describe("applyPluginNodeInvokePolicy", () => {
               const approval = await ctx.approvals?.request({
                 title: "Sensitive action",
                 description: "Needs approval",
+                allowedDecisions: ["allow-once", "deny"],
               });
               return { ok: true, payload: approval ?? null };
             },
@@ -241,6 +242,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(record?.requestedByConnId).toBe("conn-requester");
     expect(record?.requestedByDeviceId).toBe("device-owner");
     expect(record?.requestedByClientId).toBe("client-owner");
+    expect(record?.request.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "plugin.approval.requested",

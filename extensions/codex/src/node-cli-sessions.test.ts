@@ -216,8 +216,42 @@ describe("codex cli node sessions", () => {
         title: "Resume Codex CLI session",
         severity: "critical",
         toolName: CODEX_CLI_SESSION_RESUME_COMMAND,
+        allowedDecisions: ["allow-once", "deny"],
       }),
     );
+  });
+
+  it("does not treat allow-always as a valid Codex CLI resume approval", async () => {
+    const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
+      entry.commands.includes(CODEX_CLI_SESSION_RESUME_COMMAND),
+    );
+    if (!policy) {
+      throw new Error("expected Codex CLI resume node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
+    const approvals = {
+      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
+    };
+
+    const result = await policy.handle({
+      nodeId: "node-1",
+      command: CODEX_CLI_SESSION_RESUME_COMMAND,
+      params: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        prompt: "continue",
+      },
+      config: {},
+      approvals,
+      invokeNode,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "PLUGIN_APPROVAL_REQUIRED",
+      message: "Codex CLI session resume requires plugin approval.",
+      details: { approvalId: "approval-1", decision: "allow-always" },
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("fails closed when Codex CLI resume approval delivery is unavailable", async () => {

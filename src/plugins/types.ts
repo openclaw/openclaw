@@ -2167,6 +2167,7 @@ export type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
     severity?: "info" | "warning" | "critical";
     toolName?: string;
     toolCallId?: string;
+    allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
     agentId?: string;
     sessionKey?: string;
     timeoutMs?: number;

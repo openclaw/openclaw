@@ -65,6 +65,9 @@ function createApprovalRuntime(params: {
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
+        ...(Array.isArray(input.allowedDecisions)
+          ? { allowedDecisions: input.allowedDecisions }
+          : {}),
         agentId: normalizeOptionalString(input.agentId) ?? null,
         sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
       };
