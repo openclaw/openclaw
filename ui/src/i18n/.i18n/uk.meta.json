@@ -1,9 +1,9 @@
 {
   "fallbackKeys": [],
-  "generatedAt": "2026-05-17T04:23:11.418Z",
+  "generatedAt": "2026-05-17T05:10:32.429Z",
   "locale": "uk",
-  "model": "gpt-5.5",
-  "provider": "openai",
+  "model": "claude-opus-4-6",
+  "provider": "anthropic",
   "sourceHash": "79544002c00e9adfebe5cc0ad3a6ff6393313f6fd7b546e68f0d53110df29914",
   "totalKeys": 1117,
   "translatedKeys": 1117,
