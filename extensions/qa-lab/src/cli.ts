@@ -70,7 +70,13 @@ async function runQaParityReport(opts: {
   await runtime.runQaParityReportCommand(opts);
 }
 
-async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
+async function runQaCoverageReport(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+  tools?: boolean;
+  summary?: string;
+}) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCoverageReportCommand(opts);
 }
@@ -363,13 +369,23 @@ export function registerQaLabCli(program: Command) {
     );
 
   qa.command("coverage")
-    .description("Print the markdown scenario coverage inventory")
+    .description("Print the markdown QA coverage inventory")
     .option("--repo-root <path>", "Repository root to target when writing --output")
     .option("--output <path>", "Write the coverage inventory to this path")
     .option("--json", "Print JSON instead of Markdown", false)
-    .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
-      await runQaCoverageReport(opts);
-    });
+    .option("--tools", "Print runtime tool fixture coverage instead of scenario coverage", false)
+    .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        output?: string;
+        json?: boolean;
+        tools?: boolean;
+        summary?: string;
+      }) => {
+        await runQaCoverageReport(opts);
+      },
+    );
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

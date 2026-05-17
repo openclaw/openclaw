@@ -445,6 +445,28 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       output: ".artifacts/qa-coverage.md",
       json: true,
+      tools: false,
+    });
+  });
+
+  it("routes tool coverage report flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--tools",
+      "--summary",
+      ".artifacts/runtime-summary.json",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      tools: true,
+      json: false,
+      summary: ".artifacts/runtime-summary.json",
     });
   });
 

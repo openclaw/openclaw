@@ -46,6 +46,11 @@ import { readQaScenarioPack } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+import {
+  buildQaToolCoverageReport,
+  renderQaToolCoverageMarkdownReport,
+  type QaToolCoverageSuiteSummary,
+} from "./tool-coverage-report.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 
@@ -694,18 +699,39 @@ export async function runQaCoverageReportCommand(opts: {
   repoRoot?: string;
   output?: string;
   json?: boolean;
+  tools?: boolean;
+  summary?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
   const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
-  const body = opts.json
-    ? `${JSON.stringify(inventory, null, 2)}\n`
-    : renderQaCoverageMarkdownReport(inventory);
+  const scenarios = readQaScenarioPack().scenarios;
+  let body: string;
+  let outputLabel = "QA coverage report";
+  if (opts.tools === true) {
+    const summary = opts.summary?.trim()
+      ? (JSON.parse(
+          await fs.readFile(path.resolve(repoRoot, opts.summary), "utf8"),
+        ) as QaToolCoverageSuiteSummary)
+      : undefined;
+    const report = buildQaToolCoverageReport({ scenarios, summary });
+    body = opts.json
+      ? `${JSON.stringify(report, null, 2)}\n`
+      : renderQaToolCoverageMarkdownReport(report);
+    outputLabel = "QA tool coverage report";
+  } else {
+    if (opts.summary?.trim()) {
+      throw new Error("--summary requires --tools.");
+    }
+    const inventory = buildQaCoverageInventory(scenarios);
+    body = opts.json
+      ? `${JSON.stringify(inventory, null, 2)}\n`
+      : renderQaCoverageMarkdownReport(inventory);
+  }
 
   if (outputPath) {
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, body, "utf8");
-    process.stdout.write(`QA coverage report: ${outputPath}\n`);
+    process.stdout.write(`${outputLabel}: ${outputPath}\n`);
     return;
   }
 

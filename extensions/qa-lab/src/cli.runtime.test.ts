@@ -910,6 +910,13 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "memory.recall");
   });
 
+  it("prints a markdown tool coverage report from runtime tool fixtures", async () => {
+    await runQaCoverageReportCommand({ repoRoot: process.cwd(), tools: true });
+
+    expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
+    expectWriteContains(stdoutWrite, "codex-native-workspace");
+  });
+
   it("resolves character eval paths and passes model refs through", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",
