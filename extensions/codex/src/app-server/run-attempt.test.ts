@@ -219,6 +219,7 @@ function createAppServerHarness(
           handleServerRequest = handler;
           return () => undefined;
         },
+        close: vi.fn(),
       } as never;
     },
   );
@@ -1296,6 +1297,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("closes the app-server client when the active turn exceeds the attempt timeout", async () => {
     const close = vi.fn();
+    const onRunAgentEvent = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
         return threadStartResult("thread-1");
@@ -1322,6 +1324,7 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 100;
+    params.onAgentEvent = onRunAgentEvent;
 
     const result = await runCodexAppServerAttempt(params);
 
@@ -1337,6 +1340,18 @@ describe("runCodexAppServerAttempt", () => {
       { timeoutMs: 5_000 },
     );
     expect(close).toHaveBeenCalledTimes(1);
+    expect(onRunAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.lifecycle",
+      data: expect.objectContaining({
+        phase: "turn_timeout_client_retired",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        reason: "timeout",
+        timeoutMs: 100,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    });
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
@@ -2021,7 +2036,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("does not release the session after only a raw assistant response item", async () => {
+  it("releases the session after a raw assistant response item stalls without turn completion", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2078,11 +2093,188 @@ describe("runCodexAppServerAttempt", () => {
       aborted: result.aborted,
       timedOut: result.timedOut,
       promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
     }).toEqual({
-      aborted: true,
-      timedOut: true,
-      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
     });
+    expect(request).toHaveBeenCalledWith(
+      "turn/interrupt",
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      { timeoutMs: 5_000 },
+    );
+  });
+
+  it("releases after raw assistant completion clears its active assistant item", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 50,
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+      { interval: 1 },
+    );
+    await notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "message", id: "raw-final-1", role: "assistant", status: "inProgress" },
+      },
+    });
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-final-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      },
+    });
+
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
+    });
+  });
+
+  it("keeps raw assistant completion release armed across late assistant notifications", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 50,
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+      { interval: 1 },
+    );
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-final-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      },
+    });
+    await notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "message", id: "raw-final-1", role: "assistant", status: "inProgress" },
+      },
+    });
+    await notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "raw-final-1",
+        delta: "Done.",
+      },
+    });
+
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done.Done."],
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          { timeoutMs: 5_000 },
+        ),
+      { interval: 1 },
+    );
   });
 
   it("keeps waiting when a current-turn item is still active", async () => {
@@ -4524,6 +4716,7 @@ describe("runCodexAppServerAttempt", () => {
           return () => undefined;
         },
         addRequestHandler: () => () => undefined,
+        close: vi.fn(),
       } as never;
     });
 
@@ -4573,6 +4766,7 @@ describe("runCodexAppServerAttempt", () => {
           return () => undefined;
         },
         addRequestHandler: () => () => undefined,
+        close: vi.fn(),
       } as never;
     });
 
@@ -4594,6 +4788,115 @@ describe("runCodexAppServerAttempt", () => {
       ["thread/resume"],
       ["thread/resume", "turn/start"],
     ]);
+  });
+
+  it("reports exhausted startup close retries when the failed client is no longer shared", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const onRunAgentEvent = vi.fn();
+    const requests: string[][] = [];
+    let closeCount = 0;
+    let starts = 0;
+    __testing.setCodexAppServerClientFactoryForTests(async () => {
+      starts += 1;
+      const methods: string[] = [];
+      requests.push(methods);
+      return {
+        request: vi.fn(async (method: string) => {
+          methods.push(method);
+          if (method === "thread/resume") {
+            throw new Error("codex app-server client is closed");
+          }
+          return {};
+        }),
+        close: () => {
+          closeCount += 1;
+        },
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+      } as never;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.onAgentEvent = onRunAgentEvent;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+
+    expect(starts).toBe(3);
+    expect(closeCount).toBe(3);
+    expect(requests).toEqual([["thread/resume"], ["thread/resume"], ["thread/resume"]]);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server connection closed during startup; restarting app-server and retrying",
+      expect.objectContaining({
+        attempt: 1,
+        nextAttempt: 2,
+        maxAttempts: 3,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server connection closed during startup; restarting app-server and retrying",
+      expect.objectContaining({
+        attempt: 2,
+        nextAttempt: 3,
+        maxAttempts: 3,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server connection closed during startup; retries exhausted",
+      expect.objectContaining({
+        attempt: 3,
+        maxAttempts: 3,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    );
+    const lifecycleEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
+      data?: {
+        attempt?: number;
+        closedNonCurrentClient?: boolean;
+        failureClass?: string;
+        phase?: string;
+      };
+      stream?: string;
+    }>;
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({
+            phase: "startup_retry",
+            attempt: 1,
+            failureClass: "app_server_client_closed",
+            closedNonCurrentClient: true,
+          }),
+        }),
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({
+            phase: "startup_retry",
+            attempt: 2,
+            failureClass: "app_server_client_closed",
+            closedNonCurrentClient: true,
+          }),
+        }),
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({
+            phase: "startup_retries_exhausted",
+            attempt: 3,
+            failureClass: "app_server_client_closed",
+            closedNonCurrentClient: true,
+          }),
+        }),
+      ]),
+    );
   });
 
   it("passes native hook relay config on thread start and resume", async () => {

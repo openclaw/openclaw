@@ -40,6 +40,8 @@ let clearSharedCodexAppServerClient: typeof import("./shared-client.js").clearSh
 let clearSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrent;
 let createIsolatedCodexAppServerClient: typeof import("./shared-client.js").createIsolatedCodexAppServerClient;
 let getSharedCodexAppServerClient: typeof import("./shared-client.js").getSharedCodexAppServerClient;
+let retainSharedCodexAppServerClient: typeof import("./shared-client.js").retainSharedCodexAppServerClient;
+let retireSharedCodexAppServerClient: typeof import("./shared-client.js").retireSharedCodexAppServerClient;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 
 async function sendInitializeResult(
@@ -112,6 +114,8 @@ describe("shared Codex app-server client", () => {
       clearSharedCodexAppServerClientIfCurrent,
       createIsolatedCodexAppServerClient,
       getSharedCodexAppServerClient,
+      retainSharedCodexAppServerClient,
+      retireSharedCodexAppServerClient,
       resetSharedCodexAppServerClientForTests,
     } = await import("./shared-client.js"));
   });
@@ -170,6 +174,51 @@ describe("shared Codex app-server client", () => {
 
     await expect(secondList).resolves.toEqual({ models: [] });
     expect(startSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a leased shared app-server immediately but defers closing it until the lease releases", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    const firstClientPromise = getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.125.0 (macOS; test)");
+    const firstClient = await firstClientPromise;
+    const release = retainSharedCodexAppServerClient(firstClient);
+
+    expect(retireSharedCodexAppServerClient(firstClient)).toEqual({
+      clearedSharedClient: true,
+      closedClient: false,
+      deferredSharedClientRetirement: true,
+    });
+    expect(first.process.stdin.destroyed).toBe(false);
+
+    const secondClientPromise = getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
+    const secondClient = await secondClientPromise;
+    expect(secondClient).toBe(second.client);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+
+    release();
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(second.process.stdin.destroyed).toBe(false);
+  });
+
+  it("tolerates retiring a non-current app-server client without close", () => {
+    const client = {
+      request: vi.fn(),
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+
+    expect(retireSharedCodexAppServerClient(client)).toEqual({
+      clearedSharedClient: false,
+      closedClient: false,
+      deferredSharedClientRetirement: false,
+    });
   });
 
   it("does not wait for isolated initialize after a timeout closes the client", async () => {

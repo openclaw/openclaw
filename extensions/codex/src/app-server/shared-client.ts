@@ -17,6 +17,8 @@ type SharedCodexAppServerClientState = {
   client?: CodexAppServerClient;
   promise?: Promise<CodexAppServerClient>;
   key?: string;
+  leases?: WeakMap<CodexAppServerClient, number>;
+  retireWhenIdle?: WeakSet<CodexAppServerClient>;
 };
 
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
@@ -161,6 +163,10 @@ export function clearSharedCodexAppServerClient(): void {
   state.client = undefined;
   state.promise = undefined;
   state.key = undefined;
+  if (client) {
+    state.leases?.delete(client);
+    state.retireWhenIdle?.delete(client);
+  }
   client?.close();
 }
 
@@ -177,7 +183,102 @@ export function clearSharedCodexAppServerClientIfCurrent(
   state.client = undefined;
   state.promise = undefined;
   state.key = undefined;
+  state.leases?.delete(client);
+  state.retireWhenIdle?.delete(client);
   client.close();
+  return true;
+}
+
+export function retainSharedCodexAppServerClient(
+  client: CodexAppServerClient | undefined,
+): () => void {
+  if (!client) {
+    return () => undefined;
+  }
+  const state = getSharedCodexAppServerClientState();
+  if (state.client !== client) {
+    return () => undefined;
+  }
+  state.leases ??= new WeakMap();
+  state.retireWhenIdle ??= new WeakSet();
+  state.leases.set(client, (state.leases.get(client) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const currentCount = state.leases?.get(client) ?? 0;
+    if (currentCount <= 1) {
+      state.leases?.delete(client);
+      if (state.retireWhenIdle?.has(client)) {
+        state.retireWhenIdle.delete(client);
+        closeCodexAppServerClientIfAvailable(client);
+      }
+      return;
+    }
+    state.leases?.set(client, currentCount - 1);
+  };
+}
+
+export function retireSharedCodexAppServerClient(client: CodexAppServerClient | undefined): {
+  clearedSharedClient: boolean;
+  closedClient: boolean;
+  deferredSharedClientRetirement: boolean;
+} {
+  if (!client) {
+    return {
+      clearedSharedClient: false,
+      closedClient: false,
+      deferredSharedClientRetirement: false,
+    };
+  }
+  const state = getSharedCodexAppServerClientState();
+  const leaseCount = state.leases?.get(client) ?? 0;
+  const deferClose = leaseCount > 0;
+  if (state.client === client) {
+    state.client = undefined;
+    state.promise = undefined;
+    state.key = undefined;
+    if (deferClose) {
+      state.retireWhenIdle ??= new WeakSet();
+      state.retireWhenIdle.add(client);
+      return {
+        clearedSharedClient: true,
+        closedClient: false,
+        deferredSharedClientRetirement: true,
+      };
+    }
+    const closedClient = closeCodexAppServerClientIfAvailable(client);
+    return {
+      clearedSharedClient: true,
+      closedClient,
+      deferredSharedClientRetirement: false,
+    };
+  }
+  if (deferClose) {
+    state.retireWhenIdle ??= new WeakSet();
+    state.retireWhenIdle.add(client);
+    return {
+      clearedSharedClient: false,
+      closedClient: false,
+      deferredSharedClientRetirement: true,
+    };
+  }
+  const closedClient = closeCodexAppServerClientIfAvailable(client);
+  return {
+    clearedSharedClient: false,
+    closedClient,
+    deferredSharedClientRetirement: false,
+  };
+}
+
+function closeCodexAppServerClientIfAvailable(client: CodexAppServerClient): boolean {
+  const close = (client as { close?: () => void }).close;
+  if (typeof close !== "function") {
+    return false;
+  }
+  close.call(client);
   return true;
 }
 
@@ -190,6 +291,10 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   state.client = undefined;
   state.promise = undefined;
   state.key = undefined;
+  if (client) {
+    state.leases?.delete(client);
+    state.retireWhenIdle?.delete(client);
+  }
   await client?.closeAndWait(options);
 }
 
