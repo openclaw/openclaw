@@ -6,6 +6,7 @@ import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-ag
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
@@ -369,7 +370,7 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
-  buildCurrentTurnPrompt,
+  buildCurrentInboundPrompt,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -652,7 +653,52 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
-  return stripHistoricalRuntimeContextCustomMessages(normalized);
+  const withoutHistoricalInboundMetadata =
+    stripHistoricalInboundMetadataFromUserMessages(normalized);
+  return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+}
+
+function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    if (message.role !== "user") {
+      return message;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (typeof content === "string") {
+      const stripped = stripInboundMetadata(content);
+      if (stripped === content) {
+        return message;
+      }
+      changed = true;
+      return { ...message, content: stripped } as AgentMessage;
+    }
+    if (!Array.isArray(content)) {
+      return message;
+    }
+    let contentChanged = false;
+    const nextContent = content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const textBlock = block as { type?: unknown; text?: unknown };
+      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+        return block;
+      }
+      const stripped = stripInboundMetadata(textBlock.text);
+      if (stripped === textBlock.text) {
+        return block;
+      }
+      contentChanged = true;
+      return Object.assign({}, block, { text: stripped });
+    });
+    if (!contentChanged) {
+      return message;
+    }
+    changed = true;
+    return { ...message, content: nextContent } as AgentMessage;
+  });
+  return changed ? nextMessages : messages;
 }
 
 function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -1111,7 +1157,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            inboundTurnKind: params.currentTurnKind,
+            inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
@@ -1119,6 +1165,7 @@ export async function runEmbeddedAttempt(
             authProfileStore: params.authProfileStore,
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
             onToolOutcome: params.onToolOutcome,
+            skillsSnapshot: skillsSnapshotForRun,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -3267,8 +3314,8 @@ export async function runEmbeddedAttempt(
               ? "model-prompt"
               : "runtime-event",
           });
-          const promptForModel = buildCurrentTurnPrompt({
-            context: promptSubmission.runtimeOnly ? undefined : params.currentTurnContext,
+          const promptForModel = buildCurrentInboundPrompt({
+            context: promptSubmission.runtimeOnly ? undefined : params.currentInboundContext,
             prompt: promptSubmission.prompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
@@ -3293,7 +3340,7 @@ export async function runEmbeddedAttempt(
             : undefined;
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
-              ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+              ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
               promptChars: promptForModel.length,
               runtimeContextChars: promptSubmission.runtimeOnly
                 ? (runtimeSystemContext?.length ?? 0)

@@ -267,6 +267,27 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("passes runtime-pair suite selection through to the host runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: ["pi", "codex"],
+    });
+  });
+
   it("drops blank suite model refs so provider defaults apply", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -783,6 +804,76 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("writes a runtime-axis parity report from one summary", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-parity-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "Approval turn tool followthrough",
+              status: "fail",
+              steps: [],
+              runtimeParity: {
+                scenarioId: "approval-turn-tool-followthrough",
+                drift: "tool-call-shape",
+                driftDetails: "tool call 1 differs",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          counts: { total: 1, passed: 0, failed: 1 },
+          run: {
+            providerMode: "mock-openai",
+            primaryModel: "openai/gpt-5.5",
+            runtimePair: ["pi", "codex"],
+          },
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        runtimeAxis: true,
+        summary: "runtime-summary.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity report:"),
+      );
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity verdict: fail"),
+      );
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("prints a markdown coverage report from scenario metadata", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd() });
 
@@ -948,6 +1039,24 @@ describe("qa cli runtime", () => {
       disk: "24G",
     });
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
+  it("passes runtime-pair suite selection through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runner: "multipass",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "codex,pi",
+      allowFailures: true,
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        runtimePair: ["pi", "codex"],
+      }),
+    );
   });
 
   it("passes live suite selection through to the multipass runner", async () => {

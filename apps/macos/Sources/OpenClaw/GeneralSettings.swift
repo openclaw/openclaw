@@ -44,7 +44,7 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Show Dock icon",
-                        subtitle: "Keep OpenClaw visible in the Dock instead of menu-bar-only mode.",
+                        subtitle: "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
                         binding: self.$state.showDockIcon)
 
                     SettingsToggleRow(
@@ -285,7 +285,7 @@ struct GeneralSettings: View {
                     disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(
-                "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
+                "Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)

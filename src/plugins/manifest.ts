@@ -1168,7 +1168,7 @@ function normalizeManifestProviderRequest(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
-function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
+export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
     return undefined;
   }

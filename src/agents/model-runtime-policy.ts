@@ -180,6 +180,13 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
+  if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
+    const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
+    if (forcedRuntime === "pi" || forcedRuntime === "codex") {
+      return { policy: { id: forcedRuntime }, source: "model" };
+    }
+  }
+
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({ ...params, matchKind: "exact" });
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
