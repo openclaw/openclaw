@@ -130,7 +130,7 @@ describe("tailscale helpers", () => {
 
       expect(host).toBe("host.tailnet.ts.net");
       expect(loggedFailures).toEqual([]);
-      expect(exec.mock.calls.map((call) => call[2]?.suppressFailureLog)).toEqual([true, undefined]);
+      expect(exec.mock.calls.map((call) => call[2]?.suppressFailureLog)).toEqual([true, true]);
     } finally {
       vi.useRealTimers();
     }
