@@ -6414,6 +6414,85 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("keeps native hook relay config as the final thread config patch", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-hooks");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const finalConfigPatch = {
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [{ type: "command", command: "openclaw-native-hook-relay", timeout: 5 }],
+        },
+      ],
+    };
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        "features.hooks": false,
+        "hooks.PreToolUse": [],
+        ...createPluginAppConfigPatch(),
+      },
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+    const pluginThreadConfig = {
+      enabled: true,
+      inputFingerprint: "plugin-apps-input-1",
+      build: buildPluginThreadConfig,
+    };
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.hooks": false },
+      finalConfigPatch,
+      pluginThreadConfig,
+    });
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.hooks": false },
+      finalConfigPatch,
+      pluginThreadConfig: {
+        ...pluginThreadConfig,
+        enabledPluginConfigKeys: ["google-calendar"],
+      },
+    });
+
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls[0]?.[1].config).toMatchObject({
+      "features.hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+      "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
+      ...createPluginAppConfigPatch(),
+    });
+    expect(requestCalls[1]?.[1].config).toMatchObject({
+      "features.hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+      "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
+    });
+  });
+
   it("revalidates compatible plugin app bindings without resending app config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
