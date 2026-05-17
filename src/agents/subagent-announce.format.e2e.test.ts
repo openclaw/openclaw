@@ -1748,7 +1748,7 @@ describe("subagent announce formatting", () => {
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
-      steer: async () => "steered",
+      steer: async () => ({ status: "steered" }),
       direct,
     });
 
@@ -1760,7 +1760,7 @@ describe("subagent announce formatting", () => {
   it("reports cron announce as delivered when it successfully steers into an active requester run", async () => {
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
-      steer: async () => "steered",
+      steer: async () => ({ status: "steered" }),
       direct: async () => ({ delivered: false, path: "direct" as const }),
     });
 
@@ -1772,7 +1772,7 @@ describe("subagent announce formatting", () => {
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
-      steer: async () => "dropped",
+      steer: async () => ({ status: "dropped" }),
       direct,
     });
 
@@ -1863,7 +1863,7 @@ describe("subagent announce formatting", () => {
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: true,
       direct,
-      steer: async () => "steered",
+      steer: async () => ({ status: "steered" }),
     });
 
     expect(delivery.delivered).toBe(true);
