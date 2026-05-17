@@ -92,8 +92,40 @@ export async function extractBasicHtmlContent(params: {
     const text =
       stripInvisibleUnicode(markdownToText(rendered.text)) ||
       stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
-    return text ? { text, title: rendered.title } : null;
+    if (!text) return null;
+    if (!hasMeaningfulBodyContent(text, rendered.title)) return null;
+    return { text, title: rendered.title };
   }
   const text = stripInvisibleUnicode(rendered.text);
-  return text ? { text, title: rendered.title } : null;
+  if (!text) return null;
+  if (!hasMeaningfulBodyContent(text, rendered.title)) return null;
+  return { text, title: rendered.title };
+}
+
+/**
+ * Checks whether the extracted text contains meaningful body content beyond
+ * just the page title and common SPA shell placeholders (e.g. empty app divs).
+ * This prevents title-only SPA shells from being accepted as valid content
+ * and blocking richer provider-based extraction (e.g. Firecrawl).
+ */
+function hasMeaningfulBodyContent(text: string, title?: string): boolean {
+  // Remove the title from the text to see if there's real body content left
+  let bodyOnly = text;
+  if (title) {
+    // Remove all occurrences of the title text
+    const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    bodyOnly = bodyOnly.replace(new RegExp(escapedTitle, "gi"), "");
+  }
+  // Remove common SPA placeholder patterns
+  bodyOnly = bodyOnly
+    .replace(/\bapp\b/gi, "")
+    .replace(/\broot\b/gi, "")
+    .replace(/\bloading\.\.\.\b/gi, "")
+    .replace(/\bshell\b/gi, "")
+    .replace(/\bapplication\b/gi, "")
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // If there's at least 10 non-title, non-placeholder characters, consider it meaningful
+  return bodyOnly.length >= 10;
 }

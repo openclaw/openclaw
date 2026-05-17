@@ -460,7 +460,7 @@ describe("web_fetch extraction fallbacks", () => {
     ).rejects.toThrow("Readability, Test Fetch, and basic HTML cleanup returned no content");
   });
 
-  it("falls back to basic HTML cleanup after readability and before giving up", async () => {
+  it("rejects title-only SPA shell as no meaningful content", async () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
         Promise.resolve(
@@ -474,12 +474,32 @@ describe("web_fetch extraction fallbacks", () => {
     const tool = createFetchTool({
       firecrawl: { enabled: false },
     });
-    const result = await executeFetch(tool, { url: "https://example.com/shell" });
+    await expect(
+      executeFetch(tool, { url: "https://example.com/shell" }),
+    ).rejects.toThrow("Readability, Test Fetch, and basic HTML cleanup returned no content");
+  });
+
+  it("extracts simple HTML body content via basic HTML cleanup", async () => {
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Simple Page</title></head><body><p>This is a paragraph with actual content that should be extracted successfully.</p><p>Another paragraph with more text.</p></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/simple" });
     const details = result?.details as { extractor?: string; text?: string; title?: string };
 
     expect(details.extractor).toBe("raw-html");
-    expect(details.text).toContain("Shell App");
-    expect(details.title).toContain("Shell App");
+    expect(details.text).toContain("actual content that should be extracted");
+    expect(details.text).toContain("Another paragraph");
+    expect(details.title).toContain("Simple Page");
   });
 
   it("uses the provider fallback when direct fetch fails", async () => {
