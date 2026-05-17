@@ -88,18 +88,19 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
-  it("uses the Docker target platform for pnpm install and prune", async () => {
+  it("uses the Docker target platform for pnpm install, fetch, and prune", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
 
     expect(dockerfile).toContain("pnpm install --frozen-lockfile \\");
+    expect(dockerfile).toContain("pnpm fetch --prod \\");
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
     expect(dockerfile).toContain("--config.offline=true");
-    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
+    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(3);
     expect(
       dockerfile.split("--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"").length -
         1,
-    ).toBe(2);
-    expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(2);
+    ).toBe(3);
+    expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(3);
   });
 
   it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
