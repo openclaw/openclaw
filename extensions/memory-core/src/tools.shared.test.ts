@@ -137,21 +137,18 @@ describe("searchMemoryCorpusSupplements engineCandidates passthrough", () => {
       search: async (params): Promise<MemoryCorpusSearchResult[]> => {
         const candidates = params.engineCandidates ?? [];
         // Reverse the order to demonstrate the supplement is in control.
-        return candidates
-          .slice()
-          .reverse()
-          .map(
-            (c, i): MemoryCorpusSearchResult => ({
-              corpus: "reranker-style",
-              path: c.path,
-              score: 1 - i * 0.1,
-              snippet: c.snippet,
-              startLine: c.startLine,
-              endLine: c.endLine,
-              source: c.source,
-              provenanceLabel: "reranker-style",
-            }),
-          );
+        return candidates.toReversed().map(
+          (c, i): MemoryCorpusSearchResult => ({
+            corpus: "reranker-style",
+            path: c.path,
+            score: 1 - i * 0.1,
+            snippet: c.snippet,
+            startLine: c.startLine,
+            endLine: c.endLine,
+            source: c.source,
+            provenanceLabel: "reranker-style",
+          }),
+        );
       },
       get: async () => null,
     });
