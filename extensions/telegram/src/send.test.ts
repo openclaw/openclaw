@@ -2052,6 +2052,43 @@ describe("sendMessageTelegram", () => {
     expect(logs).not.toContain(body);
   });
 
+  it("logs threadless outbound text delivery after missing-thread fallback", async () => {
+    const logFile = captureInfoLogs();
+    const chatId = "-1001234567890";
+    const body = "fallback reply body should stay private";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(threadErr)
+      .mockResolvedValueOnce({
+        message_id: 322,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(`telegram:group:${chatId}:topic:271`, body, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "ops",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, body, {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, body, {
+      parse_mode: "HTML",
+    });
+    const logs = capturedLogText(logFile);
+    expect(logs).toContain("outbound send ok");
+    expect(logs).toContain("messageId=322");
+    expect(logs).not.toContain("threadId=271");
+    expect(logs).not.toContain(body);
+  });
+
   it("logs successful outbound media delivery without caption or media location", async () => {
     const logFile = captureInfoLogs();
     const chatId = "123";
@@ -2125,6 +2162,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries media sends without message_thread_id when thread is missing", async () => {
+    const logFile = captureInfoLogs();
     const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi
@@ -2172,6 +2210,10 @@ describe("sendMessageTelegram", () => {
       },
     );
     expect(res.messageId).toBe("59");
+    const logs = capturedLogText(logFile);
+    expect(logs).toContain("outbound send ok");
+    expect(logs).toContain("messageId=59");
+    expect(logs).not.toContain("threadId=271");
   });
 
   it("defaults outbound media uploads to 100MB", async () => {

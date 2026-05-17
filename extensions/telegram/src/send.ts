@@ -584,9 +584,9 @@ async function withTelegramThreadFallback<
   verbose: boolean | undefined,
   allowThreadlessRetry: boolean,
   attempt: (effectiveParams: TParams, effectiveLabel: string) => Promise<T>,
-): Promise<T> {
+): Promise<{ result: T; acceptedParams: TParams }> {
   try {
-    return await attempt(params, label);
+    return { result: await attempt(params, label), acceptedParams: params };
   } catch (err) {
     // Do not widen this fallback to cover "chat not found".
     // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
@@ -603,7 +603,10 @@ async function withTelegramThreadFallback<
       );
     }
     const retriedParams = removeMessageThreadIdParam(params);
-    return await attempt(retriedParams, `${label}-threadless`);
+    return {
+      result: await attempt(retriedParams, `${label}-threadless`),
+      acceptedParams: retriedParams,
+    };
   }
 }
 
@@ -763,17 +766,22 @@ export async function sendMessageTelegram(
   ): Promise<{ messageId: string; chatId: string }> => {
     let lastMessageId = "";
     let lastChatId = chatId;
+    let lastAcceptedParams: TelegramThreadScopedParams | undefined;
     let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
       if (!chunk) {
         continue;
       }
-      const res = await sendTelegramTextChunk(chunk, buildTextParams(index === chunks.length - 1));
+      const { result: res, acceptedParams } = await sendTelegramTextChunk(
+        chunk,
+        buildTextParams(index === chunks.length - 1),
+      );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
       lastMessageId = String(messageId);
       lastChatId = String(res?.chat?.id ?? chatId);
+      lastAcceptedParams = acceptedParams;
       sentChunkCount += 1;
     }
     if (lastMessageId) {
@@ -783,7 +791,7 @@ export async function sendMessageTelegram(
         messageId: lastMessageId,
         operation: "sendMessage",
         deliveryKind: "text",
-        messageThreadId: threadParams.message_thread_id,
+        messageThreadId: lastAcceptedParams?.message_thread_id,
         replyToMessageId: opts.replyToMessageId,
         silent: opts.silent,
         chunkCount: sentChunkCount,
@@ -1015,7 +1023,7 @@ export async function sendMessageTelegram(
       };
     })();
 
-    const result = await sendMedia(mediaSender.label, mediaSender.sender);
+    const { result, acceptedParams } = await sendMedia(mediaSender.label, mediaSender.sender);
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
@@ -1028,7 +1036,7 @@ export async function sendMessageTelegram(
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join("")}`,
       deliveryKind: mediaSender.label,
-      messageThreadId: threadParams.message_thread_id,
+      messageThreadId: acceptedParams?.message_thread_id,
       replyToMessageId: opts.replyToMessageId,
       silent: opts.silent,
     });
@@ -1598,7 +1606,7 @@ export async function sendStickerTelegram(
 
   const stickerParams = hasThreadParams ? threadParams : undefined;
 
-  const result = await withTelegramThreadFallback(
+  const { result } = await withTelegramThreadFallback(
     stickerParams,
     "sticker",
     opts.verbose,
@@ -1706,7 +1714,7 @@ export async function sendPollTelegram(
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
 
-  const result = await withTelegramThreadFallback(
+  const { result } = await withTelegramThreadFallback(
     pollParams,
     "poll",
     opts.verbose,
