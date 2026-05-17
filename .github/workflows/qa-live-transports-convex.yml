@@ -198,7 +198,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model openai/gpt-5.5-alt \
-            --output-dir .artifacts/qa-e2e/gpt54
+            --output-dir .artifacts/qa-e2e/openai-candidate
 
       - name: Run Opus 4.7 lane
         run: |
@@ -207,15 +207,15 @@ jobs:
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model anthropic/claude-opus-4-7 \
-            --alt-model anthropic/claude-sonnet-4-7 \
-            --output-dir .artifacts/qa-e2e/opus46
+            --alt-model anthropic/claude-sonnet-4-6 \
+            --output-dir .artifacts/qa-e2e/anthropic-baseline
 
       - name: Generate parity report
         run: |
           pnpm openclaw qa parity-report \
             --repo-root . \
-            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
-            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
             --baseline-label anthropic/claude-opus-4-7 \
             --output-dir .artifacts/qa-e2e/parity
@@ -565,8 +565,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
             --fast \
             --credential-source convex \
             --credential-role ci \

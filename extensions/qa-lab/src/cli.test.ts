@@ -346,9 +346,9 @@ describe("qa cli registration", () => {
       "--provider-mode",
       "live-frontier",
       "--model",
-      "openai/gpt-5.4",
+      "openai/gpt-5.5",
       "--alt-model",
-      "openai/gpt-5.4",
+      "openai/gpt-5.5",
       "--scenario",
       "slack-canary",
       "--credential-source",
@@ -360,7 +360,7 @@ describe("qa cli registration", () => {
     ]);
 
     expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
-      alternateModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.5",
       crabboxBin: "/tmp/crabbox",
       credentialRole: "maintainer",
       credentialSource: "env",
@@ -371,7 +371,7 @@ describe("qa cli registration", () => {
       leaseId: "cbx_123abc",
       machineClass: "beast",
       outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       provider: "hetzner",
       providerMode: "live-frontier",
       repoRoot: "/tmp/openclaw-repo",
