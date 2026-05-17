@@ -235,8 +235,7 @@ function scanEntryForOwner(params: {
   const authProfilePrefixes = normalizePrefixList(params.owner.authProfilePrefixes);
   const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
   const routeRuntime = normalizeString(params.route?.runtime);
-  const routeAllowsOwnerRuntime =
-    routeRuntime !== undefined && runtimeIds.has(normalizeProviderId(routeRuntime));
+  const routeRuntimeId = routeRuntime ? normalizeProviderId(routeRuntime) : undefined;
   const reasons: string[] = [];
   const pinnedRuntimeKeys: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
@@ -280,17 +279,21 @@ function scanEntryForOwner(params: {
 
   const explicitOwnedOverride =
     directOverrideIsOwned && directOverrideSource !== undefined && directOverrideSource !== "auto";
-  if (!routeAllowsOwnerRuntime && !explicitOwnedOverride) {
-    const harnessId = normalizeString(params.entry.agentHarnessId);
-    if (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) {
-      addReason(reasons, "pinned runtime");
-      pinnedRuntimeKeys.push("agentHarnessId");
+  if (!explicitOwnedOverride) {
+    for (const key of ["agentHarnessId", "agentRuntimeOverride"] as const) {
+      const runtimeId = normalizeString(params.entry[key]);
+      const normalizedRuntimeId = runtimeId ? normalizeProviderId(runtimeId) : undefined;
+      if (
+        normalizedRuntimeId &&
+        runtimeIds.has(normalizedRuntimeId) &&
+        normalizedRuntimeId !== routeRuntimeId
+      ) {
+        pinnedRuntimeKeys.push(key);
+      }
     }
-    const runtimeOverride = normalizeString(params.entry.agentRuntimeOverride);
-    if (runtimeOverride && runtimeIds.has(normalizeProviderId(runtimeOverride))) {
-      addReason(reasons, "pinned runtime");
-      pinnedRuntimeKeys.push("agentRuntimeOverride");
-    }
+  }
+  if (pinnedRuntimeKeys.length > 0) {
+    addReason(reasons, "pinned runtime");
   }
   if (!routeAllowsOwner && !explicitOwnedOverride) {
     const runtimeModel = normalizeString(params.entry.model);

@@ -237,7 +237,7 @@ describe("doctor session state provider routes", () => {
     ]);
   });
 
-  it("clears stale runtime pins while preserving configured owner model state", () => {
+  it("keeps owner state when owner remains in the configured route", () => {
     const sessionKey = "agent:main:telegram:direct:3";
     const entry: Record<string, unknown> = {
       sessionId: "sess-configured-codex",
@@ -260,33 +260,12 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "github-copilot",
           configuredModelRefs: ["github-copilot/gpt-5-mini", "openai-codex/gpt-5.4"],
-          runtime: "pi",
+          runtime: "codex",
         },
       },
     });
 
-    expect(scan.manualReview).toStrictEqual([]);
-    expect(scan.repairs).toEqual([
-      {
-        key: sessionKey,
-        ownerId: "codex",
-        ownerLabel: "Codex",
-        cliSessionKeys: ["codex-cli"],
-        pinnedRuntimeKeys: ["agentHarnessId"],
-        reasons: ["pinned runtime"],
-      },
-    ]);
-
-    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
-    expect(entry.updatedAt).toBe(123);
-    expect(entry.providerOverride).toBe("openai-codex");
-    expect(entry.modelOverride).toBe("gpt-5.4");
-    expect(entry.modelProvider).toBe("openai-codex");
-    expect(entry.model).toBe("gpt-5.4");
-    expect(entry.agentHarnessId).toBeUndefined();
-    expect(entry.cliSessionBindings).toStrictEqual({
-      "codex-cli": { sessionId: "codex-session-3" },
-    });
+    expect(scan).toEqual({ repairs: [], manualReview: [] });
   });
 
   it.each([
@@ -327,6 +306,48 @@ describe("doctor session state provider routes", () => {
     expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 456 })).toBe(true);
     expect(entry.sessionId).toBe(sessionId);
     expect(entry.updatedAt).toBe(456);
+    expect(entry.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("clears stale CLI runtime pins even when the provider still matches", () => {
+    const sessionKey = "agent:main:telegram:direct:same-provider";
+    const entry: Record<string, unknown> = {
+      sessionId: "sess-anthropic-pi",
+      updatedAt: 1,
+      modelProvider: "anthropic",
+      model: "claude-opus-4-7",
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [anthropicOwner],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "anthropic",
+          configuredModelRefs: ["anthropic/claude-opus-4-7"],
+          runtime: "pi",
+        },
+      },
+    });
+
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: "anthropic",
+        ownerLabel: "Anthropic",
+        cliSessionKeys: ["claude-cli"],
+        pinnedRuntimeKeys: ["agentRuntimeOverride"],
+        reasons: ["pinned runtime"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 789 })).toBe(true);
+    expect(entry.sessionId).toBe("sess-anthropic-pi");
+    expect(entry.updatedAt).toBe(789);
+    expect(entry.modelProvider).toBe("anthropic");
+    expect(entry.model).toBe("claude-opus-4-7");
     expect(entry.agentRuntimeOverride).toBeUndefined();
   });
 
