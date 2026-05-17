@@ -436,6 +436,60 @@ describe("resolveSubagentCompletionOrigin", () => {
   });
 });
 
+describe("deliverSubagentAnnouncement thread-bound subagent completion delivery", () => {
+  it("delivers nested completion turns to the requester subagent's bound thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "PR topic digest" }],
+        deliveryStatus: { requested: true, attempted: true, status: "sent", succeeded: true },
+      },
+    });
+    const requesterThreadOrigin = {
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "default",
+      threadId: "1176",
+    } as const;
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-subagent-session",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:subagent:topic-parent",
+      targetRequesterSessionKey: "agent:main:subagent:topic-parent",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: { channel: "webchat", to: "internal:parent" },
+      requesterSessionOrigin: requesterThreadOrigin,
+      completionDirectOrigin: requesterThreadOrigin,
+      directOrigin: { channel: "webchat", to: "internal:parent" },
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-thread-bound-subagent-completion",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      sessionKey: "agent:main:subagent:topic-parent",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "telegram",
+      accountId: "default",
+      to: "-1001234567890",
+      threadId: "1176",
+    });
+  });
+});
+
 describe("deliverSubagentAnnouncement active requester steering", () => {
   async function deliverSteeredAnnouncement(params: {
     mode?: "followup" | "collect" | "interrupt";

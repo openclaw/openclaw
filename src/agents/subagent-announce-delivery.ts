@@ -8,6 +8,7 @@ import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
+  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
@@ -525,6 +526,31 @@ function stripNonDeliverableChannelForCompletionOrigin(
   return normalizeDeliveryContext(rest);
 }
 
+function isDeliverableThreadOrigin(context?: DeliveryContext): context is DeliveryContext & {
+  channel: string;
+  to: string;
+  threadId: string | number;
+} {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.channel || !normalized.to || normalized.threadId == null) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(normalized.channel);
+  return Boolean(channel && isDeliverableMessageChannel(channel));
+}
+
+function resolveThreadBoundSubagentCompletionOrigin(
+  ...candidates: Array<DeliveryContext | undefined>
+): DeliveryContext | undefined {
+  for (const candidate of candidates) {
+    const normalized = normalizeDeliveryContext(candidate);
+    if (isDeliverableThreadOrigin(normalized)) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
 async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
   targetRequesterSessionKey: string;
@@ -575,14 +601,24 @@ async function sendSubagentAnnounceDirectly(params: {
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
     const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
-    const deliveryTarget = !params.requesterIsSubagent
-      ? resolveExternalBestEffortDeliveryTarget({
-          channel: effectiveDirectOrigin?.channel,
-          to: effectiveDirectOrigin?.to,
-          accountId: effectiveDirectOrigin?.accountId,
-          threadId: effectiveDirectOrigin?.threadId,
-        })
-      : { deliver: false };
+    const storedRequesterOrigin = deliveryContextFromSession(requesterEntry);
+    const threadBoundSubagentOrigin = params.requesterIsSubagent
+      ? resolveThreadBoundSubagentCompletionOrigin(
+          effectiveDirectOrigin,
+          requesterSessionOrigin,
+          storedRequesterOrigin,
+        )
+      : undefined;
+    const deliveryOrigin = threadBoundSubagentOrigin ?? effectiveDirectOrigin;
+    const deliveryTarget =
+      !params.requesterIsSubagent || threadBoundSubagentOrigin
+        ? resolveExternalBestEffortDeliveryTarget({
+            channel: deliveryOrigin?.channel,
+            to: deliveryOrigin?.to,
+            accountId: deliveryOrigin?.accountId,
+            threadId: deliveryOrigin?.threadId,
+          })
+        : { deliver: false };
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
       : undefined;
