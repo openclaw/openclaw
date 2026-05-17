@@ -30,21 +30,27 @@ export function resolveCacheRetention(
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
 
-  if (!family && !googleEligible) {
-    return undefined;
-  }
-
+  // Honor an explicit user-provided cacheRetention regardless of provider
+  // family. OpenAI-compatible completions backends (oMLX, llama.cpp, etc.)
+  // opt in to prompt caching via compat.supportsPromptCacheKey: true, and
+  // their users set cacheRetention to control prefix caching. Dropping the
+  // explicit value silently here meant the transport layer never received
+  // the user's choice (issue #81281).
   const newVal = extraParams?.cacheRetention;
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
   }
 
   const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m") {
+  if (legacy === "5m" && (family || googleEligible)) {
     return "short";
   }
-  if (legacy === "1h") {
+  if (legacy === "1h" && (family || googleEligible)) {
     return "long";
+  }
+
+  if (!family && !googleEligible) {
+    return undefined;
   }
 
   return family === "anthropic-direct" ? "short" : undefined;

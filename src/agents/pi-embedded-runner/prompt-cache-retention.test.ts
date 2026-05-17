@@ -30,6 +30,50 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("passes explicit cacheRetention through for openai-completions providers (issue #81281)", () => {
+    // Regression: openai-completions providers with prefix-caching backends
+    // (oMLX, llama.cpp, etc.) configure compat.supportsPromptCacheKey: true
+    // and cacheRetention: "long" but the wrapper was silently dropping the
+    // user's explicit cacheRetention because the provider is neither in the
+    // anthropic family nor google-eligible.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+      ),
+    ).toBe("long");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "short" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+      ),
+    ).toBe("none");
+  });
+
+  it("returns undefined for openai-completions without explicit cacheRetention", () => {
+    // Without an explicit user choice, openai-completions providers fall back
+    // to the transport-level default ("short") rather than receiving a
+    // wrapper-injected value.
+    expect(
+      resolveCacheRetention(undefined, "omlx-local", "openai-completions", "local_model"),
+    ).toBeUndefined();
+    expect(
+      resolveCacheRetention({}, "omlx-local", "openai-completions", "local_model"),
+    ).toBeUndefined();
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({
