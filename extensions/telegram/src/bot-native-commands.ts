@@ -71,7 +71,7 @@ import {
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
-  extractTelegramForumFlag,
+  extractTelegramMessageForumFlag,
   isTelegramCommandsAllowFromConfigured,
   resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
@@ -377,7 +377,7 @@ async function resolveTelegramNativeCommandThreadContext(params: {
     chatId,
     chatType: msg.chat.type,
     isGroup,
-    isForum: extractTelegramForumFlag(msg.chat),
+    isForum: extractTelegramMessageForumFlag(msg),
     getChat,
   });
   const threadSpec = resolveTelegramThreadSpec({

@@ -8,6 +8,7 @@ import {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  extractTelegramMessageForumFlag,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
@@ -32,6 +33,28 @@ describe("resolveTelegramForumThreadId", () => {
     { isForum: true, messageThreadId: 99, expected: 99 },
   ])("resolves forum topic ids", ({ expected, ...params }) => {
     expect(resolveTelegramForumThreadId(params)).toBe(expected);
+  });
+});
+
+describe("extractTelegramMessageForumFlag", () => {
+  it("uses is_topic_message as a forum hint when chat.is_forum is omitted", () => {
+    expect(
+      extractTelegramMessageForumFlag({
+        chat: { id: -100123, type: "supergroup" },
+        is_topic_message: true,
+        message_thread_id: 42,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps explicit chat.is_forum metadata ahead of topic hints", () => {
+    expect(
+      extractTelegramMessageForumFlag({
+        chat: { id: -100123, type: "supergroup", is_forum: false },
+        is_topic_message: true,
+        message_thread_id: 42,
+      }),
+    ).toBe(false);
   });
 });
 

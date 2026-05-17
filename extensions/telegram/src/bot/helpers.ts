@@ -121,6 +121,22 @@ export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   return typeof forum === "boolean" ? forum : undefined;
 }
 
+export function extractTelegramMessageForumFlag(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const message = value as { chat?: unknown; is_topic_message?: unknown };
+  const chatForum = extractTelegramForumFlag(message.chat);
+  if (typeof chatForum === "boolean") {
+    return chatForum;
+  }
+  const chatType =
+    message.chat && typeof message.chat === "object"
+      ? (message.chat as { type?: unknown }).type
+      : undefined;
+  return chatType === "supergroup" && message.is_topic_message === true ? true : undefined;
+}
+
 export async function resolveTelegramForumFlag(params: {
   chatId: string | number;
   chatType?: Chat["type"];

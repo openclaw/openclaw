@@ -83,6 +83,7 @@ import {
   hasBotMention,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  extractTelegramMessageForumFlag,
   isTelegramCommandsAllowFromConfigured,
   resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
@@ -1887,7 +1888,7 @@ export const registerTelegramHandlers = ({
         chatId,
         chatType: callbackMessage.chat.type,
         isGroup,
-        isForum: callbackMessage.chat.is_forum,
+        isForum: extractTelegramMessageForumFlag(callbackMessage),
         getChat,
       });
       const senderId = callback.from?.id ? String(callback.from.id) : "";
@@ -2547,7 +2548,7 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       chatType: msg.chat.type,
       isGroup,
-      isForum: msg.chat.is_forum,
+      isForum: extractTelegramMessageForumFlag(msg),
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
@@ -2681,7 +2682,7 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       chatType: msg.chat.type,
       isGroup,
-      isForum: msg.chat.is_forum,
+      isForum: extractTelegramMessageForumFlag(msg),
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);

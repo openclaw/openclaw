@@ -1061,6 +1061,37 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
   });
 
+  it("targets topic sessions for native commands when Telegram omits chat.is_forum", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: { agentId: "zu" },
+      }),
+    });
+    const ctx = createTelegramTopicCommandContext();
+    delete (ctx.message.chat as { is_forum?: boolean }).is_forum;
+    await handler({
+      ...ctx,
+      message: {
+        ...ctx.message,
+        is_topic_message: true,
+      },
+    });
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string; OriginatingTo?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
+      "agent:zu:telegram:group:-1001234567890:topic:42",
+    );
+    expect(dispatchCall?.ctx?.OriginatingTo).toBe("telegram:-1001234567890:topic:42");
+  });
+
   it("does not mark paired Telegram DM allowlist entries as native group command owners", async () => {
     const { handler, sendMessage } = registerAndResolveStatusHandler({
       cfg: {},

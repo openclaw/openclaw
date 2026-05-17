@@ -30,7 +30,7 @@ import {
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
-  extractTelegramForumFlag,
+  extractTelegramMessageForumFlag,
   resolveTelegramForumFlag,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
@@ -158,7 +158,7 @@ export const buildTelegramMessageContext = async ({
     chatId,
     chatType: msg.chat.type,
     isGroup,
-    isForum: extractTelegramForumFlag(msg.chat),
+    isForum: extractTelegramMessageForumFlag(msg),
     getChat: getChatApi,
   });
   const threadSpec = resolveTelegramThreadSpec({

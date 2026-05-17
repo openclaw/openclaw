@@ -75,6 +75,30 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
   });
 
+  it("routes topic messages when Telegram omits chat.is_forum but sets is_topic_message", async () => {
+    const message = buildForumMessage(3);
+    delete (message.chat as { is_forum?: boolean }).is_forum;
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        ...message,
+        is_topic_message: true,
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: { agentId: "zu" },
+      }),
+      botApi: {
+        getChat: vi.fn(async () => {
+          throw new Error("lookup unavailable");
+        }),
+      },
+    });
+
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:3");
+  });
+
   it("different topics route to different agents", async () => {
     const buildForTopic = async (threadId: number, agentId: string) =>
       await buildForumContext({ threadId, topicConfig: { agentId } });
