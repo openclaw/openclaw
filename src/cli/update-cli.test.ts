@@ -1176,6 +1176,44 @@ describe("update-cli", () => {
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
   });
 
+  it("post-core resume mode prefers post-doctor disk install records over the stale parent snapshot", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-disk-records");
+    const recordsPath = path.join(resultDir, "plugin-install-records.json");
+    await fs.mkdir(resultDir, { recursive: true });
+    await fs.writeFile(
+      recordsPath,
+      `${JSON.stringify({
+        stale: {
+          source: "npm",
+          spec: "@openclaw/stale@1.0.0",
+          installPath: "/tmp/stale-plugin",
+        },
+      })}\n`,
+      "utf-8",
+    );
+    const postDoctorRecords = {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@2026.5.17",
+        installPath: "/tmp/codex-plugin",
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: recordsPath,
+      },
+      async () => {
+        await updateCommand({ json: true, restart: false });
+      },
+    );
+
+    expect(syncPluginCall()?.config?.plugins?.installs).toEqual(postDoctorRecords);
+  });
+
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
