@@ -1097,8 +1097,8 @@ async function runImageDescribe(params: {
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const isRemoteUrl = /^https?:\/\//i.test(filePath.trim());
-      const resolvedPath = isRemoteUrl ? filePath.trim() : path.resolve(filePath);
+      const resolvedPath = resolveImageDescribeInput(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
@@ -1511,6 +1511,11 @@ async function runTtsProviders(transport: CapabilityTransport) {
     })),
     active,
   };
+}
+
+function resolveImageDescribeInput(filePath: string): string {
+  const trimmed = filePath.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
 }
 
 async function runTtsPersonas(transport: CapabilityTransport) {

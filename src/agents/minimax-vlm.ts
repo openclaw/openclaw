@@ -8,24 +8,39 @@ type MinimaxBaseResp = {
 };
 
 export function isMinimaxVlmProvider(provider: string): boolean {
-  return provider === "minimax" || provider === "minimax-portal";
+  const normalized = provider.trim().toLowerCase();
+  return (
+    normalized === "minimax" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal" ||
+    normalized === "minimax-portal-cn"
+  );
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
   return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
 }
 
+function isMinimaxCnProvider(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
+}
+
 function coerceApiHost(params: {
   apiHost?: string;
   modelBaseUrl?: string;
+  provider?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const env = params.env ?? process.env;
+  const defaultHost = isMinimaxCnProvider(params.provider)
+    ? "https://api.minimaxi.com"
+    : "https://api.minimax.io";
   const raw =
     params.apiHost?.trim() ||
     env.MINIMAX_API_HOST?.trim() ||
     params.modelBaseUrl?.trim() ||
-    "https://api.minimax.io";
+    defaultHost;
 
   try {
     const url = new URL(raw);
@@ -51,6 +66,7 @@ export async function minimaxUnderstandImage(params: {
   imageDataUrl: string;
   apiHost?: string;
   modelBaseUrl?: string;
+  provider?: string;
   timeoutMs?: number;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
@@ -72,6 +88,7 @@ export async function minimaxUnderstandImage(params: {
   const host = coerceApiHost({
     apiHost: params.apiHost,
     modelBaseUrl: params.modelBaseUrl,
+    provider: params.provider,
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 

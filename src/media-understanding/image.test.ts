@@ -335,6 +335,48 @@ describe("describeImageWithModel", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("uses canonical MiniMax CN baseUrl for VLM alias fallback", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              minimax: { baseUrl: "https://api.minimaxi.com/anthropic", models: [] },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-cn",
+      }),
+    );
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
   it("carries workspaceDir through image model and stream resolution", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

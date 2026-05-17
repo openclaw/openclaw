@@ -166,6 +166,32 @@ describe("resolveAutoMediaKeyProviders", () => {
     ]);
   });
 
+  it("preserves configured MiniMax CN aliases for image auto discovery", () => {
+    const providers = resolveAutoMediaKeyProviders({
+      capability: "image",
+      cfg: {
+        models: {
+          providers: {
+            "minimax-cn": {
+              models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            },
+            "minimax-portal-cn": {
+              models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            },
+            gemini: {
+              models: [{ id: "gemini-3-flash-preview", input: ["text", "image"] }],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(providers).toContain("minimax-cn");
+    expect(providers).toContain("minimax-portal-cn");
+    expect(providers).not.toContain("gemini");
+    expect(providers).toContain("google");
+  });
+
   it("keeps the bundled video fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "video" })).toEqual([
       "google",

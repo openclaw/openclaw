@@ -26,6 +26,7 @@ import {
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -315,6 +316,7 @@ function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | u
 
 async function describeImagesWithMinimax(params: {
   apiKey: string;
+  provider: string;
   modelId: string;
   modelBaseUrl?: string;
   prompt: string;
@@ -329,6 +331,7 @@ async function describeImagesWithMinimax(params: {
         : params.prompt;
     const text = await minimaxUnderstandImage({
       apiKey: params.apiKey,
+      provider: params.provider,
       prompt,
       imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
       modelBaseUrl: params.modelBaseUrl,
@@ -353,6 +356,11 @@ function resolveConfiguredProviderBaseUrl(
   const direct = cfg.models?.providers?.[provider];
   if (typeof direct?.baseUrl === "string" && direct.baseUrl.trim()) {
     return direct.baseUrl.trim();
+  }
+  const normalizedProvider = normalizeMediaProviderId(provider);
+  const normalized = cfg.models?.providers?.[normalizedProvider];
+  if (typeof normalized?.baseUrl === "string" && normalized.baseUrl.trim()) {
+    return normalized.baseUrl.trim();
   }
   return undefined;
 }
@@ -437,6 +445,7 @@ async function describeImagesWithModelInternal(
     const fallback = await resolveMinimaxVlmFallbackRuntime(params);
     return await describeImagesWithMinimax({
       apiKey: fallback.apiKey,
+      provider: params.provider,
       modelId: params.model,
       modelBaseUrl: fallback.modelBaseUrl,
       prompt,
@@ -448,6 +457,7 @@ async function describeImagesWithModelInternal(
   if (isMinimaxVlmModel(model.provider, model.id)) {
     return await describeImagesWithMinimax({
       apiKey,
+      provider: model.provider,
       modelId: model.id,
       modelBaseUrl: model.baseUrl,
       prompt,

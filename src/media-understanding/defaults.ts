@@ -2,7 +2,10 @@ import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
-import { normalizeMediaProviderId } from "./provider-registry.js";
+import {
+  normalizeMediaExecutionProviderId,
+  normalizeMediaProviderId,
+} from "./provider-registry.js";
 import { providerSupportsCapability } from "./provider-supports.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 export {
@@ -65,11 +68,14 @@ function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): string | undefined {
+  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
+  if (normalizedProviderId === "minimax" || normalizedProviderId === "minimax-portal") {
+    return undefined;
+  }
   const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
     return undefined;
   }
-  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
   for (const [providerKey, providerCfg] of Object.entries(providers)) {
     if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
       continue;
@@ -93,7 +99,7 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
   }
   const configured: string[] = [];
   for (const [providerKey, providerCfg] of Object.entries(providers)) {
-    const normalizedProviderId = normalizeMediaProviderId(providerKey);
+    const normalizedProviderId = normalizeMediaExecutionProviderId(providerKey);
     if (!normalizedProviderId || configured.includes(normalizedProviderId)) {
       continue;
     }

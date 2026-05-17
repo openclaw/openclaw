@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -48,11 +49,46 @@ function resolveDecisionFailureReason(
   return normalizeDecisionReason(findDecisionReason(decision, "failed"));
 }
 
-function buildFileContext(params: { filePath: string; mediaUrl?: string; mime?: string }) {
+function buildFileContext(params: {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  capability?: MediaUnderstandingCapability;
+}) {
+  const remoteRef =
+    params.mediaUrl ??
+    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
+  const mediaType =
+    params.mime ??
+    (remoteRef && params.capability ? `${params.capability}/*` : undefined);
+  if (remoteRef) {
+    return {
+      MediaUrl: remoteRef,
+      MediaType: mediaType,
+    };
+  }
   return {
-    ...(params.mediaUrl ? { MediaUrl: params.mediaUrl } : { MediaPath: params.filePath }),
-    MediaType: params.mime,
+    MediaPath: params.filePath,
+    MediaType: mediaType,
   };
+}
+
+function isRemoteMediaReference(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function resolveFileLocalRoots(filePath: string): string[] | undefined {
+  return isRemoteMediaReference(filePath) ? undefined : [path.dirname(filePath)];
+}
+
+function basenameFromMediaReference(value: string): string {
+  if (isRemoteMediaReference(value)) {
+    try {
+      const url = new URL(value);
+      return path.basename(url.pathname) || "image";
+    } catch {}
+  }
+  return path.basename(value);
 }
 
 function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"]): boolean {
@@ -93,7 +129,7 @@ export async function runMediaUnderstandingFile(
           },
         }
       : params.cfg;
-  const ctx = buildFileContext(params);
+  const ctx = buildFileContext({ ...params, capability: params.capability });
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
     return {
@@ -114,7 +150,7 @@ export async function runMediaUnderstandingFile(
 
   const providerRegistry = buildProviderRegistry(undefined, cfg);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: [path.dirname(params.filePath)],
+    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
@@ -166,33 +202,18 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
   const timeoutMs = params.timeoutMs ?? 30_000;
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  let buffer: Buffer;
-  let fileName = path.basename(params.filePath);
-  let mime = params.mime;
-  if (params.mediaUrl) {
-    const cache = createMediaAttachmentCache(normalizeMediaAttachments(buildFileContext(params)), {
-      ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
-    });
-    try {
-      const media = await cache.getBuffer({
-        attachmentIndex: 0,
-        maxBytes: DEFAULT_MAX_BYTES.image,
-        timeoutMs,
-      });
-      buffer = media.buffer;
-      fileName = media.fileName;
-      mime = media.mime;
-    } finally {
-      await cache.cleanup();
-    }
-  } else {
-    buffer = (await readLocalFileSafely({ filePath: params.filePath })).buffer;
-  }
+  const image = await readImageDescriptionInput({
+    filePath: params.filePath,
+    mediaUrl: params.mediaUrl,
+    mime: params.mime,
+    cfg: params.cfg,
+    timeoutMs,
+  });
   const describeImage = provider?.describeImage ?? describeImageWithModel;
   return await describeImage({
-    buffer,
-    fileName,
-    mime,
+    buffer: image.buffer,
+    fileName: image.fileName,
+    mime: image.mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,
@@ -202,6 +223,45 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     agentDir: params.agentDir ?? "",
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
+}
+
+async function readImageDescriptionInput(params: {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  cfg: OpenClawConfig;
+  timeoutMs: number;
+}): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
+  const remoteRef =
+    params.mediaUrl ??
+    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
+  if (!remoteRef) {
+    return {
+      buffer: (await readLocalFileSafely({ filePath: params.filePath })).buffer,
+      fileName: basenameFromMediaReference(params.filePath),
+      mime: params.mime,
+    };
+  }
+  const attachments = normalizeMediaAttachments(
+    buildFileContext({ ...params, capability: "image" }),
+  );
+  const cache = createMediaAttachmentCache(attachments, {
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
+  try {
+    const media = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: DEFAULT_MAX_BYTES.image,
+      timeoutMs: params.timeoutMs,
+    });
+    return {
+      buffer: media.buffer,
+      fileName: media.fileName || basenameFromMediaReference(remoteRef),
+      mime: params.mime ?? media.mime,
+    };
+  } finally {
+    await cache.cleanup();
+  }
 }
 
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
