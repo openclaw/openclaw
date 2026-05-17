@@ -3928,8 +3928,8 @@ describe("runCodexAppServerAttempt", () => {
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
-    expect(Array.isArray(startConfig?.["hooks.PostToolUse"])).toBe(true);
-    expect(Array.isArray(startConfig?.["hooks.Stop"])).toBe(true);
+    expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
+    expect(startConfig?.["hooks.Stop"]).toEqual([]);
     expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
