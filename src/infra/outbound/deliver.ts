@@ -1295,7 +1295,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (hadPartialFailure) {
-        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
+        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(
+          (err: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as failed after partial best-effort delivery: ${formatErrorMessage(err)}`,
+            );
+          },
+        );
       } else {
         if (platformSendStarted) {
           await markQueuedPlatformOutcomeUnknown({

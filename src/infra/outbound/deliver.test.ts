@@ -2540,6 +2540,22 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("warns when recording bestEffort partial failure rejects", async () => {
+    queueMocks.failDelivery.mockRejectedValueOnce(new Error("queue write failed"));
+
+    const { results } = await runBestEffortPartialFailureDelivery();
+
+    expect(results).toEqual([{ channel: "matrix", messageId: "m2", roomId: "!room:example" }]);
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "failed to mark queued delivery mock-queue-id as failed after partial best-effort delivery: queue write failed",
+    );
+  });
+
   it("writes raw payloads to the queue before normalization", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-raw", roomId: "!room:example" });
     const rawPayloads: DeliverOutboundPayload[] = [
