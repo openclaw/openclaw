@@ -391,6 +391,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectReply: true,
         input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
         replyToLatestSutMessage: true,
+        settleMs: 4_000,
       }),
   },
   {
