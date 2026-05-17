@@ -1633,6 +1633,7 @@ export function createExecTool(
 
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
+      let registeredAbortSignal: AbortSignal | null = null;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
@@ -1650,14 +1651,27 @@ export function createExecTool(
         run.kill();
       };
 
+      const cleanupToolRunListeners = () => {
+        if (registeredAbortSignal) {
+          registeredAbortSignal.removeEventListener("abort", onAbortSignal);
+          registeredAbortSignal = null;
+        }
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
+        }
+      };
+
       if (signal?.aborted) {
         onAbortSignal();
       } else if (signal) {
         signal.addEventListener("abort", onAbortSignal, { once: true });
+        registeredAbortSignal = signal;
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () =>
+        const resolveRunning = () => {
+          cleanupToolRunListeners();
           resolve({
             content: [
               {
@@ -1676,11 +1690,9 @@ export function createExecTool(
               tail: run.session.tail,
             },
           });
+        };
 
         const onYieldNow = () => {
-          if (yieldTimer) {
-            clearTimeout(yieldTimer);
-          }
           if (yielded) {
             return;
           }
@@ -1706,9 +1718,7 @@ export function createExecTool(
 
         run.promise
           .then((outcome) => {
-            if (yieldTimer) {
-              clearTimeout(yieldTimer);
-            }
+            cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;
             }
@@ -1721,9 +1731,7 @@ export function createExecTool(
             );
           })
           .catch((err) => {
-            if (yieldTimer) {
-              clearTimeout(yieldTimer);
-            }
+            cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;
             }
