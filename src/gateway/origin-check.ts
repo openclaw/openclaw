@@ -61,10 +61,13 @@ export function checkBrowserOrigin(params: {
   ) {
     return { ok: true, matchedBy: "host-header-fallback" };
   }
+  const requestHostname = requestHost ? resolveHostName(requestHost) : "";
+  const allowLoopbackSameOrigin = params.isLocalClient === true;
   if (
     requestHost &&
     parsedOrigin.host === requestHost &&
-    isTrustedSameOriginHost(requestHost, params.isLocalClient)
+    isTrustedSameOriginHost(requestHost, params.isLocalClient) &&
+    (!requestHostname || !isLoopbackHost(requestHostname) || allowLoopbackSameOrigin)
   ) {
     return { ok: true, matchedBy: "private-same-origin" };
   }
