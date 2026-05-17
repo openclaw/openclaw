@@ -502,10 +502,16 @@ describe("runCapability image skip", () => {
             providers: {
               minimax: {
                 apiKey: "test-minimax-key",
+                baseUrl: "https://api.minimax.io/anthropic",
                 models: [
                   {
                     id: "MiniMax-M2.5",
+                    name: "MiniMax M2.5",
+                    reasoning: false,
                     input: ["text", "image"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 8_192,
                   },
                 ],
               },

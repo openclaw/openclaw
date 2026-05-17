@@ -116,7 +116,18 @@ describe("resolvePdfModelConfigForTool", () => {
       models: {
         providers: {
           minimax: {
-            models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            baseUrl: "https://api.minimax.io/anthropic",
+            models: [
+              {
+                id: "MiniMax-M2.7",
+                name: "MiniMax M2.7",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
           },
         },
       },
