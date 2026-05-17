@@ -90,6 +90,12 @@ export type AgentRuntimeMessagePresentationButton = {
   value?: string;
   /** External URL opened by the button. */
   url?: string;
+  /** Channel-native web app URL for renderers that support embedded web apps. */
+  webApp?: { url: string };
+  /** Higher values are kept first when channel action limits require dropping controls. */
+  priority?: number;
+  /** Disabled action hint; channels without disabled-state support render fallback text. */
+  disabled?: boolean;
   /** Optional visual style hint for renderers that support styled actions. */
   style?: AgentRuntimeInteractiveButtonStyle;
 };
