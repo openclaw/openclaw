@@ -2339,11 +2339,11 @@ export async function runEmbeddedAttempt(
       const activeSession = session;
       installSessionEventWriteLock({
         session: activeSession,
-        withSessionWriteLock: sessionLockController.withSessionWriteLock,
+        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
       });
       installSessionExternalHookWriteLock({
         session: activeSession,
-        withSessionWriteLock: sessionLockController.withSessionWriteLock,
+        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
       });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
@@ -3745,10 +3745,11 @@ export async function runEmbeddedAttempt(
               modelId: params.modelId,
               provider: params.provider,
               sessionManager: {
-                appendCustomEntry: async (customType, data) =>
-                  await sessionLockController.withSessionWriteLock(() =>
-                    activeSessionManager.appendCustomEntry(customType, data),
-                  ),
+                appendCustomEntry: async (customType, data) => {
+                  await sessionLockController.withSessionWriteLock(() => {
+                    activeSessionManager.appendCustomEntry(customType, data);
+                  });
+                },
                 getEntries: () => activeSessionManager.getEntries(),
               },
               signal: runAbortController.signal,
@@ -3760,8 +3761,9 @@ export async function runEmbeddedAttempt(
             }
             installPromptSubmissionLockRelease({
               session: activeSession,
-              waitForSessionEvents: sessionLockController.waitForSessionEvents,
-              releaseForPrompt: sessionLockController.releaseForPrompt,
+              waitForSessionEvents: (sessionToDrain) =>
+                sessionLockController.waitForSessionEvents(sessionToDrain),
+              releaseForPrompt: () => sessionLockController.releaseForPrompt(),
             });
           }
 

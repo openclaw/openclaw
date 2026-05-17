@@ -60,7 +60,7 @@ type DeferredTurnMaintenanceRunState = {
 
 const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
 
-type SessionManagerRewriteLock = <T>(operation: () => Promise<T>) => Promise<T>;
+type SessionManagerRewriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type DeferredTurnMaintenanceSignal = "SIGINT" | "SIGTERM";
 type DeferredTurnMaintenanceProcessLike = Pick<NodeJS.Process, "on" | "off"> &
@@ -301,14 +301,14 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
         const sessionManager = params.sessionManager;
-        const rewriteSessionManagerEntries = async () =>
-          await rewriteTranscriptEntriesInSessionManager({
+        const rewriteSessionManagerEntries = () =>
+          rewriteTranscriptEntriesInSessionManager({
             sessionManager,
             replacements: request.replacements,
           });
         return params.withSessionManagerRewriteLock
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
-          : await rewriteSessionManagerEntries();
+          : rewriteSessionManagerEntries();
       }
       const rewriteTranscriptEntriesInFile = async () =>
         await rewriteTranscriptEntriesInSessionFile({

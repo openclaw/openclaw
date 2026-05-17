@@ -40,11 +40,11 @@ type SessionWithExternalHooks = SessionEventProcessor & {
   };
 };
 
-type PromptReleaseStreamFn = ((...args: unknown[]) => Promise<unknown> | unknown) & {
+type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
 };
 
-type LockableFunction = ((...args: unknown[]) => Promise<unknown> | unknown) & {
+type LockableFunction = ((...args: unknown[]) => unknown) & {
   __openclawSessionWriteLockInstalled?: boolean;
 };
 

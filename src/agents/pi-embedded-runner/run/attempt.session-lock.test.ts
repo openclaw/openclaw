@@ -92,7 +92,11 @@ describe("embedded attempt session lock lifecycle", () => {
     const acquireSessionWriteLock = vi.fn(async () => {
       acquireCount += 1;
       events.push(`acquire-${acquireCount}`);
-      return { release: vi.fn(async () => events.push("release")) };
+      return {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      };
     });
 
     const controller = await createEmbeddedAttemptSessionLockController({
@@ -194,7 +198,7 @@ describe("embedded attempt session lock lifecycle", () => {
 
   it("wraps provider stream submission with queued transcript drain and lock release", async () => {
     const events: string[] = [];
-    const streamFn = vi.fn(async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {
       events.push("stream");
     });
     const waitForSessionEvents = vi.fn(async () => {
@@ -217,10 +221,10 @@ describe("embedded attempt session lock lifecycle", () => {
 
   it("rewraps provider stream submission after the stream function is rebuilt", async () => {
     const events: string[] = [];
-    const firstStreamFn = vi.fn(async () => {
+    const firstStreamFn = vi.fn(async (..._args: unknown[]) => {
       events.push("first-stream");
     });
-    const secondStreamFn = vi.fn(async () => {
+    const secondStreamFn = vi.fn(async (..._args: unknown[]) => {
       events.push("second-stream");
     });
     const waitForSessionEvents = vi.fn(async () => {
@@ -255,8 +259,10 @@ describe("embedded attempt session lock lifecycle", () => {
 
   it("locks agent events that can reach transcript writers or registered extension hooks", async () => {
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
-      release: vi.fn(async () => releases.push("released")),
+    const acquireSessionWriteLock = vi.fn(async (_options: typeof lockOptions) => ({
+      release: vi.fn(async () => {
+        releases.push("released");
+      }),
     }));
     const processed: Array<string | undefined> = [];
     const hasHandlers = vi.fn(() => false);

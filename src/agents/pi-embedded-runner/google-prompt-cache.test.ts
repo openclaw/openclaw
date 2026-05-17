@@ -15,7 +15,7 @@ type SessionCustomEntry = {
 };
 
 type TestGooglePromptCacheSessionManager = {
-  appendCustomEntry(customType: string, data: unknown): unknown | Promise<unknown>;
+  appendCustomEntry(customType: string, data: unknown): void | Promise<void>;
   getEntries(): SessionCustomEntry[];
 };
 
@@ -33,7 +33,6 @@ function makeSessionManager(entries: SessionCustomEntry[] = []) {
         customType,
         data,
       });
-      return id;
     },
     getEntries() {
       return entries;
