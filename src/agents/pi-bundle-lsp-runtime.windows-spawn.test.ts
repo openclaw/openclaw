@@ -67,6 +67,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
+    const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
     spawnLspServerProcess({
       command: "typescript-language-server",
       args: ["--stdio"],

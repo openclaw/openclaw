@@ -158,6 +158,7 @@ const TARGET_KEYS = [
   "session.resetByChannel",
   "session.store",
   "session.typingIntervalSeconds",
+  "session.typingTtlSeconds",
   "session.typingMode",
   "session.mainKey",
   "session.sendPolicy",
