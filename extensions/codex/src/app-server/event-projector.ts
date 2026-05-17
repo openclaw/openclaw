@@ -132,6 +132,17 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptResultIds = new Set<string>();
   private readonly nativeGeneratedMediaUrls = new Set<string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
+  // #83093: When a Codex native tool (e.g. declined `commandExecution`) ends in
+  // a non-success state, the diagnostic projector previously only fired a
+  // tool.execution.blocked / tool.execution.error event without recording the
+  // failure on the attempt result, so `buildResult` returned no
+  // `lastToolError` and the embedded-runner's empty-turn fallback could
+  // silently drop the user's visible reply. Track the last non-success native
+  // tool here so `buildResult` can emit a structured `ToolErrorSummary`
+  // through the existing payload-error path.
+  private lastNonSuccessNativeTool:
+    | { toolName: string; status: "blocked" | "failed"; meta?: string }
+    | undefined;
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
@@ -316,6 +327,22 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas: [...this.toolMetas.values()],
       lastAssistant,
+      // #83093: surface the most recent blocked/failed Codex native tool so
+      // the embedded-runner's empty-turn fallback path receives a structured
+      // `ToolErrorSummary` instead of an aborted empty payload. Only set when
+      // a non-success native tool was actually observed; otherwise leave
+      // `lastToolError` undefined so existing success paths are unchanged.
+      ...(this.lastNonSuccessNativeTool
+        ? {
+            lastToolError: {
+              toolName: this.lastNonSuccessNativeTool.toolName,
+              error:
+                this.lastNonSuccessNativeTool.status === "blocked"
+                  ? "codex_native_tool_blocked"
+                  : "codex_native_tool_error",
+            },
+          }
+        : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
@@ -980,6 +1007,16 @@ export class CodexAppServerEventProjector {
               durationMs,
             };
     emitTrustedDiagnosticEvent({ ...base, ...terminalEvent });
+    // #83093: surface non-success native tool terminations through the
+    // attempt result so the embedded-runner's payload-error path can decide
+    // what to render. Last-write wins because the runner only reads the most
+    // recent error for the abort/empty-turn fallback.
+    if (params.status === "blocked" || params.status === "failed") {
+      this.lastNonSuccessNativeTool = {
+        toolName: params.name,
+        status: params.status,
+      };
+    }
   }
 
   private emitAfterToolCallObservation(item: CodexThreadItem): void {
