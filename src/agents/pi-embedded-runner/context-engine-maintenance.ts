@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
@@ -22,7 +24,7 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
@@ -46,7 +48,8 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  agentId?: string;
+  config?: OpenClawConfig;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -275,12 +278,22 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   allowDeferredCompactionExecution?: boolean;
   deferTranscriptRewriteToSessionLane?: boolean;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
+  purpose?: string;
+  contextEnginePluginId?: string;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
+    ...resolveContextEngineCapabilities({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: params.purpose ?? "context-engine.maintenance",
+    }),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
@@ -317,8 +330,9 @@ async function executeContextEngineMaintenance(params: {
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   executionMode: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
@@ -333,9 +347,12 @@ async function executeContextEngineMaintenance(params: {
       sessionFile: params.sessionFile,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
+      agentId: params.agentId,
       allowDeferredCompactionExecution: params.executionMode === "background",
       deferTranscriptRewriteToSessionLane: params.executionMode === "background",
       config: params.config,
+      purpose: `context-engine.${params.reason}.maintenance`,
+      contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
     }),
   });
   if (result.changed) {
@@ -355,8 +372,9 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   runId: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -435,6 +453,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      agentId: params.agentId,
       config: params.config,
       executionMode: "background",
     });
@@ -506,16 +525,18 @@ async function runDeferredTurnMaintenanceWorker(params: {
   }
 }
 
-function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceScheduleParams): void {
+function scheduleDeferredTurnMaintenance(
+  params: DeferredTurnMaintenanceScheduleParams,
+): Promise<void> | undefined {
   const sessionKey = normalizeSessionKey(params.sessionKey);
   if (!sessionKey) {
-    return;
+    return undefined;
   }
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
     activeRun.rerunRequested = true;
     activeRun.latestParams = { ...params, sessionKey };
-    return;
+    return activeRun.promise;
   }
 
   const existingTask = findActiveSessionTask({
@@ -558,6 +579,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
+        agentId: params.agentId,
         config: params.config,
         runId: task.runId!,
       }),
@@ -569,7 +591,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
       taskId: task.taskId,
       error: err,
     });
-    return;
+    return undefined;
   }
   let state!: DeferredTurnMaintenanceRunState;
   const trackedPromise = runPromise
@@ -580,7 +602,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         error: err,
       });
     })
-    .finally(() => {
+    .finally(async () => {
       schedulerAbort.dispose();
       const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
       if (current !== state) {
@@ -591,7 +613,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
       activeDeferredTurnMaintenanceRuns.delete(sessionKey);
       if (rerunParams) {
-        scheduleDeferredTurnMaintenance(rerunParams);
+        await scheduleDeferredTurnMaintenance(rerunParams);
       }
     });
   state = {
@@ -601,6 +623,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
   };
   activeDeferredTurnMaintenanceRuns.set(sessionKey, state);
   void trackedPromise;
+  return trackedPromise;
 }
 
 /**
@@ -614,8 +637,10 @@ export async function runContextEngineMaintenance(params: {
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  agentId?: string;
   executionMode?: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
+  config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
     return undefined;
@@ -629,15 +654,19 @@ export async function runContextEngineMaintenance(params: {
 
   if (shouldDefer) {
     try {
-      scheduleDeferredTurnMaintenance({
+      const deferred = scheduleDeferredTurnMaintenance({
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
+        agentId: params.agentId,
         config: params.config,
       });
+      if (deferred) {
+        params.onDeferredMaintenance?.(deferred);
+      }
     } catch (err) {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
     }
@@ -653,6 +682,7 @@ export async function runContextEngineMaintenance(params: {
       reason: params.reason,
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      agentId: params.agentId,
       executionMode,
       config: params.config,
     });

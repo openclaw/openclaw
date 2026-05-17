@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
+  markAutoFallbackPrimaryProbe,
+} from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -12,15 +14,15 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
@@ -30,7 +32,12 @@ import {
 } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  refreshQueuedFollowupSession,
+  type FollowupRun,
+} from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -200,28 +207,49 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    if (isFollowupRunAborted(queued)) {
+      completeFollowupRunLifecycle(queued);
+      typing.markRunComplete();
+      typing.markDispatchIdle();
+      return;
+    }
+    const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
+      .map((correlation) => correlation.begin())
+      .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
-    queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
-      originatingChannel: queued.originatingChannel,
-      messageProvider: queued.run.messageProvider,
-      originatingAccountId: queued.originatingAccountId,
-      agentAccountId: queued.run.agentAccountId,
-    });
-    const replySessionKey = queued.run.sessionKey ?? sessionKey;
-    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
-    const effectiveQueued =
-      runtimeConfig === queued.run.config
-        ? queued
-        : { ...queued, run: { ...queued.run, config: runtimeConfig } };
-    const run = effectiveQueued.run;
-    const replyOperation = createReplyOperation({
-      sessionId: run.sessionId,
-      sessionKey: replySessionKey ?? "",
-      resetTriggered: false,
-      upstreamAbortSignal: opts?.abortSignal,
-    });
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     try {
+      queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
+        originatingChannel: queued.originatingChannel,
+        messageProvider: queued.run.messageProvider,
+        originatingAccountId: queued.originatingAccountId,
+        agentAccountId: queued.run.agentAccountId,
+      });
+      const replySessionKey = queued.run.sessionKey ?? sessionKey;
+      const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
+      let effectiveQueued =
+        runtimeConfig === queued.run.config
+          ? queued
+          : { ...queued, run: { ...queued.run, config: runtimeConfig } };
+      let run = effectiveQueued.run;
+      let activeSessionEntry =
+        (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ??
+        (replySessionKey === sessionKey ? sessionEntry : undefined);
+      run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+        run,
+        entry: activeSessionEntry,
+        sessionKey: replySessionKey,
+      });
+      if (run !== effectiveQueued.run) {
+        effectiveQueued = { ...effectiveQueued, run };
+      }
+      replyOperation = createReplyOperation({
+        sessionId: run.sessionId,
+        sessionKey: replySessionKey ?? "",
+        resetTriggered: false,
+        upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
+      });
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -240,8 +268,6 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      let activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
         cfg: runtimeConfig,
         followupRun: effectiveQueued,
@@ -250,7 +276,7 @@ export function createFollowupRunner(params: {
         agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore,
-        sessionKey,
+        sessionKey: replySessionKey,
         storePath,
         isHeartbeat: opts?.isHeartbeat === true,
         replyOperation,
@@ -258,6 +284,72 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const resolveRunForFallbackCandidate = (
+        provider: string,
+        model: string,
+      ): FollowupRun["run"] => {
+        const probe = run.autoFallbackPrimaryProbe;
+        const isPrimaryProbeCandidate =
+          probe && provider === probe.provider && model === probe.model;
+        if (
+          probe &&
+          provider === probe.fallbackProvider &&
+          !isPrimaryProbeCandidate &&
+          probe.fallbackAuthProfileId
+        ) {
+          const candidateRun: FollowupRun["run"] = {
+            ...run,
+            provider,
+            model,
+            authProfileId: probe.fallbackAuthProfileId,
+          };
+          if (probe.fallbackAuthProfileIdSource) {
+            candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
+          } else {
+            delete candidateRun.authProfileIdSource;
+          }
+          return candidateRun;
+        }
+        return run;
+      };
+      const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
+        provider: string;
+        model: string;
+      }): Promise<void> => {
+        const probe = run.autoFallbackPrimaryProbe;
+        if (!probe) {
+          return;
+        }
+        if (paramsForClear.provider !== probe.provider || paramsForClear.model !== probe.model) {
+          return;
+        }
+        if (!replySessionKey || !sessionStore) {
+          return;
+        }
+        const entry = sessionStore[replySessionKey] ?? activeSessionEntry;
+        if (!entry || !entryMatchesAutoFallbackPrimaryProbe(entry, probe)) {
+          return;
+        }
+        clearAutoFallbackPrimaryProbeSelection(entry);
+        sessionStore[replySessionKey] = entry;
+        activeSessionEntry = entry;
+        if (!storePath) {
+          return;
+        }
+        await updateSessionStore(storePath, (store) => {
+          const persistedEntry = store[replySessionKey];
+          if (!persistedEntry) {
+            return;
+          }
+          if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+            return;
+          }
+          clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+          store[replySessionKey] = persistedEntry;
+        });
+      };
+      fallbackProvider = run.provider;
+      fallbackModel = run.model;
       replyOperation.setPhase("running");
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
@@ -268,7 +360,17 @@ export function createFollowupRunner(params: {
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
+            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const activeProbe = run.autoFallbackPrimaryProbe;
+            if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
+              markAutoFallbackPrimaryProbe({
+                probe: activeProbe,
+                sessionKey: replySessionKey,
+              });
+            }
+            const authProfile = resolveRunAuthProfile(candidateRun, provider, {
+              config: runtimeConfig,
+            });
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
@@ -303,10 +405,15 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                currentInboundEventKind: queued.currentInboundEventKind,
+                currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
+                suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+                suppressTranscriptOnlyAssistantPersistence:
+                  run.suppressTranscriptOnlyAssistantPersistence,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -321,6 +428,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
+                abortSignal: queued.abortSignal ?? opts?.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -331,14 +439,6 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
-                  if (evt.stream.startsWith("codex_app_server.")) {
-                    emitAgentEvent({
-                      runId,
-                      stream: evt.stream,
-                      data: evt.data,
-                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
-                    });
-                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }
@@ -366,6 +466,10 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        await clearRecoveredAutoFallbackPrimaryProbe({
+          provider: fallbackProvider,
+          model: fallbackModel,
+        });
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
@@ -384,18 +488,19 @@ export function createFollowupRunner(params: {
           provider: providerUsed,
           model: modelUsed,
           contextTokensOverride: agentCfgContextTokens,
-          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
-      if (storePath && sessionKey) {
+      if (storePath && replySessionKey) {
         await persistRunSessionUsage({
           storePath,
-          sessionKey,
+          sessionKey: replySessionKey,
           cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
+          isHeartbeat: opts?.isHeartbeat === true,
           modelUsed,
           providerUsed,
           contextTokensUsed,
@@ -409,21 +514,9 @@ export function createFollowupRunner(params: {
       if (payloadArray.length === 0) {
         return;
       }
-      const sanitizedPayloads = payloadArray.flatMap((payload) => {
-        const text = payload.text;
-        if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [payload];
-        }
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-        if (stripped.shouldSkip && !hasMedia) {
-          return [];
-        }
-        return [{ ...payload, text: stripped.text }];
-      });
       const finalPayloads = resolveFollowupDeliveryPayloads({
         cfg: runtimeConfig,
-        payloads: sanitizedPayloads,
+        payloads: payloadArray,
         messageProvider: run.messageProvider,
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
@@ -438,13 +531,14 @@ export function createFollowupRunner(params: {
         return;
       }
 
+      let deliveryPayloads = finalPayloads;
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
           cfg: runtimeConfig,
-          sessionEntry,
+          sessionEntry: activeSessionEntry,
           sessionStore,
-          sessionKey,
+          sessionKey: replySessionKey,
           storePath,
           amount: autoCompactionCount,
           compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
@@ -454,7 +548,7 @@ export function createFollowupRunner(params: {
           newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
         const refreshedSessionEntry =
-          sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
+          replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
         if (refreshedSessionEntry) {
           const queueKey = run.sessionKey ?? sessionKey;
           if (queueKey) {
@@ -468,9 +562,12 @@ export function createFollowupRunner(params: {
         }
         if (run.verboseLevel && run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
+          deliveryPayloads = [
+            {
+              text: `🧹 Auto-compaction complete${suffix}.`,
+            },
+            ...finalPayloads,
+          ];
         }
       }
 
@@ -481,12 +578,22 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendFollowupPayloads(finalPayloads, effectiveQueued, {
+      await sendFollowupPayloads(deliveryPayloads, effectiveQueued, {
         provider: providerUsed,
         modelId: modelUsed,
       });
     } finally {
-      replyOperation.complete();
+      for (const end of endDeliveryCorrelations.toReversed()) {
+        try {
+          end();
+        } catch (err) {
+          defaultRuntime.error?.(
+            `followup queue: delivery correlation cleanup failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }
+      completeFollowupRunLifecycle(queued);
+      replyOperation?.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the

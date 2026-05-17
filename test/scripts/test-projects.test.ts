@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
@@ -9,15 +10,18 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
   listFullExtensionVitestProjectConfigs,
+  orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
+import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoPath } from "../../src/test-utils/repo-files.js";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
-const normalizeRepoPath = (value: string) => value.replaceAll("\\", "/");
+const normalizeRepoPath = toRepoPath;
 
 type VitestTestConfig = {
   dir?: string;
@@ -299,7 +303,7 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "test/helpers/poll.ts",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
@@ -365,7 +369,7 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "unknown/file.txt",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps the broad changed run available for unknown root surfaces", () => {
@@ -384,13 +388,13 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "docs/help/testing.md",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips root agent guidance changes instead of broad-running tests", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => ["AGENTS.md"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips app-only changes because app tests are separate from Vitest lanes", () => {
@@ -398,7 +402,7 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
         "apps/macos/OpenClaw/AppDelegate.swift",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps public plugin SDK changes focused by default", () => {
@@ -522,6 +526,50 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes unit ui test targets to the unit ui lane", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/chat.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/chat.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed unit ui tests to the unit ui lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/ui/chat/grouped-render.test.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
         watchMode: false,
       },
     ]);
@@ -791,9 +839,16 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("uses import-graph targets in default changed mode", () => {
-    expect(resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets).toContain(
-      "src/auto-reply/status.test.ts",
-    );
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const before = readFileSync.mock.calls.length;
+    const targets = resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets;
+    const repoSourceReads = readFileSync.mock.calls
+      .slice(before)
+      .filter(([file]) => typeof file === "string" && normalizeRepoPath(file).includes("/src/"));
+    readFileSync.mockRestore();
+
+    expect(targets).toContain("src/auto-reply/status.test.ts");
+    expect(repoSourceReads.length).toBeLessThan(100);
   });
 
   it.each([
@@ -889,6 +944,24 @@ describe("scripts/test-projects local heavy-check lock", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  it("interleaves heavy and light configs for cold parallel full-suite runs", () => {
+    const specs = [
+      "test/vitest/vitest.gateway.config.ts",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+    ].map((config) => ({ config }));
+
+    expect(orderFullSuiteSpecsForParallelRun(specs).map((spec) => spec.config)).toEqual([
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+    ]);
+  });
+
   it("covers each normal full-suite test file exactly once", async () => {
     const matches = await listFullSuiteTestFileMatches();
     const e2eNamedIntegrationTests = new Set([
@@ -918,8 +991,8 @@ describe("scripts/test-projects full-suite sharding", () => {
       .map(([file, configs]) => `${file}: ${configs.join(", ")}`)
       .toSorted((left, right) => left.localeCompare(right));
 
-    expect(missing).toEqual([]);
-    expect(duplicated).toEqual([]);
+    expect(missing).toStrictEqual([]);
+    expect(duplicated).toStrictEqual([]);
   });
 
   it("uses the large host-aware local profile on roomy local hosts", () => {
@@ -1098,10 +1171,18 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const previous = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
+    let gatewayTreeReads: unknown[][] = [];
     try {
-      plans = buildFullSuiteVitestRunPlans([], process.cwd());
+      const captured = captureReaddirSyncCallsDuring(() =>
+        buildFullSuiteVitestRunPlans([], process.cwd()),
+      );
+      plans = captured.result;
+      gatewayTreeReads = captured.calls.filter(([target]) =>
+        typeof target === "string" ? normalizeRepoPath(target).includes("src/gateway") : false,
+      );
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
@@ -1110,6 +1191,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       }
     }
 
+    expect(gatewayTreeReads).toEqual([]);
     expect(plans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
@@ -1143,7 +1225,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.gateway-core.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
-      "test/vitest/vitest.gateway-server.config.ts",
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
@@ -1160,7 +1245,6 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-top-level.config.ts",
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-bluebubbles.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",
@@ -1186,13 +1270,25 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ]);
-    expect(plans).toEqual(
-      plans.map((plan) => ({
-        config: plan.config,
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      })),
+
+    const gatewayPlans = plans.filter((plan) => plan.config === gatewayServerConfig);
+    const gatewayTargets = gatewayPlans.flatMap((plan) => plan.forwardedArgs);
+    const gatewayChunkSizes = gatewayPlans.map((plan) => plan.forwardedArgs.length);
+    expect(gatewayPlans).toHaveLength(4);
+    expect(gatewayTargets.length).toBeGreaterThan(90);
+    expect(new Set(gatewayTargets).size).toBe(gatewayTargets.length);
+    expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
+    expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
+    expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
+    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+      plans
+        .filter((plan) => plan.config !== gatewayServerConfig)
+        .map((plan) => ({
+          config: plan.config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        })),
     );
   });
 

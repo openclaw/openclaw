@@ -16,19 +16,19 @@ import {
   type OpenClawConfig as ProviderAuthConfig,
   type ProviderAuthResult,
   suggestOAuthProfileIdForLegacyDefault,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
-  isClaudeOpus47ModelId,
   type ProviderPlugin,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -44,6 +44,7 @@ import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
@@ -80,6 +81,15 @@ const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.ma
     ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
     : ref,
 );
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
 const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = CLAUDE_CLI_DEFAULT_MODEL_REF.startsWith(
   `${CLAUDE_CLI_BACKEND_ID}/`,
 )
@@ -166,7 +176,7 @@ async function runAnthropicSetupTokenNonInteractive(
 
   const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential: {
       type: "token",
@@ -214,6 +224,9 @@ function resolveAnthropic46ForwardCompatModel(params: {
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  if (trimmedModelId !== lower) {
+    return undefined;
+  }
   const is46Model =
     lower === params.dashModelId ||
     lower === params.dotModelId ||
@@ -276,7 +289,11 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function isAnthropicOpus47Model(modelId: string): boolean {
-  return isClaudeOpus47ModelId(modelId);
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    normalized.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
+    normalized.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
+  );
 }
 
 function hasConfiguredModelContextOverride(
@@ -573,6 +590,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
+    // Publish Claude CLI rows through the provider catalog hook.
+    augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",

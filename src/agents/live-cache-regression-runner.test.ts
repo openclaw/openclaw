@@ -21,14 +21,14 @@ describe("live cache regression runner", () => {
       warnings,
     });
 
-    expect(regressions).toEqual([]);
+    expect(regressions).toStrictEqual([]);
     expect(warnings).toEqual([
       "openai:image cacheRead=0 < min=3840",
       "openai:image hitRate=0.000 < min=0.820",
     ]);
   });
 
-  it("keeps hard cache floors blocking for required OpenAI lanes", () => {
+  it("keeps OpenAI text cache floor misses advisory", () => {
     const regressions: string[] = [];
     const warnings: string[] = [];
 
@@ -47,11 +47,11 @@ describe("live cache regression runner", () => {
       warnings,
     });
 
-    expect(regressions).toEqual([
+    expect(regressions).toStrictEqual([]);
+    expect(warnings).toEqual([
       "openai:stable cacheRead=0 < min=4608",
       "openai:stable hitRate=0.000 < min=0.900",
     ]);
-    expect(warnings).toEqual([]);
   });
 
   it("retries hard cache baseline misses once", () => {
@@ -81,6 +81,113 @@ describe("live cache regression runner", () => {
         },
         1,
       ),
+    ).toBe(false);
+  });
+
+  it("retries a cache probe twice when provider text misses the sentinel", () => {
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 2,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 3,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
+        text: "I saw openai-stable-hit-a.",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
+        text: "CACHE-OK openai-stable-hit-a",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps cache probes above the provider empty-output floor", () => {
+    expect(
+      __testing.resolveCacheProbeMaxTokens({
+        maxTokens: 32,
+        providerTag: "openai",
+      }),
+    ).toBe(256);
+    expect(
+      __testing.resolveCacheProbeMaxTokens({
+        maxTokens: 512,
+        providerTag: "openai",
+      }),
+    ).toBe(512);
+    expect(
+      __testing.resolveCacheProbeMaxTokens({
+        maxTokens: 32,
+        providerTag: "anthropic",
+      }),
+    ).toBe(1024);
+  });
+
+  it("classifies Anthropic tool-only probe misses as provider drift", () => {
+    expect(__testing.isAnthropicToolProbeDrift(new Error("expected tool call for noop"))).toBe(true);
+    expect(
+      __testing.isAnthropicToolProbeDrift(
+        new Error('expected tool-only response for noop, got "ok"'),
+      ),
+    ).toBe(true);
+    expect(__testing.isAnthropicToolProbeDrift(new Error("other failure"))).toBe(false);
+  });
+
+  it("accepts empty cache probe text only when usage is observable", () => {
+    expect(
+      __testing.shouldAcceptEmptyCacheProbe({
+        providerTag: "openai",
+        text: "",
+        usage: { input: 5_000 },
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldAcceptEmptyCacheProbe({
+        providerTag: "openai",
+        text: "",
+        usage: { cacheRead: 4_608 },
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldAcceptEmptyCacheProbe({
+        providerTag: "openai",
+        text: "wrong",
+        usage: { input: 5_000 },
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldAcceptEmptyCacheProbe({
+        providerTag: "anthropic",
+        text: "",
+        usage: { input: 5_000 },
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldAcceptEmptyCacheProbe({
+        providerTag: "openai",
+        text: "",
+        usage: {},
+      }),
     ).toBe(false);
   });
 

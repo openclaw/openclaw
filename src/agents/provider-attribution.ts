@@ -54,6 +54,7 @@ export type ProviderEndpointClass =
   | "azure-openai"
   | "openrouter"
   | "xai-native"
+  | "xiaomi-native"
   | "zai-native"
   | "google-generative-ai"
   | "google-vertex"
@@ -123,6 +124,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
+const OPENROUTER_ATTRIBUTION_CATEGORIES =
+  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -147,6 +150,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "azure-openai",
   "openrouter",
   "xai-native",
+  "xiaomi-native",
   "zai-native",
   "google-generative-ai",
   "google-vertex",
@@ -473,7 +477,7 @@ function buildOpenRouterAttributionPolicy(
     headers: {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": identity.product,
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories": OPENROUTER_ATTRIBUTION_CATEGORIES,
     },
   };
 }
@@ -678,6 +682,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
+    endpointClass === "xiaomi-native" ||
     endpointClass === "zai-native" ||
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";

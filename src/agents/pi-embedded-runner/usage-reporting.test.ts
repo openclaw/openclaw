@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -25,6 +25,14 @@ function makeAssistantMessage(
     content: [],
     ...overrides,
   };
+}
+
+function firstAttemptInput(): Record<string, unknown> {
+  const call = mockedRunEmbeddedAttempt.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected embedded attempt");
+  }
+  return call[0] as Record<string, unknown>;
 }
 
 describe("runEmbeddedPiAgent usage reporting", () => {
@@ -83,11 +91,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
+    expect(firstAttemptInput().allowGatewaySubagentBinding).toBe(true);
   });
 
   it("forwards sender identity fields into embedded attempts", async () => {
@@ -111,14 +115,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       senderE164: "+15551234567",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderId: "user-123",
-        senderName: "Josh Lehman",
-        senderUsername: "josh",
-        senderE164: "+15551234567",
-      }),
-    );
+    const attemptInput = firstAttemptInput();
+    expect(attemptInput.senderId).toBe("user-123");
+    expect(attemptInput.senderName).toBe("Josh Lehman");
+    expect(attemptInput.senderUsername).toBe("josh");
+    expect(attemptInput.senderE164).toBe("+15551234567");
   });
 
   it("forwards memory flush write paths into memory-triggered attempts", async () => {
@@ -140,12 +141,9 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       memoryFlushWritePath: "memory/2026-03-10.md",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: "memory",
-        memoryFlushWritePath: "memory/2026-03-10.md",
-      }),
-    );
+    const attemptInput = firstAttemptInput();
+    expect(attemptInput.trigger).toBe("memory");
+    expect(attemptInput.memoryFlushWritePath).toBe("memory/2026-03-10.md");
   });
 
   it("reports total usage from the last turn instead of accumulated total", async () => {
@@ -186,7 +184,9 @@ describe("runEmbeddedPiAgent usage reporting", () => {
 
     // Check usage in meta
     const usage = result.meta.agentMeta?.usage;
-    expect(usage).toBeDefined();
+    expect(usage?.input).toBe(250);
+    expect(usage?.output).toBe(100);
+    expect(usage?.total).toBe(200);
 
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350

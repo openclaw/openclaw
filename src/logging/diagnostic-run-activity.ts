@@ -7,7 +7,7 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
-  activeEmbeddedRun: boolean;
+  activeEmbeddedRuns: Set<string>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Set<string>;
   lastProgressAt: number;
@@ -20,6 +20,11 @@ type ActiveTool = {
   startedAt: number;
   lastProgressAt: number;
 };
+
+type DiagnosticToolStartedActivityEvent = Pick<
+  Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
+  "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
+>;
 
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
@@ -46,48 +51,97 @@ function sessionRefs(params: { sessionId?: string; sessionKey?: string }): strin
   return refs;
 }
 
-function resolveSessionActivity(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  create?: boolean;
-}): SessionActivity | undefined {
-  if (params.runId) {
-    const byRun = activityByRunId.get(params.runId);
-    if (byRun) {
-      return byRun;
-    }
-  }
-
-  for (const ref of sessionRefs(params)) {
-    const activity = activityByRef.get(ref);
-    if (activity) {
-      if (params.runId) {
-        activityByRunId.set(params.runId, activity);
-      }
-      return activity;
-    }
-  }
-
-  if (!params.create) {
-    return undefined;
-  }
-
-  const activity: SessionActivity = {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    activeEmbeddedRun: false,
-    activeTools: new Map(),
-    activeModelCalls: new Set(),
-    lastProgressAt: Date.now(),
-  };
+function registerSessionActivityRefs(
+  activity: SessionActivity,
+  params: { sessionId?: string; sessionKey?: string; runId?: string },
+): void {
+  activity.sessionId ??= params.sessionId;
+  activity.sessionKey ??= params.sessionKey;
   for (const ref of sessionRefs(params)) {
     activityByRef.set(ref, activity);
   }
   if (params.runId) {
     activityByRunId.set(params.runId, activity);
   }
-  return activity;
+}
+
+function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
+  for (const [ref, activity] of activityByRef) {
+    if (activity === source) {
+      activityByRef.set(ref, target);
+    }
+  }
+  for (const [runId, activity] of activityByRunId) {
+    if (activity === source) {
+      activityByRunId.set(runId, target);
+    }
+  }
+}
+
+function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
+  target.sessionId ??= source.sessionId;
+  target.sessionKey ??= source.sessionKey;
+  for (const key of source.activeEmbeddedRuns) {
+    target.activeEmbeddedRuns.add(key);
+  }
+  for (const [key, tool] of source.activeTools) {
+    target.activeTools.set(key, tool);
+  }
+  for (const call of source.activeModelCalls) {
+    target.activeModelCalls.add(call);
+  }
+  if (source.lastProgressAt > target.lastProgressAt) {
+    target.lastProgressAt = source.lastProgressAt;
+    target.lastProgressReason = source.lastProgressReason;
+  }
+  replaceSessionActivityReferences(source, target);
+}
+
+function resolveSessionActivity(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  create?: boolean;
+}): SessionActivity | undefined {
+  let activity: SessionActivity | undefined;
+  if (params.runId) {
+    const byRun = activityByRunId.get(params.runId);
+    if (byRun) {
+      activity = byRun;
+    }
+  }
+
+  for (const ref of sessionRefs(params)) {
+    const byRef = activityByRef.get(ref);
+    if (!byRef) {
+      continue;
+    }
+    if (!activity) {
+      activity = byRef;
+    } else if (activity !== byRef) {
+      mergeSessionActivity(activity, byRef);
+    }
+  }
+
+  if (activity) {
+    registerSessionActivityRefs(activity, params);
+    return activity;
+  }
+
+  if (!params.create) {
+    return undefined;
+  }
+
+  const created: SessionActivity = {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    activeEmbeddedRuns: new Set(),
+    activeTools: new Map(),
+    activeModelCalls: new Set(),
+    lastProgressAt: Date.now(),
+  };
+  registerSessionActivityRefs(created, params);
+  return created;
 }
 
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
@@ -111,9 +165,7 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
   return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
 }
 
-function recordToolStarted(
-  event: Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
-): void {
+function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
@@ -182,34 +234,43 @@ function recordRunCompleted(
   activityByRunId.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  activity.activeEmbeddedRun = false;
+  activity.activeEmbeddedRuns.clear();
   touchSessionActivity(activity, "run:completed");
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
   sessionId: string;
   sessionKey?: string;
+  workKey?: string;
 }): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRun = true;
+  activity.activeEmbeddedRuns.add(resolveEmbeddedRunWorkKey(params));
   touchSessionActivity(activity, "embedded_run:started");
 }
 
 export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
+  workKey?: string;
+  clearRunActivity?: boolean;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRun = false;
-  activity.activeTools.clear();
-  activity.activeModelCalls.clear();
+  activity.activeEmbeddedRuns.delete(resolveEmbeddedRunWorkKey(params));
+  if (params.clearRunActivity !== false) {
+    activity.activeTools.clear();
+    activity.activeModelCalls.clear();
+  }
   touchSessionActivity(activity, "embedded_run:ended");
+}
+
+function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
+  return params.workKey ?? params.sessionId;
 }
 
 export function getDiagnosticSessionActivitySnapshot(
@@ -226,7 +287,7 @@ export function getDiagnosticSessionActivitySnapshot(
     activeWorkKind = "tool_call";
   } else if (activity.activeModelCalls.size > 0) {
     activeWorkKind = "model_call";
-  } else if (activity.activeEmbeddedRun) {
+  } else if (activity.activeEmbeddedRuns.size > 0) {
     activeWorkKind = "embedded_run";
   }
 
@@ -245,6 +306,29 @@ export function getDiagnosticSessionActivitySnapshot(
     lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
     lastProgressReason: activity.lastProgressReason,
   };
+}
+
+export function markDiagnosticRunProgressForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  reason: string;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
+  if (!activity) {
+    return;
+  }
+  touchSessionActivity(activity, params.reason);
+}
+
+export function markDiagnosticToolStartedForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  toolName: string;
+  toolCallId?: string;
+}): void {
+  recordToolStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {

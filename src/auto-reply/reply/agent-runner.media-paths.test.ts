@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiQueueMessageOutcome } from "../../agents/pi-embedded-runner/runs.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -10,7 +11,18 @@ const abortEmbeddedPiRunMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const isEmbeddedPiRunActiveMock = vi.fn(() => false);
 const isEmbeddedPiRunStreamingMock = vi.fn(() => false);
-const queueEmbeddedPiMessageMock = vi.fn(() => false);
+const queueEmbeddedPiMessageWithOutcomeAsyncMock = vi.fn(
+  async (
+    sessionId: string,
+    _text: string,
+    _options?: unknown,
+  ): Promise<EmbeddedPiQueueMessageOutcome> => ({
+    queued: false,
+    sessionId,
+    reason: "not_streaming",
+    gatewayHealth: "live",
+  }),
+);
 const resolveEmbeddedSessionLaneMock = vi.fn();
 const waitForEmbeddedPiRunEndMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
@@ -36,20 +48,23 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: compactEmbeddedPiSessionMock,
   isEmbeddedPiRunActive: isEmbeddedPiRunActiveMock,
   isEmbeddedPiRunStreaming: isEmbeddedPiRunStreamingMock,
-  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  queueEmbeddedPiMessageWithOutcomeAsync: queueEmbeddedPiMessageWithOutcomeAsyncMock,
   resolveEmbeddedSessionLane: resolveEmbeddedSessionLaneMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
 }));
 
 vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
-  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  formatEmbeddedPiQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
+    outcome.reason && outcome.sessionId
+      ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
+      : undefined,
+  queueEmbeddedPiMessageWithOutcomeAsync: queueEmbeddedPiMessageWithOutcomeAsyncMock,
 }));
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: enqueueFollowupRunMock,
   refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
-  resolvePiSteeringModeForQueueMode: (mode: string) => (mode === "queue" ? "one-at-a-time" : "all"),
   scheduleFollowupDrain: scheduleFollowupDrainMock,
 }));
 
@@ -135,8 +150,13 @@ describe("runReplyAgent media path normalization", () => {
     isEmbeddedPiRunActiveMock.mockReturnValue(false);
     isEmbeddedPiRunStreamingMock.mockReset();
     isEmbeddedPiRunStreamingMock.mockReturnValue(false);
-    queueEmbeddedPiMessageMock.mockReset();
-    queueEmbeddedPiMessageMock.mockReturnValue(false);
+    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockReset();
+    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    }));
     resolveEmbeddedSessionLaneMock.mockReset();
     waitForEmbeddedPiRunEndMock.mockReset();
     enqueueFollowupRunMock.mockReset();
@@ -188,47 +208,87 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
-    });
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
-      expect.objectContaining({
-        mediaAccess: expect.objectContaining({
-          workspaceDir: "/tmp/workspace",
-        }),
-      }),
-    );
+    expect(Array.isArray(result)).toBe(false);
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(result.mediaUrl).toBe("/tmp/outbound-media/generated.png");
+    expect(result.mediaUrls).toEqual(["/tmp/outbound-media/generated.png"]);
+    const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls.at(0);
+    expect(outboundAttachmentCall?.[0]).toBe(path.join("/tmp/workspace", "out", "generated.png"));
+    expect(outboundAttachmentCall?.[1]).toBe(5 * 1024 * 1024);
+    const outboundAttachmentOptions = outboundAttachmentCall?.[2] as
+      | { mediaAccess?: { workspaceDir?: unknown } }
+      | undefined;
+    expect(outboundAttachmentOptions?.mediaAccess?.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it("maps steer queue modes to Pi steering drain modes", async () => {
-    queueEmbeddedPiMessageMock.mockReturnValue(true);
+  it("steers active prompts in steer queue mode", async () => {
+    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
 
     await runReplyAgent(
       makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
+        shouldFollowup: true,
         isStreaming: true,
       }),
     );
 
-    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
-      steeringMode: "all",
-    });
+    expect(queueEmbeddedPiMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      "generate chart",
+      {
+        steeringMode: "all",
+      },
+    );
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("queues active prompts in followup mode without steering", async () => {
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "followup" } as QueueSettings,
+        shouldSteer: false,
+        shouldFollowup: true,
+        isActive: true,
+        isRunActive: () => true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
+  });
+
+  it("falls back to a queued followup when active steering is rejected", async () => {
+    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+      errorMessage: "cannot steer a compact turn",
+    }));
 
     await runReplyAgent(
       makeRunReplyAgentParams({
-        resolvedQueue: { mode: "queue" } as QueueSettings,
+        resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        isRunActive: () => true,
         isStreaming: true,
       }),
     );
 
-    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
-      steeringMode: "one-at-a-time",
-    });
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {
@@ -268,7 +328,8 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toMatchObject({
+    expect(result).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith({
       text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
@@ -277,7 +338,6 @@ describe("runReplyAgent media path normalization", () => {
       audioAsVoice: false,
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not create a second media context inside runAgentTurnWithFallback when onBlockReply is provided", async () => {

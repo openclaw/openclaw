@@ -16,7 +16,6 @@ enum GatewayAgentChannel: String, Codable, CaseIterable {
     case signal
     case imessage
     case msteams
-    case bluebubbles
     case webchat
 
     init(raw: String?) {
@@ -311,10 +310,33 @@ actor GatewayConnection {
         self.lastSnapshot = nil
     }
 
-    func canvasHostUrl() async -> String? {
+    func canvasPluginSurfaceUrl() async -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
-        let trimmed = snapshot.canvashosturl?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        let raw = snapshot.pluginsurfaceurls?["canvas"]?.value as? String
+        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func controlUiAutoAuthToken(config: Config) async -> String? {
+        if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty
+        {
+            return token
+        }
+        if let deviceToken = self.lastSnapshot?.auth["deviceToken"]?.value as? String {
+            let trimmed = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        let identity = DeviceIdentityStore.loadOrCreate()
+        if let entry = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") {
+            let trimmed = entry.token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return nil
     }
 
     private func sessionDefaultString(_ defaults: [String: OpenClawProtocol.AnyCodable]?, key: String) -> String {

@@ -73,6 +73,7 @@ Notes:
 ## Sending + delivery
 
 - Messages are sent to the Gateway; delivery to providers is off by default.
+- The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`; explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
 - Turn delivery on:
   - `/deliver on`
   - or the Settings panel
@@ -82,7 +83,7 @@ Notes:
 
 - Model picker: list available models and set the session override.
 - Agent picker: choose a different agent.
-- Session picker: shows only sessions for the current agent.
+- Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings: toggle deliver, tool output expansion, and thinking visibility.
 
 ## Keyboard shortcuts

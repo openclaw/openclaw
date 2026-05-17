@@ -14,6 +14,10 @@ function collectMigrationSkill(value: string, previous: string[] | undefined): s
   return [...(previous ?? []), value];
 }
 
+function collectMigrationPlugin(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
+}
+
 function readMigrationSkills(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -25,6 +29,17 @@ function readMigrationSkills(value: unknown): string[] | undefined {
   return skills.length > 0 ? skills : undefined;
 }
 
+function readMigrationPlugins(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const plugins = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return plugins.length > 0 ? plugins : undefined;
+}
+
 function addMigrationSkillOption(command: Command): Command {
   return command.option(
     "--skill <name>",
@@ -33,35 +48,70 @@ function addMigrationSkillOption(command: Command): Command {
   );
 }
 
-function addMigrationOptions(command: Command): Command {
-  return addMigrationSkillOption(
-    command
-      .option("--from <path>", "Source directory to migrate from")
-      .option("--include-secrets", "Import supported credentials and secrets", false)
-      .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
-      .option("--json", "Output JSON", false),
+function addMigrationPluginOption(command: Command): Command {
+  return command.option(
+    "--plugin <name>",
+    "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
+    collectMigrationPlugin,
   );
 }
 
+function addVerifyPluginAppsOption(command: Command): Command {
+  return command.option(
+    "--verify-plugin-apps",
+    "Codex only: verify source plugin app accessibility with app/list before planning native plugin activation",
+    false,
+  );
+}
+
+function addMigrationOptions(command: Command): Command {
+  return addVerifyPluginAppsOption(
+    addMigrationPluginOption(
+      addMigrationSkillOption(
+        command
+          .option("--from <path>", "Source directory to migrate from")
+          .option("--include-secrets", "Import supported credentials and secrets", false)
+          .option(
+            "--overwrite",
+            "Overwrite conflicting target files after item-level backups",
+            false,
+          )
+          .option("--json", "Output JSON", false),
+      ),
+    ),
+  );
+}
+
+function readVerifyPluginApps(value: unknown): boolean {
+  return value === true;
+}
+
 export function registerMigrateCommand(program: Command) {
-  const migrate = program
-    .command("migrate")
-    .description("Import state from another agent system")
-    .argument("[provider]", "Migration provider id, for example hermes")
-    .option("--from <path>", "Source directory to migrate from")
-    .option("--include-secrets", "Import supported credentials and secrets", false)
-    .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
-    .option("--dry-run", "Preview only; do not apply changes", false)
-    .option("--yes", "Apply without prompting after preview", false)
-    .option(
-      "--skill <name>",
-      "Select one skill to migrate by name or item id; repeat for multiple skills",
-      collectMigrationSkill,
-    )
-    .option("--backup-output <path>", "Pre-migration backup archive path or directory")
-    .option("--no-backup", "Skip the pre-migration OpenClaw backup")
-    .option("--force", "Allow dangerous options such as --no-backup", false)
-    .option("--json", "Output JSON", false)
+  const migrate = addVerifyPluginAppsOption(
+    program
+      .command("migrate")
+      .description("Import state from another agent system")
+      .argument("[provider]", "Migration provider id, for example hermes")
+      .option("--from <path>", "Source directory to migrate from")
+      .option("--include-secrets", "Import supported credentials and secrets", false)
+      .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
+      .option("--dry-run", "Preview only; do not apply changes", false)
+      .option("--yes", "Apply without prompting after preview", false)
+      .option(
+        "--skill <name>",
+        "Select one skill to migrate by name or item id; repeat for multiple skills",
+        collectMigrationSkill,
+      )
+      .option(
+        "--plugin <name>",
+        "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
+        collectMigrationPlugin,
+      )
+      .option("--backup-output <path>", "Pre-migration backup archive path or directory")
+      .option("--no-backup", "Skip the pre-migration OpenClaw backup")
+      .option("--force", "Allow dangerous options such as --no-backup", false)
+      .option("--json", "Output JSON", false),
+  )
     .addHelpText(
       "after",
       () =>
@@ -87,6 +137,8 @@ export function registerMigrateCommand(program: Command) {
           includeSecrets: Boolean(opts.includeSecrets),
           overwrite: Boolean(opts.overwrite),
           skills: readMigrationSkills(opts.skill),
+          plugins: readMigrationPlugins(opts.plugin),
+          verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
           dryRun: Boolean(opts.dryRun),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
@@ -119,6 +171,8 @@ export function registerMigrateCommand(program: Command) {
         includeSecrets: Boolean(opts.includeSecrets),
         overwrite: Boolean(opts.overwrite),
         skills: readMigrationSkills(opts.skill),
+        plugins: readMigrationPlugins(opts.plugin),
+        verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
         json: Boolean(opts.json),
       });
     });
@@ -139,6 +193,8 @@ export function registerMigrateCommand(program: Command) {
           includeSecrets: Boolean(opts.includeSecrets),
           overwrite: Boolean(opts.overwrite),
           skills: readMigrationSkills(opts.skill),
+          plugins: readMigrationPlugins(opts.plugin),
+          verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
           noBackup: opts.backup === false,

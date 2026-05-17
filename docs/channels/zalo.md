@@ -16,7 +16,7 @@ If you are on an older build or a custom install that excludes Zalo, install the
 npm package directly:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalo`
-- Beta channel: `openclaw plugins install @openclaw/zalo@beta`
+- Pinned version: `openclaw plugins install @openclaw/zalo@2026.5.2`
 - Or from a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
 - Details: [Plugins](/tools/plugin)
 

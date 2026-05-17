@@ -28,9 +28,15 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["tavily", "/tools/tavily"],
   ["tokenjuice", "/tools/tokenjuice"],
 ]);
+/** @type {ReadonlyMap<string, string>} */
+const PLUGIN_REFERENCE_EXTRA_SECTIONS = new Map();
 
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relativePath), "utf8"));
+}
+
+function readJsonPath(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function fileExists(relativePath) {
@@ -73,7 +79,6 @@ function humanizeId(value) {
     ["api", "API"],
     ["aws", "AWS"],
     ["azure", "Azure"],
-    ["bluebubbles", "BlueBubbles"],
     ["byteplus", "BytePlus"],
     ["codex", "Codex"],
     ["cli", "CLI"],
@@ -300,7 +305,10 @@ function resolveInstallRoute(packageJson, status) {
       ? `: \`${install.npmSpec}\``
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
-    return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
+    if (install?.defaultChoice === "clawhub") {
+      return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
+    }
+    return clawhubSpec ? `npm${npmSpec}; ClawHub${clawhubSpec}` : `npm${npmSpec}; ClawHub`;
   }
   if (release?.publishToClawHub === true) {
     return `ClawHub${clawhubSpec || npmSpec}`;
@@ -369,6 +377,7 @@ ${record.docs.map((link) => `- ${docLink(link)}`).join("\n")}`;
 
 function renderReferencePage(record) {
   const relatedDocs = renderRelatedDocs(record);
+  const extraSections = PLUGIN_REFERENCE_EXTRA_SECTIONS.get(record.id) ?? "";
   return `---
 summary: "${record.description.replaceAll('"', '\\"')}"
 read_when:
@@ -387,7 +396,7 @@ ${record.description}
 
 ## Surface
 
-${record.surface}${relatedDocs ? `\n\n${relatedDocs}` : ""}
+${record.surface}${extraSections ? `\n\n${extraSections}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
 `;
 }
 
@@ -413,11 +422,8 @@ ${renderTable(records)}
 `;
 }
 
-function collectPluginRecords() {
-  const rootPackageJson = readJson("package.json");
-  const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
-  const records = [];
-
+function collectPluginSourceEntries() {
+  const entries = [];
   for (const dirName of fs
     .readdirSync(EXTENSIONS_DIR)
     .toSorted((left, right) => left.localeCompare(right))) {
@@ -426,9 +432,45 @@ function collectPluginRecords() {
     if (!fs.existsSync(packagePath) || !fs.existsSync(manifestPath)) {
       continue;
     }
-    const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const packageJson = readJsonPath(packagePath);
+    const manifest = readJsonPath(manifestPath);
     const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
+    entries.push({ dirName, id, manifest, packageJson });
+  }
+  return entries;
+}
+
+function validatePluginCoverage(records, sourceEntries) {
+  const expectedIds = sourceEntries
+    .map((entry) => entry.id)
+    .toSorted((left, right) => left.localeCompare(right));
+  const actualIds = records
+    .map((record) => record.id)
+    .toSorted((left, right) => left.localeCompare(right));
+  const missing = expectedIds.filter((id) => !actualIds.includes(id));
+  const extra = actualIds.filter((id) => !expectedIds.includes(id));
+  const duplicateIds = actualIds.filter((id, index) => actualIds.indexOf(id) !== index);
+  if (missing.length > 0 || extra.length > 0 || duplicateIds.length > 0) {
+    throw new Error(
+      [
+        "plugin inventory coverage mismatch",
+        missing.length > 0 ? `missing: ${missing.join(", ")}` : null,
+        extra.length > 0 ? `extra: ${extra.join(", ")}` : null,
+        duplicateIds.length > 0 ? `duplicates: ${duplicateIds.join(", ")}` : null,
+      ]
+        .filter(Boolean)
+        .join("; "),
+    );
+  }
+}
+
+function collectPluginRecords() {
+  const rootPackageJson = readJson("package.json");
+  const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
+  const sourceEntries = collectPluginSourceEntries();
+  const records = [];
+
+  for (const { dirName, id, manifest, packageJson } of sourceEntries) {
     const status = resolveStatus({ dirName, packageJson, excludedDirs });
     records.push({
       description: resolveDescription({ manifest, packageJson }),
@@ -442,6 +484,7 @@ function collectPluginRecords() {
     });
   }
 
+  validatePluginCoverage(records, sourceEntries);
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -496,12 +539,33 @@ pnpm plugins:inventory:gen
 ## Definitions
 
 - **Core npm package:** built into the \`openclaw\` npm package and available without a separate plugin install.
-- **Official external package:** OpenClaw-maintained plugin omitted from the core npm package and installed through ClawHub and/or npm.
+- **Official external package:** OpenClaw-maintained plugin omitted from the core npm package, kept in this official inventory, and installed on demand through ClawHub and/or npm.
 - **Source checkout only:** repo-local plugin omitted from published npm artifacts and not advertised as an installable package.
 
 Source checkouts are different from npm installs: after \`pnpm install\`, bundled
 plugins load from \`extensions/<id>\` so local edits and package-local workspace
 dependencies are available.
+
+## Install a plugin
+
+Use the **Distribution** column to decide whether install is needed. Plugins that
+say \`included in OpenClaw\` are already present in the core package. Official
+external packages need one install, then a Gateway restart.
+
+For example, Discord is an official external package:
+
+\`\`\`bash
+openclaw plugins install @openclaw/discord
+openclaw gateway restart
+openclaw plugins inspect discord --runtime --json
+\`\`\`
+
+During the launch cutover, ordinary bare package specs still install from npm.
+Use \`clawhub:@openclaw/discord\` or \`npm:@openclaw/discord\` when you need an
+explicit source. After install, follow the plugin's setup doc, such as
+[Discord](/channels/discord), to add credentials and channel config. See
+[Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
+commands.
 
 ## Core npm package
 

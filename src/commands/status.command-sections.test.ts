@@ -54,7 +54,7 @@ describe("status.command-sections", () => {
     expect(lines.at(-1)).toBe("muted(Deep probe: cmd:openclaw security audit --deep)");
   });
 
-  it("builds verbose sessions rows and empty fallback rows", () => {
+  it("builds verbose sessions rows and returns no rows for empty sessions", () => {
     const verboseRows = buildStatusSessionsRows({
       recent: [
         {
@@ -63,6 +63,21 @@ describe("status.command-sections", () => {
           updatedAt: 1,
           age: 5_000,
           model: "gpt-5.4",
+          runtime: "OpenAI Codex",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
+        },
+        {
+          key: "agent:main:cron:daily-digest",
+          kind: "cron",
+          updatedAt: 2,
+          age: 7_000,
+          model: "gpt-5.5",
+          runtime: "OpenClaw Pi Default",
           totalTokens: null,
           totalTokensFresh: false,
           remainingTokens: null,
@@ -85,6 +100,16 @@ describe("status.command-sections", () => {
         Kind: "direct",
         Age: "5000ms",
         Model: "gpt-5.4",
+        Runtime: "OpenAI Codex",
+        Tokens: "12k",
+        Cache: "cache ok",
+      },
+      {
+        Key: "agent:ma",
+        Kind: "cron",
+        Age: "7000ms",
+        Model: "gpt-5.5",
+        Runtime: "OpenClaw Pi Default",
         Tokens: "12k",
         Cache: "cache ok",
       },
@@ -100,16 +125,7 @@ describe("status.command-sections", () => {
       muted: (value) => `muted(${value})`,
     });
 
-    expect(emptyRows).toEqual([
-      {
-        Key: "muted(no sessions yet)",
-        Kind: "",
-        Age: "",
-        Model: "",
-        Tokens: "",
-        Cache: "",
-      },
-    ]);
+    expect(emptyRows).toEqual([]);
   });
 
   it("maps health channel detail lines into status rows", () => {
@@ -134,6 +150,36 @@ describe("status.command-sections", () => {
       { Item: "Forum", Status: "muted(OFF)", Detail: "not configured" },
       { Item: "Matrix", Status: "ok(LINKED)", Detail: "linked" },
       { Item: "Pager", Status: "warn(UNLINKED)", Detail: "not linked" },
+    ]);
+  });
+
+  it("adds degraded event-loop health to status rows", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        durationMs: 42,
+        eventLoop: {
+          degraded: true,
+          reasons: ["event_loop_delay"],
+          intervalMs: 62_000,
+          delayP99Ms: 61_000,
+          delayMaxMs: 62_000,
+          utilization: 1,
+          cpuCoreRatio: 1,
+        },
+      } as HealthSummary,
+      formatHealthChannelLines: () => [],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toEqual([
+      { Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" },
+      {
+        Item: "Event loop",
+        Status: "warn(WARN)",
+        Detail: "reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
+      },
     ]);
   });
 

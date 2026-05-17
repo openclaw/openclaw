@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -17,7 +17,7 @@ import {
   type PromotionCandidate,
 } from "./short-term-promotion.js";
 
-const DAILY_MEMORY_FILE_NAME_RE = /^\d{4}-\d{2}-\d{2}\.md$/i;
+const DAILY_MEMORY_FILE_NAME_RE = /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
 
 type MemoryRemHarnessRemConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;

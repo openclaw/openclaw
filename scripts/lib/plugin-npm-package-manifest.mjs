@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
+import {
+  listPluginNpmRuntimeBuildOutputs,
+  resolvePluginNpmRuntimeBuildPlan,
+} from "./plugin-npm-runtime-build.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -19,25 +23,149 @@ function resolvePackageDir(repoRoot, packageDir) {
   return path.isAbsolute(packageDir) ? packageDir : path.resolve(repoRoot, packageDir);
 }
 
-function readGeneratedBundledChannelConfigs(repoRoot) {
+function resolvePackageJsonPath(packageDir) {
+  return path.join(packageDir, "package.json");
+}
+
+function packageRelativePathExists(packageDir, relativePath) {
+  return fs.existsSync(path.join(packageDir, relativePath));
+}
+
+function normalizePackPath(value) {
+  return value.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[|\\{}()[\]^$+?.]/gu, "\\$&");
+}
+
+function packFilePatternMatchesPath(pattern, relativePath) {
+  const normalizedPattern = normalizePackPath(pattern).replace(/^!/u, "");
+  const normalizedPath = normalizePackPath(relativePath);
+  if (!normalizedPattern || !normalizedPath) {
+    return false;
+  }
+  if (normalizedPattern === normalizedPath) {
+    return true;
+  }
+
+  let source = "";
+  for (let index = 0; index < normalizedPattern.length; index += 1) {
+    const char = normalizedPattern[index];
+    const next = normalizedPattern[index + 1];
+    const afterNext = normalizedPattern[index + 2];
+    if (char === "*" && next === "*" && afterNext === "/") {
+      source += "(?:.*/)?";
+      index += 2;
+      continue;
+    }
+    if (char === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    if (char === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    source += escapeRegExp(char ?? "");
+  }
+  return new RegExp(`^${source}$`, "u").test(normalizedPath);
+}
+
+function assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan) {
+  const fileRules = Array.isArray(plan.packageJson.files)
+    ? plan.packageJson.files.filter((entry) => typeof entry === "string")
+    : [];
+  const exclusions = fileRules.filter((entry) => normalizePackPath(entry).startsWith("!"));
+  if (exclusions.length === 0) {
+    return;
+  }
+
+  for (const requiredPath of listPluginNpmRuntimeBuildOutputs(plan)) {
+    for (const exclusion of exclusions) {
+      if (packFilePatternMatchesPath(exclusion, requiredPath)) {
+        throw new Error(
+          `package file rule '${exclusion}' excludes required package-local runtime file '${requiredPath}' for ${plan.pluginDir}. Remove the negation or publish would advertise a missing runtime entry.`,
+        );
+      }
+    }
+  }
+}
+
+function assertPluginNpmRuntimeBuildExists(plan) {
+  const missing = listPluginNpmRuntimeBuildOutputs(plan).filter(
+    (runtimePath) => !packageRelativePathExists(plan.packageDir, runtimePath.replace(/^\.\//u, "")),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      [
+        `package-local plugin runtime is missing for ${plan.pluginDir}: ${missing.join(", ")}`,
+        `Run node scripts/lib/plugin-npm-runtime-build.mjs ${path.relative(plan.repoRoot, plan.packageDir) || plan.packageDir} before publishing ${plan.packageJson.name ?? plan.pluginDir}.`,
+      ].join("\n"),
+    );
+  }
+  assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
+}
+
+export function resolveAugmentedPluginNpmPackageJson(params) {
+  const repoRoot = path.resolve(params.repoRoot ?? ".");
+  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
+  const packageJsonPath = resolvePackageJsonPath(packageDir);
+  if (!fs.existsSync(packageJsonPath)) {
+    return {
+      packageJsonPath,
+      packageDir,
+      repoRoot,
+      changed: false,
+      packageJson: undefined,
+      reason: "missing-package-json",
+    };
+  }
+
+  const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir });
+  if (!plan) {
+    return {
+      packageJsonPath,
+      packageDir,
+      repoRoot,
+      changed: false,
+      packageJson: undefined,
+      reason: "no-runtime-build",
+    };
+  }
+  assertPluginNpmRuntimeBuildExists(plan);
+
+  const packageJson = {
+    ...plan.packageJson,
+    files: plan.packageFiles,
+    peerDependencies: plan.packagePeerMetadata.peerDependencies,
+    peerDependenciesMeta: plan.packagePeerMetadata.peerDependenciesMeta,
+    openclaw: {
+      ...plan.packageJson.openclaw,
+      runtimeExtensions: plan.runtimeExtensions,
+      ...(plan.runtimeSetupEntry ? { runtimeSetupEntry: plan.runtimeSetupEntry } : {}),
+    },
+  };
+  const changed = JSON.stringify(packageJson) !== JSON.stringify(plan.packageJson);
+  return {
+    packageJsonPath,
+    packageDir,
+    repoRoot,
+    changed,
+    packageJson,
+    pluginDir: plan.pluginDir,
+    reason: changed ? "package-local-runtime" : "unchanged",
+  };
+}
+
+export function readGeneratedBundledChannelConfigs(repoRoot) {
   const metadataPath = path.join(repoRoot, GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH);
   if (!fs.existsSync(metadataPath)) {
     return new Map();
   }
   const source = fs.readFileSync(metadataPath, "utf8");
-  const match = source.match(
-    /export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = ([\s\S]*?) as const;/u,
-  );
-  if (!match?.[1]) {
-    return new Map();
-  }
-
-  let entries;
-  try {
-    entries = JSON5.parse(match[1]);
-  } catch {
-    return new Map();
-  }
+  const entries = readGeneratedBundledChannelConfigEntries(source);
   if (!Array.isArray(entries)) {
     return new Map();
   }
@@ -68,7 +196,36 @@ function readGeneratedBundledChannelConfigs(repoRoot) {
   return byPlugin;
 }
 
-function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
+function readGeneratedBundledChannelConfigEntries(source) {
+  const legacyMatch = source.match(
+    /export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = ([\s\S]*?) as const;/u,
+  );
+  if (legacyMatch?.[1]) {
+    try {
+      return JSON5.parse(legacyMatch[1]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const compactMatch = source.match(
+    /const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = \[([\s\S]*?)\]\.join\(""\);/u,
+  );
+  if (!compactMatch?.[1]) {
+    return undefined;
+  }
+  try {
+    const chunks = JSON5.parse(`[${compactMatch[1]}]`);
+    if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== "string")) {
+      return undefined;
+    }
+    return JSON.parse(chunks.join(""));
+  } catch {
+    return undefined;
+  }
+}
+
+export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
   if (!generatedChannelConfigs || Object.keys(generatedChannelConfigs).length === 0) {
     return manifest;
   }
@@ -133,34 +290,63 @@ export function resolveAugmentedPluginNpmManifest(params) {
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
-  const resolved = resolveAugmentedPluginNpmManifest({
+  const resolvedManifest = resolveAugmentedPluginNpmManifest({
+    repoRoot,
+    packageDir,
+  });
+  const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
     packageDir,
   });
 
-  if (!resolved.changed || !resolved.manifest) {
+  if (
+    (!resolvedManifest.changed || !resolvedManifest.manifest) &&
+    (!resolvedPackageJson.changed || !resolvedPackageJson.packageJson)
+  ) {
     return callback({
-      ...resolved,
+      ...resolvedManifest,
       packageDir,
       repoRoot,
       applied: false,
+      packageJsonApplied: false,
     });
   }
 
-  const originalManifest = fs.readFileSync(resolved.manifestPath, "utf8");
-  console.error(
-    `[plugin-npm-publish] overlaying generated channel config metadata for ${resolved.pluginId}`,
-  );
-  writeJsonFile(resolved.manifestPath, resolved.manifest);
+  const originalManifest =
+    resolvedManifest.changed && resolvedManifest.manifest
+      ? fs.readFileSync(resolvedManifest.manifestPath, "utf8")
+      : undefined;
+  const originalPackageJson =
+    resolvedPackageJson.changed && resolvedPackageJson.packageJson
+      ? fs.readFileSync(resolvedPackageJson.packageJsonPath, "utf8")
+      : undefined;
+  if (resolvedManifest.changed && resolvedManifest.manifest) {
+    console.error(
+      `[plugin-npm-publish] overlaying generated channel config metadata for ${resolvedManifest.pluginId}`,
+    );
+    writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
+  }
+  if (resolvedPackageJson.changed && resolvedPackageJson.packageJson) {
+    console.error(
+      `[plugin-npm-publish] overlaying package-local runtime metadata for ${resolvedPackageJson.pluginDir}`,
+    );
+    writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
+  }
   try {
     return callback({
-      ...resolved,
+      ...resolvedManifest,
       packageDir,
       repoRoot,
-      applied: true,
+      applied: resolvedManifest.changed && Boolean(resolvedManifest.manifest),
+      packageJsonApplied: resolvedPackageJson.changed && Boolean(resolvedPackageJson.packageJson),
     });
   } finally {
-    fs.writeFileSync(resolved.manifestPath, originalManifest, "utf8");
+    if (originalManifest !== undefined) {
+      fs.writeFileSync(resolvedManifest.manifestPath, originalManifest, "utf8");
+    }
+    if (originalPackageJson !== undefined) {
+      fs.writeFileSync(resolvedPackageJson.packageJsonPath, originalPackageJson, "utf8");
+    }
   }
 }
 

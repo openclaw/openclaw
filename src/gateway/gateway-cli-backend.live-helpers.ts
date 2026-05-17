@@ -20,6 +20,7 @@ import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import type { EventFrame } from "./protocol/index.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
 // websocket handshake needs a wider budget than the single-provider reruns.
@@ -40,7 +41,7 @@ export type CliBackendLiveModelSelection = {
   cliModelKey: string;
   configModelKey: string;
   configModelSwitchTarget: string | undefined;
-  agentRuntime: { id: string; fallback: "pi" | "none" };
+  agentRuntime: { id: string };
 };
 
 export type CliBackendLiveEnvSnapshot = {
@@ -72,6 +73,11 @@ export function resolveCliBackendLiveModelSelection(params: {
   }
 
   const migrated = migrateLegacyRuntimeModelRef(params.rawModel);
+  if (migrated?.legacyProvider === "codex-cli") {
+    throw new Error(
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/... is no longer supported. Use a supported CLI backend such as claude-cli or google-gemini-cli.",
+    );
+  }
   if (migrated?.cli) {
     return {
       providerId: migrated.runtime,
@@ -80,7 +86,7 @@ export function resolveCliBackendLiveModelSelection(params: {
       configModelSwitchTarget: params.modelSwitchTarget
         ? (migrateLegacyRuntimeModelRef(params.modelSwitchTarget)?.ref ?? params.modelSwitchTarget)
         : undefined,
-      agentRuntime: { id: migrated.runtime, fallback: "none" },
+      agentRuntime: { id: migrated.runtime },
     };
   }
 
@@ -90,7 +96,7 @@ export function resolveCliBackendLiveModelSelection(params: {
     cliModelKey: modelKey,
     configModelKey: modelKey,
     configModelSwitchTarget: params.modelSwitchTarget,
-    agentRuntime: { id: "pi", fallback: "pi" },
+    agentRuntime: { id: "pi" },
   };
 }
 
@@ -292,6 +298,7 @@ export async function connectTestGatewayClient(params: {
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
   const timeoutMs = params.timeoutMs ?? CLI_GATEWAY_CONNECT_TIMEOUT_MS;
@@ -331,6 +338,7 @@ async function connectClientOnce(params: {
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
@@ -367,6 +375,7 @@ async function connectClientOnce(params: {
       onHelloOk: () => finish({ client }),
       onConnectError: (error) => finish({ error }),
       onClose: failWithClose,
+      onEvent: params.onEvent,
     };
     if (params.clientDisplayName !== null) {
       clientOptions.clientDisplayName = params.clientDisplayName ?? "vitest-live";

@@ -1,7 +1,8 @@
-import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describe, expect, it, vi } from "vitest";
+import { buildCopilotDynamicHeaders } from "./stream.js";
 import {
   wrapCopilotAnthropicStream,
+  wrapCopilotOpenAICompletionsStream,
   wrapCopilotOpenAIResponsesStream,
   wrapCopilotProviderStream,
 } from "./stream.js";
@@ -14,8 +15,20 @@ function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>)
   return streamFn;
 }
 
+function requireFirstStreamOptions(mock: ReturnType<typeof vi.fn>, label: string) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  const options = call[2];
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected ${label} options`);
+  }
+  return options as { headers?: Record<string, unknown>; onPayload?: unknown };
+}
+
 describe("wrapCopilotAnthropicStream", () => {
-  it("adds Copilot headers and Anthropic cache markers for Claude payloads", async () => {
+  it("adds Copilot headers and Anthropic cache markers for Claude payloads", () => {
     const payloads: Array<{
       messages: Array<Record<string, unknown>>;
     }> = [];
@@ -65,11 +78,16 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
-    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Anthropic stream");
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Anthropic stream options");
+    }
+    expect(options).toEqual({
       headers: {
         ...expectedCopilotHeaders,
         "X-Test": "1",
       },
+      onPayload: options.onPayload,
     });
     expect(payloads[0]?.messages).toEqual([
       {
@@ -86,19 +104,17 @@ describe("wrapCopilotAnthropicStream", () => {
   it("leaves non-Anthropic Copilot models untouched", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
     const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    const model = {
+      provider: "github-copilot",
+      api: "openai-responses",
+      id: "gpt-4.1",
+    } as never;
+    const context = { messages: [{ role: "user", content: "hi" }] } as never;
     const options = { headers: { Existing: "1" } };
 
-    void wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-4.1",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      options as never,
-    );
+    void wrapped(model, context, options as never);
 
-    expect(baseStreamFn).toHaveBeenCalledWith(expect.anything(), expect.anything(), options);
+    expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
   it("adds Copilot headers, preserves reasoning IDs, and rewrites message IDs before payload send", () => {
@@ -144,11 +160,17 @@ describe("wrapCopilotAnthropicStream", () => {
       { headers: { "X-Test": "1" } },
     );
 
-    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Responses stream options");
+    }
+    expect(options).toEqual({
       headers: {
         ...expectedCopilotHeaders,
         "X-Test": "1",
       },
+      onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
     expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
@@ -181,6 +203,42 @@ describe("wrapCopilotAnthropicStream", () => {
     expect((returnedPayload as { input: Array<Record<string, unknown>> }).input[0]?.id).toMatch(
       /^msg_[a-f0-9]{16}$/,
     );
+  });
+
+  it("adds Copilot headers for Chat Completions models", () => {
+    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
+    const wrapped = requireStreamFn(wrapCopilotOpenAICompletionsStream(baseStreamFn));
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image", data: "abc", mimeType: "image/png" },
+        ],
+      },
+    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages,
+      hasImages: true,
+    });
+
+    void wrapped(
+      {
+        provider: "github-copilot",
+        api: "openai-completions",
+        id: "gemini-3.1-pro-preview",
+      } as never,
+      { messages } as never,
+      { headers: { "X-Test": "1" } },
+    );
+
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Chat Completions stream");
+    expect(options).toEqual({
+      headers: {
+        ...expectedCopilotHeaders,
+        "X-Test": "1",
+      },
+    });
   });
 
   it("adapts provider stream context without changing wrapper behavior", () => {

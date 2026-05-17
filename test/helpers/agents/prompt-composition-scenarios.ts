@@ -7,6 +7,7 @@ import {
   buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
+import { buildCurrentInboundPrompt } from "../../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
 import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
@@ -19,6 +20,7 @@ import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
+import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -106,6 +108,23 @@ function buildAutoReplyBody(params: { ctx: TemplateContext; body: string; eventL
     .join("\n\n");
 }
 
+function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string }): string {
+  const inboundUserContext = buildInboundUserContextPrefix(params.ctx);
+  const envelope = buildReplyPromptEnvelope({
+    ctx: params.ctx,
+    sessionCtx: params.ctx,
+    baseBody: params.body,
+    hasUserBody: true,
+    inboundUserContext,
+    isBareSessionReset: false,
+    startupAction: "new",
+  });
+  return buildCurrentInboundPrompt({
+    context: envelope.currentInboundContext,
+    prompt: envelope.queuedBody,
+  });
+}
+
 async function readContextFiles(workspaceDir: string, fileNames: string[]) {
   return Promise.all(
     fileNames.map(async (fileName) => ({
@@ -127,9 +146,6 @@ function buildAutoReplySystemPrompt(params: {
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "disallow",
-          silentReplyRewrite: true,
         })
       : "",
     params.includeGroupChatContext
@@ -422,6 +438,61 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
   };
 }
 
+function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
+  const body = "Please summarize the deploy log.";
+  const baseCtx: TemplateContext = {
+    Provider: "discord",
+    Surface: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: "channel:987654321",
+    AccountId: "A1",
+    ChatType: "channel",
+    GroupSubject: "#ops-bridge",
+    GroupChannel: "#ops-bridge",
+    GroupSpace: "guild-123",
+    SenderId: "U3",
+    SenderName: "Cael",
+    MessageSid: "1503084621145964846",
+    Body: body,
+    BodyStripped: body,
+    UntrustedStructuredContext: [
+      {
+        label: "Discord channel metadata",
+        source: "discord",
+        type: "channel_metadata",
+        payload: {
+          topic: "Deploy coordination",
+        },
+      },
+    ],
+  };
+  return {
+    scenario: "auto-reply-discord-boundary",
+    focus:
+      "Discord inbound body remains one user turn while supplemental context is structured metadata",
+    expectedStableSystemAfterTurnIds: [],
+    turns: [
+      {
+        id: "t1",
+        label: "Discord turn with channel metadata",
+        systemPrompt: buildAutoReplySystemPrompt({
+          workspaceDir,
+          sessionCtx: baseCtx,
+          includeGroupChatContext: true,
+        }),
+        bodyPrompt: buildAutoReplyModelPrompt({
+          ctx: baseCtx,
+          body,
+        }),
+        notes: [
+          "Inbound body should appear once in the model-bound prompt",
+          "Channel metadata should not use raw EXTERNAL_UNTRUSTED_CONTENT wrappers",
+        ],
+      },
+    ],
+  };
+}
+
 async function createToolRichScenario(workspaceDir: string): Promise<PromptScenario> {
   const skillsPrompt = [
     "<available_skills>",
@@ -594,7 +665,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
     "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
     "If nothing to store, reply with NO_REPLY.",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const memoryFlushSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -618,7 +690,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "## Red Lines",
     "Do not delete production data.",
     "",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -699,6 +772,7 @@ export async function createPromptCompositionScenarios(): Promise<{
   const scenarios = [
     createDirectScenario(workspaceDir),
     createGroupScenario(workspaceDir),
+    createDiscordBoundaryScenario(workspaceDir),
     await createToolRichScenario(workspaceDir),
     await createBootstrapWarningScenario(warningWorkspaceDir),
     await createMaintenanceScenario(workspaceDir),

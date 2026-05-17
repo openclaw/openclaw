@@ -149,7 +149,16 @@ run_prestart_cli() {
   # requires the gateway container's network namespace to already exist. That
   # creates a circular dependency for config writes that are needed before the
   # gateway can start cleanly.
-  run_prestart_gateway --entrypoint node openclaw-gateway \
+  # Host OPENCLAW_* paths are Compose bind-mount sources. Setup-time CLI writes
+  # must still resolve state/config paths inside the container.
+  run_prestart_gateway \
+    -e HOME=/home/node \
+    -e OPENCLAW_HOME=/home/node \
+    -e OPENCLAW_STATE_DIR=/home/node/.openclaw \
+    -e OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json \
+    -e OPENCLAW_CONFIG_DIR=/home/node/.openclaw \
+    -e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace \
+    --entrypoint node openclaw-gateway \
     dist/index.js "$@"
 }
 
@@ -240,9 +249,11 @@ fi
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+OPENCLAW_AUTH_PROFILE_SECRET_DIR="${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-$HOME/.openclaw-auth-profile-secrets}"
 
 validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
 validate_mount_path_value "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
+validate_mount_path_value "OPENCLAW_AUTH_PROFILE_SECRET_DIR" "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
 if [[ -n "$HOME_VOLUME_NAME" ]]; then
   if [[ "$HOME_VOLUME_NAME" == *"/"* ]]; then
     validate_mount_path_value "OPENCLAW_HOME_VOLUME" "$HOME_VOLUME_NAME"
@@ -270,6 +281,7 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+mkdir -p "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
 # Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
 # where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
@@ -278,6 +290,7 @@ mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
+export OPENCLAW_AUTH_PROFILE_SECRET_DIR
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
@@ -285,6 +298,7 @@ export OPENCLAW_DISABLE_BONJOUR="${OPENCLAW_DISABLE_BONJOUR:-}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
@@ -342,6 +356,7 @@ write_extra_compose() {
   local gateway_home_mount
   local gateway_config_mount
   local gateway_workspace_mount
+  local gateway_auth_profile_secret_mount
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
@@ -353,12 +368,15 @@ YAML
     gateway_home_mount="${home_volume}:/home/node"
     gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
     gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
+    gateway_auth_profile_secret_mount="${OPENCLAW_AUTH_PROFILE_SECRET_DIR}:/home/node/.config/openclaw"
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
+    validate_mount_spec "$gateway_auth_profile_secret_mount"
     printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
@@ -375,6 +393,7 @@ YAML
     printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
@@ -472,6 +491,7 @@ upsert_env() {
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \
   OPENCLAW_WORKSPACE_DIR \
+  OPENCLAW_AUTH_PROFILE_SECRET_DIR \
   OPENCLAW_GATEWAY_PORT \
   OPENCLAW_BRIDGE_PORT \
   OPENCLAW_GATEWAY_BIND \
@@ -482,6 +502,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
@@ -503,6 +524,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   run_docker_build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
@@ -529,6 +551,7 @@ echo "==> Fixing data-directory permissions"
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
   'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
@@ -576,15 +599,15 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo ""
   echo "==> Sandbox setup"
 
-  # Build sandbox image if Dockerfile.sandbox exists.
-  if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
+  sandbox_dockerfile="$ROOT_DIR/scripts/docker/sandbox/Dockerfile"
+  if [[ -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
     run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
-      -f "$ROOT_DIR/Dockerfile.sandbox" \
+      -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
   else
-    echo "WARNING: Dockerfile.sandbox not found in $ROOT_DIR" >&2
+    echo "WARNING: sandbox Dockerfile not found at $sandbox_dockerfile" >&2
     echo "  Sandbox config will be applied but no sandbox image will be built." >&2
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi

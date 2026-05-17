@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { collectString } from "./cli-options.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
+import { registerMantisCli } from "./mantis/cli.js";
 import {
   DEFAULT_QA_LIVE_PROVIDER_MODE,
   formatQaProviderModeHelp,
@@ -48,6 +49,7 @@ async function runQaSuite(opts: {
   memory?: string;
   disk?: string;
   preflight?: boolean;
+  runtimePair?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -55,11 +57,13 @@ async function runQaSuite(opts: {
 
 async function runQaParityReport(opts: {
   repoRoot?: string;
-  candidateSummary: string;
-  baselineSummary: string;
+  candidateSummary?: string;
+  baselineSummary?: string;
   candidateLabel?: string;
   baselineLabel?: string;
   outputDir?: string;
+  runtimeAxis?: boolean;
+  summary?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
@@ -225,6 +229,7 @@ export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
     .description("Run private QA automation flows and launch the QA debugger");
+  registerMantisCli(qa);
 
   qa.command("run")
     .description("Run the bundled QA self-check and write a Markdown report")
@@ -273,6 +278,7 @@ export function registerQaLabCli(program: Command) {
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
     .option("--memory <size>", "Multipass memory size")
     .option("--disk <size>", "Multipass disk size")
+    .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. pi,codex")
     .action(
       async (opts: {
         repoRoot?: string;
@@ -295,6 +301,7 @@ export function registerQaLabCli(program: Command) {
         memory?: string;
         disk?: string;
         preflight?: boolean;
+        runtimePair?: string;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -317,14 +324,17 @@ export function registerQaLabCli(program: Command) {
           memory: opts.memory,
           disk: opts.disk,
           preflight: opts.preflight,
+          runtimePair: opts.runtimePair,
         });
       },
     );
 
   qa.command("parity-report")
-    .description("Compare two QA suite summaries and write an agentic parity gate report")
-    .requiredOption("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
-    .requiredOption("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
+    .description("Write either a model-axis parity gate report or a runtime-axis parity report")
+    .option("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
+    .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
+    .option("--runtime-axis", "Interpret --summary as a runtime-pair qa-suite-summary.json", false)
+    .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option(
       "--candidate-label <label>",
@@ -336,11 +346,13 @@ export function registerQaLabCli(program: Command) {
     .action(
       async (opts: {
         repoRoot?: string;
-        candidateSummary: string;
-        baselineSummary: string;
+        candidateSummary?: string;
+        baselineSummary?: string;
         candidateLabel?: string;
         baselineLabel?: string;
         outputDir?: string;
+        runtimeAxis?: boolean;
+        summary?: string;
       }) => {
         await runQaParityReport(opts);
       },

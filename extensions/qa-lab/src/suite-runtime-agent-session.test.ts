@@ -11,7 +11,10 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
-afterEach(cleanup);
+afterEach(async () => {
+  vi.useRealTimers();
+  await cleanup();
+});
 
 describe("qa suite runtime agent session helpers", () => {
   const gatewayCall = vi.fn();
@@ -26,13 +29,44 @@ describe("qa suite runtime agent session helpers", () => {
     gatewayCall.mockReset();
   });
 
+  function requireGatewayCall() {
+    const [call] = gatewayCall.mock.calls;
+    if (!call) {
+      throw new Error("expected gateway call");
+    }
+    return call;
+  }
+
   it("creates sessions and trims the returned key", async () => {
     gatewayCall.mockResolvedValueOnce({ key: "  session-1  " });
 
     await expect(createSession(env, "Test Session")).resolves.toBe("session-1");
-    expect(gatewayCall).toHaveBeenCalledWith(
+    const [method, params, options] = requireGatewayCall();
+    expect(method).toBe("sessions.create");
+    expect(params).toEqual({ label: "Test Session" });
+    expect(options?.timeoutMs).toBe(60_000);
+  });
+
+  it("retries transient session store lock timeouts while creating sessions", async () => {
+    const lockTimeoutError = Object.assign(
+      new Error("SessionWriteLockTimeoutError: session file locked"),
+      { code: "OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT" },
+    );
+    gatewayCall
+      .mockRejectedValueOnce(lockTimeoutError)
+      .mockResolvedValueOnce({ key: " session-2 " });
+
+    vi.useFakeTimers();
+    const pending = createSession(env, "Retry Session", "agent:qa:retry");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(pending).resolves.toBe("session-2");
+    expect(gatewayCall).toHaveBeenCalledTimes(2);
+    expect(gatewayCall).toHaveBeenNthCalledWith(
+      2,
       "sessions.create",
-      { label: "Test Session" },
+      { label: "Retry Session", key: "agent:qa:retry" },
       expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
   });
@@ -54,11 +88,10 @@ describe("qa suite runtime agent session helpers", () => {
     });
 
     await expect(readSkillStatus(env)).resolves.toEqual([{ name: "alpha", eligible: true }]);
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "skills.status",
-      { agentId: "qa" },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
+    const [method, params, options] = requireGatewayCall();
+    expect(method).toBe("skills.status");
+    expect(params).toEqual({ agentId: "qa" });
+    expect(options?.timeoutMs).toBe(45_000);
   });
 
   it("reads the raw qa session store from disk", async () => {
@@ -87,6 +120,6 @@ describe("qa suite runtime agent session helpers", () => {
       readRawQaSessionStore({
         gateway: { tempRoot },
       } as never),
-    ).resolves.toEqual({});
+    ).resolves.toStrictEqual({});
   });
 });

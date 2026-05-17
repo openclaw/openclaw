@@ -1,5 +1,6 @@
-import { promises as fs } from "node:fs";
+import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
+import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -178,6 +179,13 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
+function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
+  const rootWithSep = params.rootPath.endsWith(path.sep)
+    ? params.rootPath
+    : `${params.rootPath}${path.sep}`;
+  return params.childPath.startsWith(rootWithSep);
+}
+
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return;
@@ -205,11 +213,43 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
-    const rootWithSep = rootBase.endsWith(path.sep) ? rootBase : `${rootBase}${path.sep}`;
-    if (!dirBase.startsWith(rootWithSep)) {
+    if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
       return;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+
+  const resolveReal = (targetPath: string): string | null => {
+    try {
+      return fsSync.realpathSync.native(targetPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const rootReal = resolveReal(entry.attachmentsRootDir);
+    const dirReal = resolveReal(entry.attachmentsDir);
+    if (!dirReal) {
+      return;
+    }
+
+    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    if (!isResolvedChildPath({ childPath: dirReal, rootPath: rootBase })) {
+      return;
+    }
+    fsSync.rmSync(dirReal, { recursive: true, force: true });
   } catch {
     // best effort
   }
@@ -258,7 +298,7 @@ export function reconcileOrphanedRun(params: {
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
-    void safeRemoveAttachmentsDir(params.entry);
+    safeRemoveAttachmentsDirSync(params.entry);
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
@@ -306,7 +346,9 @@ export function reconcileOrphanedRestoredRuns(params: {
 
 export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
-  const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
+  const minutes =
+    config.agents?.defaults?.subagents?.archiveAfterMinutes ??
+    DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
   if (!Number.isFinite(minutes) || minutes < 0) {
     return undefined;
   }

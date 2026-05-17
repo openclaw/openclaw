@@ -9,6 +9,7 @@ import {
   listAgentToolResultMiddlewares,
   normalizeAgentToolResultMiddlewareRuntimeIds,
 } from "./agent-tool-result-middleware.js";
+import { loadOpenClawPlugins } from "./loader.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 
 const log = createSubsystemLogger("plugins/agent-tool-result-middleware");
@@ -67,16 +68,22 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       return [];
     }
 
-    const registry = getLoadedRuntimePluginRegistry({
-      workspaceDir: params.workspaceDir,
-      env,
-      requiredPluginIds: pluginIds,
-    });
-    if (!registry) {
-      return [];
-    }
+    const runtimeRegistry =
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: params.workspaceDir,
+        env,
+        requiredPluginIds: pluginIds,
+      }) ??
+      loadOpenClawPlugins({
+        config,
+        workspaceDir: params.workspaceDir,
+        env,
+        onlyPluginIds: pluginIds,
+        manifestRegistry,
+        activate: false,
+      });
 
-    return registry.agentToolResultMiddlewares
+    return runtimeRegistry.agentToolResultMiddlewares
       .filter((entry) => entry.runtimes.includes(params.runtime))
       .map((entry) => entry.handler);
   } catch (error) {

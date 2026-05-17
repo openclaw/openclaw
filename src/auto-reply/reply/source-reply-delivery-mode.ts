@@ -1,26 +1,48 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
+import {
+  isExplicitCommandTurn,
+  resolveCommandTurnContext,
+  type CommandTurnContext,
+} from "../command-turn-context.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  InboundEventKind?: InboundEventKind;
+  CommandAuthorized?: boolean;
+  CommandBody?: string;
   CommandSource?: "text" | "native";
+  CommandTurn?: CommandTurnContext;
 };
+
+export function isExplicitSourceReplyCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+  return isExplicitCommandTurn(resolveCommandTurnContext(ctx));
+}
 
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
-  if (params.requested) {
-    return params.messageToolAvailable === false && params.requested === "message_tool_only"
-      ? "automatic"
-      : params.requested;
+  if (params.strictMessageToolOnly === true) {
+    return "message_tool_only";
   }
-  if (params.ctx.CommandSource === "native") {
+  if (params.ctx.InboundEventKind === "room_event") {
+    return "message_tool_only";
+  }
+  if (
+    params.requested &&
+    (params.requested !== "message_tool_only" || params.messageToolAvailable !== false)
+  ) {
+    return params.requested;
+  }
+  if (isExplicitSourceReplyCommand(params.ctx)) {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
@@ -54,6 +76,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
   suppressAcpChildUserDelivery?: boolean;
   explicitSuppressTyping?: boolean;
@@ -65,6 +88,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
+    strictMessageToolOnly: params.strictMessageToolOnly,
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,
   });

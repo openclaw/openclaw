@@ -4,6 +4,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  readOpenClawManagedNpmRootOverrides,
+  syncManagedNpmRootPeerDependencies,
+} from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -11,6 +15,7 @@ import {
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
 } from "./install-paths.js";
+import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type UninstallActions = {
@@ -98,11 +103,16 @@ export type UninstallPluginResult =
 
 export type PluginUninstallDirectoryRemoval = {
   target: string;
-  cleanup?: {
-    kind: "npm";
-    npmRoot: string;
-    packageName: string;
-  };
+  cleanup?:
+    | {
+        kind: "npm";
+        npmRoot: string;
+        packageName: string;
+      }
+    | {
+        kind: "git";
+        parentDir: string;
+      };
 };
 
 export type PluginUninstallPlanResult =
@@ -136,12 +146,12 @@ export function resolveUninstallDirectoryTarget(params: {
   if (npmManagedInstall) {
     return npmManagedInstall.installPath;
   }
-  const gitManagedPath = resolveGitManagedInstallPath({
+  const gitManagedInstall = resolveGitManagedInstall({
     installRecord: params.installRecord,
     extensionsDir: params.extensionsDir,
   });
-  if (gitManagedPath) {
-    return gitManagedPath;
+  if (gitManagedInstall) {
+    return gitManagedInstall.installPath;
   }
 
   let defaultPath: string;
@@ -226,10 +236,10 @@ function resolveNpmPackageNameFromInstallPath(params: {
   return segments[0] ?? null;
 }
 
-function resolveGitManagedInstallPath(params: {
+function resolveGitManagedInstall(params: {
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
-}): string | null {
+}): { installPath: string; parentDir: string } | null {
   const installPath = params.installRecord?.installPath?.trim();
   if (params.installRecord?.source !== "git" || !installPath) {
     return null;
@@ -246,7 +256,7 @@ function resolveGitManagedInstallPath(params: {
       isPathInsideOrEqual(gitRoot, installPath) &&
       resolveComparablePath(gitRoot) !== resolveComparablePath(installPath)
     ) {
-      return installPath;
+      return { installPath, parentDir: path.dirname(installPath) };
     }
   }
   return null;
@@ -519,6 +529,13 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
           extensionsDir,
         })
       : null;
+  const gitManagedInstall =
+    deleteFiles && !isLinked
+      ? resolveGitManagedInstall({
+          installRecord,
+          extensionsDir,
+        })
+      : null;
 
   const deleteTarget =
     deleteFiles && !isLinked
@@ -546,7 +563,14 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
                   packageName: npmManagedInstall.packageName,
                 },
               }
-            : {}),
+            : gitManagedInstall && deleteTarget === gitManagedInstall.installPath
+              ? {
+                  cleanup: {
+                    kind: "git",
+                    parentDir: gitManagedInstall.parentDir,
+                  },
+                }
+              : {}),
         }
       : null,
   };
@@ -565,26 +589,42 @@ export async function applyPluginUninstallDirectoryRemoval(
       .then(() => true)
       .catch(() => false)) ?? false;
   const warnings: string[] = [];
-  if (!existed) {
+  if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
   }
 
-  if (removal.cleanup?.kind === "npm") {
+  const npmCleanupManifestExists =
+    removal.cleanup?.kind === "npm"
+      ? await fs
+          .access(path.join(removal.cleanup.npmRoot, "package.json"))
+          .then(() => true)
+          .catch(() => false)
+      : false;
+
+  if (!existed && removal.cleanup?.kind === "npm" && !npmCleanupManifestExists) {
+    return { directoryRemoved: false, warnings };
+  }
+
+  if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists) {
     const uninstall = await runCommandWithTimeout(
       [
         "npm",
         "uninstall",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        removal.cleanup.npmRoot,
         removal.cleanup.packageName,
       ],
       {
+        cwd: removal.cleanup.npmRoot,
         timeoutMs: 300_000,
-        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+        env: createSafeNpmInstallEnv(process.env, {
+          legacyPeerDeps: true,
+          packageLock: true,
+          quiet: true,
+        }),
       },
     );
     if (uninstall.code !== 0) {
@@ -596,9 +636,77 @@ export async function applyPluginUninstallDirectoryRemoval(
         }`,
       );
     }
+    try {
+      const managedOverrides = await readOpenClawManagedNpmRootOverrides();
+      const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
+        npmRoot: removal.cleanup.npmRoot,
+        managedOverrides,
+      });
+      if (syncedPeerDependencies) {
+        const cleanup = await runCommandWithTimeout(
+          [
+            "npm",
+            "install",
+            "--omit=dev",
+            "--omit=peer",
+            "--loglevel=error",
+            "--legacy-peer-deps",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+          ],
+          {
+            cwd: removal.cleanup.npmRoot,
+            timeoutMs: 300_000,
+            env: createSafeNpmInstallEnv(process.env, {
+              legacyPeerDeps: true,
+              packageLock: true,
+              quiet: true,
+            }),
+          },
+        );
+        if (cleanup.code !== 0) {
+          warnings.push(
+            `Failed to prune managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${
+              cleanup.stderr.trim() ||
+              cleanup.stdout.trim() ||
+              `npm exited with code ${cleanup.code}`
+            }`,
+          );
+        }
+      }
+    } catch (error) {
+      warnings.push(
+        `Failed to sync managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
+      );
+    }
+    try {
+      await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+        npmRoot: removal.cleanup.npmRoot,
+        logger: {
+          warn: (message) => warnings.push(message),
+        },
+      });
+    } catch (error) {
+      warnings.push(
+        `Failed to repair managed npm peer links after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
+      );
+    }
   }
   try {
     await fs.rm(removal.target, { recursive: true, force: true });
+    if (removal.cleanup?.kind === "git") {
+      try {
+        await fs.rmdir(removal.cleanup.parentDir);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+          warnings.push(
+            `Failed to remove empty git plugin install parent ${removal.cleanup.parentDir}: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+    }
     return { directoryRemoved: existed, warnings };
   } catch (error) {
     return {

@@ -13,11 +13,13 @@ import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import {
   clearGatewayRestartIntentSync,
+  type GatewayRestartIntent,
   writeGatewayRestartIntentSync,
 } from "../../infra/restart.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { formatInvalidConfigRecoveryHint } from "../config-recovery-hints.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
 import {
   buildDaemonServiceSnapshot,
@@ -28,6 +30,10 @@ import { filterContainerGenericHints } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
+  force?: boolean;
+  wait?: string;
+  restartIntent?: GatewayRestartIntent;
+  disable?: boolean;
 };
 
 type RestartPostCheckContext = {
@@ -249,7 +255,7 @@ export async function runServiceStart(params: {
       fail(
         preflight.hints
           ? `${params.serviceNoun} start blocked: ${preflight.message}`
-          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`,
         preflight.hints,
       );
       return;
@@ -358,6 +364,7 @@ export async function runServiceStop(params: {
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
+  stopWhenNotLoaded?: boolean;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "stop", json });
@@ -378,6 +385,20 @@ export async function runServiceStop(params: {
     }
   }
   if (!loaded) {
+    if (params.stopWhenNotLoaded) {
+      try {
+        await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
+      } catch (err) {
+        fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+        return;
+      }
+      emit({
+        ok: true,
+        result: "stopped",
+        service: buildDaemonServiceSnapshot(params.service, false),
+      });
+      return;
+    }
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, fail });
       if (handled) {
@@ -409,7 +430,7 @@ export async function runServiceStop(params: {
     return;
   }
   try {
-    await params.service.stop({ env: process.env, stdout });
+    await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
   } catch (err) {
     fail(`${params.serviceNoun} stop failed: ${String(err)}`);
     return;
@@ -440,6 +461,7 @@ export async function runServiceRestart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "restart", json });
   const warnings: string[] = [];
+  const restartIntent = params.opts?.restartIntent;
   let handledRecovery: ServiceRecoveryResult | null = null;
   let recoveredLoadedState: boolean | null = null;
   const emitScheduledRestart = (
@@ -477,7 +499,7 @@ export async function runServiceRestart(params: {
       fail(
         preflight.hints
           ? `${params.serviceNoun} restart blocked: ${preflight.message}`
-          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`,
         preflight.hints,
       );
       return false;
@@ -552,6 +574,8 @@ export async function runServiceRestart(params: {
         const runtime = await params.service.readRuntime(process.env).catch(() => null);
         wroteRestartIntent = writeGatewayRestartIntentSync({
           targetPid: runtime?.pid,
+          reason: "gateway.restart",
+          ...(restartIntent ? { intent: restartIntent } : {}),
         });
       }
       try {

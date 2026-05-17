@@ -38,8 +38,12 @@ run_plugins_clawhub_scenario() {
     if [[ "${OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB:-0}" = "1" ]]; then
       export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
       export NPM_CONFIG_REGISTRY="${OPENCLAW_PLUGINS_E2E_LIVE_NPM_REGISTRY:-https://registry.npmjs.org/}"
-    elif [[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]; then
+    else
       # Keep the release-path smoke hermetic; live ClawHub can rate-limit CI.
+      if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
+        echo "Ignoring ambient ClawHub URL for fixture-mode plugin E2E; set OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1 for live ClawHub."
+      fi
+      unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
       clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-clawhub-fixture.XXXXXX")"
       start_clawhub_fixture_server "$clawhub_fixture_dir"
     fi

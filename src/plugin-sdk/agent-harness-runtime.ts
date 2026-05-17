@@ -2,14 +2,26 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
 import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
+import {
+  abortEmbeddedPiRun,
+  clearActiveEmbeddedRun,
+  queueEmbeddedPiMessageWithOutcome,
+  resolveActiveEmbeddedRunSessionId,
+  setActiveEmbeddedRun,
+  type EmbeddedPiQueueMessageOptions,
+} from "../agents/pi-embedded-runner/runs.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
-export type { AgentMessage } from "@mariozechner/pi-agent-core";
+export type { AgentMessage } from "@earendil-works/pi-agent-core";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -18,6 +30,8 @@ export type {
   AgentHarnessCompactResult,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
+  AgentHarnessSideQuestionParams,
+  AgentHarnessSideQuestionResult,
   AgentHarnessResetParams,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
@@ -26,11 +40,17 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/pi-embedded-runner/run/types.js";
-export type { ContextEngine as HarnessContextEngine } from "../context-engine/types.js";
+export type {
+  ContextEngine as HarnessContextEngine,
+  ContextEngineProjection,
+} from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
-export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../agents/pi-embedded-messaging.types.js";
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
@@ -86,8 +106,12 @@ export {
   filterToolResultMediaUrls,
 } from "../agents/pi-embedded-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-export { resolveSessionAgentIds } from "../agents/agent-scope.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
+export {
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
@@ -95,25 +119,55 @@ export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner
 export {
   abortEmbeddedPiRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
-  queueEmbeddedPiMessage as queueAgentHarnessMessage,
+  resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
-} from "../agents/pi-embedded-runner/runs.js";
+};
+
+/**
+ * @deprecated Active-run queueing is an internal runtime concern. This legacy
+ * boolean API only reports immediate queue eligibility and cannot observe async
+ * runtime rejection; runtime-owned delivery paths should use acceptance-aware
+ * steering instead of public SDK queueing.
+ */
+export function queueAgentHarnessMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): boolean {
+  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+}
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
+
+export async function loadCodexBundleMcpThreadConfig(
+  params: LoadCodexBundleMcpThreadConfigParams,
+): Promise<CodexBundleMcpThreadConfig> {
+  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  return load(params);
+}
 export { resolveSandboxContext } from "../agents/sandbox.js";
+export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
   resolveSessionWriteLockAcquireTimeoutMs,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
@@ -132,6 +186,7 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
@@ -151,8 +206,14 @@ export {
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.
  */
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args });
+export type ToolProgressDetailMode = "explain" | "raw";
+
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolProgressDetailMode },
+): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
   return formatToolDetail(display);
 }
 

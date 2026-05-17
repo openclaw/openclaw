@@ -38,6 +38,10 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import {
+  collectInstalledPackageErrors,
+  normalizeInstalledBinaryVersion,
+} from "./openclaw-npm-postpublish-verify.ts";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -70,6 +74,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/task-registry-control.runtime.js",
+  "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
@@ -124,7 +129,7 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["doctor", "--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
-  ["models", "list", "--provider", "amazon-bedrock"],
+  ["models", "list", "--provider", "openai"],
 ] as const;
 export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = [
   "doctor",
@@ -329,7 +334,59 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
   });
 }
 
-function writePackedBundledPluginActivationConfig(homeDir: string): void {
+export function collectPackedInstalledPackageVerificationErrors(params: {
+  expectedVersion: string;
+  installedBinaryVersion?: string;
+  packageRoot: string;
+}): string[] {
+  const packageJson = JSON.parse(
+    readFileSync(join(params.packageRoot, "package.json"), "utf8"),
+  ) as { version?: string };
+  const errors = collectInstalledPackageErrors({
+    expectedVersion: params.expectedVersion,
+    installedVersion: packageJson.version?.trim() ?? "",
+    packageRoot: params.packageRoot,
+  });
+  if (
+    params.installedBinaryVersion !== undefined &&
+    normalizeInstalledBinaryVersion(params.installedBinaryVersion) !== params.expectedVersion
+  ) {
+    errors.push(
+      `installed openclaw binary version mismatch: expected ${params.expectedVersion}, found ${params.installedBinaryVersion || "<missing>"}.`,
+    );
+  }
+  return errors;
+}
+
+function verifyPackedInstalledPackage(params: {
+  expectedVersion: string;
+  packageRoot: string;
+  prefixDir: string;
+  tmpRoot: string;
+}): void {
+  const installedBinaryVersion = execFileSync(
+    resolveInstalledBinaryPath(params.prefixDir),
+    ["--version"],
+    {
+      cwd: params.tmpRoot,
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
+  const errors = collectPackedInstalledPackageVerificationErrors({
+    expectedVersion: params.expectedVersion,
+    installedBinaryVersion,
+    packageRoot: params.packageRoot,
+  });
+  if (errors.length > 0) {
+    throw new Error(
+      `release-check: packed installed package verification failed:\n- ${errors.join("\n- ")}`,
+    );
+  }
+}
+
+export function writePackedBundledPluginActivationConfig(homeDir: string): void {
   const configPath = join(homeDir, ".openclaw", "openclaw.json");
   mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
   writeFileSync(
@@ -342,7 +399,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
           },
         },
         channels: {
-          feishu: {
+          matrix: {
             enabled: true,
           },
         },
@@ -358,7 +415,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
         plugins: {
           enabled: true,
           entries: {
-            feishu: {
+            matrix: {
               enabled: true,
             },
           },
@@ -463,6 +520,14 @@ function runPackedCliSmoke(params: {
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
+    const expectedVersion = (
+      JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+        version?: string;
+      }
+    ).version;
+    if (!expectedVersion) {
+      throw new Error("release-check: root package.json is missing version.");
+    }
     const packDir = join(tmpRoot, "pack");
     mkdirSync(packDir);
 
@@ -472,6 +537,12 @@ function runPackedBundledChannelEntrySmoke(): void {
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    verifyPackedInstalledPackage({
+      expectedVersion,
+      packageRoot,
+      prefixDir,
+      tmpRoot,
+    });
     const homeDir = join(tmpRoot, "home");
     const stateDir = join(tmpRoot, "state");
     mkdirSync(homeDir, { recursive: true });

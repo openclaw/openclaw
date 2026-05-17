@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sanitizeSessionHistory } from "./replay-history.js";
@@ -54,7 +54,9 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     });
 
     const toolResult = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
-    expect(toolResult).toBeTruthy();
+    expect(toolResult?.role).toBe("toolResult");
+    expect(toolResult?.toolCallId).toBe("call1");
+    expect(toolResult?.toolName).toBe("web_fetch");
     expect(toolResult).not.toHaveProperty("details");
 
     const serialized = JSON.stringify(sanitized);
@@ -76,9 +78,10 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       sessionId: "test",
     });
 
-    expect(sanitized[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "plain reply" }],
-    });
+    const assistant = sanitized[0];
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("Expected sanitized first message to be an assistant message");
+    }
+    expect(assistant?.content).toEqual([{ type: "text", text: "plain reply" }]);
   });
 });

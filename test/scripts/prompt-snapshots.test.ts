@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createFormattedPromptSnapshotFiles,
   deleteStalePromptSnapshotFiles,
@@ -12,35 +13,143 @@ import {
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
-  HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
 } from "../helpers/agents/happy-path-prompt-snapshots.js";
 
+function requireGeneratedSnapshot(
+  generated: Array<{ path: string; content: string }>,
+  fileName: string,
+): string {
+  const match = generated.find((file) => file.path.endsWith(fileName));
+  if (!match) {
+    throw new Error(`Missing generated prompt snapshot ${fileName}`);
+  }
+  return match.content;
+}
+
+function renderedPromptSection(content: string, heading: string, nextHeading: string): string {
+  const start = content.indexOf(heading);
+  const end = content.indexOf(nextHeading, start + heading.length);
+  if (start === -1 || end === -1) {
+    throw new Error(`Missing rendered prompt section ${heading}`);
+  }
+  return content.slice(start, end);
+}
+
+function listCommittedPromptSnapshotFiles(): string[] {
+  const externalFiles = listExternalCommittedPromptSnapshotFiles();
+  if (externalFiles) {
+    return externalFiles;
+  }
+  return fs
+    .readdirSync(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
+    .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
+    .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry))
+    .toSorted();
+}
+
+function listExternalCommittedPromptSnapshotFiles(): string[] | null {
+  return listGitCommittedPromptSnapshotFiles() ?? listFindCommittedPromptSnapshotFiles();
+}
+
+function listGitCommittedPromptSnapshotFiles(): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["ls-files", "--", CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.endsWith(".md") || line.endsWith(".json"))
+    .toSorted();
+}
+
+function listFindCommittedPromptSnapshotFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      path.join(process.cwd(), CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR),
+      "-maxdepth",
+      "1",
+      "-type",
+      "f",
+      "(",
+      "-name",
+      "*.md",
+      "-o",
+      "-name",
+      "*.json",
+      ")",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((filePath) => toRepoRelativePath(process.cwd(), filePath))
+    .toSorted();
+}
+
 describe("happy path prompt snapshots", () => {
+  let generatedSnapshots: Awaited<ReturnType<typeof createFormattedPromptSnapshotFiles>>;
+
+  beforeAll(async () => {
+    generatedSnapshots = await createFormattedPromptSnapshotFiles();
+  }, 300_000);
+
+  it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const committed = listCommittedPromptSnapshotFiles();
+
+      expect(committed.length).toBeGreaterThan(0);
+      expect(committed.every((file) => file.endsWith(".md") || file.endsWith(".json"))).toBe(true);
+    });
+  });
+
   it("matches the committed Codex prompt snapshot artifacts", async () => {
-    const generated = await createFormattedPromptSnapshotFiles();
-    const expectedPaths = new Set(generated.map((file) => file.path));
-    for (const file of generated) {
+    const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));
+    for (const file of generatedSnapshots) {
       expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
     }
-    const committed = fs
-      .readdirSync(HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
-      .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-      .map((entry) => path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
+    const committed = listCommittedPromptSnapshotFiles();
     expect(committed.toSorted()).toEqual([...expectedPaths].toSorted());
   });
 
   it("deletes stale generated snapshot artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-stale-"));
     try {
-      const snapshotDir = path.join(root, HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
+      const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
       fs.mkdirSync(snapshotDir, { recursive: true });
-      const stalePath = path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "stale-snapshot.md");
+      const stalePath = path.join(
+        CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+        "stale-snapshot.md",
+      );
       fs.writeFileSync(path.join(root, stalePath), "stale\n");
 
       const deleted = await deleteStalePromptSnapshotFiles(root, [
-        { path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "current.md") },
+        { path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "current.md") },
       ]);
 
       expect(deleted).toEqual([stalePath]);
@@ -51,21 +160,66 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("renders the Codex model-bound prompt layers", async () => {
-    const generated = await createFormattedPromptSnapshotFiles();
-    const telegram = generated.find((file) =>
-      file.path.endsWith("telegram-direct-codex-message-tool.md"),
+    const telegram = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-direct-codex-message-tool.md",
     );
 
-    expect(telegram?.content).toContain("## Reconstructed Model-Bound Prompt Layers");
-    expect(telegram?.content).toContain(
-      "### System: Codex Model Instructions (gpt-5.5, pragmatic)",
-    );
-    expect(telegram?.content).toContain("You are Codex, a coding agent based on GPT-5.");
-    expect(telegram?.content).toContain("### Developer: Codex Permission Instructions");
-    expect(telegram?.content).toContain(
+    expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
+    expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
+    expect(telegram).toContain("You are Codex, a coding agent based on GPT-5.");
+    expect(telegram).toContain("### Developer: Codex Permission Instructions");
+    expect(telegram).toContain(
       "Approval policy is currently never. Do not provide the `sandbox_permissions`",
     );
-    expect(telegram?.content).toContain("### Tools: Dynamic Tool Catalog");
+    expect(telegram).toContain(
+      "### User: Codex Config Instructions (OpenClaw Workspace Bootstrap Context)",
+    );
+    expect(telegram).toContain("<SOUL.md contents will be here>");
+    expect(telegram).toContain("<TOOLS.md contents will be here>");
+    expect(telegram).toContain("<HEARTBEAT.md contents will be here>");
+    expect(telegram).toContain("Codex loads AGENTS.md natively");
+    expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
+  });
+
+  it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
+    const direct = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-direct-codex-message-tool.md",
+    );
+    const group = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "discord-group-codex-message-tool.md",
+    );
+    const heartbeat = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-heartbeat-codex-tool.md",
+    );
+    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
+
+    expect(direct).toContain('"collaborationMode": {');
+    expect(direct).toContain('"developer_instructions": null');
+    expect(group).toContain('"collaborationMode": {');
+    expect(group).toContain('"developer_instructions": null');
+    expect(direct).not.toContain(heartbeatPhrase);
+    expect(group).not.toContain(heartbeatPhrase);
+
+    expect(heartbeat).toContain('"collaborationMode": {');
+    expect(heartbeat).toContain('"developer_instructions": "This is an OpenClaw heartbeat turn.');
+    const openClawRuntimeInstructions = renderedPromptSection(
+      heartbeat,
+      "### Developer: OpenClaw Runtime Instructions",
+      "### Developer: Codex Collaboration Mode Instructions",
+    );
+    const collaborationModeInstructions = renderedPromptSection(
+      heartbeat,
+      "### Developer: Codex Collaboration Mode Instructions",
+      "### User: Turn Input Text",
+    );
+
+    expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
+    expect(collaborationModeInstructions).toContain(heartbeatPhrase);
+    expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
   });
 
   it("keeps the Codex model prompt fixture next to its source metadata", () => {
@@ -119,8 +273,12 @@ describe("happy path prompt snapshots", () => {
       fs.mkdirSync(path.dirname(cachePath), { recursive: true });
       fs.writeFileSync(cachePath, JSON.stringify({ models: [] }));
 
-      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toMatchObject({
+      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toEqual({
         catalogPath: cachePath,
+        candidates: [
+          cachePath,
+          path.join(root, "code", "codex", "codex-rs", "models-manager", "models.json"),
+        ],
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

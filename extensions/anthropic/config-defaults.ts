@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
+const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = ["anthropic/claude-haiku-4-5"] as const;
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -13,6 +14,10 @@ function normalizeProviderId(provider: string): string {
     return "amazon-bedrock";
   }
   return normalized;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function resolveAnthropicDefaultAuthMode(
@@ -153,9 +158,16 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
   if (parsedPrimary?.provider === CLAUDE_CLI_BACKEND_ID) {
     return true;
   }
-  return Object.keys(config.agents?.defaults?.models ?? {}).some((key) => {
+  return Object.entries(config.agents?.defaults?.models ?? {}).some(([key, entry]) => {
     const parsed = parseProviderModelRef(key, "anthropic");
-    return parsed?.provider === CLAUDE_CLI_BACKEND_ID;
+    if (parsed?.provider === CLAUDE_CLI_BACKEND_ID) {
+      return true;
+    }
+    const runtimeId = isRecord(entry?.agentRuntime) ? entry.agentRuntime.id : undefined;
+    return (
+      parsed?.provider === "anthropic" &&
+      normalizeLowercaseStringOrEmpty(runtimeId) === CLAUDE_CLI_BACKEND_ID
+    );
   });
 }
 
@@ -163,6 +175,63 @@ function toCanonicalAnthropicModelRef(ref: string): string {
   return ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
     ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
     : ref;
+}
+
+function toClaudeCliRuntimeModelRef(raw: string): string | null {
+  const ref = resolveAnthropicPrimaryModelRef(raw);
+  if (!ref) {
+    return null;
+  }
+  const parsed = parseProviderModelRef(ref, "anthropic");
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.provider !== "anthropic" && parsed.provider !== CLAUDE_CLI_BACKEND_ID) {
+    return null;
+  }
+  if (!normalizeLowercaseStringOrEmpty(parsed.model).startsWith("claude-")) {
+    return null;
+  }
+  return `anthropic/${parsed.model}`;
+}
+
+function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
+  const currentRuntime = normalizeLowercaseStringOrEmpty(currentRuntimeId);
+  if (currentRuntime && currentRuntime !== "auto") {
+    return base;
+  }
+  base.agentRuntime = {
+    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+    id: CLAUDE_CLI_BACKEND_ID,
+  };
+  return base;
+}
+
+function collectClaudeCliRuntimeRefs(
+  model: string | { primary?: string; fallbacks?: string[] } | undefined,
+): string[] {
+  const refs = new Set<string>();
+  if (typeof model === "string") {
+    const ref = toClaudeCliRuntimeModelRef(model);
+    if (ref) {
+      refs.add(ref);
+    }
+    return [...refs];
+  }
+  const primary =
+    typeof model?.primary === "string" ? toClaudeCliRuntimeModelRef(model.primary) : null;
+  if (primary) {
+    refs.add(primary);
+  }
+  for (const fallback of model?.fallbacks ?? []) {
+    const ref = toClaudeCliRuntimeModelRef(fallback);
+    if (ref) {
+      refs.add(ref);
+    }
+  }
+  return [...refs];
 }
 
 function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
@@ -267,6 +336,19 @@ export function applyAnthropicConfigDefaults(params: {
       }
     }
 
+    const hasAnthropicApiKeyModel = Object.keys(nextModels).some((key) =>
+      isAnthropicCacheRetentionTarget(parseProviderModelRef(key, "anthropic")),
+    );
+    if (hasAnthropicApiKeyModel) {
+      for (const ref of ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS) {
+        if (ref in nextModels) {
+          continue;
+        }
+        nextModels[ref] = { params: { cacheRetention: "short" } };
+        modelsMutated = true;
+      }
+    }
+
     if (modelsMutated) {
       nextDefaults.models = nextModels;
       mutated = true;
@@ -276,12 +358,17 @@ export function applyAnthropicConfigDefaults(params: {
   if (authMode === "oauth" && usesClaudeCliModelSelection(params.config)) {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
+    const runtimeRefs = new Set<string>(collectClaudeCliRuntimeRefs(defaults.model));
     for (const rawRef of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
-      const ref = toCanonicalAnthropicModelRef(rawRef);
-      if (ref in nextModels) {
+      runtimeRefs.add(toCanonicalAnthropicModelRef(rawRef));
+    }
+    for (const ref of runtimeRefs) {
+      const current = nextModels[ref];
+      const updated = modelEntryWithClaudeCliRuntime(current);
+      if (JSON.stringify(updated) === JSON.stringify(current ?? {})) {
         continue;
       }
-      nextModels[ref] = {};
+      nextModels[ref] = updated;
       modelsMutated = true;
     }
     if (modelsMutated) {

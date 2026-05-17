@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -70,8 +70,8 @@ describe("check-cli-bootstrap-imports", () => {
     writeFixture(root, "dist/light.js", `import path from "node:path";\nvoid path;\n`);
     writeGatewayRunChunk(root);
 
-    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toEqual([]);
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([]);
+    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
   });
 
   it("reports external packages in the static bootstrap graph", () => {
@@ -118,13 +118,12 @@ describe("check-cli-bootstrap-imports", () => {
   it("reports oversized gateway run chunks", () => {
     const root = makeTempRoot();
     writeGatewayRunChunk(root, "x".repeat(10));
+    const gatewayRunChunkBytes = statSync(join(root, "dist", "run-gateway.js")).size;
 
     expect(
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
-      expect.stringMatching(
-        /^Gateway run chunk dist\/run-gateway\.js is \d+ bytes, above budget 50 bytes\.$/,
-      ),
+      `Gateway run chunk dist/run-gateway.js is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
     ]);
   });
 });

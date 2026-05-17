@@ -2,17 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
-// plugin-module-loader-cache prefers native require() for compiled .js before falling
-// back to jiti. These tests scripts plugin-loading behaviour through the
-// source-transform mock — disable the native-require fast path so the mocked source transformer
-// stays authoritative for the test fixture files on disk.
+// plugin-module-loader-cache prefers native require() for compiled .js before
+// falling back to jiti. These tests script plugin-loading behavior through the
+// source-transform mock, so force the fallback path and keep the fixture
+// transformer authoritative.
 vi.mock("./native-module-require.js", () => ({
   isJavaScriptModulePath: (_modulePath: string) => false,
   tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
@@ -26,6 +25,9 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
+let setPluginSetupRegistryModuleLoaderFactoryForTest:
+  | typeof import("./setup-registry.js").setPluginSetupRegistryModuleLoaderFactoryForTest
+  | undefined;
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -164,10 +166,41 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   } finally {
     process.off("unhandledRejection", onUnhandledRejection);
   }
-  expect(unhandledRejections).toEqual([]);
+  expect(unhandledRejections).toStrictEqual([]);
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCall(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+): ReadonlyArray<unknown> {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+): unknown {
+  return mockCall(mock, callIndex)[argIndex];
+}
+
+function firstRecordArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+  return requireRecord(mockArg(mock, 0, 0));
 }
 
 afterEach(() => {
+  setPluginSetupRegistryModuleLoaderFactoryForTest?.(undefined);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -181,7 +214,9 @@ describe("setup-registry module loader", () => {
       resolvePluginSetupProvider,
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
+      setPluginSetupRegistryModuleLoaderFactoryForTest,
     } = await import("./setup-registry.js"));
+    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginSetupRegistryCache();
   });
 
@@ -194,7 +229,6 @@ describe("setup-registry module loader", () => {
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
-    const expectedTryNative = shouldExpectNativeJitiForJavaScriptTestRuntime();
 
     try {
       resolvePluginSetupRegistry({
@@ -207,14 +241,10 @@ describe("setup-registry module loader", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(
       pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
     );
-    expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        tryNative: expectedTryNative,
-      }),
-    );
+    expect(requireRecord(mockArg(mocks.createJiti, 0, 1)).tryNative).toBe(true);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {
@@ -230,11 +260,8 @@ describe("setup-registry module loader", () => {
       env: {},
     });
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginIds: ["test-plugin"],
-      }),
-    );
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(firstRecordArg(mocks.loadPluginManifestRegistry).pluginIds).toEqual(["test-plugin"]);
   });
 
   it("skips setup-api loading when config has no relevant migration triggers", () => {
@@ -275,7 +302,7 @@ describe("setup-registry module loader", () => {
       env: {},
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -332,7 +359,7 @@ describe("setup-registry module loader", () => {
 
     expect(result.changes).toEqual(["amazon-bedrock"]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(bedrockRoot, "setup-api.js"));
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(bedrockRoot, "setup-api.js"));
   });
 
   it("still loads explicitly configured plugin entries without manifest trigger metadata", () => {
@@ -390,15 +417,14 @@ describe("setup-registry module loader", () => {
       });
     });
 
-    expect(resolvePluginSetupProvider({ provider: "amazon-bedrock", env: {} })).toEqual(
-      expect.objectContaining({
-        id: "amazon-bedrock",
-        label: "Amazon Bedrock",
-      }),
+    const provider = requireRecord(
+      resolvePluginSetupProvider({ provider: "amazon-bedrock", env: {} }),
     );
+    expect(provider.id).toBe("amazon-bedrock");
+    expect(provider.label).toBe("Amazon Bedrock");
     expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
   });
 
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
@@ -425,18 +451,14 @@ describe("setup-registry module loader", () => {
 
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
-    expect(resolvePluginSetupRegistry({ env: {} })).toEqual({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [
-        expect.objectContaining({
-          pluginId: "openai",
-          code: "setup-descriptor-runtime-disabled",
-        }),
-      ],
-    });
+    const registry = resolvePluginSetupRegistry({ env: {} });
+    expect(registry.providers).toEqual([]);
+    expect(registry.cliBackends).toEqual([]);
+    expect(registry.configMigrations).toEqual([]);
+    expect(registry.autoEnableProbes).toEqual([]);
+    expect(registry.diagnostics).toHaveLength(1);
+    expect(registry.diagnostics[0]?.pluginId).toBe("openai");
+    expect(registry.diagnostics[0]?.code).toBe("setup-descriptor-runtime-disabled");
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -513,28 +535,19 @@ describe("setup-registry module loader", () => {
 
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
-    expect(registry.diagnostics).toEqual([
-      expect.objectContaining({
-        pluginId: "openai",
-        code: "setup-descriptor-provider-missing-runtime",
-        declaredId: "openai",
-      }),
-      expect.objectContaining({
-        pluginId: "openai",
-        code: "setup-descriptor-provider-runtime-undeclared",
-        runtimeId: "anthropic",
-      }),
-      expect.objectContaining({
-        pluginId: "openai",
-        code: "setup-descriptor-cli-backend-missing-runtime",
-        declaredId: "codex-cli",
-      }),
-      expect.objectContaining({
-        pluginId: "openai",
-        code: "setup-descriptor-cli-backend-runtime-undeclared",
-        runtimeId: "claude-cli",
-      }),
-    ]);
+    expect(registry.diagnostics).toHaveLength(4);
+    expect(registry.diagnostics[0]?.pluginId).toBe("openai");
+    expect(registry.diagnostics[0]?.code).toBe("setup-descriptor-provider-missing-runtime");
+    expect(registry.diagnostics[0]?.declaredId).toBe("openai");
+    expect(registry.diagnostics[1]?.pluginId).toBe("openai");
+    expect(registry.diagnostics[1]?.code).toBe("setup-descriptor-provider-runtime-undeclared");
+    expect(registry.diagnostics[1]?.runtimeId).toBe("anthropic");
+    expect(registry.diagnostics[2]?.pluginId).toBe("openai");
+    expect(registry.diagnostics[2]?.code).toBe("setup-descriptor-cli-backend-missing-runtime");
+    expect(registry.diagnostics[2]?.declaredId).toBe("codex-cli");
+    expect(registry.diagnostics[3]?.pluginId).toBe("openai");
+    expect(registry.diagnostics[3]?.code).toBe("setup-descriptor-cli-backend-runtime-undeclared");
+    expect(registry.diagnostics[3]?.runtimeId).toBe("claude-cli");
   });
 
   it("does not report drift when setup descriptors match runtime registrations", () => {
@@ -542,7 +555,7 @@ describe("setup-registry module loader", () => {
       requiresRuntime: true,
     });
 
-    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toEqual([]);
+    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toStrictEqual([]);
   });
 
   it("does not load setup-api modules from the current working directory", () => {
@@ -640,7 +653,7 @@ describe("setup-registry module loader", () => {
     expect(second).toEqual(first);
     expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(openaiRoot, "setup-api.js"));
   });
 
   it("keeps synchronously registered cli backends even when register returns a promise", () => {
@@ -693,12 +706,9 @@ describe("setup-registry module loader", () => {
     });
 
     await expectNoUnhandledRejection(() => {
-      expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toEqual(
-        expect.objectContaining({
-          id: "openai",
-          label: "OpenAI",
-        }),
-      );
+      const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+      expect(provider.id).toBe("openai");
+      expect(provider.label).toBe("OpenAI");
     });
   });
 

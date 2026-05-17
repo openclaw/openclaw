@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,6 @@ import {
   resolveCommandsLightIncludePattern,
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../test/vitest/vitest.extension-bluebubbles-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
@@ -72,7 +72,6 @@ const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
-const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "test/vitest/vitest.extension-bluebubbles.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
@@ -118,6 +117,102 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
+
+const FULL_SUITE_CONFIG_WEIGHT = new Map([
+  [GATEWAY_VITEST_CONFIG, 180],
+  [GATEWAY_SERVER_VITEST_CONFIG, 180],
+  [GATEWAY_CORE_VITEST_CONFIG, 179],
+  [GATEWAY_CLIENT_VITEST_CONFIG, 178],
+  [GATEWAY_METHODS_VITEST_CONFIG, 177],
+  [COMMANDS_VITEST_CONFIG, 175],
+  ["test/vitest/vitest.agents-core.config.ts", 170],
+  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
+  ["test/vitest/vitest.agents-support.config.ts", 168],
+  ["test/vitest/vitest.agents-tools.config.ts", 167],
+  [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
+  [EXTENSIONS_VITEST_CONFIG, 168],
+  [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
+  ["test/vitest/vitest.runtime-config.config.ts", 166],
+  [CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG, 85],
+  [CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG, 60],
+  [CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG, 50],
+  [CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG, 35],
+  [CONTRACTS_PLUGIN_VITEST_CONFIG, 20],
+  ["test/vitest/vitest.tasks.config.ts", 165],
+  [CHANNEL_VITEST_CONFIG, 164],
+  [UNIT_FAST_VITEST_CONFIG, 160],
+  [AUTO_REPLY_REPLY_VITEST_CONFIG, 155],
+  [INFRA_VITEST_CONFIG, 145],
+  ["test/vitest/vitest.secrets.config.ts", 140],
+  [CRON_VITEST_CONFIG, 135],
+  ["test/vitest/vitest.wizard.config.ts", 130],
+  [UNIT_SRC_VITEST_CONFIG, 125],
+  [EXTENSION_MATRIX_VITEST_CONFIG, 100],
+  [EXTENSION_DISCORD_VITEST_CONFIG, 98],
+  [EXTENSION_PROVIDERS_VITEST_CONFIG, 96],
+  [EXTENSION_TELEGRAM_VITEST_CONFIG, 94],
+  [EXTENSION_WHATSAPP_VITEST_CONFIG, 92],
+  [AUTO_REPLY_CORE_VITEST_CONFIG, 90],
+  [CLI_VITEST_CONFIG, 86],
+  [MEDIA_VITEST_CONFIG, 84],
+  [PLUGINS_VITEST_CONFIG, 82],
+  [BUNDLED_VITEST_CONFIG, 80],
+  [EXTENSION_SLACK_VITEST_CONFIG, 78],
+  [COMMANDS_LIGHT_VITEST_CONFIG, 48],
+  [PLUGIN_SDK_VITEST_CONFIG, 46],
+  [AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG, 45],
+  [UNIT_UI_VITEST_CONFIG, 40],
+  [PLUGIN_SDK_LIGHT_VITEST_CONFIG, 38],
+  [DAEMON_VITEST_CONFIG, 36],
+  [BOUNDARY_VITEST_CONFIG, 34],
+  ["test/vitest/vitest.tooling.config.ts", 32],
+  [UNIT_SECURITY_VITEST_CONFIG, 30],
+  [UNIT_SUPPORT_VITEST_CONFIG, 28],
+  [EXTENSION_ZALO_VITEST_CONFIG, 24],
+  [EXTENSION_IRC_VITEST_CONFIG, 20],
+  [EXTENSION_FEISHU_VITEST_CONFIG, 18],
+  [EXTENSION_MATTERMOST_VITEST_CONFIG, 16],
+  [EXTENSION_MESSAGING_VITEST_CONFIG, 14],
+  [EXTENSION_IMESSAGE_VITEST_CONFIG, 13],
+  [EXTENSION_LINE_VITEST_CONFIG, 12],
+  [EXTENSION_SIGNAL_VITEST_CONFIG, 11],
+  [EXTENSION_ACPX_VITEST_CONFIG, 10],
+  [EXTENSION_DIFFS_VITEST_CONFIG, 8],
+  [EXTENSION_MEMORY_VITEST_CONFIG, 6],
+  [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
+]);
+
+function resolveConfigSortWeight(config, shardTimings) {
+  return shardTimings.get(config) ?? (FULL_SUITE_CONFIG_WEIGHT.get(config) ?? 0) * 1000;
+}
+
+function interleaveSlowAndFastSpecs(sortedSpecs) {
+  const ordered = [];
+  let slowIndex = 0;
+  let fastIndex = sortedSpecs.length - 1;
+  while (slowIndex <= fastIndex) {
+    ordered.push(sortedSpecs[slowIndex]);
+    slowIndex += 1;
+    if (slowIndex <= fastIndex) {
+      ordered.push(sortedSpecs[fastIndex]);
+      fastIndex -= 1;
+    }
+  }
+  return ordered;
+}
+
+export function orderFullSuiteSpecsForParallelRun(specs, shardTimings = new Map()) {
+  const sortedSpecs = specs.toSorted((a, b) => {
+    const weightDelta =
+      resolveConfigSortWeight(b.config, shardTimings) -
+      resolveConfigSortWeight(a.config, shardTimings);
+    if (weightDelta !== 0) {
+      return weightDelta;
+    }
+    return a.config.localeCompare(b.config);
+  });
+  return interleaveSlowAndFastSpecs(sortedSpecs);
+}
 const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
@@ -155,7 +250,6 @@ const VITEST_CONFIG_BY_KIND = {
   extension: EXTENSIONS_VITEST_CONFIG,
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
-  extensionBlueBubbles: EXTENSION_BLUEBUBBLES_VITEST_CONFIG,
   extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
@@ -239,6 +333,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
   [
+    "scripts/mantis/build-telegram-evidence.mjs",
+    ["test/scripts/mantis-build-telegram-evidence.test.ts"],
+  ],
+  [
+    "scripts/mantis/build-telegram-desktop-proof-evidence.mjs",
+    ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
+  ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
+  [
     "scripts/run-vitest.mjs",
     [
       "test/scripts/run-vitest.test.ts",
@@ -273,9 +376,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
-  ["scripts/blacksmith-testbox-state.mjs", ["test/scripts/blacksmith-testbox-state.test.ts"]],
-  ["scripts/blacksmith-testbox-runner.mjs", ["test/scripts/blacksmith-testbox-runner.test.ts"]],
-  ["scripts/testbox-sync-sanity.mjs", ["test/scripts/testbox-sync-sanity.test.ts"]],
+  ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
+  ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
@@ -287,19 +391,22 @@ const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
   [
+    "test/scripts/mantis-publish-pr-evidence.test.ts",
+    ["test/scripts/mantis-publish-pr-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-build-telegram-evidence.test.ts",
+    ["test/scripts/mantis-build-telegram-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts",
+    ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
+  [
     "test/scripts/plugin-prerelease-test-plan.test.ts",
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
-  [
-    "test/scripts/blacksmith-testbox-runner.test.ts",
-    ["test/scripts/blacksmith-testbox-runner.test.ts"],
-  ],
-  [
-    "test/scripts/blacksmith-testbox-state.test.ts",
-    ["test/scripts/blacksmith-testbox-state.test.ts"],
-  ],
-  ["test/scripts/testbox-sync-sanity.test.ts", ["test/scripts/testbox-sync-sanity.test.ts"]],
   [
     "test/scripts/vitest-local-scheduling.test.ts",
     ["test/scripts/vitest-local-scheduling.test.ts"],
@@ -392,10 +499,10 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/auto-reply/reply/dispatch-acp-command-bypass.test.ts"],
   ],
 ]);
-const GENERATED_CHANGED_TEST_TARGETS = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
+const GENERATED_CHANGED_TEST_TARGET_PATTERNS = [
+  /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
+  /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
+];
 const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "test"];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPECIFIER_PATTERN =
@@ -404,6 +511,19 @@ const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
+const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
+const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+]);
+const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
+  "src/gateway/gateway.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+]);
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -453,6 +573,77 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
+}
+
+function listRepoFilesRecursive(root, cwd) {
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const absolute = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      return listRepoFilesRecursive(absolute, cwd);
+    }
+    if (!entry.isFile()) {
+      return [];
+    }
+    return [normalizePathPattern(path.relative(cwd, absolute))];
+  });
+}
+
+function listGatewayFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", "src/gateway"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0);
+}
+
+function isGatewayServerFullSuiteTarget(relative) {
+  if (
+    GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) ||
+    relative.startsWith("src/gateway/server-methods/")
+  ) {
+    return false;
+  }
+  return (
+    GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS.has(relative) ||
+    (relative.startsWith("src/gateway/") &&
+      path.posix.basename(relative).includes("server") &&
+      relative.endsWith(".test.ts"))
+  );
+}
+
+function resolveGatewayServerFullSuiteTargets(cwd) {
+  const gatewayDir = path.join(cwd, "src/gateway");
+  if (!fs.existsSync(gatewayDir)) {
+    return [];
+  }
+  return (listGatewayFilesFromGit(cwd) ?? listRepoFilesRecursive(gatewayDir, cwd))
+    .filter(isGatewayServerFullSuiteTarget)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function splitTargetChunks(targets, chunkCount) {
+  if (targets.length === 0) {
+    return [];
+  }
+  const normalizedChunkCount = Math.min(chunkCount, targets.length);
+  const baseSize = Math.floor(targets.length / normalizedChunkCount);
+  const remainder = targets.length % normalizedChunkCount;
+  const chunks = [];
+  let offset = 0;
+  for (let index = 0; index < normalizedChunkCount; index += 1) {
+    const chunkSize = baseSize + (index < remainder ? 1 : 0);
+    chunks.push(targets.slice(offset, offset + chunkSize));
+    offset += chunkSize;
+  }
+  return chunks;
 }
 
 function isExistingPathTarget(arg, cwd) {
@@ -566,13 +757,154 @@ function resolveImportSpecifier(importer, specifier, fileSet) {
 
 let cachedImportGraph = null;
 let cachedImportGraphCwd = null;
+let cachedImportGraphFiles = null;
+let cachedImportGraphFilesCwd = null;
+
+function isImportableGraphFile(relative) {
+  return IMPORTABLE_FILE_EXTENSIONS.some((ext) => relative.endsWith(ext));
+}
+
+function listImportGraphFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", ...SOURCE_ROOTS_FOR_IMPORT_GRAPH], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function listImportGraphFilesForCwd(cwd) {
+  if (cachedImportGraphFiles && cachedImportGraphFilesCwd === cwd) {
+    return cachedImportGraphFiles;
+  }
+
+  cachedImportGraphFiles =
+    listImportGraphFilesFromGit(cwd) ??
+    SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) => listImportGraphFiles(cwd, root));
+  cachedImportGraphFilesCwd = cwd;
+  return cachedImportGraphFiles;
+}
+
+function stripImportableGraphExtension(relative) {
+  for (const ext of IMPORTABLE_FILE_EXTENSIONS) {
+    if (relative.endsWith(ext)) {
+      return relative.slice(0, -ext.length);
+    }
+  }
+  return relative;
+}
+
+function resolveImportGraphSearchTerm(relative) {
+  const basename = path.posix.basename(stripImportableGraphExtension(relative));
+  if (basename === "index" || basename.length < 3) {
+    return null;
+  }
+  return basename;
+}
+
+function listImportGraphGrepMatches(cwd, term) {
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "--fixed-strings", term, "--", ...SOURCE_ROOTS_FOR_IMPORT_GRAPH],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function findDirectImportersWithGitGrep(cwd, importedFile, fileSet) {
+  const term = resolveImportGraphSearchTerm(importedFile);
+  if (!term) {
+    return null;
+  }
+
+  const candidates = listImportGraphGrepMatches(cwd, term);
+  if (!candidates || candidates.length > 800) {
+    return null;
+  }
+
+  const importers = [];
+  for (const file of candidates) {
+    if (file === importedFile || !fileSet.has(file)) {
+      continue;
+    }
+    let source = "";
+    try {
+      source = fs.readFileSync(path.join(cwd, file), "utf8");
+    } catch {
+      continue;
+    }
+    for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
+      const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
+      if (imported === importedFile) {
+        importers.push(file);
+        break;
+      }
+    }
+  }
+  return importers;
+}
+
+function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
+  const normalized = normalizePathPattern(changedPath);
+  const files = listImportGraphFilesForCwd(cwd);
+  const fileSet = new Set(files);
+  if (!fileSet.has(normalized)) {
+    return [];
+  }
+
+  const testFiles = new Set(
+    files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
+  );
+  const queue = [normalized];
+  const seen = new Set(queue);
+  const targets = [];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    const importers = findDirectImportersWithGitGrep(cwd, current, fileSet);
+    if (importers === null) {
+      return null;
+    }
+    for (const importer of importers) {
+      if (seen.has(importer)) {
+        continue;
+      }
+      seen.add(importer);
+      if (testFiles.has(importer)) {
+        targets.push(importer);
+      }
+      queue.push(importer);
+    }
+  }
+
+  return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
+}
 
 function getImportGraph(cwd) {
   if (cachedImportGraph && cachedImportGraphCwd === cwd) {
     return cachedImportGraph;
   }
 
-  const files = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) => listImportGraphFiles(cwd, root));
+  const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map();
   const testFiles = new Set(
@@ -604,6 +936,11 @@ function getImportGraph(cwd) {
 
 function resolveAffectedTestsFromImportGraph(changedPath, cwd) {
   const normalized = normalizePathPattern(changedPath);
+  const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+  if (targetedTargets !== null) {
+    return targetedTargets;
+  }
+
   const { reverseImports, testFiles } = getImportGraph(cwd);
   const queue = [normalized];
   const seen = new Set(queue);
@@ -632,6 +969,23 @@ function resolveVitestConfigTargetKind(relative) {
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
+}
+
+function isUnitUiTestTarget(relative) {
+  if (!relative.endsWith(".test.ts")) {
+    return false;
+  }
+  return (
+    relative === "ui/src/ui/app-chat.test.ts" ||
+    relative.startsWith("ui/src/ui/chat/") ||
+    relative === "ui/src/ui/views/agents-utils.test.ts" ||
+    relative === "ui/src/ui/views/channels.test.ts" ||
+    relative === "ui/src/ui/views/chat.test.ts" ||
+    relative === "ui/src/ui/views/dreaming.test.ts" ||
+    relative === "ui/src/ui/views/usage-render-details.test.ts" ||
+    relative === "ui/src/ui/controllers/agents.test.ts" ||
+    relative === "ui/src/ui/controllers/chat.test.ts"
+  );
 }
 
 function resolveChannelContractTargetKind(relative) {
@@ -751,7 +1105,7 @@ function shouldUseBroadChangedTargets(env = process.env) {
 }
 
 function isRoutableChangedTarget(changedPath) {
-  if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
+  if (GENERATED_CHANGED_TEST_TARGET_PATTERNS.some((pattern) => pattern.test(changedPath))) {
     return false;
   }
   if (changedPath.endsWith(".live.test.ts")) {
@@ -898,9 +1252,6 @@ function classifyTarget(arg, cwd) {
     if (isDiffsExtensionRoot(extensionRoot)) {
       return "extensionDiffs";
     }
-    if (isBlueBubblesExtensionRoot(extensionRoot)) {
-      return "extensionBlueBubbles";
-    }
     if (isBrowserExtensionRoot(extensionRoot)) {
       return "extensionBrowser";
     }
@@ -1037,6 +1388,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isUnitUiTestTarget(relative)) {
+      return "unitUi";
+    }
     return "ui";
   }
   if (relative.startsWith("src/utils/")) {
@@ -1203,7 +1557,6 @@ export function buildVitestRunPlans(
     "e2e",
     "extensionAcpx",
     "extensionDiffs",
-    "extensionBlueBubbles",
     "extensionBrowser",
     "extensionDiscord",
     "extensionFeishu",
@@ -1279,7 +1632,7 @@ export function buildVitestRunPlans(
 }
 
 export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
-  const { forwardedArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   if (watchMode) {
     return [
       {
@@ -1304,12 +1657,30 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     }
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
-    return configs.map((config) => ({
-      config,
-      forwardedArgs,
-      includePatterns: null,
-      watchMode: false,
-    }));
+    return configs.flatMap((config) => {
+      if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
+        const chunks = splitTargetChunks(
+          resolveGatewayServerFullSuiteTargets(cwd),
+          GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+        );
+        if (chunks.length > 0) {
+          return chunks.map((targets) => ({
+            config,
+            forwardedArgs: [...forwardedArgs, ...targets],
+            includePatterns: null,
+            watchMode: false,
+          }));
+        }
+      }
+      return [
+        {
+          config,
+          forwardedArgs,
+          includePatterns: null,
+          watchMode: false,
+        },
+      ];
+    });
   });
 }
 
@@ -1334,7 +1705,8 @@ function hasConservativeVitestWorkerBudget(env) {
   return workerBudget !== null && workerBudget <= 1;
 }
 
-export function resolveParallelFullSuiteConcurrency(specCount, env = process.env, hostInfo) {
+export function resolveParallelFullSuiteConcurrency(specCount, env, hostInfo) {
+  env ??= process.env;
   const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
   if (override !== null) {
     return Math.min(override, specCount);

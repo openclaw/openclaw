@@ -2,7 +2,7 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -63,7 +63,10 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-function resolveBundledProviderPolicyPluginId(providerId: string): string | null {
+function resolveBundledProviderPolicyPluginId(
+  providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+): string | null {
   const normalizedProviderId = normalizeProviderId(providerId);
   if (!normalizedProviderId) {
     return null;
@@ -73,7 +76,7 @@ function resolveBundledProviderPolicyPluginId(providerId: string): string | null
     return null;
   }
 
-  const registry = loadPluginManifestRegistry();
+  const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {
@@ -93,15 +96,19 @@ function resolveBundledProviderPolicyPluginId(providerId: string): string | null
 
 export function resolveBundledProviderPolicySurface(
   providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
 ): BundledProviderPolicySurface | null {
   const normalizedProviderId = normalizeProviderId(providerId);
   if (!normalizedProviderId) {
     return null;
   }
-  return (
-    tryLoadBundledProviderPolicySurface(normalizedProviderId) ??
-    tryLoadBundledProviderPolicySurface(
-      resolveBundledProviderPolicyPluginId(normalizedProviderId) ?? normalizedProviderId,
-    )
-  );
+  const directSurface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
+  if (directSurface) {
+    return directSurface;
+  }
+  const ownerPluginId = resolveBundledProviderPolicyPluginId(normalizedProviderId, options);
+  if (!ownerPluginId || ownerPluginId === normalizedProviderId) {
+    return null;
+  }
+  return tryLoadBundledProviderPolicySurface(ownerPluginId);
 }

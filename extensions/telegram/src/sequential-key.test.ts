@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -35,6 +35,25 @@ describe("getTelegramSequentialKey", () => {
     [
       {
         message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          message_thread_id: 9,
+          is_topic_message: true,
+        }),
+      },
+      "telegram:123:topic:9",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          is_topic_message: true,
+        }),
+      },
+      "telegram:123:topic:1",
+    ],
+    [
+      {
+        message: mockMessage({
           chat: mockChat({ id: 123, type: "supergroup", is_forum: true }),
         }),
       },
@@ -58,6 +77,41 @@ describe("getTelegramSequentialKey", () => {
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }) },
       "telegram:123:control",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@vacs_tars_bot",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@some_other_bot",
+        }),
+      },
+      "telegram:-100:topic:5907",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@openclaw_bot!",
+        }),
+      },
+      "telegram:-100:control",
     ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) },

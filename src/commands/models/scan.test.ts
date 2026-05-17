@@ -55,6 +55,14 @@ function scanResult(overrides: Partial<ModelScanResult> = {}): ModelScanResult {
   };
 }
 
+function firstScanRequest(): { apiKey?: string; probe?: boolean } {
+  const call = mocks.scanOpenRouterModels.mock.calls[0];
+  if (!call) {
+    throw new Error("expected OpenRouter scan call");
+  }
+  return call[0] as { apiKey?: string; probe?: boolean };
+}
+
 describe("models scan command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,9 +80,8 @@ describe("models scan command", () => {
 
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledWith(
-      expect.objectContaining({ probe: false }),
-    );
+    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
+    expect(firstScanRequest().probe).toBe(false);
     expect(runtime.lines.join("\n")).toContain("metadata only");
     expect(runtime.lines.join("\n")).toContain("Tool");
     expect(runtime.lines.join("\n")).toContain("skip");
@@ -94,9 +101,8 @@ describe("models scan command", () => {
       provider: "openrouter",
       cfg: {},
     });
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledWith(
-      expect.objectContaining({ probe: false }),
-    );
+    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
+    expect(firstScanRequest().probe).toBe(false);
     expect(runtime.lines.join("\n")).toContain("still require OPENROUTER_API_KEY");
   });
 
@@ -113,12 +119,10 @@ describe("models scan command", () => {
 
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: "sk-or-test",
-        probe: true,
-      }),
-    );
+    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
+    const scanRequest = firstScanRequest();
+    expect(scanRequest?.apiKey).toBe("sk-or-test");
+    expect(scanRequest?.probe).toBe(true);
   });
 
   it("rejects applying metadata-only scan results", async () => {

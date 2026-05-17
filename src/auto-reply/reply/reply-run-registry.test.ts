@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   __testing,
   abortActiveReplyRuns,
   createReplyOperation,
@@ -14,6 +18,7 @@ import {
 describe("reply run registry", () => {
   afterEach(() => {
     __testing.resetReplyRunRegistry();
+    resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });
 
@@ -51,6 +56,39 @@ describe("reply run registry", () => {
     }
   });
 
+  it("mirrors active reply operations into diagnostic work state", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:chat-1",
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.updateSessionId("session-2");
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.complete();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBeUndefined();
+  });
+
   it("clears queued operations immediately on user abort", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -64,6 +102,23 @@ describe("reply run registry", () => {
 
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("runs completeThen callbacks after active state clears", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-complete",
+      resetTriggered: false,
+    });
+    const afterClear = vi.fn(() => {
+      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
+    });
+
+    operation.completeThen(afterClear);
+
+    expect(operation.result).toEqual({ kind: "completed" });
+    expect(afterClear).toHaveBeenCalledTimes(1);
   });
 
   it("force-clears a running operation after abort without backend cleanup", async () => {
@@ -99,7 +154,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("queues messages only through the active running backend", async () => {
+  it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",

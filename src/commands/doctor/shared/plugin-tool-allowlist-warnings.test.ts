@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { collectPluginToolAllowlistWarnings } from "./plugin-tool-allowlist-warnings.js";
+import {
+  collectBundledProviderAllowlistPolicyWarnings,
+  collectPluginToolAllowlistWarnings,
+} from "./plugin-tool-allowlist-warnings.js";
 
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
@@ -46,9 +49,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining(
-        'plugins.allow is an exclusive plugin allowlist. tools.allow contains "*"',
-      ),
+      '- plugins.allow is an exclusive plugin allowlist. tools.allow contains "*", but that wildcard only matches tools from plugins that are loaded; plugin tools outside plugins.allow stay unavailable. Add the required plugin ids to plugins.allow or remove plugins.allow.',
     ]);
   });
 
@@ -96,7 +97,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
       manifestRegistry,
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("does not warn when plugins.allow is not restrictive", () => {
@@ -107,6 +108,36 @@ describe("collectPluginToolAllowlistWarnings", () => {
       manifestRegistry,
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
+
+  it("warns when restrictive plugins.allow leaves bundled provider discovery in explicit compat mode", () => {
+    const warnings = collectBundledProviderAllowlistPolicyWarnings({
+      cfg: {
+        plugins: {
+          allow: ["telegram"],
+          bundledDiscovery: "compat",
+        },
+      },
+    });
+
+    expect(warnings).toEqual([
+      '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
+    ]);
+  });
+
+  it.each([
+    { name: "default", plugins: { allow: ["telegram"] } },
+    {
+      name: "explicit allowlist",
+      plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" as const },
+    },
+  ])(
+    "does not warn when bundled provider discovery follows the allowlist ($name)",
+    ({ plugins }) => {
+      const warnings = collectBundledProviderAllowlistPolicyWarnings({ cfg: { plugins } });
+
+      expect(warnings).toStrictEqual([]);
+    },
+  );
 });

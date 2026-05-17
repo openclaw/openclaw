@@ -18,6 +18,7 @@ import {
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
+  collectPackedInstalledPackageVerificationErrors,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
@@ -49,7 +50,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.2.26", "202602260")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
   it("requires lane-floor builds on and after lane-floor cutover", () => {
@@ -63,7 +64,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts canonical stable lane builds on and after lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 });
 
@@ -79,7 +80,7 @@ describe("packed CLI smoke", () => {
       ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
-      ["models", "list", "--provider", "amazon-bedrock"],
+      ["models", "list", "--provider", "openai"],
     ]);
   });
 
@@ -145,7 +146,7 @@ describe("packed CLI smoke", () => {
           OPENCLAW_STATE_DIR: "/tmp/smoke-state",
         },
       ),
-    ).toMatchObject({
+    ).toEqual({
       PATH: "/usr/bin",
       HOME: "/tmp/smoke-home",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
@@ -237,7 +238,7 @@ describe("collectBundledExtensionManifestErrors", () => {
           },
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags non-object install metadata instead of throwing", () => {
@@ -292,16 +293,16 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
-        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("@lancedb/lancedb");\n`,
+        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("root-owned-test-dep");\n`,
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -319,17 +320,17 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "root-runtime.js"),
-        `import("@lancedb/lancedb");\n`,
+        `import("root-owned-test-dep");\n`,
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency '@lancedb/lancedb' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -380,9 +381,9 @@ describe("collectForbiddenPackPaths", () => {
 
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
-    expect(pkg.files).toEqual(
-      expect.arrayContaining(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => `!${entry}`)),
-    );
+    for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
+      expect(pkg.files).toContain(`!${entry}`);
+    }
   });
 
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
@@ -483,30 +484,25 @@ describe("collectMissingPackPaths", () => {
       "dist/build-info.json",
     ]);
 
-    expect(missing).toEqual(
-      expect.arrayContaining([
-        "dist/channel-catalog.json",
-        PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-        "dist/control-ui/index.html",
-        "scripts/npm-runner.mjs",
-        "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/official-external-channel-catalog.json",
-        "scripts/lib/official-external-plugin-catalog.json",
-        "scripts/lib/official-external-provider-catalog.json",
-        "scripts/lib/package-dist-imports.mjs",
-        "scripts/postinstall-bundled-plugins.mjs",
-        "dist/task-registry-control.runtime.js",
-        bundledDistPluginFile("acpx", "runtime-api.js"),
-        bundledDistPluginFile("acpx", "openclaw.plugin.json"),
-        bundledDistPluginFile("acpx", "package.json"),
-        bundledDistPluginFile("googlechat", "runtime-api.js"),
-        bundledDistPluginFile("googlechat", "openclaw.plugin.json"),
-        bundledDistPluginFile("googlechat", "package.json"),
-        bundledDistPluginFile("line", "runtime-api.js"),
-        bundledDistPluginFile("line", "openclaw.plugin.json"),
-        bundledDistPluginFile("line", "package.json"),
-      ]),
-    );
+    for (const path of [
+      "dist/channel-catalog.json",
+      PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+      "dist/control-ui/index.html",
+      "scripts/npm-runner.mjs",
+      "scripts/preinstall-package-manager-warning.mjs",
+      "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/official-external-plugin-catalog.json",
+      "scripts/lib/official-external-provider-catalog.json",
+      "scripts/lib/package-dist-imports.mjs",
+      "scripts/postinstall-bundled-plugins.mjs",
+      "dist/task-registry-control.runtime.js",
+      "dist/telegram-ingress-worker.runtime.js",
+      bundledDistPluginFile("telegram", "runtime-api.js"),
+      bundledDistPluginFile("telegram", "openclaw.plugin.json"),
+      bundledDistPluginFile("telegram", "package.json"),
+    ]) {
+      expect(missing).toContain(path);
+    }
   });
 
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
@@ -530,20 +526,46 @@ describe("collectMissingPackPaths", () => {
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
         "dist/task-registry-control.runtime.js",
+        "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
+  });
+
+  it("runs postpublish package integrity checks against the packed install before publish", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-packed-install-"));
+    try {
+      const packageRoot = join(root, "openclaw");
+      const distDir = join(packageRoot, "dist");
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
+      );
+      writeFileSync(join(distDir, "typescript-compiler.js"), "x".repeat(6 * 1024 * 1024 + 1));
+
+      expect(
+        collectPackedInstalledPackageVerificationErrors({
+          expectedVersion: "2026.5.14-beta.3",
+          installedBinaryVersion: "openclaw 2026.5.14-beta.3",
+          packageRoot,
+        }),
+      ).toEqual([
+        "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
-    expect(requiredBundledPluginPackPaths).toEqual(
-      expect.arrayContaining([
-        bundledDistPluginFile("acpx", "runtime-api.js"),
-        bundledDistPluginFile("googlechat", "runtime-api.js"),
-        bundledDistPluginFile("line", "runtime-api.js"),
-      ]),
+    expect(requiredBundledPluginPackPaths).not.toContain(
+      bundledDistPluginFile("slack", "runtime-api.js"),
+    );
+    expect(requiredBundledPluginPackPaths).toContain(
+      bundledDistPluginFile("telegram", "runtime-api.js"),
     );
   });
 });
@@ -578,7 +600,7 @@ describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags oversized pack results that risk low-memory startup failures", () => {
