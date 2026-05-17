@@ -1,0 +1,10 @@
+{
+  "id": "copilot-sdk",
+  "name": "GitHub Copilot SDK",
+  "description": "Registers the placeholder copilot-sdk agent harness scaffold.",
+  "version": "2026.5.17",
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["copilot-sdk"]
+  }
+}
