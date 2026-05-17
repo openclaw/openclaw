@@ -54,6 +54,7 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronPreflightFallbackCandidates } from "./run-fallback-policy.js";
 import {
   adoptCronRunSessionMetadata,
   createPersistCronSessionEntry,
@@ -638,27 +639,53 @@ async function prepareCronRunContext(params: {
   let model = resolvedModelSelection.model;
   const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
 
-  const preflight = await (
-    await loadCronModelPreflightRuntime()
-  ).preflightCronModelProvider({
+  const modelPreflightRuntime = await loadCronModelPreflightRuntime();
+  const preflight = await modelPreflightRuntime.preflightCronModelProvider({
     cfg: cfgWithAgentDefaults,
     provider,
     model,
   });
   if (preflight.status === "unavailable") {
-    logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
-    return {
-      ok: false,
-      result: withRunSession({
-        status: "skipped",
-        error: preflight.reason,
-        diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
-          severity: "warn",
+    const fallbackCandidates = resolveCronPreflightFallbackCandidates({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+      provider,
+      model,
+      useSubagentFallbacks,
+    });
+    let selectedFallback: { provider: string; model: string } | undefined;
+    for (const candidate of fallbackCandidates) {
+      const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
+        cfg: cfgWithAgentDefaults,
+        provider: candidate.provider,
+        model: candidate.model,
+      });
+      if (candidatePreflight.status === "available") {
+        selectedFallback = candidate;
+        break;
+      }
+    }
+    if (!selectedFallback) {
+      logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          error: preflight.reason,
+          diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
+            severity: "warn",
+          }),
+          provider,
+          model,
         }),
-        provider,
-        model,
-      }),
-    };
+      };
+    }
+    logWarn(
+      `[cron:${input.job.id}] ${preflight.reason}; continuing with fallback ${selectedFallback.provider}/${selectedFallback.model}.`,
+    );
+    provider = selectedFallback.provider;
+    model = selectedFallback.model;
   }
 
   const hooksGmailThinking = isGmailHook
