@@ -23,7 +23,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",
-      "hosts": ["api.x.ai", "api.grok.x.ai"]
+      "hosts": ["api.x.ai"]
     }
   ],
   "providerRequest": {

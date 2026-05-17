@@ -23,6 +23,40 @@ export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-
 
 export type OAuthCallbackResult = { code: string; state: string };
 
+// IdP-host allowlist for CORS echo on the loopback OAuth callback. Plugins
+// pass the hosts that may legitimately issue preflights against the redirect
+// URI; everything else gets a 204 with no `Access-Control-Allow-*` headers,
+// which is safe for normal browser navigation but blocks cross-origin script
+// reads. The empty allowlist (default) suppresses CORS echo entirely.
+export function buildOAuthCallbackOriginResolver(
+  allowedHosts: readonly string[] | undefined,
+): (originHeader: string | string[] | undefined) => string | undefined {
+  if (!allowedHosts || allowedHosts.length === 0) {
+    return () => undefined;
+  }
+  const normalized = new Set(
+    allowedHosts.map((host) => host.trim().toLowerCase()).filter((host) => host.length > 0),
+  );
+  if (normalized.size === 0) {
+    return () => undefined;
+  }
+  return (originHeader) => {
+    const value = Array.isArray(originHeader) ? originHeader[0] : originHeader;
+    if (!value) {
+      return undefined;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "https:") {
+        return undefined;
+      }
+      return normalized.has(parsed.host.toLowerCase()) ? parsed.origin : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
 export function generateOAuthState(): string {
   return crypto.randomBytes(32).toString("hex");
 }
@@ -65,9 +99,15 @@ export async function waitForLocalOAuthCallback(params: {
   progressMessage?: string;
   hostname?: string;
   onProgress?: (message: string) => void;
+  // IdP host allowlist for CORS preflight echo. Pass the canonical authority
+  // host(s) (e.g. `["auth.example.com"]`) that may issue an `OPTIONS` against
+  // the redirect URI. When omitted, no `Access-Control-Allow-*` headers are
+  // echoed.
+  corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
   const escapedSuccessTitle = escapeHtmlText(params.successTitle);
+  const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
 
   return new Promise<OAuthCallbackResult>((resolve, reject) => {
     let settled = false;
@@ -76,21 +116,27 @@ export async function waitForLocalOAuthCallback(params: {
       try {
         applyOAuthCallbackCorsHeaders(req, res);
         const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${params.port}`);
+        const requestOrigin = resolveOAuthCallbackOrigin(req.headers.origin);
+        if (requestOrigin) {
+          res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+          res.setHeader("Vary", "Origin");
+          res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
         if (requestUrl.pathname !== params.callbackPath) {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain");
           res.end("Not found");
           return;
         }
-
-        if (req.method === "OPTIONS") {
-          res.statusCode = 204;
-          res.end();
-          return;
-        }
-
         if (req.method !== "GET") {
           res.statusCode = 405;
+          res.setHeader("Allow", "GET, OPTIONS");
           res.setHeader("Content-Type", "text/plain");
           res.end("Method not allowed");
           return;

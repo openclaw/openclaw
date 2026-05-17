@@ -81,3 +81,40 @@ describe("plugin-sdk provider-auth-runtime", () => {
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
 });
+
+describe("buildOAuthCallbackOriginResolver", () => {
+  it("returns a no-op resolver when no allowlist is provided", () => {
+    const noOp = providerAuthRuntime.buildOAuthCallbackOriginResolver(undefined);
+    expect(noOp("https://auth.example.com")).toBeUndefined();
+
+    const empty = providerAuthRuntime.buildOAuthCallbackOriginResolver([]);
+    expect(empty("https://auth.example.com")).toBeUndefined();
+
+    const blank = providerAuthRuntime.buildOAuthCallbackOriginResolver(["", "  "]);
+    expect(blank("https://auth.example.com")).toBeUndefined();
+  });
+
+  it("echoes only allowlisted hosts and only over https", () => {
+    const resolver = providerAuthRuntime.buildOAuthCallbackOriginResolver([
+      "auth.example.com",
+      "ACCOUNTS.example.com",
+    ]);
+
+    expect(resolver("https://auth.example.com")).toBe("https://auth.example.com");
+    expect(resolver("https://accounts.example.com")).toBe("https://accounts.example.com");
+    expect(resolver("https://AUTH.EXAMPLE.COM")).toBe("https://auth.example.com");
+    expect(resolver("https://attacker.example.com")).toBeUndefined();
+    expect(resolver("http://auth.example.com")).toBeUndefined();
+    expect(resolver("not a url")).toBeUndefined();
+    expect(resolver(undefined)).toBeUndefined();
+    expect(resolver([])).toBeUndefined();
+  });
+
+  it("uses the first value when multiple Origin headers arrive", () => {
+    const resolver = providerAuthRuntime.buildOAuthCallbackOriginResolver(["auth.example.com"]);
+    expect(resolver(["https://auth.example.com", "https://attacker.example.com"])).toBe(
+      "https://auth.example.com",
+    );
+    expect(resolver(["https://attacker.example.com", "https://auth.example.com"])).toBeUndefined();
+  });
+});
