@@ -30,3 +30,18 @@ onlyBuiltDependencies:
 ignoredBuiltDependencies:
   - "@discordjs/opus"
   - koffi
+
+nodeLinker: hoisted
+resolutionMode: highest
+blockExoticSubdeps: false
+allowBuilds:
+  allowBuilds:
+  "@google/genai": true
+  "@matrix-org/matrix-sdk-crypto-nodejs": true
+  "@tloncorp/tlon-skill": true
+  "@whiskeysockets/baileys": true
+  esbuild: true
+  koffi: true
+  node-llama-cpp: true
+  protobufjs: true
+  sharp: true
