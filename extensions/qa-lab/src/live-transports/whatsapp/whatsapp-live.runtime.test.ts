@@ -198,6 +198,9 @@ describe("WhatsApp QA live runtime", () => {
     expect(
       __testing.isTransientWhatsAppQaDriverError(new Error("status 440: session conflict")),
     ).toBe(true);
+    expect(__testing.isTransientWhatsAppQaDriverError(new Error("Stream Errored (conflict)"))).toBe(
+      true,
+    );
     expect(
       __testing.isTransientWhatsAppQaDriverError(
         new Error("timed out waiting for WhatsApp QA driver message"),
