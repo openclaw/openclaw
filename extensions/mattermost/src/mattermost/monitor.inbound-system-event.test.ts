@@ -363,6 +363,7 @@ function createInteractionRequest(params: {
   const body = JSON.stringify(params.body);
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   const req = {
+    destroyed: false,
     method: "POST",
     headers: params.headers ?? {},
     socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
@@ -371,6 +372,14 @@ function createInteractionRequest(params: {
       const existing = listeners.get(event) ?? [];
       existing.push(handler);
       listeners.set(event, existing);
+      return this;
+    },
+    removeListener(event: string, handler: (...args: unknown[]) => void) {
+      const existing = listeners.get(event) ?? [];
+      listeners.set(
+        event,
+        existing.filter((entry) => entry !== handler),
+      );
       return this;
     },
   } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
@@ -560,6 +569,7 @@ describe("mattermost inbound user posts", () => {
         user_id: "user-1",
       },
     });
+    abortController.abort();
     socket.emitClose(1000);
     await monitor;
 
@@ -632,6 +642,7 @@ describe("mattermost inbound user posts", () => {
         _token: generateInteractionToken(context, "default"),
       },
     });
+    abortController.abort();
     socket.emitClose(1000);
     await monitor;
 

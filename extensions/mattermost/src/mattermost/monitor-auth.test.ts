@@ -166,7 +166,7 @@ describe("mattermost monitor auth", () => {
   it("denies channel records with missing type before policy evaluation", async () => {
     const { authorizeMattermostCommandInvocation } = await import("./monitor-auth.js");
 
-    expect(
+    await expect(
       authorizeMattermostCommandInvocation({
         account: {
           config: { groupPolicy: "open" },
@@ -179,14 +179,12 @@ describe("mattermost monitor auth", () => {
         allowTextCommands: true,
         hasControlCommand: false,
       }),
-    ).toMatchObject({
+    ).resolves.toMatchObject({
       ok: false,
       denyReason: "unknown-channel",
       commandAuthorized: false,
     });
     expect(isDangerousNameMatchingEnabled).not.toHaveBeenCalled();
-    expect(resolveEffectiveAllowFromLists).not.toHaveBeenCalled();
-    expect(resolveControlCommandGate).not.toHaveBeenCalled();
-    expect(evaluateSenderGroupAccessForPolicy).not.toHaveBeenCalled();
+    expect(resolveAllowlistMatchSimple).not.toHaveBeenCalled();
   });
 });
