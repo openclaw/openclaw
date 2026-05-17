@@ -2592,6 +2592,7 @@ export async function runEmbeddedPiAgent(
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
+            currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
