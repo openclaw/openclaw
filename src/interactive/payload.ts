@@ -5,14 +5,21 @@ import {
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
+/** Visual tone for a portable message presentation. */
 export type MessagePresentationTone = "info" | "success" | "warning" | "danger" | "neutral";
 
+/** Button style hint for renderers that support styled actions. */
 export type MessagePresentationButtonStyle = InteractiveButtonStyle;
 
+/** Portable action control rendered as a button or link by channel adapters. */
 export type MessagePresentationButton = {
+  /** User-visible button label. */
   label: string;
+  /** Callback command or opaque value sent when the button is pressed. */
   value?: string;
+  /** External URL opened by the button instead of sending a callback value. */
   url?: string;
+  /** Telegram-style web app launch target. */
   webApp?: {
     url: string;
   };
@@ -22,13 +29,19 @@ export type MessagePresentationButton = {
   web_app?: {
     url: string;
   };
+  /** Higher-priority buttons are kept first when channel limits require truncation. */
   priority?: number;
+  /** Disable the button when the target channel supports disabled controls. */
   disabled?: boolean;
+  /** Optional visual style hint; unsupported channels ignore or normalize it. */
   style?: InteractiveButtonStyle;
 };
 
+/** Portable select/menu option. */
 export type MessagePresentationOption = {
+  /** User-visible option label. */
   label: string;
+  /** Callback command or opaque value sent when the option is selected. */
   value: string;
 };
 
@@ -84,11 +97,13 @@ export type InteractiveReply = {
 
 export type MessagePresentationTextBlock = {
   type: "text";
+  /** Primary markdown-ish text rendered in the message body. */
   text: string;
 };
 
 export type MessagePresentationContextBlock = {
   type: "context";
+  /** Lower-emphasis contextual text, or normal text on channels without context support. */
   text: string;
 };
 
@@ -98,12 +113,15 @@ export type MessagePresentationDividerBlock = {
 
 export type MessagePresentationButtonsBlock = {
   type: "buttons";
+  /** Button row candidates; core may split or truncate them for channel limits. */
   buttons: MessagePresentationButton[];
 };
 
 export type MessagePresentationSelectBlock = {
   type: "select";
+  /** Optional prompt shown above or inside the select control. */
   placeholder?: string;
+  /** Menu options; core may truncate them for channel limits. */
   options: MessagePresentationOption[];
 };
 
@@ -119,8 +137,11 @@ export type MessagePresentationBlock =
   | MessagePresentationSelectBlock;
 
 export type MessagePresentation = {
+  /** Optional short heading rendered before blocks when the channel supports it. */
   title?: string;
+  /** Optional severity/status tone for renderers that support toned presentations. */
   tone?: MessagePresentationTone;
+  /** Ordered portable blocks rendered or downgraded by the target channel adapter. */
   blocks: MessagePresentationBlock[];
 };
 

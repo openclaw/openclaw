@@ -177,6 +177,7 @@ function buildApprovalPresentationButtons(
   }));
 }
 
+/** Build the portable approval button presentation for already-resolved actions. */
 export function buildApprovalPresentationFromActionDescriptors(
   actions: readonly ExecApprovalActionDescriptor[],
 ): MessagePresentation | undefined {
@@ -184,6 +185,7 @@ export function buildApprovalPresentationFromActionDescriptors(
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
+/** Build the portable approval presentation for an approval id and decision allowlist. */
 export function buildApprovalPresentation(params: {
   approvalId: string;
   ask?: string | null;
@@ -198,6 +200,7 @@ export function buildApprovalPresentation(params: {
   );
 }
 
+/** Build the portable exec-approval presentation for command callback buttons. */
 export function buildExecApprovalPresentation(params: {
   approvalCommandId: string;
   ask?: string | null;

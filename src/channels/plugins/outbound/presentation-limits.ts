@@ -434,6 +434,12 @@ function adaptTextBlock(
   return block;
 }
 
+/**
+ * Adapt a portable presentation to the target channel's advertised capabilities.
+ *
+ * Unsupported controls are downgraded to text/context fallback blocks where possible, and
+ * labels, values, rows, options, styles, disabled state, and text are clipped to channel limits.
+ */
 export function adaptMessagePresentationForChannel(params: {
   presentation: MessagePresentation;
   capabilities?: ChannelPresentationCapabilities;
@@ -508,6 +514,7 @@ export function adaptMessagePresentationForChannel(params: {
   };
 }
 
+/** Return the subset of buttons that can still be rendered under action limits. */
 export function applyPresentationActionLimits(
   buttons: readonly MessagePresentationButton[],
   capabilities?: ChannelPresentationCapabilities,
@@ -522,6 +529,7 @@ export function applyPresentationActionLimits(
   return block.flatMap((entry) => (entry.type === "buttons" ? entry.buttons : []));
 }
 
+/** Resolve an action page size that leaves room for reserved actions on the target channel. */
 export function presentationPageSize(
   capabilities?: ChannelPresentationCapabilities,
   reservedActions = 0,

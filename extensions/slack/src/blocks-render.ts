@@ -63,6 +63,7 @@ function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | 
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
+/** Resolve existing OpenClaw Block Kit indexes so appended controls keep stable unique IDs. */
 export function resolveSlackInteractiveBlockOffsets(
   blocks?: readonly SlackBlock[],
 ): SlackInteractiveBlockRenderOptions {
@@ -189,6 +190,7 @@ export function buildSlackInteractiveBlocks(
   }).blocks;
 }
 
+/** Render portable presentation blocks as Slack Block Kit blocks. */
 export function buildSlackPresentationBlocks(
   presentation?: MessagePresentation,
   options: SlackInteractiveBlockRenderOptions = {},

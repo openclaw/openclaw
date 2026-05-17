@@ -82,15 +82,23 @@ export type AgentRuntimeProviderHandle = {
 
 export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
+/** Portable action control exposed to agent runtime reply payloads. */
 export type AgentRuntimeMessagePresentationButton = {
+  /** User-visible button label. */
   label: string;
+  /** Callback command or opaque value sent when pressed. */
   value?: string;
+  /** External URL opened by the button. */
   url?: string;
+  /** Optional visual style hint for renderers that support styled actions. */
   style?: AgentRuntimeInteractiveButtonStyle;
 };
 
+/** Portable select/menu option exposed to agent runtime reply payloads. */
 export type AgentRuntimeMessagePresentationOption = {
+  /** User-visible option label. */
   label: string;
+  /** Callback command or opaque value sent when selected. */
   value: string;
 };
 
@@ -159,8 +167,11 @@ export type AgentRuntimeMessagePresentationBlock =
     };
 
 export type AgentRuntimeMessagePresentation = {
+  /** Optional short heading rendered before blocks when supported. */
   title?: string;
+  /** Optional severity/status tone for renderers that support toned presentations. */
   tone?: AgentRuntimeMessagePresentationTone;
+  /** Ordered portable blocks rendered or downgraded by channel adapters. */
   blocks: AgentRuntimeMessagePresentationBlock[];
 };
 
