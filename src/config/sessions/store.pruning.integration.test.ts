@@ -320,6 +320,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const validTranscript = path.join(testDir, "valid-present.jsonl");
+    const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
     await fs.writeFile(
       storePath,
       JSON.stringify(
@@ -340,6 +341,11 @@ describe("Integration: saveSessionStore with pruning", () => {
             updatedAt: now,
             groupActivation: "always",
           },
+          "legacy-present-invalid-id": {
+            sessionId: "agent:main:main",
+            sessionFile: "legacy-present.jsonl",
+            updatedAt: now,
+          },
           "valid-present": { sessionId: "valid-present", updatedAt: now },
         } satisfies Record<string, SessionEntry>,
         null,
@@ -348,6 +354,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       "utf-8",
     );
     await fs.writeFile(validTranscript, "valid", "utf-8");
+    await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
 
     const dryRun = await runSessionsCleanup({
       cfg: {},
@@ -356,12 +363,13 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
     const preview = dryRun.previewResults[0];
     expect(preview?.summary.missing).toBe(3);
-    expect(preview?.summary.beforeCount).toBe(5);
-    expect(preview?.summary.afterCount).toBe(2);
+    expect(preview?.summary.beforeCount).toBe(6);
+    expect(preview?.summary.afterCount).toBe(3);
     expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
     expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
     expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
     expect(preview?.missingKeys.has("agent:main:metadata")).toBe(false);
+    expect(preview?.missingKeys.has("legacy-present-invalid-id")).toBe(false);
     const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       unknown
@@ -375,12 +383,18 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(applied.appliedSummaries[0]?.missing).toBe(3);
-    expect(applied.appliedSummaries[0]?.afterCount).toBe(2);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(3);
     const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(Object.keys(persisted)).toEqual(["agent:main:metadata", "valid-present"]);
+    expect(Object.keys(persisted)).toEqual([
+      "agent:main:metadata",
+      "legacy-present-invalid-id",
+      "valid-present",
+    ]);
     expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
     expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
+    expect(persisted["legacy-present-invalid-id"]?.sessionId).toBe("agent:main:main");
     await expectPathExists(validTranscript);
+    await expectPathExists(legacyPresentTranscript);
   });
 
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
