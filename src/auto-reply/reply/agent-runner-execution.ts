@@ -838,6 +838,15 @@ export function buildContextOverflowRecoveryText(params: {
   );
 }
 
+function isOpenAIGptChatBrevityGuardDisabledByEnv(): boolean {
+  const raw = process.env.OPENCLAW_DISABLE_GPT_CHAT_BREVITY_GUARD;
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true";
+}
+
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
   if (params.provider !== "openai" && params.provider !== "openai-codex") {
     return false;
@@ -910,13 +919,16 @@ function shortenChattyFinalReplyText(
   return shortened.replace(/[.,;:!?-]*$/u, "").trimEnd() + "...";
 }
 
-function applyOpenAIGptChatReplyGuard(params: {
+export function applyOpenAIGptChatReplyGuard(params: {
   provider?: string;
   model?: string;
   commandBody: string;
   isHeartbeat: boolean;
   payloads?: ReplyPayload[];
 }): void {
+  if (isOpenAIGptChatBrevityGuardDisabledByEnv()) {
+    return;
+  }
   if (
     params.isHeartbeat ||
     !shouldApplyOpenAIGptChatGuard({
