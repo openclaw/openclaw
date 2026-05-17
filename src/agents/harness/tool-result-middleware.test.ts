@@ -232,16 +232,16 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   it("coerces nested toolResult blocks (Codex message-tool shape) into text instead of failing closed (#82912)", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
+        // The shape Codex app-server emits for the `message` tool path: a
+        // single content block with `type: "toolResult"` and a nested
+        // `content` array. The strict validator rejects this, so the fixture
+        // must escape through `never` like the existing tests above.
         result: {
           content: [
-            {
-              // The shape Codex app-server emits for the `message` tool path.
-              type: "toolResult",
-              content: [{ type: "text", text: "send receipt: SIG-9af3" }],
-            } as never,
+            { type: "toolResult", content: [{ type: "text", text: "send receipt: SIG-9af3" }] },
           ],
           details: { status: "delivered" },
-        },
+        } as never,
       }),
     ]);
 
@@ -261,12 +261,10 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       () => ({
         result: {
           content: [
-            {
-              type: "function_result",
-              output: "delivered to chat-42 at 2026-05-17T05:00:00Z",
-            } as never,
+            { type: "function_result", output: "delivered to chat-42 at 2026-05-17T05:00:00Z" },
           ],
-        },
+          details: {},
+        } as never,
       }),
     ]);
 
@@ -286,9 +284,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
-          content: [{ type: "image" /* missing mimeType + data */ } as never],
+          content: [{ type: "image" /* missing mimeType + data */ }],
           details: {},
-        },
+        } as never,
       }),
     ]);
 
