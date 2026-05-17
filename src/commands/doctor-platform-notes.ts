@@ -6,7 +6,10 @@ import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
+import {
+  findStaleOpenClawUpdateLaunchdJobs,
+  removeOpenClawUpdateLaunchdJob,
+} from "../daemon/launchd.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -64,6 +67,54 @@ export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
     `  ${formatCliCommand("openclaw gateway restart")}`,
   ];
   (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
+}
+
+export async function maybeRemoveStaleOpenClawUpdateLaunchdJobs(deps?: {
+  platform?: NodeJS.Platform;
+  shouldRemove?: boolean;
+  findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  removeJob?: typeof removeOpenClawUpdateLaunchdJob;
+  noteFn?: typeof note;
+}): Promise<void> {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin" || !deps?.shouldRemove) {
+    return;
+  }
+  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)().catch(() => []);
+  if (jobs.length === 0) {
+    return;
+  }
+  const removeJob = deps?.removeJob ?? removeOpenClawUpdateLaunchdJob;
+  const noteFn = deps?.noteFn ?? note;
+  const removed: string[] = [];
+  const failed: string[] = [];
+  for (const job of jobs) {
+    const ok = await removeJob(job.label).catch(() => false);
+    if (ok) {
+      removed.push(job.label);
+    } else {
+      failed.push(job.label);
+    }
+  }
+  const lines: string[] = [];
+  if (removed.length > 0) {
+    lines.push(
+      `- Removed ${removed.length} stale OpenClaw updater launchd job(s):`,
+      ...removed.map((l) => `  - ${l}`),
+    );
+  }
+  if (failed.length > 0) {
+    lines.push(
+      `- Failed to remove ${failed.length} stale OpenClaw updater launchd job(s). Remove manually:`,
+      ...failed.map((l) => `  launchctl remove ${l}`),
+    );
+  }
+  if (removed.length > 0) {
+    lines.push(`  ${formatCliCommand("openclaw gateway restart")}`);
+  }
+  if (lines.length > 0) {
+    noteFn(lines.join("\n"), "Gateway (macOS)");
+  }
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
