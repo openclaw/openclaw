@@ -101,6 +101,7 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -161,6 +162,28 @@ function resolvePayloadTelegramInlineButtons(
     presentation,
     interactive: payload.interactive,
   });
+}
+
+function hasExecApprovalPayload(payload: ReplyPayload): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  const execApproval = channelData.execApproval;
+  return Boolean(execApproval && typeof execApproval === "object" && !Array.isArray(execApproval));
+}
+
+function canUseNativeToolProgressDraft(params: {
+  payload: ReplyPayload;
+  reply: ReturnType<typeof resolveSendableOutboundReplyParts>;
+  buttons?: TelegramInlineButtons;
+}): boolean {
+  return (
+    !params.reply.hasMedia &&
+    params.payload.isError !== true &&
+    !hasExecApprovalPayload(params.payload) &&
+    params.buttons === undefined
+  );
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -561,6 +584,18 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const nativeToolProgressDraft =
+    streamToolProgressEnabled && !isRoomEvent && !isGroup && threadSpec.scope === "dm"
+      ? (
+          telegramDeps.createNativeTelegramToolProgressDraft ??
+          createNativeTelegramToolProgressDraft
+        )({
+          api: bot.api,
+          chatId,
+          thread: threadSpec,
+          log: logVerbose,
+        })
+      : undefined;
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastAnswerPartialText = "";
@@ -607,24 +642,41 @@ export const dispatchTelegramMessage = async ({
     options?: { toolName?: string; startImmediately?: boolean },
   ) => {
     if (!answerLane.stream) {
-      return;
+      return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
-      return;
+      return false;
     }
     const rawText = typeof line === "string" ? line : line?.text;
     const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
     const progressLine =
       typeof line === "object" && line !== undefined ? { ...line, text: normalized } : normalized;
+    if (nativeToolProgressDraft && !streamToolProgressSuppressed && normalized) {
+      const nextLines = mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
+        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+      });
+      if (nextLines === streamToolProgressLines) {
+        return false;
+      }
+      const streamText = formatChannelProgressDraftText({
+        entry: telegramCfg,
+        lines: nextLines,
+        seed: progressSeed,
+      });
+      if (streamText && (await nativeToolProgressDraft.update(streamText))) {
+        streamToolProgressLines = nextLines;
+        return true;
+      }
+    }
     if (streamMode !== "progress") {
       if (!streamToolProgressEnabled || streamToolProgressSuppressed || !normalized) {
-        return;
+        return false;
       }
       const nextLines = mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
         maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
       });
       if (nextLines === streamToolProgressLines) {
-        return;
+        return false;
       }
       streamToolProgressLines = nextLines;
       const streamText = formatChannelProgressDraftText({
@@ -638,7 +690,7 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream.update(streamText);
-      return;
+      return true;
     }
     if (streamToolProgressEnabled && !streamToolProgressSuppressed && normalized) {
       streamToolProgressLines = mergeChannelProgressDraftLine(
@@ -659,14 +711,17 @@ export const dispatchTelegramMessage = async ({
       await progressDraftGate.startNow();
       if (alreadyStarted && progressDraftGate.hasStarted) {
         await renderProgressDraft();
+        return true;
       }
-      return;
+      return progressDraftGate.hasStarted;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
     await progressDraftGate.noteWork();
     if (alreadyStarted && progressDraftGate.hasStarted) {
       await renderProgressDraft();
+      return true;
     }
+    return false;
   };
   let splitReasoningOnNextStream = false;
   let draftLaneEventQueue = Promise.resolve();
@@ -741,6 +796,7 @@ export const dispatchTelegramMessage = async ({
     resetDraftLaneState(lane);
   };
   const rotateAnswerLaneAfterToolProgress = async () => {
+    nativeToolProgressDraft?.stop();
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
@@ -752,6 +808,7 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const prepareAnswerLaneForText = async () => {
+    nativeToolProgressDraft?.stop();
     if (await rotateAnswerLaneAfterToolProgress()) {
       return;
     }
@@ -1344,6 +1401,19 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
+                        if (
+                          nativeToolProgressDraft &&
+                          canUseNativeToolProgressDraft({
+                            payload: effectivePayload,
+                            reply,
+                            buttons: telegramButtons,
+                          })
+                        ) {
+                          if (await pushStreamToolProgress(segment.update.text)) {
+                            blockDelivered = true;
+                            continue;
+                          }
+                        }
                         await prepareAnswerLaneForToolProgress();
                       }
                       const result =
@@ -1652,6 +1722,7 @@ export const dispatchTelegramMessage = async ({
     } finally {
       await draftLaneEventQueue;
       progressDraftGate.cancel();
+      nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
         { laneName: "reasoning", lane: reasoningLane },
