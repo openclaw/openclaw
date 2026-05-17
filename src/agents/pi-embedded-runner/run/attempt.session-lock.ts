@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -257,6 +258,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     });
 
   let heldLock: SessionLock | undefined = await acquireLock();
+  const activeWriteLock = new AsyncLocalStorage<SessionLock>();
   let fenceFingerprint: SessionFileFingerprint | undefined;
   let fenceActive = false;
   let takeoverDetected = false;
@@ -310,12 +312,21 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (takeoverDetected) {
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
+      if (activeWriteLock.getStore()) {
+        return await run();
+      }
       const { lock, owned } = await acquireWriteLock();
       try {
         await assertSessionFileFence();
-        const result = await run();
-        await refreshSessionFileFence();
-        return result;
+        const runWithLock = async () => {
+          const result = await run();
+          await refreshSessionFileFence();
+          return result;
+        };
+        if (owned) {
+          return await activeWriteLock.run(lock, runWithLock);
+        }
+        return await runWithLock();
       } finally {
         if (owned) {
           await lock.release();

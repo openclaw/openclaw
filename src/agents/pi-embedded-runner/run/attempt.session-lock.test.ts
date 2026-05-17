@@ -78,6 +78,46 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(events).toEqual(["prep-release", "post-write", "post-release"]);
   });
 
+  it("reuses its active post-prompt lock for nested session writes", async () => {
+    const events: string[] = [];
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("prep-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("post-release")) })
+      .mockRejectedValueOnce(
+        new SessionWriteLockTimeoutError({
+          timeoutMs: lockOptions.timeoutMs,
+          owner: "pid=789",
+          lockPath: `${sessionFile}.lock`,
+        }),
+      );
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await controller.withSessionWriteLock(async () => {
+      events.push("outer-start");
+      await fs.appendFile(sessionFile, '{"type":"message","id":"local"}\n', "utf8");
+      await controller.withSessionWriteLock(async () => {
+        events.push("inner-write");
+      });
+      events.push("outer-end");
+    });
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      "prep-release",
+      "outer-start",
+      "inner-write",
+      "outer-end",
+      "post-release",
+    ]);
+  });
+
   it("drains queued Pi session events before reacquiring for cleanup", async () => {
     const events: string[] = [];
     let resolveQueue!: () => void;
