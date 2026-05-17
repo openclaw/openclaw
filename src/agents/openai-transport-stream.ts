@@ -3499,6 +3499,15 @@ export function buildOpenAICompletionsParams(
   }
   if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
     params.prompt_cache_key = options.sessionId;
+    // When the caller explicitly opted into long retention, forward the
+    // canonical prompt_cache_retention value alongside the cache key so
+    // OpenAI-compatible completions backends (oMLX, llama.cpp, official
+    // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
+    // the key reaches the wire but the retention preference is silently
+    // dropped (issue #81281).
+    if (cacheRetention === "long") {
+      params.prompt_cache_retention = "24h";
+    }
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
