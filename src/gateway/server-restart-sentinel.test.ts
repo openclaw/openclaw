@@ -408,6 +408,8 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
     mocks.removeRestartSentinelFile.mockClear();
+    mocks.formatRestartSentinelMessage.mockClear();
+    mocks.summarizeRestartSentinel.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
     mocks.recordInboundSessionAndDispatchReply.mockReset();
@@ -438,6 +440,12 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
+    expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(expect.anything(), {
+      state: "completed",
+    });
+    expect(mocks.summarizeRestartSentinel).toHaveBeenCalledWith(expect.anything(), {
+      state: "completed",
+    });
     expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:main",
