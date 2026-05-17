@@ -94,7 +94,7 @@ export type FirecrawlScrapeParams = {
   timeoutSeconds?: number;
 };
 
-export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+export async function assertFirecrawlScrapeTargetAllowed(url: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -106,10 +106,24 @@ export function assertFirecrawlScrapeTargetAllowed(url: string): void {
       `Blocked non-HTTP(S) protocol in Firecrawl scrape URL: ${parsed.protocol}`,
     );
   }
+
+  // Literal check (fast)
   if (isBlockedHostnameOrIp(parsed.hostname)) {
     throw new SsrFBlockedError(
       `Blocked hostname or private/internal IP in Firecrawl scrape URL: ${parsed.hostname}`,
     );
+  }
+
+  // DNS resolution check (robust)
+  try {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  } catch (err) {
+    if (err instanceof SsrFBlockedError) {
+      throw new SsrFBlockedError(
+        `Blocked hostname or private/internal IP in Firecrawl scrape URL: ${parsed.hostname}`,
+      );
+    }
+    // For other errors (DNS failure), we allow it to let the actual fetch fail later.
   }
 }
 
@@ -518,7 +532,7 @@ export function parseFirecrawlScrapePayload(params: {
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
-  assertFirecrawlScrapeTargetAllowed(params.url);
+  await assertFirecrawlScrapeTargetAllowed(params.url);
 
   const apiKey = resolveFirecrawlApiKey(params.cfg);
   if (!apiKey) {

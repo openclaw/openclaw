@@ -83,9 +83,19 @@ function isMainModule() {
   return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
 }
 
+function assertSafeCommand(target) {
+  const allowedPrefix = process.env.OPENCLAW_MCP_PROXY_ALLOWED_COMMAND_PREFIX;
+  if (allowedPrefix && !target.command.startsWith(allowedPrefix)) {
+    throw new Error(
+      `MCP proxy blocked command: does not start with allowed prefix "${allowedPrefix}"`,
+    );
+  }
+}
+
 function main() {
   const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
   const target = splitCommandLine(targetCommand);
+  assertSafeCommand(target);
   const child = spawn(target.command, target.args, createTargetSpawnOptions());
 
   if (!child.stdin || !child.stdout) {

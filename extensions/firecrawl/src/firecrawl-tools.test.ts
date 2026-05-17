@@ -222,10 +222,10 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
-    expect(
+  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
+    await expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).toBeUndefined();
+    ).resolves.toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",
@@ -235,13 +235,15 @@ describe("firecrawl tools", () => {
       "http://metadata.google.internal/computeMetadata/v1/",
       "file:///etc/passwd",
     ]) {
-      expect(() => firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(blockedUrl)).toThrow(
-        /Blocked|non-HTTP/i,
-      );
+      await expect(
+        firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(blockedUrl),
+      ).rejects.toThrow(/Blocked|non-HTTP/i);
     }
 
     try {
-      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("not-a-valid-url?token=secret");
+      await firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(
+        "not-a-valid-url?token=secret",
+      );
       expect.fail("Expected invalid URL to be blocked");
     } catch (error) {
       expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
