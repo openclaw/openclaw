@@ -491,12 +491,13 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const finalized = finalizeInboundContext(params.ctx);
   const foregroundReplyFence = beginForegroundReplyFence(finalized);
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
-  const configuredBeforeDeliver =
-    params.dispatcherOptions.beforeDeliver ??
-    combineBeforeDeliverHooks(
-      buildMessageSendingBeforeDeliver(finalized),
-      buildReplyPayloadSendingBeforeDeliver(finalized, { runId: params.replyOptions?.runId }),
-    );
+  const globalBeforeDeliver = combineBeforeDeliverHooks(
+    buildMessageSendingBeforeDeliver(finalized),
+    buildReplyPayloadSendingBeforeDeliver(finalized, { runId: params.replyOptions?.runId }),
+  );
+  const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, globalBeforeDeliver)
+    : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
@@ -575,14 +576,16 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
+  const globalBeforeDeliver = combineBeforeDeliverHooks(
+    buildMessageSendingBeforeDeliver(params.ctx),
+    buildReplyPayloadSendingBeforeDeliver(params.ctx, { runId: params.replyOptions?.runId }),
+  );
+  const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, globalBeforeDeliver)
+    : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
-    beforeDeliver:
-      params.dispatcherOptions.beforeDeliver ??
-      combineBeforeDeliverHooks(
-        buildMessageSendingBeforeDeliver(params.ctx),
-        buildReplyPayloadSendingBeforeDeliver(params.ctx, { runId: params.replyOptions?.runId }),
-      ),
+    beforeDeliver: composedBeforeDeliver,
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
   return await dispatchInboundMessage({

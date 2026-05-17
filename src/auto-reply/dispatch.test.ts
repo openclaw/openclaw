@@ -498,6 +498,57 @@ describe("withReplyDispatcher", () => {
     expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
   });
 
+  it("composes custom beforeDeliver with reply_payload_sending hooks", async () => {
+    const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
+      text: `${payload.text ?? ""} [custom]`,
+    }));
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+      payload: {
+        ...payload,
+        text: `${payload.text ?? ""} [plugin]`,
+      },
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
+      runMessageSending: vi.fn(async () => undefined),
+      runReplyPayloadSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+        beforeDeliver: customBeforeDeliver,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver({ text: "original" }, { kind: "final" });
+
+    expect(customBeforeDeliver).toHaveBeenCalledTimes(1);
+    expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
+    expect(runReplyPayloadSending).toHaveBeenCalledTimes(1);
+    expect(runReplyPayloadSending).toHaveBeenCalledWith(
+      {
+        payload: { text: "original [custom]" },
+        kind: "final",
+        channel: "telegram",
+        sessionKey: expect.any(String),
+        runId: undefined,
+      },
+      expect.anything(),
+    );
+    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+  });
+
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {
     hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
       dispatcher: createDispatcher([]),
