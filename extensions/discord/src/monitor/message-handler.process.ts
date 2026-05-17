@@ -32,10 +32,12 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
+import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
@@ -423,6 +425,28 @@ export async function processDiscordMessage(
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
+  const clearGroupHistory = () => {
+    if (isDirectMessage) {
+      return;
+    }
+    createChannelHistoryWindow({ historyMap: guildHistories }).clear({
+      historyKey: messageChannelId,
+      limit: historyLimit,
+    });
+  };
+  const beginDeliveryCorrelation = () =>
+    isRoomEvent
+      ? beginDiscordInboundEventDeliveryCorrelation(
+          ctxPayload.SessionKey,
+          {
+            outboundTo: messageChannelId,
+            outboundAccountId: route.accountId,
+            markInboundEventDelivered: clearGroupHistory,
+          },
+          { inboundEventKind: ctxPayload.InboundEventKind },
+        )
+      : () => {};
+  const endDiscordInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
 
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
@@ -651,12 +675,14 @@ export async function processDiscordMessage(
       ctxPayload,
       recordInboundSession,
       record: turn.record,
-      history: {
-        isGroup: isGuildMessage,
-        historyKey: messageChannelId,
-        historyMap: guildHistories,
-        limit: historyLimit,
-      },
+      history: isRoomEvent
+        ? undefined
+        : {
+            isGroup: isGuildMessage,
+            historyKey: messageChannelId,
+            historyMap: guildHistories,
+            limit: historyLimit,
+          },
       onPreDispatchFailure: settleDispatchBeforeStart,
       runDispatch: async () =>
         await dispatchInboundMessage({
@@ -668,6 +694,10 @@ export async function processDiscordMessage(
             abortSignal,
             skillFilter: channelConfig?.skills,
             sourceReplyDeliveryMode,
+            queuedDeliveryCorrelations: isRoomEvent
+              ? [{ begin: beginDeliveryCorrelation }]
+              : undefined,
+            suppressTyping: isRoomEvent ? true : undefined,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               sourceRepliesAreToolOnly && draftPreview.draftStream && draftPreview.isProgressMode
                 ? true
@@ -827,6 +857,7 @@ export async function processDiscordMessage(
     dispatchError = true;
     throw err;
   } finally {
+    endDiscordInboundEventDeliveryCorrelation();
     try {
       await draftPreview.cleanup();
     } finally {
