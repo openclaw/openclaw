@@ -951,7 +951,7 @@ function convertResponsesTools(
     model,
   });
   return sortTransportToolsByName(tools).map((tool): FunctionTool => {
-    const base = {
+    const result = {
       type: "function" as const,
       name: tool.name,
       description: tool.description,
@@ -960,8 +960,11 @@ function convertResponsesTools(
         strict === true,
         model.compat,
       ) as Record<string, unknown>,
-    };
-    return strict === undefined ? (base as FunctionTool) : { ...base, strict };
+    } as FunctionTool;
+    if (strict !== undefined) {
+      result.strict = strict;
+    }
+    return result;
   });
 }
 
@@ -2686,9 +2689,13 @@ function convertTools(
       model,
     },
   );
-  return sortTransportToolsByName(tools).map((tool) => ({
-    type: "function",
-    function: {
+  return sortTransportToolsByName(tools).map((tool) => {
+    const functionTool: {
+      name: string;
+      description: string | undefined;
+      parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
+      strict?: boolean;
+    } = {
       name: tool.name,
       description: tool.description,
       parameters: normalizeOpenAIStrictToolParameters(
@@ -2696,9 +2703,15 @@ function convertTools(
         strict === true,
         model.compat,
       ),
-      ...(strict === undefined ? {} : { strict }),
-    },
-  }));
+    };
+    if (strict !== undefined) {
+      functionTool.strict = strict;
+    }
+    return {
+      type: "function",
+      function: functionTool,
+    };
+  });
 }
 
 function compareTransportToolText(left: string | undefined, right: string | undefined): number {
