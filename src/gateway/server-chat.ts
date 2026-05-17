@@ -1396,7 +1396,7 @@ export function createAgentEventHandler({
       if (
         !isAborted &&
         evt.stream === "assistant" &&
-        typeof evt.data?.text === "string" &&
+        (typeof evt.data?.text === "string" || typeof evt.data?.delta === "string") &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
         emitChatDelta(
