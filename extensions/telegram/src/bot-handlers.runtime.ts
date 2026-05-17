@@ -1463,7 +1463,7 @@ export const registerTelegramHandlers = ({
       );
       const addedReactions = reaction.new_reaction
         .map(toReactionEntry)
-        .filter((r): r is ReactionEntry => Boolean(r) && !oldReactionKeys.has(r.key));
+        .filter((r): r is ReactionEntry => r !== undefined && !oldReactionKeys.has(r.key));
 
       if (addedReactions.length === 0) {
         return;
