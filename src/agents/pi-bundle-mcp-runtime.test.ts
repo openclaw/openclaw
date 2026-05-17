@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
+import {
+  createBundleMcpJsonSchemaValidator,
+  createSessionMcpRuntime,
+} from "./pi-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
@@ -72,6 +75,7 @@ function makeRuntime(
 }
 
 afterEach(async () => {
+  __testing.resetMcpServerDegradationForTests();
   await cleanupBundleMcpHarness();
 });
 
@@ -504,5 +508,96 @@ describe("session MCP runtime", () => {
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
     expect(disposed).toStrictEqual([]);
+  });
+
+  it("marks a timed-out optional MCP server degraded and skips it during cooldown", async () => {
+    const runtimeA = createSessionMcpRuntime({
+      sessionId: "session-slow-mcp-a",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            slowProbe: {
+              command: process.execPath,
+              args: ["-e", "setTimeout(() => {}, 60_000)"],
+              connectionTimeoutMs: 5,
+              degradedCooldownMs: 60_000,
+            },
+          },
+        },
+      },
+    });
+
+    const firstStartedAt = Date.now();
+    const firstCatalog = await runtimeA.getCatalog();
+    const firstElapsedMs = Date.now() - firstStartedAt;
+
+    expect(firstCatalog.servers.slowProbe).toMatchObject({
+      status: "degraded",
+      optional: true,
+      toolCount: 0,
+    });
+    expect(firstCatalog.servers.slowProbe?.degradedReason).toMatch(/timed out/i);
+    expect(firstElapsedMs).toBeGreaterThanOrEqual(1);
+    await runtimeA.dispose();
+
+    const runtimeB = createSessionMcpRuntime({
+      sessionId: "session-slow-mcp-b",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            slowProbe: {
+              command: process.execPath,
+              args: ["-e", "setTimeout(() => {}, 60_000)"],
+              connectionTimeoutMs: 5,
+              degradedCooldownMs: 60_000,
+            },
+          },
+        },
+      },
+    });
+
+    const secondStartedAt = Date.now();
+    const secondCatalog = await runtimeB.getCatalog();
+    const secondElapsedMs = Date.now() - secondStartedAt;
+
+    expect(secondCatalog.servers.slowProbe).toMatchObject({
+      status: "degraded",
+      optional: true,
+      toolCount: 0,
+    });
+    expect(secondElapsedMs).toBeLessThan(Math.max(50, firstElapsedMs));
+    expect(__testing.listActiveMcpServerDegradations()).toEqual([
+      expect.objectContaining({
+        serverName: "slowProbe",
+        reason: expect.stringMatching(/timed out/i),
+      }),
+    ]);
+    await runtimeB.dispose();
+  });
+
+  it("fails required MCP startup instead of silently degrading it", async () => {
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-required-slow-mcp",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            requiredProbe: {
+              command: process.execPath,
+              args: ["-e", "setTimeout(() => {}, 60_000)"],
+              connectionTimeoutMs: 5,
+              degradedCooldownMs: 60_000,
+              required: true,
+            },
+          },
+        },
+      },
+    });
+
+    await expect(runtime.getCatalog()).rejects.toThrow(/timed out/i);
+    expect(__testing.listActiveMcpServerDegradations()).toEqual([]);
+    await runtime.dispose();
   });
 });

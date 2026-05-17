@@ -47,6 +47,17 @@ const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeMa
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_MCP_SERVER_DEGRADED_COOLDOWN_MS = 5 * 60 * 1000;
+
+type McpServerDegradation = {
+  serverName: string;
+  fingerprint: string;
+  reason: string;
+  failedAt: number;
+  degradedUntil: number;
+};
+
+const degradedMcpServers = new Map<string, McpServerDegradation>();
 
 type Ajv2020Like = {
   compile: (schema: JsonSchemaType) => ValidateFunction;
@@ -113,6 +124,84 @@ function connectWithTimeout(
       },
     );
   });
+}
+
+function createMcpServerDegradationKey(fingerprint: string, serverName: string): string {
+  return `${fingerprint}:${serverName}`;
+}
+
+function resolveMcpServerDegradedCooldownMs(rawServer: unknown): number {
+  if (isMcpConfigRecord(rawServer)) {
+    const raw = rawServer.degradedCooldownMs;
+    if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+      return Math.floor(raw);
+    }
+  }
+  return DEFAULT_MCP_SERVER_DEGRADED_COOLDOWN_MS;
+}
+
+function isRequiredMcpServer(rawServer: unknown): boolean {
+  return isMcpConfigRecord(rawServer) && rawServer.required === true;
+}
+
+function getActiveMcpServerDegradation(params: {
+  fingerprint: string;
+  serverName: string;
+  now?: number;
+}): McpServerDegradation | undefined {
+  const key = createMcpServerDegradationKey(params.fingerprint, params.serverName);
+  const degraded = degradedMcpServers.get(key);
+  if (!degraded) {
+    return undefined;
+  }
+  const now = params.now ?? Date.now();
+  if (degraded.degradedUntil <= now) {
+    degradedMcpServers.delete(key);
+    return undefined;
+  }
+  return degraded;
+}
+
+function markMcpServerDegraded(params: {
+  fingerprint: string;
+  serverName: string;
+  reason: string;
+  cooldownMs: number;
+}): McpServerDegradation | undefined {
+  if (params.cooldownMs <= 0) {
+    return undefined;
+  }
+  const failedAt = Date.now();
+  const degraded: McpServerDegradation = {
+    serverName: params.serverName,
+    fingerprint: params.fingerprint,
+    reason: params.reason,
+    failedAt,
+    degradedUntil: failedAt + params.cooldownMs,
+  };
+  degradedMcpServers.set(
+    createMcpServerDegradationKey(params.fingerprint, params.serverName),
+    degraded,
+  );
+  return degraded;
+}
+
+function resetMcpServerDegradationForTests() {
+  degradedMcpServers.clear();
+}
+
+function listActiveMcpServerDegradations(now = Date.now()): McpServerDegradation[] {
+  const active: McpServerDegradation[] = [];
+  for (const degraded of degradedMcpServers.values()) {
+    if (degraded.degradedUntil <= now) {
+      degradedMcpServers.delete(
+        createMcpServerDegradationKey(degraded.fingerprint, degraded.serverName),
+      );
+      continue;
+    }
+    active.push({ ...degraded });
+  }
+  return active;
 }
 
 function redactErrorUrls(error: unknown): string {
@@ -232,10 +321,32 @@ export function createSessionMcpRuntime(params: {
             continue;
           }
           const safeServerName = sanitizeServerName(serverName, usedServerNames);
+          const optional = !isRequiredMcpServer(rawServer);
           if (safeServerName !== serverName) {
             logWarn(
               `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
             );
+          }
+          const degraded = optional
+            ? getActiveMcpServerDegradation({
+                fingerprint: configFingerprint,
+                serverName,
+              })
+            : undefined;
+          if (degraded) {
+            servers[serverName] = {
+              serverName,
+              launchSummary: resolved.description,
+              toolCount: 0,
+              status: "degraded",
+              optional,
+              degradedReason: degraded.reason,
+              degradedUntil: degraded.degradedUntil,
+            };
+            logWarn(
+              `bundle-mcp: skipping degraded optional server "${serverName}" (${resolved.description}); retry after ${new Date(degraded.degradedUntil).toISOString()}: ${degraded.reason}`,
+            );
+            continue;
           }
 
           const client = new Client(
@@ -266,6 +377,8 @@ export function createSessionMcpRuntime(params: {
               serverName,
               launchSummary: resolved.description,
               toolCount: listedTools.length,
+              status: "connected",
+              optional,
             };
             for (const tool of listedTools) {
               const toolName = tool.name.trim();
@@ -283,13 +396,32 @@ export function createSessionMcpRuntime(params: {
               });
             }
           } catch (error) {
+            const reason = redactErrorUrls(error);
             if (!disposed) {
               logWarn(
-                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${redactErrorUrls(error)}`,
+                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${reason}`,
               );
             }
             await disposeSession(session);
             sessions.delete(serverName);
+            if (!optional) {
+              throw error;
+            }
+            const degraded = markMcpServerDegraded({
+              fingerprint: configFingerprint,
+              serverName,
+              reason,
+              cooldownMs: resolveMcpServerDegradedCooldownMs(rawServer),
+            });
+            servers[serverName] = {
+              serverName,
+              launchSummary: resolved.description,
+              toolCount: 0,
+              status: "degraded",
+              optional,
+              degradedReason: reason,
+              degradedUntil: degraded?.degradedUntil,
+            };
             failIfDisposed();
           }
         }
@@ -641,5 +773,7 @@ export const __testing = {
   getCachedSessionIds() {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
+  listActiveMcpServerDegradations,
+  resetMcpServerDegradationForTests,
   resolveSessionMcpRuntimeIdleTtlMs,
 };

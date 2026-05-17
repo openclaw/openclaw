@@ -28,6 +28,7 @@ import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import { markAuthProfileFailure } from "./usage.js";
 
 export {
   isSafeToCopyOAuthIdentity,
@@ -412,6 +413,15 @@ export async function resolveApiKeyForProfile(
     }
 
     const message = extractErrorMessage(surfacedMessageError);
+    if (isRefreshTokenReusedError(surfacedMessageError) || /\binvalid_grant\b/i.test(message)) {
+      await markAuthProfileFailure({
+        store: refreshedStore,
+        profileId,
+        reason: "auth_permanent",
+        cfg,
+        agentDir: params.agentDir,
+      }).catch(() => undefined);
+    }
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,
