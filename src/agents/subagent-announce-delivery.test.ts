@@ -8,6 +8,7 @@ import type {
   EmbeddedPiQueueMessageOptions,
   EmbeddedPiQueueMessageOutcome,
 } from "./pi-embedded-runner/runs.js";
+import { __testing as announceDedupeTesting } from "./subagent-announce-dedupe.js";
 import {
   __testing,
   deliverSubagentAnnouncement,
@@ -23,6 +24,7 @@ import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   __testing.setDepsForTest();
+  announceDedupeTesting.resetAnnounceDeliveryDedupForTests();
 });
 
 const slackThreadOrigin = {
@@ -2041,5 +2043,178 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+});
+
+describe("deliverSubagentAnnouncement idempotency", () => {
+  it("posts a Slack subagent completion only once when the same announce dispatches twice", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "slack dup smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child completion output",
+        replyInstruction: "Summarize the result.",
+      },
+    ];
+
+    const firstResult = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-dup",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce:v1:agent:worker:subagent:child:run-dup",
+      internalEvents,
+    });
+    expectRecordFields(firstResult, { delivered: true, path: "direct" });
+
+    const secondResult = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-dup",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce:v1:agent:worker:subagent:child:run-dup",
+      internalEvents,
+    });
+
+    expect(secondResult).toBe(firstResult);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries delivery when the previous attempt did not produce a visible reply", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({ result: { payloads: [] } })
+      .mockResolvedValueOnce({
+        result: { payloads: [{ text: "child completion output" }] },
+      }) as unknown as typeof runtimeCallGateway;
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "slack retry smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child completion output",
+        replyInstruction: "Summarize the result.",
+      },
+    ];
+
+    const first = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-retry",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce:v1:agent:worker:subagent:child:run-retry",
+      internalEvents,
+    });
+    expectRecordFields(first, { delivered: false, path: "direct" });
+
+    const second = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-retry",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce:v1:agent:worker:subagent:child:run-retry",
+      internalEvents,
+    });
+    expectRecordFields(second, { delivered: true, path: "direct" });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries delivery after a thrown gateway error (no cached result)", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("permanent error: unsupported channel"))
+      .mockResolvedValueOnce({
+        result: { payloads: [{ text: "child completion output" }] },
+      }) as unknown as typeof runtimeCallGateway;
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "slack throw smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child completion output",
+        replyInstruction: "Summarize the result.",
+      },
+    ];
+    const params = {
+      callGateway,
+      sessionId: "requester-session-throw",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce:v1:agent:worker:subagent:child:run-throw",
+      internalEvents,
+    } as const;
+
+    const first = await deliverSlackThreadAnnouncement(params);
+    expectRecordFields(first, { delivered: false, path: "direct" });
+
+    const second = await deliverSlackThreadAnnouncement(params);
+    expectRecordFields(second, { delivered: true, path: "direct" });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent dispatches for the same announce key", async () => {
+    let inflight = 0;
+    let maxInflight = 0;
+    const callGateway = vi.fn(async () => {
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inflight -= 1;
+      return { result: { payloads: [{ text: "child completion output" }] } };
+    }) as unknown as typeof runtimeCallGateway;
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "slack race smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child completion output",
+        replyInstruction: "Summarize the result.",
+      },
+    ];
+    const params = {
+      callGateway,
+      sessionId: "requester-session-race",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce:v1:agent:worker:subagent:child:run-race",
+      internalEvents,
+    } as const;
+
+    const [a, b, c] = await Promise.all([
+      deliverSlackThreadAnnouncement(params),
+      deliverSlackThreadAnnouncement(params),
+      deliverSlackThreadAnnouncement(params),
+    ]);
+    expectRecordFields(a, { delivered: true, path: "direct" });
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(maxInflight).toBe(1);
   });
 });
