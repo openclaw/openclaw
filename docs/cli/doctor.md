@@ -37,11 +37,12 @@ human operator intentionally wants doctor to edit config or state.
 
 ```bash
 openclaw doctor
-openclaw doctor --repair
 openclaw doctor --lint
 openclaw doctor --lint --json
+openclaw doctor --lint --severity-min warning
 openclaw doctor --deep
-openclaw doctor --repair --non-interactive
+openclaw doctor --fix
+openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
 ```
 
@@ -76,6 +77,8 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 It uses the structured health-check path, does not prompt, and does not repair
 or rewrite config/state. Use it in CI, preflight scripts, and review workflows
 when you want machine-readable findings instead of guided repair prompts.
+Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
+are only accepted with `--lint`.
 
 ```bash
 openclaw doctor --lint
@@ -92,7 +95,7 @@ doctor --lint: ran 5 check(s), 1 finding(s)
     fix: Run `openclaw configure` and set Gateway mode (local/remote), or `openclaw config set gateway.mode local`.
 ```
 
-JSON output is stable enough for scripts:
+JSON output is the scripting surface for lint runs:
 
 ```json
 {

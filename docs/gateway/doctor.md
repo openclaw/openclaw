@@ -26,9 +26,9 @@ openclaw doctor
     Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
   </Tab>
-  <Tab title="--repair">
+  <Tab title="--fix">
     ```bash
-    openclaw doctor --repair
+    openclaw doctor --fix
     ```
 
     Apply recommended repairs without prompting (repairs + restarts where safe).
@@ -45,9 +45,9 @@ openclaw doctor
     touch state.
 
   </Tab>
-  <Tab title="--repair --force">
+  <Tab title="--fix --force">
     ```bash
-    openclaw doctor --repair --force
+    openclaw doctor --fix --force
     ```
 
     Apply aggressive repairs too (overwrites custom supervisor configs).
@@ -120,6 +120,8 @@ Use `--severity-min info|warning|error` to control both what is printed and what
 causes a non-zero lint exit. Use `--only <id>` for narrow preflight gates and
 `--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
 lint run active.
+Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
+must be paired with `--lint`; regular doctor and repair runs reject them.
 
 ## What it does (summary)
 
@@ -526,8 +528,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     - `openclaw doctor` prompts before rewriting supervisor config.
     - `openclaw doctor --yes` accepts the default repair prompts.
-    - `openclaw doctor --repair` applies recommended fixes without prompts.
-    - `openclaw doctor --repair --force` overwrites custom supervisor configs.
+    - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
+    - `openclaw doctor --fix --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
