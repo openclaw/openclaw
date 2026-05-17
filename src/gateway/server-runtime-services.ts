@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isVitestRuntimeEnv } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -272,7 +272,7 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
-  const stopModelPricingRefresh = !isVitestRuntimeEnv()
+  const stopModelPricingRefresh = !isVitestRuntimeEnv() && !isTruthyEnvValue(process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP)
     ? startGatewayModelPricingRefreshOnDemand({
         config: params.cfgAtStart,
         ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),

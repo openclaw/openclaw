@@ -17,6 +17,16 @@ const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
   "server-close",
   "server-reload-handlers",
 ];
+const ALLOWED_BOOTSTRAP_EXTERNAL_IMPORTS = new Set([
+  "@openclaw/fs-safe/advanced",
+  "@openclaw/fs-safe/config",
+  "@openclaw/fs-safe/errors",
+  "@openclaw/fs-safe/path",
+  "@openclaw/fs-safe/root",
+  "@openclaw/fs-safe/secure-file",
+  "@openclaw/fs-safe/walk",
+  "json5",
+]);
 const STATIC_IMPORT_RE =
   /\b(?:import|export)\s+(?:(?:[^'"()]*?\s+from\s+)|)["'](?<specifier>[^"']+)["']/gu;
 
@@ -85,7 +95,9 @@ function walkStaticImportGraph(params) {
         continue;
       }
       if (!isRelativeSpecifier(specifier)) {
-        params.onExternalSpecifier?.({ filePath, specifier, errors });
+        if (!ALLOWED_BOOTSTRAP_EXTERNAL_IMPORTS.has(specifier)) {
+          params.onExternalSpecifier?.({ filePath, specifier, errors });
+        }
         continue;
       }
       const resolved = resolveRelativeImport(filePath, specifier, fsImpl);
@@ -143,13 +155,15 @@ function listJsFiles(dirPath, fsImpl = fs) {
       files.push(...listJsFiles(fullPath, fsImpl));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".js")) {
+    if (
+      entry.isFile() &&
+      (entry.name.endsWith(".js") || entry.name.endsWith(".mjs") || entry.name.endsWith(".cjs"))
+    ) {
       files.push(fullPath);
     }
   }
   return files;
 }
-
 export function collectGatewayRunChunkBudgetErrors(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;

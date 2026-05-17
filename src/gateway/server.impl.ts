@@ -76,7 +76,6 @@ import {
 } from "./plugin-channel-reload-targets.js";
 import {
   collectGatewayProcessMemoryUsageMb,
-  finishGatewayRestartTrace,
   recordGatewayRestartTraceDetail,
   recordGatewayRestartTraceSpan,
   resumeGatewayRestartTraceFromEnv,
@@ -110,6 +109,11 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import {
+  createGatewayStartupRuntimeState,
+  writeGatewayStartupRuntimeState,
+  type GatewayStartupRuntimeState,
+} from "./startup-runtime-state.js";
 
 export async function __resetModelCatalogCacheForTest(): Promise<void> {
   const { __resetModelCatalogCacheForTest: resetModelCatalogCacheForTest } =
@@ -519,6 +523,8 @@ export type GatewayServerOptions = {
    * reparsing openclaw.json during server startup.
    */
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  /** Start a local gateway/control UI only, skipping providers/channels/Bonjour/pricing side effects. */
+  safeMode?: boolean;
 };
 
 type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
@@ -535,8 +541,40 @@ export async function startGatewayServer(
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
+  const safeMode = opts.safeMode === true || isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_SAFE_MODE);
+  if (safeMode) {
+    process.env.OPENCLAW_GATEWAY_SAFE_MODE = "1";
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+    process.env.OPENCLAW_DISABLE_BONJOUR = "1";
+    process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP = "1";
+    log.info("[gateway] safe mode enabled");
+    log.info("[gateway] skipping plugins/providers/channels");
+    log.info("[gateway] bonjour disabled by safe mode");
+    log.info("[gateway] model pricing startup fetch disabled by safe mode");
+  }
   const minimalTestGateway =
-    isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+    safeMode || (isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1");
+  const startupRuntimeState: GatewayStartupRuntimeState = createGatewayStartupRuntimeState({
+    port,
+    safeMode,
+    startupPhase: "starting",
+    providersSkipped: isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+    channelsSkipped: isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) || minimalTestGateway,
+    bonjourDisabled: isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) || minimalTestGateway,
+    modelPricingStartupDisabled: isTruthyEnvValue(
+      process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP,
+    ),
+    startupStartedAt: opts.startupStartedAt,
+  });
+  const writeStartupState = (phase: string) => {
+    startupRuntimeState.startupPhase = phase;
+    startupRuntimeState.startupDurationMs = opts.startupStartedAt
+      ? Date.now() - opts.startupStartedAt
+      : startupRuntimeState.startupDurationMs;
+    writeGatewayStartupRuntimeState(startupRuntimeState);
+  };
+  writeStartupState("starting");
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -678,6 +716,8 @@ export async function startGatewayServer(
     baseMethods,
     runtimePluginsLoaded,
   } = pluginBootstrap;
+  startupRuntimeState.pluginsLoaded = startupPluginIds.length;
+  writeStartupState("plugins-bootstrapped");
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
@@ -1481,84 +1521,83 @@ export async function startGatewayServer(
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       pluginServices: runtimeState.pluginServices,
     } = await startupTrace.measure("runtime.post-attach", () =>
-      loadGatewayStartupPostAttachModule().then(
-        ({ startGatewayPostAttachRuntime, stopPostReadySidecarsAfterCloseStarted }) =>
-          startGatewayPostAttachRuntime({
-            minimalTestGateway,
-            cfgAtStart,
-            bindHost,
-            bindHosts: httpBindHosts,
-            port,
-            tlsEnabled: gatewayTls.enabled,
-            log,
-            isNixMode,
-            startupStartedAt: opts.startupStartedAt,
-            broadcast,
-            tailscaleMode,
-            resetOnExit: tailscaleConfig.resetOnExit ?? false,
-            preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
-            controlUiBasePath,
-            logTailscale,
-            gatewayPluginConfigAtStart,
-            pluginRegistry,
-            defaultWorkspaceDir,
-            deps,
-            startChannels,
-            logHooks,
-            logChannels,
-            unavailableGatewayMethods,
-            loadStartupPlugins: runtimePluginsLoaded
-              ? undefined
-              : async () => {
-                  const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
-                  return loadGatewayStartupPluginRuntime({
-                    cfg: gatewayPluginConfigAtStart,
-                    activationSourceConfig: startupActivationSourceConfig,
-                    workspaceDir: defaultWorkspaceDir,
-                    log,
-                    baseMethods,
-                    coreGatewayMethodNames,
-                    hostServices: pluginHostServices,
-                    startupPluginIds,
-                    pluginLookUpTable,
-                    startupTrace,
-                  });
-                },
-            onStartupPluginsLoading: () => {
-              startupPendingReason = "startup-sidecars";
-            },
-            onStartupPluginsLoaded: async (loaded) => {
-              replaceAttachedPluginRuntime(loaded);
-              startupPendingReason = "startup-sidecars";
-              await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-            },
-            getCronService: () =>
-              runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
-            onPluginServices: (pluginServices) => {
-              runtimeState.pluginServices = pluginServices;
-            },
-            onPostReadySidecars: (postReadySidecars) => {
-              runtimeState.postReadySidecars = postReadySidecars;
-              stopPostReadySidecarsAfterCloseStarted({
-                postReadySidecars,
-                closeStarted: closePreludeStarted,
-              });
-              if (closePreludeStarted) {
-                runtimeState.postReadySidecars = [];
-              }
-            },
-            onSidecarsReady: () => {
-              startupSidecarsReady = true;
-              activateScheduledServicesWhenReady();
-            },
-            startupTrace,
-            deferSidecars: opts.deferStartupSidecars === true,
-          }),
+      loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
+        startGatewayPostAttachRuntime({
+          minimalTestGateway,
+          cfgAtStart,
+          bindHost,
+          bindHosts: httpBindHosts,
+          port,
+          tlsEnabled: gatewayTls.enabled,
+          log,
+          isNixMode,
+          startupStartedAt: opts.startupStartedAt,
+          broadcast,
+          tailscaleMode,
+          resetOnExit: tailscaleConfig.resetOnExit ?? false,
+          preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
+          controlUiBasePath,
+          logTailscale,
+          gatewayPluginConfigAtStart,
+          pluginRegistry,
+          defaultWorkspaceDir,
+          deps,
+          startChannels,
+          logHooks,
+          logChannels,
+          unavailableGatewayMethods,
+          loadStartupPlugins: runtimePluginsLoaded
+            ? undefined
+            : async () => {
+                const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
+                return loadGatewayStartupPluginRuntime({
+                  cfg: gatewayPluginConfigAtStart,
+                  activationSourceConfig: startupActivationSourceConfig,
+                  workspaceDir: defaultWorkspaceDir,
+                  log,
+                  baseMethods,
+                  coreGatewayMethodNames,
+                  hostServices: pluginHostServices,
+                  startupPluginIds,
+                  pluginLookUpTable,
+                  startupTrace,
+                });
+              },
+          onStartupPluginsLoading: () => {
+            startupPendingReason = "startup-sidecars";
+          },
+          onStartupPluginsLoaded: async (loaded) => {
+            replaceAttachedPluginRuntime(loaded);
+            startupPendingReason = "startup-sidecars";
+            await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
+          },
+          getCronService: () =>
+            runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
+          onPluginServices: (pluginServices) => {
+            runtimeState.pluginServices = pluginServices;
+          },
+          onSidecarsReady: (summary) => {
+            if (summary) {
+              startupRuntimeState.channelsAttempted = summary.channelsAttempted;
+              startupRuntimeState.channelsStarted = summary.channelsStarted;
+              startupRuntimeState.channelsFailed = summary.channelsFailed;
+              startupRuntimeState.channelsTimedOut = summary.channelsTimedOut;
+              startupRuntimeState.channelResults = summary.channelResults;
+              startupRuntimeState.warnings.push(...summary.warnings);
+              startupRuntimeState.errors.push(...summary.errors);
+            }
+            startupSidecarsReady = true;
+            writeStartupState("sidecars-ready");
+            activateScheduledServicesWhenReady();
+          },
+          startupTrace,
+          deferSidecars: opts.deferStartupSidecars === true,
+        }),
       ),
     ));
     startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
     startupTrace.mark("ready");
-    finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
+    writeStartupState(startupSidecarsReady ? "ready" : "http-ready");
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 

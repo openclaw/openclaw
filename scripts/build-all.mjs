@@ -13,12 +13,8 @@ const BUILD_CACHE_VERSION = 2;
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
-  {
-    label: "check-cli-bootstrap-imports",
-    kind: "node",
-    args: ["scripts/check-cli-bootstrap-imports.mjs"],
-  },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
+  { label: "check-cli-bootstrap-imports", kind: "node", args: ["scripts/check-cli-bootstrap-imports.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
     label: "runtime-postbuild-stamp",
@@ -98,13 +94,12 @@ export const BUILD_ALL_PROFILES = {
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
-    "check-cli-bootstrap-imports",
     "runtime-postbuild",
+    "check-cli-bootstrap-imports",
     "build-stamp",
     "runtime-postbuild-stamp",
     "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
-    "check-plugin-sdk-exports",
     "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
@@ -114,15 +109,15 @@ export const BUILD_ALL_PROFILES = {
   ],
   gatewayWatch: [
     "tsdown",
-    "check-cli-bootstrap-imports",
     "runtime-postbuild",
+    "check-cli-bootstrap-imports",
     "build-stamp",
     "runtime-postbuild-stamp",
   ],
   cliStartup: [
     "tsdown",
-    "check-cli-bootstrap-imports",
     "runtime-postbuild",
+    "check-cli-bootstrap-imports",
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",

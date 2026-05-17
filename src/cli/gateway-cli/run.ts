@@ -62,6 +62,7 @@ type GatewayRunOpts = {
   rawStreamPath?: unknown;
   dev?: boolean;
   reset?: boolean;
+  safeMode?: boolean;
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
@@ -89,6 +90,7 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "claudeCliLogs",
   "compact",
   "rawStream",
+  "safeMode",
 ] as const;
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
@@ -469,6 +471,13 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
   installQaParentWatchdog();
+  if (opts.safeMode) {
+    process.env.OPENCLAW_GATEWAY_SAFE_MODE = "1";
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+    process.env.OPENCLAW_DISABLE_BONJOUR = "1";
+    process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP = "1";
+  }
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
@@ -817,6 +826,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
+          ...(opts.safeMode ? { safeMode: true } : {}),
         });
       },
     });
@@ -913,6 +923,11 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
+    .option(
+      "--safe-mode",
+      "Start only the local gateway/control UI and skip providers, channels, Bonjour, and startup pricing refresh",
+      false,
+    )
     .action(async (opts, command) => {
       await runGatewayCommand(resolveGatewayRunOptions(opts, command));
     });
