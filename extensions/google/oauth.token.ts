@@ -136,3 +136,51 @@ export async function refreshTokensForGeminiCli(credentials: {
     allowIdentityFallback: true,
   });
 }
+
+export async function refreshGeminiTokens(
+  refreshToken: string,
+): Promise<GeminiCliOAuthCredentials> {
+  const { clientId, clientSecret } = resolveOAuthClientConfig();
+  const body = new URLSearchParams({
+    client_id: clientId,
+    refresh_token: refreshToken,
+    grant_type: "refresh_token",
+  });
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
+
+  const response = await fetchWithTimeout(TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      Accept: "*/*",
+      "User-Agent": "google-api-nodejs-client/9.15.1",
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Token refresh failed: ${errorText}`);
+  }
+
+  const data = (await response.json()) as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+  };
+
+  const identity = isGeminiCliPersonalOAuth()
+    ? await resolveGooglePersonalOAuthIdentity(data.access_token)
+    : await resolveGoogleOAuthIdentity(data.access_token);
+  const expiresAt = Date.now() + data.expires_in * 1000 - 5 * 60 * 1000;
+
+  return {
+    refresh: data.refresh_token || refreshToken,
+    access: data.access_token,
+    expires: expiresAt,
+    projectId: identity.projectId,
+    email: identity.email,
+  };
+}

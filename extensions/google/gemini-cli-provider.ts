@@ -119,6 +119,20 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
         providerId: PROVIDER_ID,
         ctx,
       }),
+    refreshOAuth: async (cred) => {
+      const { refreshGeminiTokens } = await import("./oauth.token.js");
+      if (!cred.refresh) {
+        throw new Error("Missing refresh token for Gemini CLI OAuth");
+      }
+      const refreshed = await refreshGeminiTokens(cred.refresh);
+      return {
+        ...cred,
+        access: refreshed.access,
+        refresh: refreshed.refresh,
+        expires: refreshed.expires,
+        ...(refreshed.email ? { email: refreshed.email } : {}),
+      };
+    },
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
