@@ -350,10 +350,16 @@ async function finalizeHarnessCompactionTranscript(params: {
     if (!rotation.rotated) {
       return result;
     }
+    const postCompactionSessionFile = rotation.sessionFile ?? params.params.sessionFile;
     log.info(
       `[compaction] rotated active transcript after harness compaction ` +
         `(sessionKey=${params.params.sessionKey ?? params.params.sessionId})`,
     );
+    await runPostCompactionSideEffects({
+      config: params.params.config,
+      sessionKey: params.params.sessionKey,
+      sessionFile: postCompactionSessionFile,
+    });
     return {
       ...result,
       result: {
@@ -367,8 +373,8 @@ async function finalizeHarnessCompactionTranscript(params: {
         ...(rotation.sessionId && rotation.sessionId !== params.params.sessionId
           ? { sessionId: rotation.sessionId }
           : {}),
-        ...(rotation.sessionFile && rotation.sessionFile !== params.params.sessionFile
-          ? { sessionFile: rotation.sessionFile }
+        ...(postCompactionSessionFile !== params.params.sessionFile
+          ? { sessionFile: postCompactionSessionFile }
           : {}),
       },
     };
