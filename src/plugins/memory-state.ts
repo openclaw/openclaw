@@ -77,6 +77,13 @@ export type MemoryFlushPlan = {
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  /**
+   * Resolved model context window in tokens for the caller's run, when
+   * available. Passed through to plan resolvers so they can scale defaults
+   * (notably `softThresholdTokens`) for large-window models. Optional —
+   * resolvers that do not need it (control-plane / docs) may ignore it.
+   */
+  modelContextWindowTokens?: number;
 }) => MemoryFlushPlan | null;
 
 export type RegisteredMemorySearchManager = MemorySearchManager;
@@ -256,6 +263,7 @@ export function registerMemoryFlushPlanResolverForPlugin(
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  modelContextWindowTokens?: number;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
 }
