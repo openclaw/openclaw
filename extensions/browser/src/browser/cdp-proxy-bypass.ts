@@ -45,15 +45,21 @@ export function hasProxyEnv(): boolean {
 
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
 
-function noProxyAlreadyCoversLocalhost(): boolean {
-  const current = process.env.NO_PROXY || process.env.no_proxy || "";
+function noProxyValueCoversLocalhost(value: string | undefined): boolean {
   const entries = new Set(
-    current
+    (value ?? "")
       .split(",")
       .map((entry) => entry.trim().toLowerCase())
       .filter(Boolean),
   );
   return entries.has("localhost") && entries.has("127.0.0.1") && entries.has("[::1]");
+}
+
+function noProxyAlreadyCoversLocalhost(): boolean {
+  return (
+    noProxyValueCoversLocalhost(process.env.NO_PROXY) &&
+    noProxyValueCoversLocalhost(process.env.no_proxy)
+  );
 }
 
 export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
@@ -116,9 +122,7 @@ class NoProxyLeaseManager {
     const { noProxy, noProxyLower, applied } = this.snapshot;
     const currentNoProxy = process.env.NO_PROXY;
     const currentNoProxyLower = process.env.no_proxy;
-    const untouched =
-      currentNoProxy === applied &&
-      (currentNoProxyLower === applied || currentNoProxyLower === undefined);
+    const untouched = currentNoProxy === applied && currentNoProxyLower === applied;
     if (untouched) {
       if (noProxy !== undefined) {
         process.env.NO_PROXY = noProxy;

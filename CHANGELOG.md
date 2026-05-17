@@ -106,6 +106,7 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI: stop post-processing GPT-5 final replies with hardcoded brevity caps, preserving full channel responses instead of appending synthetic ellipses, and log when strict-agentic GPT-5 execution activates. Fixes #82910.
 - Mac app: refine the Settings General and Connection panes with cleaner status panels, card rows, and a single native titlebar sidebar toggle.
 - Agents/media: deliver failed async image, music, and video generation completions directly when requester-session completion handoff fails, so channel users see provider errors instead of silent fallback stalls.
+- Browser/CDP: keep loopback proxy bypass active across both `NO_PROXY` casings and redact home-relative Chrome MCP profile paths in attach-failure diagnostics.
 - Agents/music: steer song, jingle, beat, anthem, and instrumental requests toward `music_generate` audio creation instead of lyric-only replies, and reserve `lyrics` for exact sung words.
 - Codex app-server: record native Codex tool calls and results into trajectory artifacts so debug/trajectory exports capture the full Codex-native tool history, not just OpenClaw-bridged turns. Thanks @vyctorbrzezowski.
 - Codex/app-server: keep bound conversation sessions on the owning agent runtime so native Codex control and follow-up turns do not fall back to the default agent client. Fixes #82954. (#82993)
