@@ -538,10 +538,25 @@ export async function launchOpenClawChrome(
         await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
       }
 
-      if (!(await isChromeReachable(profile.cdpUrl))) {
-        const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
-          .then(formatChromeCdpDiagnostic)
-          .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
+      // #82904: capture the diagnostic ONCE and decide readiness from it, then
+      // reuse the same result for the thrown error text. Previously the final
+      // decision used `isChromeReachable` (a weak HTTP /json/version probe
+      // that can transiently fail on cold-start macOS) and the diagnostic was
+      // only run to format the error — leading to "Failed to start Chrome CDP
+      // … {ok:true ...}" self-contradicting messages when the diagnostic
+      // succeeded a moment after the probe failed.
+      let finalDiagnostic: ChromeCdpDiagnostic | null;
+      let diagnosticErrorText: string | null = null;
+      try {
+        finalDiagnostic = await diagnoseChromeCdp(profile.cdpUrl);
+      } catch (err) {
+        finalDiagnostic = null;
+        diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+      }
+      if (!finalDiagnostic?.ok) {
+        const diagnosticText = finalDiagnostic
+          ? formatChromeCdpDiagnostic(finalDiagnostic)
+          : (diagnosticErrorText ?? "CDP diagnostic failed.");
         const stderrOutput =
           normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
         const redactedStderrOutput = redactToolPayloadText(stderrOutput);
