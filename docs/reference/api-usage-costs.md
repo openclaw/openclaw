@@ -23,8 +23,12 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 **Per-message cost footer**
 
-- `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
+- `/usage full` appends a usage footer to normal final replies, including **estimated cost** (API-key only).
 - `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows hide dollar cost.
+- Explicit message-tool sends do not get an automatic usage footer. In
+  group/channel rooms that use `messages.groupChat.visibleReplies:
+"message_tool"`, the visible message-tool output is delivered without the
+  final-reply footer.
 - Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
   `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
   from `stats.input_tokens - stats.cached` when needed.

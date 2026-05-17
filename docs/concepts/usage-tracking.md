@@ -21,7 +21,8 @@ title: "Usage tracking"
 ## Where it shows up
 
 - `/status` in chats: emoji-rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window.
-- `/usage off|tokens|full` in chats: per-response usage footer (OAuth shows tokens only).
+- `/usage off|tokens|full` in chats: per-response usage footer for normal final replies (OAuth shows tokens only).
+  Explicit message-tool sends, including tool-only group/channel visible replies, do not receive an automatic footer.
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).

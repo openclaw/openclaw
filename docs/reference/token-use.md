@@ -63,9 +63,12 @@ Use these in chat:
 
 - `/status` → **emoji-rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
-- `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
+- `/usage off|tokens|full` → appends a **per-response usage footer** to normal final replies.
   - Persists per session (stored as `responseUsage`).
   - OAuth auth **hides cost** (tokens only).
+  - Message-tool sends, including group/topic visible replies when
+    `messages.groupChat.visibleReplies: "message_tool"`, do not receive an
+    automatic usage footer.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
