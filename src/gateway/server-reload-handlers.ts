@@ -355,9 +355,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               return;
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
+            stoppedChannels.push(channel);
             await params.stopChannel(channel);
             channelsStoppedBeforePluginReload.add(channel);
-            stoppedChannels.push(channel);
           },
           onFailure: (channel, err) => {
             params.logChannels.error(
