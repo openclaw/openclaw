@@ -13,6 +13,7 @@ import {
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -4274,13 +4275,11 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
-      );
+      expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
     }
   });
 
-  it("returns a session reset hint for OpenAI missing custom tool output errors on external chat channels", async () => {
+  it("returns a provider conversation-state error for OpenAI missing custom tool output errors on external chat channels", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error("Custom tool call output is missing for call id: call_live_123."),
     );
@@ -4290,7 +4289,7 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
-        Provider: "discord",
+        Provider: "slack",
         ChannelId: "channel-1",
       } as unknown as TemplateContext,
       opts: {},
@@ -4312,9 +4311,43 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
-      );
+      expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
+    }
+  });
+
+  it("does not auto-reset role-ordering provider conversation-state errors", async () => {
+    const resetSessionAfterRoleOrderingConflict = vi.fn(async () => true);
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        ChatId: "chat-1",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(resetSessionAfterRoleOrderingConflict).not.toHaveBeenCalled();
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
     }
   });
 

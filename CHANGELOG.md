@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: advertise shared Gateway protocol constants in browser connect frames, fixing protocol mismatch handshakes after protocol constant drift. Fixes #82882. Thanks @galiniliev.
 - Gateway: add rollback protocol-mismatch diagnostics, including client protocol ranges in Gateway logs and deep status/doctor hints for stale client processes. Fixes #82841. (#82908)
 - Gateway/auth: allow same-host trusted-proxy callers to use the documented local direct `gateway.auth.password` fallback after revisiting the #78684 fail-closed policy, while keeping token fallback rejected and forwarded-header requests on the trusted-proxy path. Fixes #82607. (#82953) Thanks @joshavant.
+- Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure.
 - Agents/subagents: route group/channel subagent completions through message-tool-only handoffs when required and keep active-requester wake failures from dropping completion delivery. Fixes #82803. Thanks @galiniliev, @yozakura-ava, and @moeedahmed.
 - Memory-core: scan persisted memory source sessions on startup, comparing on-disk transcripts against the index and marking only missing/newer/resized files dirty for incremental sync. Fixes #82341. (#82341) Thanks @giodl73-repo.
 - Telegram: keep the top-level default account in the account list when named accounts or bindings are added alongside top-level credentials, preserving default polling while still letting named-only configs resolve to a single account. Fixes #82794. (#82794) Thanks @giodl73-repo.
@@ -91,7 +92,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/Docker: fail closed for non-loopback gateway starts without explicit shared-secret or trusted-proxy auth, and stop the image default command from bypassing config validation. Fixes #82865. (#82866) Thanks @coygeek.
 - Agents/followups: route queued followup turns through CLI runtime backends instead of embedded harness lookup, preventing `claude-cli`/`google-gemini-cli` followups from failing before delivery. Fixes #82847. (#82857) Thanks @hclsys.
 - CLI/sessions: let `openclaw sessions cleanup --fix-missing` prune malformed rows with unresolvable transcript metadata instead of throwing. Fixes #80970. (#82745) Thanks @IWhatsskill.
-- Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure.
 - Gateway/usage: refresh large session usage summaries in the background and reuse durable transcript metadata so `sessions.usage` no longer blocks Gateway requests on full transcript rescans. Fixes #82773. (#82778) Thanks @hclsys.
 - CLI/MiniMax media: let `openclaw infer image describe --file` accept HTTP(S) image URLs without treating them as local paths, and keep automatic MiniMax image understanding routed through `MiniMax-VL-01` even when legacy MiniMax M2.x chat metadata claims image input. Fixes #82837. Thanks @mGaolin.
 - TUI: restore the submitted draft when chat is busy instead of clearing it or queueing another run. Fixes #45326. (#82774) Thanks @hyspacex.
@@ -187,7 +187,6 @@ Docs: https://docs.openclaw.ai
 - TUI: update the displayed model in real time when an auto-fallback resolution swaps in a different model mid-turn, so the status line reflects the actual model handling the run. Fixes #82296. Thanks @giodl73-repo.
 - Gateway/sessions: estimate context usage from local/OpenAI-compatible transcripts when provider usage telemetry is missing, so status no longer shows empty usage for real local-model sessions. Fixes #73990. (#82317) Thanks @giodl73-repo.
 - Update/installers: override npm `min-release-age` quarantine for OpenClaw-managed package installs, so `openclaw update`, plugin updates, and hosted installer scripts can install the requested latest release immediately.
-- Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure.
 - Agents/sessions: preserve fresh post-compaction token snapshots across stale usage updates, preventing repeated auto-compaction after every message. Fixes #82576. (#82578) Thanks @njuboy11.
 - Agents/replies: preserve active inbound reply context at the LLM boundary so Discord referenced-message turns do not answer from stale session history. Fixes #82608. (#82801) Thanks @joshavant.
 - Agents/OpenAI Responses: log redacted diagnostics for detail-less `response.failed` events while preserving failed response ids, so operators can correlate provider-side failures. Fixes #82558.
