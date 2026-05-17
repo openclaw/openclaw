@@ -424,7 +424,7 @@ export const OpenClawSchema = z
           ])
           .optional(),
       })
-      .strict()
+      .catchall(z.unknown())
       .optional(),
     env: z
       .object({

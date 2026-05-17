@@ -58,4 +58,30 @@ describe("meta.lastTouchedAt numeric timestamp coercion", () => {
     });
     expect(res.ok).toBe(true);
   });
+
+  it("preserves unknown metadata keys for forward compatibility", () => {
+    const res = validateConfigObject({
+      meta: {
+        lastTouchedVersion: "2026.5.12",
+        lastTouchedReason: "legacy config write note",
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.meta?.lastTouchedReason).toBe("legacy config write note");
+    }
+  });
+
+  it("continues to reject unknown operational config keys", () => {
+    const res = validateConfigObject({
+      gateway: {
+        mode: "local",
+        lastTouchedReason: "not metadata",
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "gateway")).toBe(true);
+    }
+  });
 });
