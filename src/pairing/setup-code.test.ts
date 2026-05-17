@@ -516,6 +516,7 @@ describe("pairing setup code", () => {
       config: {
         gateway: {
           bind: "tailnet",
+          tls: { enabled: false },
           auth: { mode: "token", token: "tok_123" },
         },
       } satisfies ResolveSetupConfig,
