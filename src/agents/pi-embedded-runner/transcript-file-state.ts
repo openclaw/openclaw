@@ -378,6 +378,11 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
       }
       continue;
     }
+    if (entry.type === "label" && !acceptedIds.has(entry.targetId)) {
+      rejectedIds.add(entry.id);
+      rejectedParentById.set(entry.id, entry.parentId);
+      continue;
+    }
     if (acceptedIds.has(entry.id)) {
       continue;
     }
