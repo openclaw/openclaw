@@ -937,6 +937,10 @@ export async function runEmbeddedPiAgent(
         }
         return false;
       };
+      const advanceAttemptAuthProfile =
+        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+          ? advancePluginHarnessAuthProfile
+          : advanceAuthProfile;
 
       // Plugin harnesses own their model transport/auth. Running PI's generic
       // auth bootstrap here can turn synthetic provider markers into real
@@ -2264,9 +2268,7 @@ export async function runEmbeddedPiAgent(
             });
             if (
               promptFailoverDecision.action === "rotate_profile" &&
-              (await (pluginHarnessOwnsTransport
-                ? advancePluginHarnessAuthProfile()
-                : advanceAuthProfile()))
+              (await advanceAttemptAuthProfile())
             ) {
               if (failedPromptProfileId && promptProfileFailureReason) {
                 void maybeMarkAuthProfileFailure({
@@ -2496,9 +2498,7 @@ export async function runEmbeddedPiAgent(
             maybeMarkAuthProfileFailure,
             maybeEscalateRateLimitProfileFallback,
             maybeBackoffBeforeOverloadFailover,
-            advanceAuthProfile: pluginHarnessOwnsTransport
-              ? advancePluginHarnessAuthProfile
-              : advanceAuthProfile,
+            advanceAuthProfile: advanceAttemptAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {

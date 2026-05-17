@@ -624,6 +624,171 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("refreshes bootstrapped Codex OAuth credentials when rotating profiles", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const subscriptionLimit = new Error(
+      "You've reached your Codex subscription usage limit. Next reset in 20 hours.",
+    );
+    const normalizedLimit = Object.assign(new Error(subscriptionLimit.message), {
+      name: "FailoverError",
+      reason: "rate_limit",
+      status: 429,
+    });
+    let attemptCount = 0;
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => {
+      attemptCount += 1;
+      return attemptCount === 1
+        ? makeAttemptResult({ promptError: subscriptionLimit })
+        : makeAttemptResult({ assistantTexts: ["backup ok"], promptError: null });
+    });
+    const codexAuthStorage = {
+      setRuntimeApiKey: vi.fn(),
+      getApiKey: vi.fn(async () => "stored-test-key"),
+    };
+    const firstRuntimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai-codex",
+        authProfileProviderForAuth: "openai-codex",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:sub",
+        forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai-codex:backup"],
+      },
+    });
+    const secondRuntimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai-codex",
+        authProfileProviderForAuth: "openai-codex",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:backup",
+        forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai-codex:backup"],
+      },
+    });
+    const codexAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "openai-codex:sub": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "sub-access-token",
+          refresh: "sub-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+        "openai-codex:backup": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "backup-access-token",
+          refresh: "backup-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
+    mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:sub", "openai-codex:backup"]);
+    mockedResolveModelAsync
+      .mockResolvedValueOnce({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai",
+          contextWindow: 200000,
+          api: "openai-responses",
+        },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      })
+      .mockResolvedValueOnce({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai-codex",
+          contextWindow: 200000,
+          api: "openai-codex-responses",
+        },
+        error: null,
+        authStorage: codexAuthStorage,
+        modelRegistry: {},
+      });
+    mockedBuildAgentRuntimePlan
+      .mockReturnValueOnce(firstRuntimePlan)
+      .mockReturnValueOnce(secondRuntimePlan);
+    mockedGetApiKeyForModel.mockImplementation(
+      async ({ profileId }: { profileId?: string } = {}) => ({
+        apiKey: profileId === "openai-codex:backup" ? "backup-token" : "sub-token",
+        profileId: profileId ?? "openai-codex:sub",
+        source: "test",
+        mode: "api-key",
+      }),
+    );
+    mockedCoerceToFailoverError.mockReturnValueOnce(normalizedLimit);
+    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
+      message: err instanceof Error ? err.message : String(err),
+      reason: err === normalizedLimit ? "rate_limit" : undefined,
+      status: err === normalizedLimit ? 429 : undefined,
+      code: undefined,
+    }));
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        runId: "forced-openai-codex-responses-rotates-oauth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(2);
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(
+      1,
+      "openai-codex",
+      "sub-token",
+    );
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(
+      2,
+      "openai-codex",
+      "backup-token",
+    );
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
+    expectMockCallFields(pluginRunAttempt, {
+      provider: "openai-codex",
+      authProfileId: "openai-codex:sub",
+      resolvedApiKey: "sub-token",
+    });
+    expectMockCallFields(
+      pluginRunAttempt,
+      {
+        provider: "openai-codex",
+        authProfileId: "openai-codex:backup",
+        resolvedApiKey: "backup-token",
+      },
+      1,
+    );
+  });
+
   it("keeps auto-selected OpenAI Codex auth profiles for forced codex harness runs", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
