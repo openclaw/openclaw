@@ -75,6 +75,7 @@ Docs: https://docs.openclaw.ai
 - Secrets/audit: treat `$VAR` auth-profile values as env SecretRefs and stop reporting env-ref credentials as plaintext, including mixed `keyRef` plus env-ref profile states. Fixes #53998. Thanks @schirloc and @artwalker.
 - Agents/model fallback: suppress fallback notices when the active OpenAI Codex runtime reports the same canonical OpenAI model.
 - Agents/music generation: remove model-controlled request timeouts, default internal provider requests to five minutes, and keep configured timeouts at a 120-second floor.
+- Cron: let isolated best-effort deliveries send the parent result immediately while fire-and-forget subagents keep running, avoiding false run timeouts. Fixes #44428. Thanks @amknight.
 - Agents/media generation: stop logging delivered failure summaries as missing message-tool delivery when no generated media was expected.
 - Agents/sessions: prioritize manual user turns ahead of queued cron and maintenance work in the same session lane, so visible follow-ups no longer wait behind background runs. Fixes #82764. (#82765) Thanks @galiniliev.
 - Agents/edit tool: honor `file_path` and related path aliases when resolving edit-recovery targets, so post-write errors no longer surface false edit failures after the file actually changed. Fixes #81909. Thanks @giodl73-repo.
