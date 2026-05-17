@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "featureId": "feat_cli-command_134cd3621e",
+  "title": "CLI command openclaw",
+  "summary": "Package bin 'openclaw' at openclaw.mjs.",
+  "kind": "cli-command",
+  "source": "package-json-bin",
+  "confidence": "high",
+  "entrypoints": [
+    {
+      "path": "openclaw.mjs",
+      "symbol": null,
+      "route": null,
+      "command": "openclaw"
+    }
+  ],
+  "ownedFiles": [
+    {
+      "path": "openclaw.mjs",
+      "reason": "entrypoint"
+    }
+  ],
+  "contextFiles": [
+    {
+      "path": "src/agents/openclaw-gateway-tool.test.ts",
+      "reason": "nearby test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.agents.test.ts",
+      "reason": "nearby test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.camera.test.ts",
+      "reason": "nearby test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.pdf-registration.test.ts",
+      "reason": "nearby test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.plugin-context.test.ts",
+      "reason": "nearby test"
+    }
+  ],
+  "tests": [
+    {
+      "path": "src/agents/openclaw-gateway-tool.test.ts",
+      "command": "pnpm test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.agents.test.ts",
+      "command": "pnpm test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.camera.test.ts",
+      "command": "pnpm test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.pdf-registration.test.ts",
+      "command": "pnpm test"
+    },
+    {
+      "path": "src/agents/openclaw-tools.plugin-context.test.ts",
+      "command": "pnpm test"
+    }
+  ],
+  "tags": ["node", "cli"],
+  "trustBoundaries": ["user-input", "filesystem", "process-exec"],
+  "status": "pending",
+  "lock": null,
+  "findingIds": [],
+  "patchAttemptIds": [],
+  "analysisHistory": [],
+  "createdAt": "2026-05-16T21:01:51.305Z",
+  "updatedAt": "2026-05-16T21:01:51.305Z"
+}

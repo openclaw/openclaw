@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "stateDir": ".clawpatch",
+  "include": ["**/*"],
+  "exclude": [
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "target/**",
+    ".build/**",
+    ".git/**",
+    ".clawpatch/**"
+  ],
+  "provider": {
+    "name": "codex",
+    "model": null
+  },
+  "commands": {
+    "typecheck": null,
+    "lint": "pnpm lint",
+    "format": "pnpm format",
+    "test": "pnpm test"
+  },
+  "review": {
+    "maxContextFiles": 24,
+    "maxOwnedFiles": 12,
+    "maxFindingsPerFeature": 10,
+    "minConfidenceToFix": "medium"
+  },
+  "git": {
+    "requireCleanWorktreeForFix": true,
+    "commit": false,
+    "openPr": false
+  }
+}
