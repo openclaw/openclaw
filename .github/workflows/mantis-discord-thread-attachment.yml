@@ -46,9 +46,8 @@ jobs:
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           (
-            contains(github.event.comment.body, '@Mantis') ||
-            contains(github.event.comment.body, '@mantis') ||
-            contains(github.event.comment.body, '/mantis')
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
           )
         )
       }}
@@ -128,7 +127,7 @@ jobs:
 
             const normalized = body.toLowerCase();
             const requested =
-              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
+              (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
               normalized.includes("discord") &&
               normalized.includes("thread") &&
               (normalized.includes("attachment") ||

@@ -1631,7 +1631,7 @@ openclaw logs --follow
           // Molty listens to all bot-authored Discord messages.
           allowBots: true,
           mentionAliases: {
-            // Lets Molty write "@Mantis" and send a real Discord mention.
+            // Lets Molty write a Mantis Discord mention with the configured user id.
             Mantis: "MANTIS_DISCORD_USER_ID",
           },
           botLoopProtection: {
