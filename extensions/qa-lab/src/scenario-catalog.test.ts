@@ -103,6 +103,19 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
+  it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
+    const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
+    const soak = readQaScenarioById("runtime-soak-100-turn");
+
+    expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+      turnCount: 20,
+    });
+    expect(soak.runtimeParityTier).toBe("soak");
+    expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {
