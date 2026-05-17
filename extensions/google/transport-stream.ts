@@ -192,7 +192,17 @@ function isJsonLikeThoughtSignature(value: string): boolean {
   );
 }
 
-function sanitizeGeminiToolCallThoughtSignature(
+const GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
+const GEMINI_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+
+function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
+  return (
+    GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
+    (GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
+  );
+}
+
+function sanitizeGeminiThoughtSignature(
   thoughtSignature: string | undefined,
 ): string | undefined {
   if (typeof thoughtSignature !== "string") {
@@ -212,15 +222,7 @@ function sanitizeGeminiToolCallThoughtSignature(
   ) {
     return undefined;
   }
-  // Reject signatures that show concrete compaction-truncation footprints.
-  // Ellipsis (U+2026 or three dots) marks a truncated Base64 string.
-  if (/[…]|\.\.\./.test(trimmed)) {
-    return undefined;
-  }
-  // For strings that look like canonical Base64, a length not a multiple of 4
-  // means compaction cut the token mid-stream. Opaque-shape signatures
-  // (e.g. containing -, _, ~, .) do not match and pass through unchanged.
-  if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 !== 0) {
+  if (hasGeminiThoughtSignatureTruncationFootprint(trimmed)) {
     return undefined;
   }
   return trimmed;
@@ -546,7 +548,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             continue;
           }
           const sanitizedTextSignature = isSameRoute
-            ? sanitizeGeminiToolCallThoughtSignature(block.textSignature)
+            ? sanitizeGeminiThoughtSignature(block.textSignature)
             : undefined;
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
@@ -561,7 +563,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             continue;
           }
           if (isSameRoute) {
-            const sanitizedThinkingSignature = sanitizeGeminiToolCallThoughtSignature(
+            const sanitizedThinkingSignature = sanitizeGeminiThoughtSignature(
               block.thinkingSignature,
             );
             parts.push({
@@ -587,7 +589,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           // Never replay signatures from foreign providers — Gemini requires
           // its own signatures returned exactly as issued.
           const ownSignature = isSameRoute
-            ? sanitizeGeminiToolCallThoughtSignature(block.thoughtSignature)
+            ? sanitizeGeminiThoughtSignature(block.thoughtSignature)
             : undefined;
           if (ownSignature) {
             nextReplayToolCallThoughtSignatures.set(replayKey, ownSignature);

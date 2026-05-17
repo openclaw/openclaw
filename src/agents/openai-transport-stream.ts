@@ -2767,6 +2767,16 @@ function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): b
   return model.id.toLowerCase().includes("gemini-3");
 }
 
+const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
+const GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+
+function hasGoogleCompatThoughtSignatureTruncationFootprint(value: string): boolean {
+  return (
+    GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
+    (GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
+  );
+}
+
 function injectToolCallThoughtSignatures(
   outgoingMessages: unknown[],
   context: Context,
@@ -2819,17 +2829,9 @@ function injectToolCallThoughtSignatures(
         continue;
       }
       let sig: string | undefined = sigById.get(id) ?? fallbackSig;
-      // Reject only concrete compaction-truncation footprints. If the captured
-      // same-route signature is truncated, fall back to `fallbackSig` so the
-      // Gemini 3 skip-validator contract (skip_thought_signature_validator) is
-      // preserved instead of emitting an unsigned function-call replay.
-      // Opaque-shape signatures (containing -, _, ~, .) pass through unchanged.
       if (typeof sig === "string" && sig.length > 0) {
         const trimmed = sig.trim();
-        const isTruncated =
-          /[\u2026]|\.\.\./.test(trimmed) ||
-          (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 !== 0);
-        if (isTruncated) {
+        if (hasGoogleCompatThoughtSignatureTruncationFootprint(trimmed)) {
           sig = fallbackSig;
         }
       }
