@@ -585,6 +585,92 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 });
 
+describe("gateway channel hot reload handlers", () => {
+  it("continues restarting remaining channels when one channel restart fails", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const setState = vi.fn();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async (name: ChannelKind) => {
+      if (name === "discord") {
+        throw new Error("discord stop timed out");
+      }
+    });
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels,
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await applyHotReload(
+        {
+          changedPaths: ["channels.discord.token", "channels.telegram.botToken"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set<ChannelKind>(["discord", "telegram"]),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        { channels: { discord: { token: "next" }, telegram: { botToken: "next" } } } as never,
+      );
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel.mock.calls.map(([name]) => name)).toEqual(["discord", "telegram"]);
+    expect(startChannel).not.toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("telegram");
+    expect(logChannels.error).toHaveBeenCalledWith(
+      expect.stringContaining("[discord] hot-reload restart failed"),
+    );
+    expect(setState).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("gateway plugin hot reload handlers", () => {
   it("stops removed channel plugins from broad activation before swapping plugin runtime", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;

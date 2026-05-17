@@ -430,7 +430,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           await params.startChannel(name);
         };
         for (const channel of channelsToRestart) {
-          await restartChannel(channel);
+          try {
+            await restartChannel(channel);
+          } catch (err) {
+            params.logChannels.error(
+              `[${channel}] hot-reload restart failed; continuing remaining channels: ${String(
+                err,
+              )}`,
+            );
+          }
         }
       }
     }
