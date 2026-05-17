@@ -9,6 +9,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { FlowContribution } from "./types.js";
+export {
+  doctorHealthConversionRules,
+  type DoctorHealthConversionKind,
+  type DoctorHealthConversionRule,
+} from "./doctor-health-conversion-plan.js";
 
 type DoctorFlowMode = "local" | "remote";
 

@@ -355,29 +355,50 @@ function inferCapturedNoteSeverity(text: string): HealthFinding["severity"] {
 
 function createNoteCollector(checkId: string): {
   readonly findings: readonly HealthFinding[];
-  noteFn(message: unknown): void;
+  readonly noteFn: (message: unknown) => void;
 } {
   const findings: HealthFinding[] = [];
+  const noteFn = (message: unknown): void => {
+    const text = noteMessageToText(message);
+    if (!text.trim()) {
+      return;
+    }
+    const severity = inferCapturedNoteSeverity(text);
+    if (severity === "info") {
+      return;
+    }
+    findings.push(
+      noteTextToFinding({
+        checkId,
+        severity,
+        text,
+      }),
+    );
+  };
   return {
     findings,
-    noteFn(message: unknown) {
-      const text = message instanceof Error ? message.message : String(message ?? "");
-      if (!text.trim()) {
-        return;
-      }
-      const severity = inferCapturedNoteSeverity(text);
-      if (severity === "info") {
-        return;
-      }
-      findings.push(
-        noteTextToFinding({
-          checkId,
-          severity,
-          text,
-        }),
-      );
-    },
+    noteFn,
   };
+}
+
+function noteMessageToText(message: unknown): string {
+  if (message instanceof Error) {
+    return message.message;
+  }
+  if (message == null) {
+    return "";
+  }
+  if (typeof message === "string") {
+    return message;
+  }
+  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
+    return String(message);
+  }
+  try {
+    return JSON.stringify(message) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 const claudeCliCheck: HealthCheck = {
