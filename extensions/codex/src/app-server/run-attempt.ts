@@ -1040,6 +1040,7 @@ export async function runCodexAppServerAttempt(
   let turnCompletionIdleTimedOut = false;
   let turnCompletionIdleTimeoutMessage: string | undefined;
   let clientClosedPromptError: string | undefined;
+  let clientClosedAbort = false;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -2063,6 +2064,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
+    clientClosedAbort = true;
     runAbortController.abort("client_closed");
     completed = true;
     clearTurnAttemptIdleTimer();
@@ -2135,7 +2137,8 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
-    const finalAborted = result.aborted || runAbortController.signal.aborted;
+    const finalAborted =
+      result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
     let finalPromptError =
       clientClosedPromptError ??
       (turnCompletionIdleTimedOut
@@ -2279,11 +2282,14 @@ export async function runCodexAppServerAttempt(
     });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
-        status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        status:
+          timedOut || (runAbortController.signal.aborted && !clientClosedAbort)
+            ? "interrupted"
+            : "cleanup",
         threadId: thread.threadId,
         turnId: activeTurnId,
         timedOut,
-        aborted: runAbortController.signal.aborted,
+        aborted: runAbortController.signal.aborted && !clientClosedAbort,
       });
     }
     await runAgentCleanupStep({

@@ -5085,7 +5085,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.promptError).toBe("codex app-server client closed before turn completed");
-    expect(result.aborted).toBe(true);
+    expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
   });
 
