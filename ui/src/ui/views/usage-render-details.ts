@@ -2,7 +2,7 @@ import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { parseToolSummary } from "../usage-helpers.ts";
+import { normalizeUsageProviderId, parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
 import {
@@ -70,7 +70,7 @@ function renderSessionSummary(
     badges.push(`agent:${session.agentId}`);
   }
   if (session.modelProvider || session.providerOverride) {
-    badges.push(`provider:${session.modelProvider ?? session.providerOverride}`);
+    badges.push(`provider:${normalizeUsageProviderId(session.modelProvider ?? session.providerOverride)}`);
   }
   if (session.model) {
     badges.push(`model:${session.model}`);

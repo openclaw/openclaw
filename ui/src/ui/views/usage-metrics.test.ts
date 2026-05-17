@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
+  buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageMosaicStats,
   getHourAndWeekdayForUtcQuarterBucket,
@@ -262,6 +263,77 @@ describe("buildPeakErrorHours", () => {
     expect(peakErrorSummaries(result)).toStrictEqual([
       { value: "30.00%", sub: "3 errors · 10 msgs" },
     ]);
+  });
+});
+
+describe("buildAggregatesFromSessions", () => {
+  it("groups provider aliases under their canonical provider ids", () => {
+    const sessions = [
+      {
+        key: "zai-a",
+        usage: {
+          totalTokens: 10,
+          totalCost: 0.01,
+          modelUsage: [
+            {
+              provider: "z-ai",
+              model: "glm-4.5",
+              count: 1,
+              totals: { totalTokens: 10, totalCost: 0.01 },
+            },
+          ],
+          dailyModelUsage: [
+            {
+              date: "2026-05-01",
+              provider: "z-ai",
+              model: "glm-4.5",
+              tokens: 10,
+              cost: 0.01,
+              count: 1,
+            },
+          ],
+        },
+      },
+      {
+        key: "zai-b",
+        usage: {
+          totalTokens: 20,
+          totalCost: 0.02,
+          modelUsage: [
+            {
+              provider: "z.ai",
+              model: "glm-4.5",
+              count: 1,
+              totals: { totalTokens: 20, totalCost: 0.02 },
+            },
+          ],
+          dailyModelUsage: [
+            {
+              date: "2026-05-01",
+              provider: "z.ai",
+              model: "glm-4.5",
+              tokens: 20,
+              cost: 0.02,
+              count: 1,
+            },
+          ],
+        },
+      },
+    ] as unknown as UsageSessionEntry[];
+
+    const result = buildAggregatesFromSessions(sessions);
+
+    expect(result.byProvider).toHaveLength(1);
+    expect(result.byProvider[0]?.provider).toBe("zai");
+    expect(result.byProvider[0]?.count).toBe(2);
+    expect(result.byProvider[0]?.totals.totalTokens).toBe(30);
+    expect(result.byModel).toHaveLength(1);
+    expect(result.byModel[0]?.provider).toBe("zai");
+    expect(result.byModel[0]?.count).toBe(2);
+    expect(result.dailyModelUsage).toHaveLength(1);
+    expect(result.dailyModelUsage[0]?.provider).toBe("zai");
+    expect(result.dailyModelUsage[0]?.tokens).toBe(30);
+    expect(result.dailyModelUsage[0]?.count).toBe(2);
   });
 });
 

@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";
-import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
+import {
+  extractQueryTerms,
+  filterSessionsByQuery,
+  normalizeUsageProviderId,
+} from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
@@ -192,7 +196,7 @@ export function renderUsage(props: UsageProps) {
     const normalized = normalizeQueryText(key);
     return queryTerms
       .filter((term) => normalizeQueryText(term.key ?? "") === normalized)
-      .map((term) => term.value)
+      .map((term) => (normalized === "provider" ? normalizeUsageProviderId(term.value) : term.value))
       .filter(Boolean);
   };
   const unique = (items: Array<string | undefined>) => {
@@ -207,9 +211,9 @@ export function renderUsage(props: UsageProps) {
   const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
   const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
-    ...sortedSessions.map((s) => s.modelProvider),
-    ...sortedSessions.map((s) => s.providerOverride),
-    ...(data.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
+    ...sortedSessions.map((s) => normalizeUsageProviderId(s.modelProvider)),
+    ...sortedSessions.map((s) => normalizeUsageProviderId(s.providerOverride)),
+    ...(data.aggregates?.byProvider.map((entry) => normalizeUsageProviderId(entry.provider)) ?? []),
   ]).slice(0, 12);
   const modelOptions = unique([
     ...sortedSessions.map((s) => s.model),
@@ -680,7 +684,10 @@ export function renderUsage(props: UsageProps) {
             ? html`
                 <div class="usage-query-chips">
                   ${queryTerms.map((term) => {
-                    const label = term.raw;
+                    const label =
+                      normalizeQueryText(term.key ?? "") === "provider"
+                        ? `provider:${normalizeUsageProviderId(term.value)}`
+                        : term.raw;
                     return html`
                       <span class="usage-query-chip">
                         ${label}

@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeUsageProviderId } from "../usage-helpers.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -544,7 +545,7 @@ function renderUsageInsights(
     sub: `${formatTokens(entry.totals.totalTokens)} · ${entry.count} ${t("usage.overview.messagesAbbrev")}`,
   }));
   const topProviders = aggregates.byProvider.slice(0, 5).map((entry) => ({
-    label: entry.provider ?? t("usage.common.unknown"),
+    label: normalizeUsageProviderId(entry.provider) || t("usage.common.unknown"),
     value: formatCost(entry.totals.totalCost),
     sub: `${formatTokens(entry.totals.totalTokens)} · ${entry.count} ${t("usage.overview.messagesAbbrev")}`,
   }));
@@ -728,7 +729,7 @@ function renderSessionsCard(
       parts.push(`agent:${s.agentId}`);
     }
     if (showColumn("provider") && (s.modelProvider || s.providerOverride)) {
-      parts.push(`provider:${s.modelProvider ?? s.providerOverride}`);
+      parts.push(`provider:${normalizeUsageProviderId(s.modelProvider ?? s.providerOverride)}`);
     }
     if (showColumn("model") && s.model) {
       parts.push(`model:${s.model}`);

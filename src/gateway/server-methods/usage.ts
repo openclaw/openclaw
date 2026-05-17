@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -59,6 +60,13 @@ const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
 const SESSIONS_USAGE_CACHE_READ_CONCURRENCY = 12;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+const normalizeUsageProviderId = (provider?: string): string | undefined => {
+  if (!provider) {
+    return undefined;
+  }
+  return normalizeProviderId(provider);
+};
 
 type DateRange = { startMs: number; endMs: number };
 type DateInterpretation =
@@ -632,11 +640,12 @@ function mergeModelUsage(
     target.missingCostEntries += source.missingCostEntries;
   };
   for (const entry of [...(left ?? []), ...(right ?? [])]) {
-    const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+    const provider = normalizeUsageProviderId(entry.provider);
+    const key = `${provider ?? "unknown"}::${entry.model ?? "unknown"}`;
     const existing =
       map.get(key) ??
       ({
-        provider: entry.provider,
+        provider,
         model: entry.model,
         count: 0,
         totals: createEmptySessionCostSummary(),
@@ -701,10 +710,11 @@ function mergeDailyModelRows(
 ): SessionCostSummary["dailyModelUsage"] {
   const map = new Map<string, NonNullable<SessionCostSummary["dailyModelUsage"]>[number]>();
   for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = `${row.date}:${row.provider ?? "unknown"}:${row.model ?? "unknown"}`;
+    const provider = normalizeUsageProviderId(row.provider);
+    const key = `${row.date}:${provider ?? "unknown"}:${row.model ?? "unknown"}`;
     const existing = map.get(key);
     if (!existing) {
-      map.set(key, { ...row });
+      map.set(key, { ...row, provider });
       continue;
     }
     existing.tokens += row.tokens;
@@ -1214,11 +1224,12 @@ export const usageHandlers: GatewayRequestHandlers = {
 
         if (usage.modelUsage) {
           for (const entry of usage.modelUsage) {
-            const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+            const provider = normalizeUsageProviderId(entry.provider);
+            const modelKey = `${provider ?? "unknown"}::${entry.model ?? "unknown"}`;
             const modelExisting =
               byModelMap.get(modelKey) ??
               ({
-                provider: entry.provider,
+                provider,
                 model: entry.model,
                 count: 0,
                 totals: emptyTotals(),
@@ -1227,11 +1238,11 @@ export const usageHandlers: GatewayRequestHandlers = {
             mergeTotals(modelExisting.totals, entry.totals);
             byModelMap.set(modelKey, modelExisting);
 
-            const providerKey = entry.provider ?? "unknown";
+            const providerKey = provider ?? "unknown";
             const providerExisting =
               byProviderMap.get(providerKey) ??
               ({
-                provider: entry.provider,
+                provider,
                 model: undefined,
                 count: 0,
                 totals: emptyTotals(),
@@ -1247,12 +1258,13 @@ export const usageHandlers: GatewayRequestHandlers = {
 
         if (usage.dailyModelUsage) {
           for (const entry of usage.dailyModelUsage) {
-            const key = `${entry.date}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+            const provider = normalizeUsageProviderId(entry.provider);
+            const key = `${entry.date}::${provider ?? "unknown"}::${entry.model ?? "unknown"}`;
             const existing =
               modelDailyMap.get(key) ??
               ({
                 date: entry.date,
-                provider: entry.provider,
+                provider,
                 model: entry.model,
                 tokens: 0,
                 cost: 0,

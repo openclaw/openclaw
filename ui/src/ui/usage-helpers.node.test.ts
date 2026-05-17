@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./usage-helpers.ts";
+import {
+  extractQueryTerms,
+  filterSessionsByQuery,
+  normalizeUsageProviderId,
+  parseToolSummary,
+} from "./usage-helpers.ts";
 
 function requireFirstTool(tools: Array<[string, number]>): [string, number] {
   const tool = tools[0];
@@ -31,6 +36,26 @@ describe("usage-helpers", () => {
     const b = { key: "b", label: "b", usage: { totalTokens: 5, totalCost: 0 } };
     expect(filterSessionsByQuery([a, b], "minTokens:10").sessions).toEqual([a]);
     expect(filterSessionsByQuery([a, b], "maxTokens:10").sessions).toEqual([b]);
+  });
+
+  it("matches provider filters against canonical provider aliases", () => {
+    const session = {
+      key: "alias-provider",
+      label: "Alias provider",
+      modelProvider: "z-ai",
+      providerOverride: "aws-bedrock",
+      usage: {
+        totalTokens: 10,
+        totalCost: 0,
+        modelUsage: [{ provider: "z.ai", model: "glm-4.5", count: 1, totals: { totalTokens: 10 } }],
+      },
+    };
+
+    expect(normalizeUsageProviderId("z-ai")).toBe("zai");
+    expect(normalizeUsageProviderId("aws-bedrock")).toBe("amazon-bedrock");
+    expect(filterSessionsByQuery([session], "provider:zai").sessions).toEqual([session]);
+    expect(filterSessionsByQuery([session], "provider:z.ai").sessions).toEqual([session]);
+    expect(filterSessionsByQuery([session], "provider:amazon-bedrock").sessions).toEqual([session]);
   });
 
   it("warns on unknown keys and invalid numbers", () => {

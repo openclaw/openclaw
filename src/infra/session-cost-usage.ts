@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -67,6 +68,13 @@ export type {
   UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
+const normalizeUsageProviderId = (provider?: string): string | undefined => {
+  if (!provider) {
+    return undefined;
+  }
+  return normalizeProviderId(provider);
+};
+
 const emptyTotals = (): CostUsageTotals => ({
   input: 0,
   output: 0,
@@ -81,7 +89,7 @@ const emptyTotals = (): CostUsageTotals => ({
   missingCostEntries: 0,
 });
 
-const USAGE_COST_CACHE_VERSION = 3;
+const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const logger = createSubsystemLogger("usage-cost-cache");
@@ -717,12 +725,13 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       utcQuarterHourTokenMap.set(quarterBucket.key, utcQuarterHourToken);
 
       if (entry.provider || entry.model) {
-        const dailyModelKey = `${dayKey}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+        const provider = normalizeUsageProviderId(entry.provider);
+        const dailyModelKey = `${dayKey}::${provider ?? "unknown"}::${entry.model ?? "unknown"}`;
         const dailyModel =
           dailyModelUsageMap.get(dailyModelKey) ??
           ({
             date: dayKey,
-            provider: entry.provider,
+            provider,
             model: entry.model,
             tokens: 0,
             cost: 0,
@@ -736,11 +745,12 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     }
 
     if (entry.provider || entry.model) {
-      const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+      const provider = normalizeUsageProviderId(entry.provider);
+      const modelKey = `${provider ?? "unknown"}::${entry.model ?? "unknown"}`;
       const modelUsage =
         modelUsageMap.get(modelKey) ??
         ({
-          provider: entry.provider,
+          provider,
           model: entry.model,
           count: 0,
           totals: emptyTotals(),

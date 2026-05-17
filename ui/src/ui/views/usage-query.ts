@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { extractQueryTerms } from "../usage-helpers.ts";
+import { extractQueryTerms, normalizeUsageProviderId } from "../usage-helpers.ts";
 import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
 
 function downloadTextFile(filename: string, content: string, type = "text/plain") {
@@ -61,7 +61,7 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
         session.label ?? "",
         session.agentId ?? "",
         session.channel ?? "",
-        session.modelProvider ?? session.providerOverride ?? "",
+        normalizeUsageProviderId(session.modelProvider ?? session.providerOverride),
         session.model ?? session.modelOverride ?? "",
         session.updatedAt ? new Date(session.updatedAt).toISOString() : "",
         usage?.durationMs ?? "",
@@ -140,7 +140,7 @@ const buildQuerySuggestions = (
     : ["", ""];
 
   const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const value = key === "provider" ? normalizeUsageProviderId(rawValue) : normalizeLowercaseStringOrEmpty(rawValue);
 
   const unique = (items: Array<string | undefined>): string[] => {
     const set = new Set<string>();
@@ -155,9 +155,9 @@ const buildQuerySuggestions = (
   const agents = unique(sessions.map((s) => s.agentId)).slice(0, 6);
   const channels = unique(sessions.map((s) => s.channel)).slice(0, 6);
   const providers = unique([
-    ...sessions.map((s) => s.modelProvider),
-    ...sessions.map((s) => s.providerOverride),
-    ...(aggregates?.byProvider.map((p) => p.provider) ?? []),
+    ...sessions.map((s) => normalizeUsageProviderId(s.modelProvider)),
+    ...sessions.map((s) => normalizeUsageProviderId(s.providerOverride)),
+    ...(aggregates?.byProvider.map((p) => normalizeUsageProviderId(p.provider)) ?? []),
   ]).slice(0, 6);
   const models = unique([
     ...sessions.map((s) => s.model),
@@ -238,12 +238,27 @@ const addQueryToken = (query: string, token: string): string => {
   const tokens = trimmed.split(/\s+/);
   const last = tokens[tokens.length - 1] ?? "";
   const tokenKey = token.includes(":") ? token.split(":")[0] : null;
+  const tokenValue = token.includes(":") ? token.slice(token.indexOf(":") + 1) : "";
   const lastKey = last.includes(":") ? last.split(":")[0] : null;
   if (last.endsWith(":") && tokenKey && lastKey === tokenKey) {
     tokens[tokens.length - 1] = token;
     return `${tokens.join(" ")} `;
   }
-  if (tokens.includes(token)) {
+  const hasEquivalentToken = tokens.some((entry) => {
+    if (entry === token) {
+      return true;
+    }
+    if (normalizeQueryText(tokenKey ?? "") !== "provider") {
+      return false;
+    }
+    const entryKey = entry.includes(":") ? entry.split(":")[0] : null;
+    if (normalizeQueryText(entryKey ?? "") !== "provider") {
+      return false;
+    }
+    const entryValue = entry.slice(entry.indexOf(":") + 1);
+    return normalizeUsageProviderId(entryValue) === normalizeUsageProviderId(tokenValue);
+  });
+  if (hasEquivalentToken) {
     return `${tokens.join(" ")} `;
   }
   return `${tokens.join(" ")} ${token} `;
@@ -251,7 +266,22 @@ const addQueryToken = (query: string, token: string): string => {
 
 const removeQueryToken = (query: string, token: string): string => {
   const tokens = query.trim().split(/\s+/).filter(Boolean);
-  const next = tokens.filter((entry) => entry !== token);
+  const tokenKey = token.includes(":") ? token.split(":")[0] : null;
+  const tokenValue = token.includes(":") ? token.slice(token.indexOf(":") + 1) : "";
+  const next = tokens.filter((entry) => {
+    if (entry === token) {
+      return false;
+    }
+    if (normalizeQueryText(tokenKey ?? "") !== "provider") {
+      return true;
+    }
+    const entryKey = entry.includes(":") ? entry.split(":")[0] : null;
+    if (normalizeQueryText(entryKey ?? "") !== "provider") {
+      return true;
+    }
+    const entryValue = entry.slice(entry.indexOf(":") + 1);
+    return normalizeUsageProviderId(entryValue) !== normalizeUsageProviderId(tokenValue);
+  });
   return next.length ? `${next.join(" ")} ` : "";
 };
 

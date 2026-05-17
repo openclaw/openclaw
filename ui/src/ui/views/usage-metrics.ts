@@ -6,6 +6,7 @@ import {
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeUsageProviderId } from "../usage-helpers.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -572,9 +573,10 @@ const buildAggregatesFromSessions = (
 
     if (usage.modelUsage) {
       for (const entry of usage.modelUsage) {
-        const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+        const provider = normalizeUsageProviderId(entry.provider);
+        const modelKey = `${provider || "unknown"}::${entry.model ?? "unknown"}`;
         const modelExisting = modelMap.get(modelKey) ?? {
-          provider: entry.provider,
+          provider: provider || undefined,
           model: entry.model,
           count: 0,
           totals: emptyUsageTotals(),
@@ -583,9 +585,9 @@ const buildAggregatesFromSessions = (
         mergeUsageTotals(modelExisting.totals, entry.totals);
         modelMap.set(modelKey, modelExisting);
 
-        const providerKey = entry.provider ?? "unknown";
+        const providerKey = provider || "unknown";
         const providerExisting = providerMap.get(providerKey) ?? {
-          provider: entry.provider,
+          provider: provider || undefined,
           model: undefined,
           count: 0,
           totals: emptyUsageTotals(),
@@ -638,10 +640,11 @@ const buildAggregatesFromSessions = (
     }
     mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
     for (const day of usage.dailyModelUsage ?? []) {
-      const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
+      const provider = normalizeUsageProviderId(day.provider);
+      const key = `${day.date}::${provider || "unknown"}::${day.model ?? "unknown"}`;
       const existing = modelDailyMap.get(key) ?? {
         date: day.date,
-        provider: day.provider,
+        provider: provider || undefined,
         model: day.model,
         tokens: 0,
         cost: 0,

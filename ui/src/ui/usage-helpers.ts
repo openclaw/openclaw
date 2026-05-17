@@ -1,3 +1,6 @@
+import { normalizeProviderId } from "../../../src/agents/provider-id.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+
 export type UsageQueryTerm = {
   key?: string;
   value: string;
@@ -52,6 +55,13 @@ const QUERY_KEYS = new Set([
 ]);
 
 const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
+
+export const normalizeUsageProviderId = (provider?: string | null): string => {
+  if (!provider) {
+    return "";
+  }
+  return normalizeProviderId(provider);
+};
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -109,17 +119,17 @@ const getSessionText = (session: UsageSessionQueryTarget): string[] => {
 const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
   const providers = new Set<string>();
   if (session.modelProvider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.modelProvider));
+    providers.add(normalizeUsageProviderId(session.modelProvider));
   }
   if (session.providerOverride) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.providerOverride));
+    providers.add(normalizeUsageProviderId(session.providerOverride));
   }
   if (session.origin?.provider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.origin.provider));
+    providers.add(normalizeUsageProviderId(session.origin.provider));
   }
   for (const entry of session.usage?.modelUsage ?? []) {
     if (entry.provider) {
-      providers.add(normalizeLowercaseStringOrEmpty(entry.provider));
+      providers.add(normalizeUsageProviderId(entry.provider));
     }
   }
   return Array.from(providers);
@@ -158,8 +168,10 @@ const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTer
       return normalizeLowercaseStringOrEmpty(session.channel).includes(value);
     case "chat":
       return normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
-    case "provider":
-      return getSessionProviders(session).some((provider) => provider.includes(value));
+    case "provider": {
+      const providerValue = normalizeUsageProviderId(term.value ?? "");
+      return getSessionProviders(session).some((provider) => provider.includes(providerValue));
+    }
     case "model":
       return getSessionModels(session).some((model) => model.includes(value));
     case "tool":
@@ -318,4 +330,3 @@ export function parseToolSummary(content: string) {
     cleanContent: nonToolLines.join("\n").trim(),
   };
 }
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
