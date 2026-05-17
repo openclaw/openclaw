@@ -63,7 +63,7 @@ Use these in chat:
 
 - `/status` → **emoji-rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
-- `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
+- `/usage off|tokens|full` → appends a **per-response usage footer** to **normal final replies** after the agent run. Replies sent via the `message` tool (`action: send`) — including the `messages.groupChat.visibleReplies: "message_tool"` path on Telegram forum topics and similar group-chat surfaces — are delivered as authored and do **not** receive the footer.
   - Persists per session (stored as `responseUsage`).
   - OAuth auth **hides cost** (tokens only).
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.

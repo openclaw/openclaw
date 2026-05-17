@@ -23,7 +23,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
-- `/usage tokens` → append per-reply usage footer to normal replies.
+- `/usage tokens` → append per-reply usage footer to **normal final replies**. Replies sent via the `message` tool (`action: send`) — including the `messages.groupChat.visibleReplies: "message_tool"` path — are delivered as authored without a footer.
 - `/compact` → summarize older history into a compact entry to free window space.
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
