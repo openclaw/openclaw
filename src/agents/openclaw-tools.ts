@@ -204,6 +204,7 @@ export function createOpenClawTools(
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
     agentDir: imageToolAgentDir,
+    workspaceDir,
     modelHasVision: options?.modelHasVision,
     authStore: options?.authProfileStore,
   })
