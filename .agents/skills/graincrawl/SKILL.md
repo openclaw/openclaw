@@ -3,13 +3,13 @@ name: graincrawl
 description: "Granola archive: search, sync freshness, notes, transcripts, panels, SQL counts, and Graincrawl repo work."
 metadata:
   openclaw:
-    homepage: https://github.com/vincentkoc/graincrawl
+    homepage: https://github.com/openclaw/graincrawl
     requires:
       bins:
         - graincrawl
     install:
       - kind: go
-        module: github.com/vincentkoc/graincrawl/cmd/graincrawl@latest
+        module: github.com/openclaw/graincrawl/cmd/graincrawl@latest
         bins:
           - graincrawl
 ---
