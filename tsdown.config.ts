@@ -120,7 +120,7 @@ function buildCoreDistEntries(): Record<string, string> {
   const minimalCore = process.env.OPENCLAW_BUILD_CORE_MINIMAL === "1";
   if (minimalCore) {
     return {
-      index: "src/index.ts",
+      minimal: "src/build/minimal-entry.ts",
     };
   }
   return {
