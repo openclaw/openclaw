@@ -183,16 +183,61 @@ function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeConte
   if (!Array.isArray(messages)) {
     return;
   }
-  for (const message of messages) {
+
+  let latestCompactionSummaryIndex = -1;
+  let latestCompactionTimestamp: number | null = null;
+  for (let i = 0; i < messages.length; i += 1) {
+    const entry = messages[i];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as { role?: unknown; timestamp?: unknown };
+    if (candidate.role !== "compactionSummary") {
+      continue;
+    }
+    latestCompactionSummaryIndex = i;
+    latestCompactionTimestamp = parseMessageTimestamp(candidate.timestamp);
+  }
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
     if (!message || typeof message !== "object") {
       continue;
     }
-    const candidate = message as { role?: unknown; usage?: unknown };
+    const candidate = message as {
+      role?: unknown;
+      timestamp?: unknown;
+      usage?: unknown;
+    };
     if (candidate.role !== "assistant") {
+      continue;
+    }
+    const staleByLegacyNoSummary = latestCompactionSummaryIndex === -1;
+    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
+    const staleByTimestamp =
+      latestCompactionTimestamp !== null &&
+      messageTimestamp !== null &&
+      messageTimestamp <= latestCompactionTimestamp;
+    const staleByLegacyOrdering =
+      latestCompactionSummaryIndex !== -1 && i < latestCompactionSummaryIndex;
+    if (!staleByLegacyNoSummary && !staleByTimestamp && !staleByLegacyOrdering) {
       continue;
     }
     // pi-coding-agent expects assistant usage to exist when computing context usage.
     // Reset stale snapshots to zeros instead of deleting the field.
     candidate.usage = makeZeroUsageSnapshot();
   }
+}
+
+function parseMessageTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
 }

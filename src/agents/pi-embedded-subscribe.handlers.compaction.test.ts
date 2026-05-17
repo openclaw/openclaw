@@ -14,6 +14,18 @@ import {
   reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
+
+function makeUsage(input: number, output: number, totalTokens: number) {
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
 
 function createCompactionContext(params: {
   storePath: string;
@@ -21,12 +33,13 @@ function createCompactionContext(params: {
   agentId?: string;
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
+  messages?: unknown[];
 }): EmbeddedPiSubscribeContext {
   let compactionCount = params.initialCount;
   return {
     params: {
       runId: "run-test",
-      session: { messages: [] } as never,
+      session: { messages: params.messages ?? [] } as never,
       config: { session: { store: params.storePath } } as never,
       sessionKey: params.sessionKey,
       sessionId: "session-1",
@@ -305,5 +318,60 @@ describe("handleCompactionEnd", () => {
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
     expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps fresh assistant usage after the latest compaction summary", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-usage-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      compactionCount: 0,
+    });
+    const staleUsage = makeUsage(120_000, 3_000, 123_000);
+    const freshUsage = makeUsage(1_000, 250, 1_250);
+    const messages: Array<Record<string, unknown> & { usage?: unknown }> = [
+      {
+        role: "assistant",
+        content: "pre-compaction answer",
+        timestamp: "2026-03-20T00:00:00.000Z",
+        usage: staleUsage,
+      },
+      {
+        role: "compactionSummary",
+        summary: "compressed",
+        timestamp: "2026-03-20T00:00:10.000Z",
+      },
+      {
+        role: "user",
+        content: "new question",
+        timestamp: "2026-03-20T00:00:20.000Z",
+      },
+      {
+        role: "assistant",
+        content: "fresh answer",
+        timestamp: "2026-03-20T00:00:30.000Z",
+        usage: freshUsage,
+      },
+    ];
+
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: { kept: 12 },
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(messages[0]?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(messages[3]?.usage).toEqual(freshUsage);
   });
 });
