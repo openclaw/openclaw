@@ -1646,9 +1646,6 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
-      undici:
-        specifier: 8.3.0
-        version: 8.3.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
