@@ -219,6 +219,51 @@ struct ConfigSnapshot: Codable {
     let issues: [Issue]?
 }
 
+struct ConfigSchemaLookupChild: Identifiable {
+    let key: String
+    let path: String
+    let typeLabel: String?
+    let required: Bool
+    let hasChildren: Bool
+    let hint: ConfigUiHint?
+    let hintPath: String?
+
+    var id: String { self.path }
+
+    init?(raw: [String: AnyCodable]) {
+        guard let key = raw["key"]?.stringValue,
+              let path = raw["path"]?.stringValue
+        else {
+            return nil
+        }
+        self.key = key
+        self.path = path
+        if let type = raw["type"]?.stringValue {
+            self.typeLabel = type
+        } else if let types = raw["type"]?.arrayValue {
+            self.typeLabel = types.compactMap(\.stringValue).joined(separator: " / ")
+        } else {
+            self.typeLabel = nil
+        }
+        self.required = raw["required"]?.boolValue ?? false
+        self.hasChildren = raw["hasChildren"]?.boolValue ?? false
+        if let hint = raw["hint"]?.dictionaryValue {
+            self.hint = ConfigUiHint(raw: hint.mapValues(\.foundationValue))
+        } else {
+            self.hint = nil
+        }
+        self.hintPath = raw["hintPath"]?.stringValue
+    }
+}
+
+struct ConfigSchemaLookupNode {
+    let path: String
+    let schema: ConfigSchemaNode
+    let hint: ConfigUiHint?
+    let hintPath: String?
+    let children: [ConfigSchemaLookupChild]
+}
+
 @MainActor
 @Observable
 final class ChannelsStore {
@@ -243,6 +288,9 @@ final class ChannelsStore {
     var isSavingConfig = false
     var configSchemaLoading = false
     var configSchema: ConfigSchemaNode?
+    var configLookupRoot: ConfigSchemaLookupNode?
+    var configLookupCache: [String: ConfigSchemaLookupNode] = [:]
+    var configLookupLoadingPaths: Set<String> = []
     var configUiHints: [String: ConfigUiHint] = [:]
     var configSchemaSourceKey: String?
     var configSchemaLoadingSourceKey: String?
