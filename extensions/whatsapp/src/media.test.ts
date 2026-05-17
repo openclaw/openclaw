@@ -5,13 +5,10 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  withMockedWindowsPlatform,
-  withRestoredMocks,
-} from "../../../src/test-utils/vitest-spies.js";
 import {
   LocalMediaAccessError,
   loadWebMedia,
