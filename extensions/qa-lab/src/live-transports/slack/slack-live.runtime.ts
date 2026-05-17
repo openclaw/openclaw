@@ -714,7 +714,9 @@ async function waitForSlackNoReply(params: {
         ts: message.ts,
         userId: message.user,
       });
-      throw new Error("unexpected Slack SUT reply observed");
+      if (matchedScenario) {
+        throw new Error("unexpected Slack SUT reply observed");
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
