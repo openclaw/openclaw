@@ -10,6 +10,7 @@ final class DashboardManager {
     static let shared = DashboardManager()
 
     private var controller: DashboardWindowController?
+    private static let failureURL = URL(string: "about:blank")!
 
     private init() {}
 
@@ -67,6 +68,19 @@ final class DashboardManager {
 
         // Refresh the cached hello payload without blocking window creation.
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
+    }
+
+    func showFailure(_ error: Error) {
+        let message = (error as NSError).localizedDescription
+        dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
+        let controller = self.controller ?? DashboardWindowController(
+            url: Self.failureURL,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        self.controller = controller
+        controller.showFailure(
+            title: "Dashboard unavailable",
+            message: message,
+            detail: "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.")
     }
 
     func close() {

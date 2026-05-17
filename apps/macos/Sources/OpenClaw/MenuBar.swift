@@ -91,8 +91,11 @@ struct OpenClawApp: App {
         }
     }
 
-    private func applyStatusItemAppearance(paused: Bool, sleeping: Bool) {
-        self.statusItem?.button?.appearsDisabled = paused || sleeping
+    private func applyStatusItemAppearance(paused _: Bool, sleeping _: Bool) {
+        // Keep the status item actionable even when the Gateway is paused or disconnected.
+        // The SwiftUI label already renders those states; AppKit's disabled appearance can
+        // leak into menu item validation and grey out app-level commands like Settings.
+        self.statusItem?.button?.appearsDisabled = false
     }
 
     private static func applyAttachOnlyOverrideIfNeeded() {
@@ -180,10 +183,7 @@ struct OpenClawApp: App {
             do {
                 try await DashboardManager.shared.show()
             } catch {
-                let alert = NSAlert()
-                alert.messageText = "Dashboard unavailable"
-                alert.informativeText = error.localizedDescription
-                alert.runModal()
+                DashboardManager.shared.showFailure(error)
             }
         }
     }
@@ -302,10 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 do {
                     try await DashboardManager.shared.show()
                 } catch {
-                    let alert = NSAlert()
-                    alert.messageText = "Dashboard unavailable"
-                    alert.informativeText = error.localizedDescription
-                    alert.runModal()
+                    DashboardManager.shared.showFailure(error)
                 }
             }
         }
