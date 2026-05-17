@@ -146,7 +146,7 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: { runId: string; model: string; content: string },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -157,7 +157,23 @@ function writeAssistantContentChunk(
       {
         index: 0,
         delta: { content: params.content },
-        finish_reason: params.finishReason,
+        finish_reason: null,
+      },
+    ],
+  });
+}
+
+function writeAssistantFinishChunk(res: ServerResponse, params: { runId: string; model: string }) {
+  writeSse(res, {
+    id: params.runId,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: "stop",
       },
     ],
   });
@@ -586,7 +602,6 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: null,
       });
       return;
     }
@@ -597,6 +612,9 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        if (phase === "end") {
+          writeAssistantFinishChunk(res, { runId, model });
+        }
         writeDone(res);
         res.end();
       }
@@ -629,7 +647,6 @@ export async function handleOpenAiHttpRequest(
           runId,
           model,
           content,
-          finishReason: null,
         });
       }
     } catch (err) {
@@ -641,8 +658,8 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content: "Error: internal error",
-        finishReason: "stop",
       });
+      writeAssistantFinishChunk(res, { runId, model });
       emitAgentEvent({
         runId,
         stream: "lifecycle",
@@ -653,6 +670,7 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        writeAssistantFinishChunk(res, { runId, model });
         writeDone(res);
         res.end();
       }

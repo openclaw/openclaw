@@ -792,6 +792,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(allContent).toBe("hello");
+
+        // Per OpenAI streaming spec: content chunks have finish_reason: null,
+        // final chunk has finish_reason: "stop" with empty delta
+        const allChoices = jsonChunks.flatMap(
+          (c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
+        );
+        const contentChoices = allChoices.filter(
+          (choice) => (choice.delta as Record<string, unknown> | undefined)?.content !== undefined,
+        );
+        for (const choice of contentChoices) {
+          expect(choice).toHaveProperty("finish_reason", null);
+        }
+        const stopChoice = allChoices.findLast((choice) => choice.finish_reason === "stop");
+        expect(stopChoice).toBeDefined();
+        expect((stopChoice?.delta as Record<string, unknown>)?.content).toBeUndefined();
       }
 
       {
@@ -857,12 +872,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const errorChunks = errorData
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const stopChoice = errorChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
+        const allChoices = errorChunks.flatMap(
+          (c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
+        // Error content must be in a separate chunk with finish_reason: null
+        const errorContentChoice = allChoices.find(
+          (choice) =>
+            (choice.delta as Record<string, unknown> | undefined)?.content ===
+            "Error: internal error",
+        );
+        expect(errorContentChoice).toBeDefined();
+        expect(errorContentChoice).toHaveProperty("finish_reason", null);
+        // Final stop chunk must have empty delta and finish_reason: "stop"
+        const stopChoice = allChoices.findLast((choice) => choice.finish_reason === "stop");
+        expect(stopChoice).toBeDefined();
+        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBeUndefined();
       }
     } finally {
       // shared server
