@@ -6,14 +6,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
+  PluginHookInboundObservedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./types.js";
 
 async function expectMessageHookCall(params: {
-  hookName: "message_sending" | "message_sent";
-  event: PluginHookMessageSendingEvent | PluginHookMessageSentEvent;
+  hookName: "inbound_observed" | "message_sending" | "message_sent";
+  event:
+    | PluginHookInboundObservedEvent
+    | PluginHookMessageSendingEvent
+    | PluginHookMessageSentEvent;
   hookResult?: PluginHookMessageSendingResult;
   expectedResult?: PluginHookMessageSendingResult;
   channelCtx: { channelId: string };
@@ -22,7 +26,12 @@ async function expectMessageHookCall(params: {
     params.hookResult === undefined ? vi.fn() : vi.fn().mockReturnValue(params.hookResult);
   const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
 
-  if (params.hookName === "message_sending") {
+  if (params.hookName === "inbound_observed") {
+    await runner.runInboundObserved(
+      params.event as PluginHookInboundObservedEvent,
+      params.channelCtx,
+    );
+  } else if (params.hookName === "message_sending") {
     const result = await runner.runMessageSending(
       params.event as PluginHookMessageSendingEvent,
       params.channelCtx,
@@ -38,6 +47,25 @@ async function expectMessageHookCall(params: {
 
   expect(handler).toHaveBeenCalledWith(params.event, params.channelCtx);
 }
+
+describe("inbound_observed hook runner", () => {
+  const demoChannelCtx = { channelId: "demo-channel" };
+
+  it("runInboundObserved invokes registered hooks", async () => {
+    await expectMessageHookCall({
+      hookName: "inbound_observed",
+      event: {
+        channel: "demo-channel",
+        content: "quiet room message",
+        conversationId: "room-1",
+        isGroup: true,
+        skipped: true,
+        skipReason: "requireMention:no-mention",
+      },
+      channelCtx: demoChannelCtx,
+    });
+  });
+});
 
 describe("message_sending hook runner", () => {
   const demoChannelCtx = { channelId: "demo-channel" };

@@ -23,6 +23,8 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", () => {
       ...context,
       metadata: { to: context.to },
     }),
+    toPluginInboundObservedEvent: (context: Record<string, unknown>) => context,
+    toPluginMessageContext: (context: Record<string, unknown>) => context,
     triggerInternalHook: internalHookMocks.triggerInternalHook,
   };
 });

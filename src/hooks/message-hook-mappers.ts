@@ -8,6 +8,7 @@ import {
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundObservedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
@@ -351,6 +352,56 @@ export function toPluginInboundClaimEvent(
       channelName: canonical.channelName,
       groupId: canonical.groupId,
       topicName: canonical.topicName,
+    },
+  };
+  assignTraceFields(event, canonical.trace);
+  return event;
+}
+
+export function toPluginInboundObservedEvent(
+  canonical: CanonicalInboundMessageHookContext,
+  observed?: {
+    skipped?: boolean;
+    skipReason?: string;
+    wasMentioned?: boolean;
+  },
+): PluginHookInboundObservedEvent {
+  const event: PluginHookInboundObservedEvent = {
+    content: canonical.content,
+    body: canonical.body,
+    bodyForAgent: canonical.bodyForAgent,
+    timestamp: canonical.timestamp,
+    channel: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+    senderId: canonical.senderId,
+    senderName: canonical.senderName,
+    senderUsername: canonical.senderUsername,
+    threadId: canonical.threadId,
+    messageId: canonical.messageId,
+    isGroup: canonical.isGroup,
+    wasMentioned: observed?.wasMentioned,
+    skipped: observed?.skipped,
+    skipReason: observed?.skipReason,
+    metadata: {
+      from: canonical.from,
+      to: canonical.to,
+      provider: canonical.provider,
+      surface: canonical.surface,
+      threadId: canonical.threadId,
+      originatingChannel: canonical.originatingChannel,
+      originatingTo: canonical.originatingTo,
+      messageId: canonical.messageId,
+      senderId: canonical.senderId,
+      senderName: canonical.senderName,
+      senderUsername: canonical.senderUsername,
+      senderE164: canonical.senderE164,
+      guildId: canonical.guildId,
+      channelName: canonical.channelName,
+      groupId: canonical.groupId,
+      topicName: canonical.topicName,
+      skipped: observed?.skipped,
+      skipReason: observed?.skipReason,
     },
   };
   assignTraceFields(event, canonical.trace);
