@@ -272,6 +272,46 @@ describe("gateway restart benchmark script", () => {
     }
   });
 
+  it("keeps restart probes running until HTTP recovers after an unavailable window", async () => {
+    let requests = 0;
+    const server = createServer((_req, res) => {
+      requests += 1;
+      res.statusCode = requests === 1 ? 503 : 200;
+      res.end(requests === 1 ? "warming" : "ok");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test server did not bind to a TCP port");
+      }
+      const sampleStartAt = performance.now();
+      const result = await __testing.waitForRestartProbe({
+        deadlineAt: sampleStartAt + 2_000,
+        events: [],
+        isDone: () => requests >= 1,
+        iteration: 1,
+        path: "/readyz",
+        port: address.port,
+        sampleStartAt,
+        signalSentAt: sampleStartAt,
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.ms).not.toBeNull();
+      expect(result.unavailableMs).not.toBeNull();
+      expect(result.downtimeMs).not.toBeNull();
+      expect(requests).toBeGreaterThanOrEqual(2);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("writes plugin fixtures as a parent load path with explicit startup activation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-config-test-"));
     try {

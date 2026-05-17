@@ -600,6 +600,7 @@ async function waitForRestartProbe(params: {
   deadlineAt: number;
   events: BenchmarkEvent[];
   isDone?: () => boolean;
+  isProcessDone?: () => boolean;
   iteration: number;
   path: string;
   port: number;
@@ -614,8 +615,19 @@ async function waitForRestartProbe(params: {
   let unavailableMs: number | null = null;
   const transitions: ProbeTransition[] = [];
   while (performance.now() < params.deadlineAt) {
-    if (params.isDone?.()) {
+    if (params.isProcessDone?.()) {
       break;
+    }
+    if (params.isDone?.() && unavailableMs == null && lastSuccessMs != null) {
+      return {
+        downtimeMs: null,
+        firstErrorKind,
+        firstRecoveryMs,
+        ms: lastSuccessMs,
+        status: 200,
+        transitions,
+        unavailableMs: null,
+      };
     }
     const attempt = await requestProbeStatus(params.port, params.path);
     const now = performance.now();
@@ -1343,7 +1355,8 @@ async function runGatewaySample(options: {
         waitForRestartProbe({
           deadlineAt,
           events,
-          isDone: () => childExited || hasRestartReadySignal(iteration),
+          isDone: () => hasRestartReadySignal(iteration),
+          isProcessDone: () => childExited,
           iteration: index,
           path: "/healthz",
           port,
@@ -1353,7 +1366,8 @@ async function runGatewaySample(options: {
         waitForRestartProbe({
           deadlineAt,
           events,
-          isDone: () => childExited || hasRestartReadySignal(iteration),
+          isDone: () => hasRestartReadySignal(iteration),
+          isProcessDone: () => childExited,
           iteration: index,
           path: "/readyz",
           port,
@@ -1384,7 +1398,7 @@ async function runGatewaySample(options: {
         ? "restart_child_exited"
         : resolveIterationFailure(iteration);
       iterations.push(iteration);
-      console.log(
+      console.error(
         `[gateway-restart-bench] ${options.benchCase.id} restart ${index}/${options.restarts}: readyz=${formatMs(iteration.readyz.ms)} downtime=${formatMs(iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs)} restartReady=${formatMs(traceValue(iteration, "restart.ready.total"))} cpu=${formatMs(iteration.cpuMs)} rss=${formatMb(traceValue(iteration, "restart.ready.rssMb", "restart.ready.memory.ready.rssMb") ?? lastSnapshotValue(iteration, "rssMb"))} failure=${iteration.failureCode ?? "none"}`,
       );
       if (iteration.failureCode && iteration.failureCode !== "no_unavailable_window") {
@@ -1449,11 +1463,11 @@ async function runCase(options: {
     });
     if (index >= options.warmup) {
       samples.push(sample);
-      console.log(
+      console.error(
         `[gateway-restart-bench] ${options.benchCase.id} sample ${samples.length}/${options.runs}: iterations=${sample.iterations.length} failure=${sample.failureCode ?? "none"} rssSlope=${formatMb(sample.resourceSlope.rssMbPerRestart)} heapSlope=${formatMb(sample.resourceSlope.heapUsedMbPerRestart)} fdSlope=${sample.resourceSlope.fdCountPerRestart ?? "n/a"}`,
       );
     } else {
-      console.log(
+      console.error(
         `[gateway-restart-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: failure=${sample.failureCode ?? "none"}`,
       );
     }
