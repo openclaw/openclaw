@@ -165,12 +165,11 @@ async function fetchQdrantJson<T>(
   const url = new URL(pathname, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
   let response: Response;
   try {
+    const headers = new Headers(init?.headers);
+    headers.set("content-type", "application/json");
     response = await fetch(url, {
-      headers: {
-        "content-type": "application/json",
-        ...init?.headers,
-      },
       ...init,
+      headers,
     });
   } catch (err: unknown) {
     const cause = (err as { cause?: unknown })?.cause;
@@ -184,11 +183,26 @@ async function fetchQdrantJson<T>(
       details.push(`syscall=${syscall}`);
     }
     if (cause !== undefined) {
-      details.push(`cause=${String(cause)}`);
+      details.push(`cause=${formatUnknownDetail(cause)}`);
     }
     throw new Error(`Qdrant fetch failed: ${details.join(" ")}`, { cause: err });
   }
   return readQdrantResponseJson<T>(response);
+}
+
+function formatUnknownDetail(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Error) {
+    return value.message;
+  }
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? "<unserializable>" : json;
+  } catch {
+    return "<unserializable>";
+  }
 }
 
 export async function getQdrantCollectionInfo(

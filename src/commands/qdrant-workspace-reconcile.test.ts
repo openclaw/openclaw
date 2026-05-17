@@ -92,7 +92,7 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
           },
         });
       }
-      throw new Error(`unexpected fetch ${String(init?.method ?? "GET")} ${url}`);
+      throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`);
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const runtime = createRuntime();
@@ -245,7 +245,7 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       if (url.endsWith("/collections/agent-memory/points/delete?wait=true")) {
         return createJsonResponse({ status: "ok" });
       }
-      throw new Error(`unexpected fetch ${String(init?.method ?? "GET")} ${url}`);
+      throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`);
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     spawnSyncMock.mockReturnValue({
@@ -279,7 +279,11 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       String(input).endsWith("/collections/agent-memory/points?wait=true"),
     );
     expect(upsertCall).toBeTruthy();
-    const upsertBody = JSON.parse(String(upsertCall?.[1]?.body)) as {
+    const upsertBodyRaw = upsertCall?.[1]?.body;
+    if (typeof upsertBodyRaw !== "string") {
+      throw new TypeError("expected upsert body to be a string");
+    }
+    const upsertBody = JSON.parse(upsertBodyRaw) as {
       points: Array<{ id: string; vector: number[] }>;
     };
     const { workspaceIdToUuid } = await import("./qdrant-workspace-reconcile.js");
@@ -295,7 +299,11 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
       String(input).endsWith("/collections/agent-memory/points/delete?wait=true"),
     );
     expect(deleteCall).toBeTruthy();
-    expect(JSON.parse(String(deleteCall?.[1]?.body))).toEqual({
+    const deleteBodyRaw = deleteCall?.[1]?.body;
+    if (typeof deleteBodyRaw !== "string") {
+      throw new TypeError("expected delete body to be a string");
+    }
+    expect(JSON.parse(deleteBodyRaw)).toEqual({
       points: ["workspace:projects/stale.md#0"],
     });
   });

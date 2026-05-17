@@ -16,17 +16,6 @@ import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
-import { listMemoryCorePublicArtifacts } from "./src/public-artifacts.js";
-import { registerQmdMcpMaintenance } from "./src/qmd-mcp-maintenance.js";
-import { memoryRuntime } from "./src/runtime-provider.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
-export {
-  buildMemoryFlushPlan,
-  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
-  DEFAULT_MEMORY_FLUSH_PROMPT,
-  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-} from "./src/flush-plan.js";
-export { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
 type RuntimeProviderModule = typeof import("./src/runtime-provider.js");
@@ -186,8 +175,6 @@ export default definePluginEntry({
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
-    registerDreamingCommand(api);
-    registerQmdMcpMaintenance(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,

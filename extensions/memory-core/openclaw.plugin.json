@@ -6,10 +6,7 @@
   "kind": "memory",
   "contracts": {
     "memoryEmbeddingProviders": ["local"],
-    "tools": ["memory_search", "memory_get"]
-  },
-  "runtimeDependencies": {
-    "localMemoryEmbedding": ["node-llama-cpp@3.18.1"]
+    "tools": ["memory_get", "memory_search"]
   },
   "commandAliases": [
     {

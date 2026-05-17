@@ -296,10 +296,13 @@ function splitSectionByParagraphGroups(
   const groups = splitParagraphGroups(bodyText);
 
   if (groups.length === 0) {
-    return splitOversizedText(section.text, maxChars).map((text) => ({
-      text,
-      ...(section.title ? { title: section.title } : {}),
-    }));
+    return splitOversizedText(section.text, maxChars).map((text) => {
+      const chunk: WorkspaceReconcileChunk = { text };
+      if (section.title) {
+        chunk.title = section.title;
+      }
+      return chunk;
+    });
   }
 
   const result: WorkspaceReconcileChunk[] = [];
