@@ -198,6 +198,27 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
+export async function clearSharedCodexAppServerClientIfCurrentAndWait(
+  client: CodexAppServerClient | undefined,
+  options?: {
+    exitTimeoutMs?: number;
+    forceKillDelayMs?: number;
+  },
+): Promise<boolean> {
+  if (!client) {
+    return false;
+  }
+  const state = getSharedCodexAppServerClientState();
+  for (const [key, entry] of state.clients) {
+    if (entry.client === client) {
+      state.clients.delete(key);
+      await client.closeAndWait(options);
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function clearSharedCodexAppServerClientAndWait(options?: {
   exitTimeoutMs?: number;
   forceKillDelayMs?: number;
