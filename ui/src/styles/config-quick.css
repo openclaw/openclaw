@@ -15,7 +15,7 @@
   width: 100%;
   max-width: 1520px;
   margin: 0 auto;
-  padding: 24px 16px 0;
+  padding: 24px 16px 16px;
 }
 
 .settings-section-nav__item {
@@ -1230,7 +1230,7 @@
 
 @media (max-width: 480px) {
   .settings-section-nav {
-    padding: 16px 0 0;
+    padding: 16px 0 12px;
   }
 
   .settings-section-nav__item {
