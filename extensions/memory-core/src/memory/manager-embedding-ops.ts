@@ -124,8 +124,8 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const error = new Error(params.message);
-      controller.abort(error);
       reject(error);
+      controller.abort(error);
     }, params.timeoutMs);
     timer.unref?.();
   });

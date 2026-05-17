@@ -57,6 +57,21 @@ describe("memory embedding timeout abort", () => {
 
     expect(signalSeen?.aborted).toBe(true);
   });
+
+  it("keeps the timeout error when a provider abort listener rejects generically", async () => {
+    await expect(
+      runEmbeddingOperationWithTimeout({
+        timeoutMs: 1,
+        message: "memory embeddings batch timed out after 0s",
+        run: async (signal) =>
+          await new Promise<number[]>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("provider aborted")), {
+              once: true,
+            });
+          }),
+      }),
+    ).rejects.toThrow("memory embeddings batch timed out after 0s");
+  });
 });
 
 describe("memory index concurrency resolution", () => {
