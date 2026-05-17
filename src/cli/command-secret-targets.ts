@@ -36,6 +36,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
+  "tools.web.fetch.firecrawl.apiKey",
 ] as const;
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,

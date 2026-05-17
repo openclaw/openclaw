@@ -136,6 +136,7 @@ describe("command secret target ids", () => {
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
