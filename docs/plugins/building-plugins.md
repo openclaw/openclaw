@@ -253,6 +253,12 @@ See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
 Tools are typed functions the LLM can call. They can be required (always
 available) or optional (user opt-in):
 
+For simple plugins that only own a fixed set of tools, prefer
+[`defineToolPlugin`](/plugins/tool-plugins). It generates manifest metadata and
+keeps `contracts.tools` aligned. Use the lower-level `api.registerTool(...)`
+surface when the plugin also owns channels, providers, hooks, services,
+commands, or fully dynamic tool registration.
+
 ```typescript
 register(api) {
   // Required tool - always available

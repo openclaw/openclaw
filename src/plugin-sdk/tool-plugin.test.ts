@@ -74,6 +74,98 @@ describe("defineToolPlugin", () => {
     });
   });
 
+  it("passes optional tools through to runtime registration and metadata", () => {
+    const entry = defineToolPlugin({
+      id: "optional-tools",
+      name: "Optional Tools",
+      description: "Optional tool demo.",
+      tools: (tool) => [
+        tool({
+          name: "optional_echo",
+          description: "Echo input.",
+          parameters: Type.Object({ input: Type.String() }),
+          optional: true,
+          execute: ({ input }) => input,
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "optional-tools" });
+    const registerTool = vi.fn();
+    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+    entry.register(captured.api);
+
+    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "optional_echo" }), {
+      optional: true,
+    });
+    expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
+      { name: "optional_echo", optional: true },
+    ]);
+  });
+
+  it("supports context factories while keeping static tool metadata", () => {
+    const entry = defineToolPlugin({
+      id: "factory-tools",
+      name: "Factory Tools",
+      description: "Factory tool demo.",
+      configSchema: Type.Object({ prefix: Type.String() }),
+      tools: (tool) => [
+        tool({
+          name: "factory_echo",
+          label: "Factory Echo",
+          description: "Echo input.",
+          parameters: Type.Object({ input: Type.String() }),
+          optional: true,
+          factory({ config, toolContext }) {
+            if (toolContext.sandboxed) {
+              return null;
+            }
+            return {
+              name: "factory_echo",
+              label: "Factory Echo",
+              description: "Echo input.",
+              parameters: Type.Object({ input: Type.String() }),
+              async execute(_toolCallId: string, params: { input?: unknown }) {
+                const input = typeof params.input === "string" ? params.input : "";
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `${config.prefix}:${input}`,
+                    },
+                  ],
+                  details: undefined,
+                };
+              },
+            };
+          },
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "factory-tools" });
+    captured.api.pluginConfig = { prefix: "ctx" };
+    const registerTool = vi.fn();
+    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+    entry.register(captured.api);
+
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
+      name: "factory_echo",
+      optional: true,
+    });
+    expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
+      {
+        name: "factory_echo",
+        label: "Factory Echo",
+        optional: true,
+      },
+    ]);
+
+    const factory = registerTool.mock.calls[0]?.[0] as (ctx: { sandboxed?: boolean }) => unknown;
+    expect(factory({ sandboxed: true })).toBeNull();
+    expect(factory({ sandboxed: false })).toMatchObject({ name: "factory_echo" });
+  });
+
   it("defaults author config to a strict empty object schema", () => {
     const entry = defineToolPlugin({
       id: "empty-config",

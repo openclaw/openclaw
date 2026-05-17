@@ -33,6 +33,28 @@ function createDemoMetadata() {
   return metadata;
 }
 
+function createOptionalDemoMetadata() {
+  const entry = defineToolPlugin({
+    id: "optional-demo-tools",
+    name: "Optional Demo Tools",
+    description: "Optional demo tool plugin.",
+    tools: (tool) => [
+      tool({
+        name: "demo_optional_echo",
+        description: "Echo input.",
+        parameters: Type.Object({ input: Type.String() }),
+        optional: true,
+        execute: ({ input }) => ({ input }),
+      }),
+    ],
+  });
+  const metadata = getToolPluginMetadata(entry);
+  if (!metadata) {
+    throw new Error("missing metadata");
+  }
+  return metadata;
+}
+
 describe("plugin authoring commands", () => {
   it("generates manifest metadata from defineToolPlugin metadata", () => {
     const metadata = createDemoMetadata();
@@ -49,6 +71,27 @@ describe("plugin authoring commands", () => {
       },
       activation: { onStartup: true },
       contracts: { tools: ["demo_echo"] },
+    });
+  });
+
+  it("generates optional tool metadata for optional tool plugins", () => {
+    const metadata = createOptionalDemoMetadata();
+
+    expect(buildToolPluginManifest({ metadata, packageManifest: { version: "1.2.3" } })).toEqual({
+      id: "optional-demo-tools",
+      name: "Optional Demo Tools",
+      description: "Optional demo tool plugin.",
+      version: "1.2.3",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      activation: { onStartup: true },
+      contracts: { tools: ["demo_optional_echo"] },
+      toolMetadata: {
+        demo_optional_echo: { optional: true },
+      },
     });
   });
 

@@ -109,6 +109,48 @@ export default defineToolPlugin({
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
 
+## Optional and factory tools
+
+Set `optional: true` when users should explicitly allowlist the tool before it
+is sent to a model:
+
+```typescript
+tool({
+  name: "workflow_run",
+  description: "Run an external workflow.",
+  parameters: Type.Object({ goal: Type.String() }),
+  optional: true,
+  execute: ({ goal }) => ({ queued: true, goal }),
+});
+```
+
+`openclaw plugins build` writes the matching `toolMetadata.<tool>.optional`
+manifest entry, so OpenClaw can discover the tool without loading plugin
+runtime code.
+
+Use `factory` when a tool needs the runtime tool context before it can be
+created. The factory keeps metadata static while letting the tool opt out for a
+specific run, inspect sandbox state, or bind runtime helpers.
+
+```typescript
+tool({
+  name: "local_workflow",
+  description: "Run a local workflow outside sandboxed sessions.",
+  parameters: Type.Object({ goal: Type.String() }),
+  optional: true,
+  factory({ api, toolContext }) {
+    if (toolContext.sandboxed) {
+      return null;
+    }
+    return createLocalWorkflowTool(api);
+  },
+});
+```
+
+Factories are still for fixed tool names. Use `definePluginEntry` directly when
+the plugin computes tool names dynamically or combines tools with hooks,
+services, providers, commands, or other runtime surfaces.
+
 ## Return values
 
 `defineToolPlugin` wraps plain return values into the OpenClaw tool-result
@@ -140,10 +182,10 @@ tool({
 });
 ```
 
-Use `definePluginEntry` instead of `defineToolPlugin` when you need to return a
-custom `AgentToolResult`, stream custom progress semantics, register dynamic
-tools, or combine tools with hooks, services, providers, commands, or other
-advanced surfaces.
+Use a factory tool when you need to return a custom `AgentToolResult` or reuse
+an existing `api.registerTool` implementation. Use `definePluginEntry` instead
+of `defineToolPlugin` when you need fully dynamic tools or mixed plugin
+capabilities.
 
 ## Configuration
 

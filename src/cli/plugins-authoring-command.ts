@@ -117,6 +117,7 @@ export function buildToolPluginManifest(params: {
   metadata: ToolPluginMetadata;
   packageManifest: JsonObject;
 }): JsonObject {
+  const optionalTools = params.metadata.tools.filter((tool) => tool.optional);
   return {
     id: params.metadata.id,
     name: params.metadata.name,
@@ -128,6 +129,13 @@ export function buildToolPluginManifest(params: {
     contracts: {
       tools: params.metadata.tools.map((tool) => tool.name),
     },
+    ...(optionalTools.length > 0
+      ? {
+          toolMetadata: Object.fromEntries(
+            optionalTools.map((tool) => [tool.name, { optional: true }]),
+          ),
+        }
+      : {}),
   };
 }
 
