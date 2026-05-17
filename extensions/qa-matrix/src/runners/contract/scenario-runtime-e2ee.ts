@@ -1931,6 +1931,7 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
       "status",
       "--account",
       accountId,
+      "--allow-degraded-local-state",
       "--json",
     ]);
     const statusArtifacts = await writeMatrixQaCliOutputArtifacts({

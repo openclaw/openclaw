@@ -199,6 +199,7 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "pi" });
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");

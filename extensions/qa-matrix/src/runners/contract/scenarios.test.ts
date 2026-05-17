@@ -3507,11 +3507,12 @@ describe("matrix live qa scenarios", () => {
   it("preserves separate finalized block events when Matrix block streaming is enabled", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$block-stream-trigger");
-    const readBlockText = (label: "ONE" | "TWO") =>
-      mockMessageBody(sendTextMessage, "sendTextMessage")
-        .split("\n")
-        .find((line) => line.startsWith(`MATRIX_QA_BLOCK_${label}_`)) ??
-      `MATRIX_QA_BLOCK_${label}_FIXED`;
+    const readBlockText = (label: "ONE" | "TWO") => {
+      const match = mockMessageBody(sendTextMessage, "sendTextMessage").match(
+        new RegExp(`MATRIX_QA_BLOCK_${label}_[A-F0-9]{8}`),
+      );
+      return match?.[0] ?? `MATRIX_QA_BLOCK_${label}_FIXED`;
+    };
     const waitForRoomEvent = vi
       .fn()
       .mockImplementationOnce(async () => ({
@@ -3593,8 +3594,13 @@ describe("matrix live qa scenarios", () => {
     });
     const body = mockMessageBody(sendTextMessage, "sendTextMessage");
     expect(body).toMatch(
-      /reply with exactly this two-line body and no extra text:\nMATRIX_QA_BLOCK_ONE_[A-F0-9]{8}\nMATRIX_QA_BLOCK_TWO_[A-F0-9]{8}$/,
+      /first reply with only this exact marker: `MATRIX_QA_BLOCK_ONE_[A-F0-9]{8}`/,
     );
+    expect(body).toContain("Then use the read tool exactly once on `QA_KICKOFF_TASK.md`.");
+    expect(body).toMatch(
+      /After that read completes, reply with only this exact marker: `MATRIX_QA_BLOCK_TWO_[A-F0-9]{8}`/,
+    );
+    expect(scenario.configOverrides?.toolProfile).toBe("coding");
     expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(
       "driver-sync-block-one",
     );
@@ -5217,7 +5223,10 @@ describe("matrix live qa scenarios", () => {
             }),
           };
         }
-        if (joined === "matrix verify status --account cli-add-e2ee --json") {
+        if (
+          joined ===
+          "matrix verify status --account cli-add-e2ee --allow-degraded-local-state --json"
+        ) {
           return {
             args,
             exitCode: 0,
@@ -5289,7 +5298,15 @@ describe("matrix live qa scenarios", () => {
           "--enable-e2ee",
           "--json",
         ],
-        ["matrix", "verify", "status", "--account", "cli-add-e2ee", "--json"],
+        [
+          "matrix",
+          "verify",
+          "status",
+          "--account",
+          "cli-add-e2ee",
+          "--allow-degraded-local-state",
+          "--json",
+        ],
       ]);
       expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Account Add Owner",

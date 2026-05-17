@@ -143,6 +143,7 @@ type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeart
 const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 3;
+const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
   "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
@@ -382,7 +383,7 @@ async function waitForWhatsAppChannelRunning(
         running?: boolean;
       }
     | undefined;
-  while (Date.now() - startedAt < 60_000) {
+  while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -475,6 +476,7 @@ function isTransientWhatsAppQaDriverError(error: unknown) {
   const message = formatErrorMessage(error);
   return (
     /\bConnection Closed\b/iu.test(message) ||
+    /\bsession conflict\b/iu.test(message) ||
     /\btimed out waiting for WhatsApp QA driver message\b/iu.test(message)
   );
 }
