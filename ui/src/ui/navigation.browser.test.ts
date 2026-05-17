@@ -451,6 +451,15 @@ describe("control UI routing", () => {
     const app = mountApp("/overview");
     app.sessionKey = "agent:main:second";
     app.sessionsResult = createSessionsResult([
+      { key: "global", kind: "global", label: "Global", updatedAt: Date.now() },
+      { key: "unknown", kind: "unknown", label: "Unknown", updatedAt: Date.now() - 10_000 },
+      { key: "cron:daily", kind: "cron", label: "Daily cron", updatedAt: Date.now() - 20_000 },
+      {
+        key: "agent:main:subagent:task",
+        label: "Subagent",
+        spawnedBy: "agent:main:second",
+        updatedAt: Date.now() - 25_000,
+      },
       { key: "agent:main:first", label: "First workspace", updatedAt: Date.now() - 5 * 60_000 },
       { key: "agent:main:second", label: "Second workspace", updatedAt: Date.now() - 30_000 },
     ]) as typeof app.sessionsResult;

@@ -148,9 +148,10 @@ import {
 } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import "./components/dashboard-header.ts";
-import { resolveSessionDisplayName } from "./session-display.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   buildAgentMainSessionKey,
+  isSubagentSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
@@ -248,7 +249,16 @@ function isSidebarSessionBusy(state: AppViewState) {
 
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
   return (state.sessionsResult?.sessions ?? [])
-    .filter((row) => !row.archived)
+    .filter(
+      (row) =>
+        !row.archived &&
+        row.kind !== "global" &&
+        row.kind !== "unknown" &&
+        row.kind !== "cron" &&
+        !isCronSessionKey(row.key) &&
+        !isSubagentSessionKey(row.key) &&
+        !row.spawnedBy,
+    )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
 }
