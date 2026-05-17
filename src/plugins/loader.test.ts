@@ -3526,6 +3526,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
         api.on("message_sent", () => undefined);
       } };`,
     });
+    const laterScopedPlugin = writePlugin({
+      id: "later-scoped-provider-load",
+      filename: "later-scoped-provider-load.cjs",
+      body: `module.exports = { id: "later-scoped-provider-load", register() {} };`,
+    });
 
     const gatewayRegistry = loadOpenClawPlugins({
       workspaceDir: gatewayPlugin.dir,
@@ -3569,6 +3574,19 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
     expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
     expect(globalHookRunner.hasHooks("message_sent")).toBe(false);
+
+    loadOpenClawPlugins({
+      workspaceDir: laterScopedPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [laterScopedPlugin.file] },
+          allow: ["later-scoped-provider-load"],
+        },
+      },
+    });
+
+    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
   });
 
   it.each([

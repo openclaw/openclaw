@@ -42,6 +42,41 @@ afterEach(() => {
 });
 
 describe("gateway HTTP request trace scope", () => {
+  it("threads startup unavailable methods into the /tools/invoke HTTP route", async () => {
+    await withTempConfig({
+      cfg: { gateway: { auth: { mode: "none" } } },
+      run: async () => {
+        const httpServer = createGatewayHttpServer({
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          resolvedAuth,
+          unavailableGatewayMethods: new Set(["tools.invoke"]),
+        });
+        const port = await listen(httpServer);
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              tool: "__readiness_probe_nonexistent",
+              action: "call",
+              args: {},
+            }),
+          });
+          const body = (await response.json()) as { error?: { type?: string } };
+          expect(response.status).toBe(503);
+          expect(body.error?.type).toBe("plugins_not_ready");
+        } finally {
+          await closeServer(httpServer);
+        }
+      },
+    });
+  });
+
   it("threads active request trace through logs and diagnostics", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-request-trace-"));
     const logPath = path.join(dir, "gateway.log");

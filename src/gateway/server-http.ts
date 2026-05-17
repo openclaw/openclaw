@@ -627,6 +627,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+              unavailableGatewayMethods: opts.unavailableGatewayMethods,
             }),
         });
       }

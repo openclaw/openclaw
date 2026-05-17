@@ -52,7 +52,11 @@ import {
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+} from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -1491,10 +1495,18 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
+  const existingGlobalRegistry = getGlobalPluginRegistry();
+  const hookRegistrationCount = (candidate: {
+    hooks: readonly unknown[];
+    typedHooks: readonly unknown[];
+  }) => candidate.hooks.length + candidate.typedHooks.length;
   const preserveGatewayHookRunner =
     runtimeSubagentMode === "default" &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
-    getGlobalHookRunner() !== null;
+    getGlobalHookRunner() !== null &&
+    (getActivePluginRuntimeSubagentMode() === "gateway-bindable" ||
+      (existingGlobalRegistry !== null &&
+        existingGlobalRegistry !== registry &&
+        hookRegistrationCount(registry) < hookRegistrationCount(existingGlobalRegistry)));
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
   if (!preserveGatewayHookRunner) {
     initializeGlobalHookRunner(registry);
