@@ -229,6 +229,7 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
+    options: { mirror?: boolean } = {},
   ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -300,6 +301,7 @@ export function createFollowupRunner(params: {
           requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
+          mirror: options.mirror,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
@@ -395,6 +397,23 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         run.verboseLevel === "full" && !shouldSuppressDefaultToolProgressMessages();
+      let progressDeliveryChain: Promise<void> = Promise.resolve();
+      const pendingProgressDeliveries = new Set<Promise<void>>();
+      const enqueueProgressDelivery = (deliver: () => Promise<void>) => {
+        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err) => {
+          logVerbose(`followup queue: progress delivery failed: ${formatErrorMessage(err)}`);
+        });
+        const task = progressDeliveryChain.finally(() => {
+          pendingProgressDeliveries.delete(task);
+        });
+        pendingProgressDeliveries.add(task);
+        return task;
+      };
+      const drainProgressDeliveries = async () => {
+        while (pendingProgressDeliveries.size > 0) {
+          await Promise.all([...pendingProgressDeliveries]);
+        }
+      };
       replyOperation = createReplyOperation({
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
@@ -705,29 +724,36 @@ export function createFollowupRunner(params: {
                 toolProgressDetail,
                 shouldEmitToolResult: shouldEmitToolResultProgress,
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
-                onToolResult: async (payload) => {
-                  if (
-                    run.sourceReplyDeliveryMode === "message_tool_only" &&
-                    run.verboseLevel === "off"
-                  ) {
-                    return;
-                  }
-                  await sendFollowupPayloads([payload], effectiveQueued, {
-                    provider,
-                    modelId: model,
-                  });
-                },
-                onAgentEvent: async (evt) => {
-                  await forwardFollowupProgressEvent({
-                    evt,
-                    opts,
-                    detailMode: toolProgressDetail,
-                    emitChannelProgress: shouldEmitToolResultProgress(),
-                    onCompactionComplete: () => {
-                      attemptCompactionCount += 1;
-                    },
-                  });
-                },
+                onToolResult: (payload) =>
+                  enqueueProgressDelivery(async () => {
+                    if (
+                      run.sourceReplyDeliveryMode === "message_tool_only" &&
+                      run.verboseLevel === "off"
+                    ) {
+                      return;
+                    }
+                    await sendFollowupPayloads(
+                      [payload],
+                      effectiveQueued,
+                      {
+                        provider,
+                        modelId: model,
+                      },
+                      { mirror: false },
+                    );
+                  }),
+                onAgentEvent: (evt) =>
+                  enqueueProgressDelivery(async () => {
+                    await forwardFollowupProgressEvent({
+                      evt,
+                      opts,
+                      detailMode: toolProgressDetail,
+                      emitChannelProgress: shouldEmitToolResultProgress(),
+                      onCompactionComplete: () => {
+                        attemptCompactionCount += 1;
+                      },
+                    });
+                  }),
               });
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
@@ -782,9 +808,12 @@ export function createFollowupRunner(params: {
           });
           pendingDeferredCliTerminal = undefined;
         }
+        await drainProgressDeliveries();
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }
+
+      await drainProgressDeliveries();
 
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;

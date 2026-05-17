@@ -119,6 +119,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToId: "reply-1",
       replyToMode: "all",
+      kind: "final",
     });
 
     const params = firstDeliverParams();
@@ -151,6 +152,7 @@ describe("deliverDiscordReply", () => {
         runtime,
         cfg,
         textLimit: 2000,
+        kind: "final",
       }),
     ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
   });
@@ -196,6 +198,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
@@ -215,6 +218,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([
@@ -254,6 +258,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ channelData, text: undefined }]);
@@ -283,6 +288,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ presentation, text: undefined }]);
@@ -299,6 +305,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text }]);
@@ -320,6 +327,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text }]);
@@ -353,6 +361,7 @@ describe("deliverDiscordReply", () => {
       maxLinesPerMessage: 7,
       tableMode: "off",
       chunkMode: "newline",
+      kind: "final",
     });
 
     expect(firstDeliverParams().cfg).toBe(baseCfg);
@@ -382,6 +391,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToMode: "off",
       mediaLocalRoots: ["/tmp/openclaw-media"],
+      kind: "final",
     });
 
     const params = firstDeliverParams();
@@ -400,6 +410,7 @@ describe("deliverDiscordReply", () => {
       cfg,
       textLimit: 2000,
       replyToId: "reply-1",
+      kind: "final",
     });
 
     const deps = firstDeliverParams().deps!;
@@ -448,6 +459,7 @@ describe("deliverDiscordReply", () => {
       replyToId: "reply-1",
       sessionKey: "agent:main:subagent:child",
       threadBindings,
+      kind: "final",
     });
 
     const params = firstDeliverParams();

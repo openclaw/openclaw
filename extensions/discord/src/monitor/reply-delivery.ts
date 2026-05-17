@@ -172,7 +172,7 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
-  kind?: "tool" | "block" | "final";
+  kind: "tool" | "block" | "final";
 }) {
   void params.runtime;
 

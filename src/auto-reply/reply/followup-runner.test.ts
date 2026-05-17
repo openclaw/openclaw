@@ -1155,9 +1155,67 @@ describe("createFollowupRunner progress forwarding", () => {
         to: "channel:C1",
         accountId: "acct-1",
         threadId: "thread-1",
+        mirror: false,
         payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
       }),
     );
+  });
+
+  it("drains fire-and-forget queued tool progress before final delivery", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+    let releaseProgressRoute: (() => void) | undefined;
+    const progressRouteStarted = new Promise<void>((resolve) => {
+      routeReplyMock.mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: true }>((release) => {
+            releaseProgressRoute = () => {
+              release({ ok: true });
+            };
+            resolve();
+          }),
+      );
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: { onToolResult?: (payload: { text: string }) => Promise<void> }) => {
+        void args.onToolResult?.({ text: "🛠️ Exec: echo queued-progress" });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    const runPromise = runner(queued);
+    await progressRouteStarted;
+    await Promise.resolve();
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toEqual(
+      expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 0).mirror).toBe(false);
+
+    releaseProgressRoute?.();
+    await runPromise;
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(routeReplyMock, 1).payload).toEqual(
+      expect.objectContaining({ text: "final reply" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 1).mirror).toBeUndefined();
   });
 
   it("preserves queued verbose progress when default tool progress is suppressed", async () => {
@@ -1227,6 +1285,7 @@ describe("createFollowupRunner progress forwarding", () => {
         to: "channel:C1",
         accountId: "acct-1",
         threadId: "thread-1",
+        mirror: false,
         payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-suppressed-preview" }),
       }),
     );
