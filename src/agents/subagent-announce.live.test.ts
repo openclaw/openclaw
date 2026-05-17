@@ -2,7 +2,11 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { callGateway as realCallGateway } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { dispatchGatewayMethodInProcess as realDispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
@@ -18,6 +22,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
 import { listSubagentRunsForRequester } from "./subagent-registry.js";
 
 const LIVE = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_E2E);
@@ -458,13 +463,7 @@ describeLive("subagent announce live", () => {
               context: "isolated",
               runTimeoutSeconds: 300,
             })}.`,
-            `Step 2: after spawn returns status="accepted", call subagents with exactly this JSON input: ${JSON.stringify(
-              {
-                action: "steer",
-                target: "steered_child",
-                message: steerToken,
-              },
-            )}.`,
+            'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
             `Step 3: call sessions_yield with message="waiting for ${childToken}" and wait for the child completion event.`,
             `Step 4: after the completion event arrives, reply exactly ${parentToken}.`,
             "Do not reply with the parent token until the child completion event is visible.",
@@ -475,6 +474,23 @@ describeLive("subagent announce live", () => {
       initialRequest.catch((error: unknown) => {
         initialError = error;
       });
+
+      const spawnedRun = await waitFor("steered child spawn", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        return listSubagentRunsForRequester(sessionKey).find(
+          (run) => run.taskName === "steered_child" && !run.endedAt,
+        );
+      });
+      const cfg = getRuntimeConfig();
+      const steerResult = await steerControlledSubagentRun({
+        cfg,
+        controller: resolveSubagentController({ cfg, agentSessionKey: sessionKey }),
+        entry: spawnedRun,
+        message: steerToken,
+      });
+      expect(steerResult.status).toBe("accepted");
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
