@@ -518,6 +518,9 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain(
       "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
     );
+    expect(msg).toContain(
+      "If the runtime marks this route as message-tool-only, send visible output with the message tool first",
+    );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
